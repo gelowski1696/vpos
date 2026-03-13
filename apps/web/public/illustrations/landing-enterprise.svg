@@ -1,0 +1,49 @@
+<svg width="1200" height="700" viewBox="0 0 1200 700" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="entBg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#0F172A"/>
+      <stop offset="100%" stop-color="#1E293B"/>
+    </linearGradient>
+  </defs>
+
+  <rect width="1200" height="700" rx="28" fill="url(#entBg)"/>
+  <rect x="76" y="74" width="1048" height="552" rx="18" fill="#F1F5F9" fill-opacity="0.97"/>
+
+  <rect x="112" y="108" width="976" height="66" rx="12" fill="#0B3C5D"/>
+  <text x="140" y="149" fill="#E2E8F0" font-family="Arial, sans-serif" font-size="24" font-weight="700">Enterprise Command View</text>
+  <text x="828" y="149" fill="#BFDBFE" font-family="Arial, sans-serif" font-size="18">Branch Group: All</text>
+
+  <rect x="112" y="196" width="230" height="136" rx="12" fill="#FFFFFF"/>
+  <rect x="360" y="196" width="230" height="136" rx="12" fill="#FFFFFF"/>
+  <rect x="608" y="196" width="230" height="136" rx="12" fill="#FFFFFF"/>
+  <rect x="856" y="196" width="232" height="136" rx="12" fill="#FFFFFF"/>
+
+  <text x="132" y="238" fill="#475569" font-family="Arial, sans-serif" font-size="18">Net Sales</text>
+  <text x="132" y="288" fill="#0F172A" font-family="Arial, sans-serif" font-size="34" font-weight="800">PHP 2.84M</text>
+
+  <text x="380" y="238" fill="#475569" font-family="Arial, sans-serif" font-size="18">Gross Margin</text>
+  <text x="380" y="288" fill="#0F172A" font-family="Arial, sans-serif" font-size="34" font-weight="800">31.8%</text>
+
+  <text x="628" y="238" fill="#475569" font-family="Arial, sans-serif" font-size="18">Open Reviews</text>
+  <text x="628" y="288" fill="#0F172A" font-family="Arial, sans-serif" font-size="34" font-weight="800">12</text>
+
+  <text x="876" y="238" fill="#475569" font-family="Arial, sans-serif" font-size="18">Sync Success</text>
+  <text x="876" y="288" fill="#0F172A" font-family="Arial, sans-serif" font-size="34" font-weight="800">99.4%</text>
+
+  <rect x="112" y="354" width="976" height="234" rx="14" fill="#FFFFFF"/>
+  <text x="136" y="394" fill="#0F172A" font-family="Arial, sans-serif" font-size="22" font-weight="700">Regional Sales and Stock Health</text>
+
+  <rect x="148" y="438" width="48" height="110" rx="8" fill="#0B3C5D"/>
+  <rect x="214" y="420" width="48" height="128" rx="8" fill="#165B88"/>
+  <rect x="280" y="446" width="48" height="102" rx="8" fill="#2875AA"/>
+  <rect x="346" y="404" width="48" height="144" rx="8" fill="#328CC1"/>
+  <rect x="412" y="432" width="48" height="116" rx="8" fill="#4FA6D2"/>
+  <rect x="478" y="452" width="48" height="96" rx="8" fill="#6DC0E2"/>
+
+  <path d="M586 530C620 504 654 500 686 474C718 450 746 454 774 432C806 406 836 416 870 392C900 370 938 374 968 356" stroke="#0B3C5D" stroke-width="8" stroke-linecap="round"/>
+  <circle cx="586" cy="530" r="6" fill="#0B3C5D"/>
+  <circle cx="686" cy="474" r="6" fill="#0B3C5D"/>
+  <circle cx="774" cy="432" r="6" fill="#0B3C5D"/>
+  <circle cx="870" cy="392" r="6" fill="#0B3C5D"/>
+  <circle cx="968" cy="356" r="6" fill="#0B3C5D"/>
+</svg>

@@ -1,0 +1,53 @@
+<svg width="1200" height="700" viewBox="0 0 1200 700" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="bgB" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#0F172A"/>
+      <stop offset="100%" stop-color="#0B3C5D"/>
+    </linearGradient>
+    <linearGradient id="panelB" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#E2E8F0" stop-opacity="0.98"/>
+      <stop offset="100%" stop-color="#CBD5E1" stop-opacity="0.98"/>
+    </linearGradient>
+  </defs>
+
+  <rect width="1200" height="700" rx="28" fill="url(#bgB)"/>
+  <circle cx="150" cy="120" r="150" fill="#38BDF8" fill-opacity="0.14"/>
+  <circle cx="1080" cy="560" r="170" fill="#22D3EE" fill-opacity="0.12"/>
+
+  <rect x="90" y="92" width="1020" height="516" rx="24" fill="#020617" fill-opacity="0.28"/>
+  <rect x="120" y="126" width="960" height="448" rx="18" fill="url(#panelB)"/>
+
+  <text x="156" y="174" fill="#0F172A" font-family="Arial, sans-serif" font-size="28" font-weight="700">Analytics Snapshot</text>
+  <text x="156" y="206" fill="#334155" font-family="Arial, sans-serif" font-size="18">Sales trend, stock risk and receivable health</text>
+
+  <rect x="156" y="234" width="208" height="112" rx="14" fill="#FFFFFF"/>
+  <text x="180" y="276" fill="#0B3C5D" font-family="Arial, sans-serif" font-size="20" font-weight="700">Gross Profit</text>
+  <text x="180" y="320" fill="#0F172A" font-family="Arial, sans-serif" font-size="34" font-weight="800">PHP 62.1K</text>
+
+  <rect x="384" y="234" width="208" height="112" rx="14" fill="#FFFFFF"/>
+  <text x="408" y="276" fill="#0B3C5D" font-family="Arial, sans-serif" font-size="20" font-weight="700">Collection</text>
+  <text x="408" y="320" fill="#0F172A" font-family="Arial, sans-serif" font-size="34" font-weight="800">87.4%</text>
+
+  <rect x="612" y="234" width="208" height="112" rx="14" fill="#FFFFFF"/>
+  <text x="636" y="276" fill="#0B3C5D" font-family="Arial, sans-serif" font-size="20" font-weight="700">Stock Health</text>
+  <text x="636" y="320" fill="#0F172A" font-family="Arial, sans-serif" font-size="34" font-weight="800">92%</text>
+
+  <rect x="840" y="234" width="204" height="112" rx="14" fill="#FFFFFF"/>
+  <text x="864" y="276" fill="#0B3C5D" font-family="Arial, sans-serif" font-size="20" font-weight="700">Sync Success</text>
+  <text x="864" y="320" fill="#0F172A" font-family="Arial, sans-serif" font-size="34" font-weight="800">99.1%</text>
+
+  <rect x="156" y="374" width="888" height="168" rx="16" fill="#FFFFFF"/>
+
+  <rect x="188" y="470" width="60" height="40" rx="8" fill="#93C5FD"/>
+  <rect x="272" y="448" width="60" height="62" rx="8" fill="#60A5FA"/>
+  <rect x="356" y="428" width="60" height="82" rx="8" fill="#3B82F6"/>
+  <rect x="440" y="410" width="60" height="100" rx="8" fill="#2563EB"/>
+  <rect x="524" y="396" width="60" height="114" rx="8" fill="#1D4ED8"/>
+
+  <path d="M642 490C674 468 706 468 742 450C776 433 804 420 834 426C870 434 896 402 930 386C956 374 986 370 1010 360" stroke="#0B3C5D" stroke-width="8" stroke-linecap="round"/>
+  <circle cx="642" cy="490" r="7" fill="#0B3C5D"/>
+  <circle cx="742" cy="450" r="7" fill="#0B3C5D"/>
+  <circle cx="834" cy="426" r="7" fill="#0B3C5D"/>
+  <circle cx="930" cy="386" r="7" fill="#0B3C5D"/>
+  <circle cx="1010" cy="360" r="7" fill="#0B3C5D"/>
+</svg>

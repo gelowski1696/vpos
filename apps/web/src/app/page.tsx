@@ -1,50 +1,54 @@
-import Link from 'next/link';
-import type { Route } from 'next';
+import type { Metadata } from 'next';
+import { HomeLandingShowcase } from '../components/home-landing-showcase';
 
-const adminLinks: Array<{ href: string; label: string }> = [
-  { href: '/dashboard', label: 'dashboard' },
-  { href: '/reports', label: 'reports' },
-  { href: '/branches', label: 'branches' },
-  { href: '/transfer-list', label: 'transfer-list' },
-  { href: '/locations', label: 'locations' },
-  { href: '/users', label: 'users' },
-  { href: '/customers', label: 'customers' },
-  { href: '/suppliers', label: 'suppliers' },
-  { href: '/customer-payments', label: 'customer-payments' },
-  { href: '/products', label: 'products' },
-  { href: '/cylinder-types', label: 'cylinder-types' },
-  { href: '/price-lists', label: 'price-lists' },
-  { href: '/expenses', label: 'expenses' },
-  { href: '/tenants', label: 'tenants' },
-  { href: '/audit-logs', label: 'audit-logs' }
-];
+const siteUrl = process.env.NEXT_PUBLIC_SITE_URL?.trim() || 'https://vmjamtech.com';
+
+export const metadata: Metadata = {
+  title: 'VPOS Web Admin | LPG Operations Platform',
+  description:
+    'Modern LPG operations admin: sales, inventory, transfers, reporting, tenant controls, and branch-level execution.',
+  keywords: ['LPG POS', 'LPG inventory', 'multi-tenant POS', 'branch management', 'sales and transfers'],
+  alternates: { canonical: '/' },
+  openGraph: {
+    type: 'website',
+    url: siteUrl,
+    title: 'VPOS Web Admin',
+    description:
+      'Run LPG operations with smart reporting, stock controls, pricing rules, and owner-grade tenant governance.',
+    siteName: 'VPOS Web'
+  },
+  twitter: {
+    card: 'summary_large_image',
+    title: 'VPOS Web Admin',
+    description: 'Operate LPG sales, inventory, and transfers from one control hub.'
+  }
+};
 
 export default function HomePage(): JSX.Element {
+  const structuredData = {
+    '@context': 'https://schema.org',
+    '@type': 'SoftwareApplication',
+    name: 'VPOS Web Admin',
+    applicationCategory: 'BusinessApplication',
+    operatingSystem: 'Web',
+    offers: {
+      '@type': 'Offer',
+      price: '0',
+      priceCurrency: 'USD'
+    },
+    url: siteUrl,
+    description:
+      'Web platform for LPG sales, inventory, transfer operations, reporting, and multi-tenant governance.'
+  };
+
   return (
-    <main className="min-h-screen px-6 py-8">
-      <div className="mx-auto max-w-6xl rounded-3xl border border-slate-200 bg-white/90 p-8 shadow-sm backdrop-blur dark:border-slate-800 dark:bg-slate-900/80">
-        <h1 className="text-3xl font-bold text-brandPrimary">VPOS Web Admin</h1>
-        <p className="mt-2 text-sm text-slate-600 dark:text-slate-300">Online-only administration for LPG operations.</p>
-        <div className="mt-4 flex flex-wrap gap-3">
-          <Link className="rounded-lg bg-brandPrimary px-4 py-2 text-sm font-semibold text-white" href="/login">
-            Login to Admin
-          </Link>
-          <Link className="rounded-lg border border-slate-300 px-4 py-2 text-sm font-semibold text-slate-700 dark:border-slate-700 dark:text-slate-100" href={'/dashboard' as Route}>
-            Open Dashboard
-          </Link>
-        </div>
-        <div className="mt-6 grid gap-3 md:grid-cols-3">
-          {adminLinks.map((link) => (
-            <Link
-              key={link.href}
-              href={link.href as Route}
-              className="rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm font-medium text-slate-700 transition hover:border-brandSecondary dark:border-slate-700 dark:bg-slate-800 dark:text-slate-100"
-            >
-              {link.label}
-            </Link>
-          ))}
-        </div>
-      </div>
-    </main>
+    <>
+      <script
+        type="application/ld+json"
+        dangerouslySetInnerHTML={{ __html: JSON.stringify(structuredData) }}
+      />
+      <HomeLandingShowcase />
+    </>
   );
 }
+

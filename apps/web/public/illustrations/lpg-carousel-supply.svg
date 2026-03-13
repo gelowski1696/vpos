@@ -1,0 +1,53 @@
+<svg width="900" height="520" viewBox="0 0 900 520" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="bgB" x1="70" y1="30" x2="850" y2="490" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#090909"/>
+      <stop offset="0.52" stop-color="#17110A"/>
+      <stop offset="1" stop-color="#050505"/>
+    </linearGradient>
+    <linearGradient id="goldB" x1="0" y1="0" x2="1" y2="1">
+      <stop stop-color="#F4D491"/>
+      <stop offset="1" stop-color="#B58436"/>
+    </linearGradient>
+  </defs>
+  <rect x="14" y="14" width="872" height="492" rx="28" fill="url(#bgB)"/>
+  <rect x="14" y="14" width="872" height="492" rx="28" stroke="#D4AB62" stroke-opacity="0.35"/>
+
+  <text x="70" y="90" fill="#F7DEAA" font-size="27" font-family="Segoe UI, Arial, sans-serif" font-weight="700">Supply Chain Isometric Map</text>
+  <text x="70" y="120" fill="#E8C980" font-size="16" font-family="Segoe UI, Arial, sans-serif">Supplier to warehouse to store and route execution</text>
+
+  <g transform="translate(85,170)">
+    <polygon points="0,68 110,0 220,68 110,136" fill="#101010" stroke="#D2A75A" stroke-opacity="0.6"/>
+    <polygon points="110,136 220,68 220,148 110,214" fill="#171717" stroke="#D2A75A" stroke-opacity="0.42"/>
+    <polygon points="0,68 110,136 110,214 0,148" fill="#131313" stroke="#D2A75A" stroke-opacity="0.42"/>
+    <text x="64" y="246" fill="#F1D38E" font-size="15" font-family="Segoe UI, Arial, sans-serif">Supplier</text>
+  </g>
+
+  <g transform="translate(335,132)">
+    <polygon points="0,88 126,10 252,88 126,166" fill="#121212" stroke="url(#goldB)" stroke-opacity="0.65"/>
+    <polygon points="126,166 252,88 252,180 126,258" fill="#191919" stroke="#D2A75A" stroke-opacity="0.44"/>
+    <polygon points="0,88 126,166 126,258 0,180" fill="#151515" stroke="#D2A75A" stroke-opacity="0.44"/>
+    <text x="86" y="292" fill="#F1D38E" font-size="15" font-family="Segoe UI, Arial, sans-serif">Warehouse</text>
+  </g>
+
+  <g transform="translate(640,176)">
+    <polygon points="0,58 98,0 196,58 98,116" fill="#111111" stroke="#D2A75A" stroke-opacity="0.6"/>
+    <polygon points="98,116 196,58 196,130 98,188" fill="#171717" stroke="#D2A75A" stroke-opacity="0.42"/>
+    <polygon points="0,58 98,116 98,188 0,130" fill="#141414" stroke="#D2A75A" stroke-opacity="0.42"/>
+    <text x="68" y="218" fill="#F1D38E" font-size="15" font-family="Segoe UI, Arial, sans-serif">Store</text>
+  </g>
+
+  <path d="M300 240L334 226" stroke="#F4D491" stroke-width="4" stroke-linecap="round"/>
+  <path d="M585 258L640 234" stroke="#F4D491" stroke-width="4" stroke-linecap="round"/>
+  <path d="M490 326L715 338" stroke="#E7C476" stroke-width="4" stroke-linecap="round"/>
+
+  <circle cx="334" cy="226" r="7" fill="#F4D491"/>
+  <circle cx="640" cy="234" r="7" fill="#F4D491"/>
+  <circle cx="715" cy="338" r="7" fill="#E7C476"/>
+
+  <rect x="602" y="84" width="246" height="126" rx="16" fill="#101010" stroke="#D2A75A" stroke-opacity="0.48"/>
+  <text x="626" y="116" fill="#F4D89B" font-size="15" font-family="Segoe UI, Arial, sans-serif" font-weight="700">Movement Signals</text>
+  <text x="626" y="145" fill="#E8C982" font-size="13" font-family="Segoe UI, Arial, sans-serif">Restock In: supplier to branch</text>
+  <text x="626" y="168" fill="#E8C982" font-size="13" font-family="Segoe UI, Arial, sans-serif">Warehouse Out: WH to store</text>
+  <text x="626" y="191" fill="#E8C982" font-size="13" font-family="Segoe UI, Arial, sans-serif">Return Empty: route to branch</text>
+</svg>

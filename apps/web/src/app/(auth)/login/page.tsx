@@ -1,5 +1,6 @@
 'use client';
 
+import Image from 'next/image';
 import { FormEvent, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import type { Route } from 'next';
@@ -56,18 +57,32 @@ export default function LoginPage(): JSX.Element {
   }
 
   return (
-    <main className="min-h-screen px-6 py-10">
-      <section className="mx-auto max-w-md rounded-2xl border border-slate-200 bg-white/95 p-6 shadow-sm backdrop-blur dark:border-slate-800 dark:bg-slate-900/90">
-        <h1 className="text-2xl font-bold text-brandPrimary">VPOS Admin Login</h1>
-        <p className="mt-1 text-sm text-slate-600 dark:text-slate-300">Authenticate to access online master data and branding modules.</p>
+    <main className="min-h-screen bg-[radial-gradient(circle_at_15%_10%,rgba(240,200,111,0.18),transparent_35%),radial-gradient(circle_at_85%_10%,rgba(182,138,61,0.16),transparent_32%),linear-gradient(125deg,#060606,#16120d,#050505)] px-6 py-10">
+      <section className="mx-auto max-w-md rounded-2xl border border-amber-300/40 bg-black/65 p-6 shadow-2xl shadow-black/60 backdrop-blur">
+        <div className="mb-4 flex items-center gap-3">
+          <Image
+            src="/logo.png"
+            alt="VPOS logo"
+            width={42}
+            height={42}
+            className="h-10 w-10 rounded-lg border border-amber-300/60 bg-black/40 object-cover p-1"
+            priority
+          />
+          <div>
+            <p className="text-[10px] uppercase tracking-[0.22em] text-amber-300/90">VMJAMTECH</p>
+            <p className="text-sm font-semibold text-amber-100">VPOS Platform</p>
+          </div>
+        </div>
+        <h1 className="text-2xl font-bold text-amber-200">VPOS Admin Login</h1>
+        <p className="mt-1 text-sm text-slate-300">Authenticate to access online master data and branding modules.</p>
 
         <form autoComplete="off" className="mt-5 space-y-3" onSubmit={onSubmit}>
           <label className="block text-sm">
-            <span className="mb-1 block font-medium text-slate-700 dark:text-slate-200">Email</span>
+            <span className="mb-1 block font-medium text-amber-100">Email</span>
             <input
               autoComplete="off"
               autoCorrect="off"
-              className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-slate-900 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-100"
+              className="w-full rounded-lg border border-amber-300/40 bg-slate-900/80 px-3 py-2 text-amber-50 placeholder:text-slate-400"
               name="vpos_email"
               onChange={(event) => setEmail(event.target.value)}
               required
@@ -78,11 +93,11 @@ export default function LoginPage(): JSX.Element {
           </label>
 
           <label className="block text-sm">
-            <span className="mb-1 block font-medium text-slate-700 dark:text-slate-200">Password</span>
+            <span className="mb-1 block font-medium text-amber-100">Password</span>
             <div className="relative">
               <input
                 autoComplete="new-password"
-                className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 pr-11 text-slate-900 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-100"
+                className="w-full rounded-lg border border-amber-300/40 bg-slate-900/80 px-3 py-2 pr-11 text-amber-50 placeholder:text-slate-400"
                 name="vpos_password"
                 onChange={(event) => setPassword(event.target.value)}
                 required
@@ -91,7 +106,7 @@ export default function LoginPage(): JSX.Element {
               />
               <button
                 aria-label={showPassword ? 'Hide password' : 'Show password'}
-                className="absolute right-2 top-1/2 -translate-y-1/2 rounded-md border border-slate-300 px-2 py-1 text-xs text-slate-700 hover:bg-slate-100 dark:border-slate-700 dark:text-slate-200 dark:hover:bg-slate-700"
+                className="absolute right-2 top-1/2 -translate-y-1/2 rounded-md border border-amber-300/40 px-2 py-1 text-xs text-amber-100 hover:bg-amber-300/10"
                 onClick={() => setShowPassword((prev) => !prev)}
                 type="button"
               >
@@ -112,12 +127,12 @@ export default function LoginPage(): JSX.Element {
             </div>
           </label>
 
-          <button className="w-full rounded-lg bg-brandPrimary px-4 py-2 font-semibold text-white" disabled={loading} type="submit">
+          <button className="w-full rounded-lg bg-amber-300 px-4 py-2 font-semibold text-slate-900 hover:bg-amber-200" disabled={loading} type="submit">
             {loading ? 'Signing in...' : 'Sign In'}
           </button>
         </form>
 
-        {error && <p className="mt-3 text-sm text-rose-700">{error}</p>}
+        {error && <p className="mt-3 text-sm text-rose-300">{error}</p>}
       </section>
     </main>
   );

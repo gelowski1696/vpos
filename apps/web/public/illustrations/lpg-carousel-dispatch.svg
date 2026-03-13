@@ -1,0 +1,60 @@
+<svg width="900" height="520" viewBox="0 0 900 520" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="bgC" x1="80" y1="40" x2="860" y2="500" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#090909"/>
+      <stop offset="0.54" stop-color="#18120B"/>
+      <stop offset="1" stop-color="#050505"/>
+    </linearGradient>
+    <linearGradient id="goldC" x1="0" y1="0" x2="1" y2="1">
+      <stop stop-color="#F2CF84"/>
+      <stop offset="1" stop-color="#B78638"/>
+    </linearGradient>
+  </defs>
+  <rect x="14" y="14" width="872" height="492" rx="28" fill="url(#bgC)"/>
+  <rect x="14" y="14" width="872" height="492" rx="28" stroke="#D4AB62" stroke-opacity="0.35"/>
+
+  <text x="72" y="92" fill="#F7DEAA" font-size="27" font-family="Segoe UI, Arial, sans-serif" font-weight="700">Dispatch Readiness Monitor</text>
+  <text x="72" y="122" fill="#E8C980" font-size="16" font-family="Segoe UI, Arial, sans-serif">Cashier route support with refill and non-refill mix</text>
+
+  <g transform="translate(80,164)">
+    <rect x="0" y="0" width="420" height="280" rx="18" fill="#101010" stroke="#D4AB62" stroke-opacity="0.45"/>
+    <text x="24" y="36" fill="#F5D99C" font-size="16" font-family="Segoe UI, Arial, sans-serif" font-weight="700">Route Capacity (Today)</text>
+
+    <text x="24" y="84" fill="#E6C67F" font-size="14" font-family="Segoe UI, Arial, sans-serif">Refill Exchange</text>
+    <rect x="24" y="96" width="360" height="14" rx="7" fill="#1A1A1A" stroke="#B88B42"/>
+    <rect x="24" y="96" width="282" height="14" rx="7" fill="url(#goldC)"/>
+
+    <text x="24" y="144" fill="#E6C67F" font-size="14" font-family="Segoe UI, Arial, sans-serif">Non-Refill Delivery</text>
+    <rect x="24" y="156" width="360" height="14" rx="7" fill="#1A1A1A" stroke="#B88B42"/>
+    <rect x="24" y="156" width="196" height="14" rx="7" fill="url(#goldC)"/>
+
+    <text x="24" y="204" fill="#E6C67F" font-size="14" font-family="Segoe UI, Arial, sans-serif">Empty Collection</text>
+    <rect x="24" y="216" width="360" height="14" rx="7" fill="#1A1A1A" stroke="#B88B42"/>
+    <rect x="24" y="216" width="238" height="14" rx="7" fill="url(#goldC)"/>
+
+    <text x="318" y="84" fill="#F2CF84" font-size="12" font-family="Segoe UI, Arial, sans-serif">78%</text>
+    <text x="232" y="144" fill="#F2CF84" font-size="12" font-family="Segoe UI, Arial, sans-serif">54%</text>
+    <text x="274" y="204" fill="#F2CF84" font-size="12" font-family="Segoe UI, Arial, sans-serif">66%</text>
+  </g>
+
+  <g transform="translate(540,176)">
+    <rect x="0" y="0" width="280" height="248" rx="18" fill="#111111" stroke="#D4AB62" stroke-opacity="0.45"/>
+    <text x="24" y="36" fill="#F5D99C" font-size="16" font-family="Segoe UI, Arial, sans-serif" font-weight="700">Tank by Route</text>
+
+    <g transform="translate(26,70)">
+      <rect x="0" y="0" width="54" height="138" rx="16" fill="#1B1B1B" stroke="url(#goldC)" stroke-width="2.5"/>
+      <rect x="14" y="-14" width="26" height="16" rx="7" fill="#D2A75A"/>
+      <text x="-2" y="162" fill="#E9C982" font-size="12" font-family="Segoe UI, Arial, sans-serif">R1</text>
+    </g>
+    <g transform="translate(104,82)">
+      <rect x="0" y="0" width="54" height="126" rx="16" fill="#1B1B1B" stroke="url(#goldC)" stroke-width="2.5"/>
+      <rect x="14" y="-14" width="26" height="16" rx="7" fill="#C49648"/>
+      <text x="-2" y="150" fill="#E9C982" font-size="12" font-family="Segoe UI, Arial, sans-serif">R2</text>
+    </g>
+    <g transform="translate(182,62)">
+      <rect x="0" y="0" width="54" height="146" rx="16" fill="#1B1B1B" stroke="url(#goldC)" stroke-width="2.5"/>
+      <rect x="14" y="-14" width="26" height="16" rx="7" fill="#E0B96F"/>
+      <text x="-2" y="170" fill="#E9C982" font-size="12" font-family="Segoe UI, Arial, sans-serif">R3</text>
+    </g>
+  </g>
+</svg>

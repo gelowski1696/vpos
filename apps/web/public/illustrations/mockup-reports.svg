@@ -1,0 +1,18 @@
+<svg width="1024" height="640" viewBox="0 0 1024 640" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <rect width="1024" height="640" rx="22" fill="#1E293B"/>
+  <rect x="24" y="24" width="976" height="592" rx="18" fill="#F8FAFC"/>
+  <rect x="46" y="46" width="932" height="58" rx="12" fill="#0B3C5D"/>
+  <text x="72" y="82" fill="#E2E8F0" font-family="Arial, sans-serif" font-size="20" font-weight="700">Reports Workspace</text>
+  <rect x="46" y="118" width="932" height="72" rx="12" fill="#E2E8F0"/>
+  <rect x="66" y="136" width="140" height="36" rx="8" fill="#FFFFFF"/>
+  <rect x="218" y="136" width="140" height="36" rx="8" fill="#FFFFFF"/>
+  <rect x="370" y="136" width="140" height="36" rx="8" fill="#FFFFFF"/>
+  <rect x="824" y="136" width="132" height="36" rx="8" fill="#0B3C5D"/>
+  <rect x="46" y="206" width="464" height="388" rx="14" fill="#FFFFFF"/>
+  <rect x="526" y="206" width="452" height="188" rx="14" fill="#FFFFFF"/>
+  <rect x="526" y="406" width="452" height="188" rx="14" fill="#FFFFFF"/>
+  <path d="M84 530C130 510 164 502 208 476C248 452 286 446 324 424C366 400 396 406 438 382" stroke="#0B3C5D" stroke-width="7" stroke-linecap="round"/>
+  <rect x="566" y="452" width="372" height="20" rx="8" fill="#E2E8F0"/>
+  <rect x="566" y="484" width="318" height="20" rx="8" fill="#E2E8F0"/>
+  <rect x="566" y="516" width="282" height="20" rx="8" fill="#E2E8F0"/>
+</svg>

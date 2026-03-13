@@ -1,0 +1,21 @@
+<svg width="1024" height="640" viewBox="0 0 1024 640" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <rect width="1024" height="640" rx="22" fill="#0B3C5D"/>
+  <rect x="24" y="24" width="976" height="592" rx="18" fill="#F1F5F9"/>
+
+  <rect x="354" y="62" width="316" height="516" rx="34" fill="#0F172A"/>
+  <rect x="372" y="90" width="280" height="462" rx="22" fill="#E2E8F0"/>
+  <rect x="430" y="72" width="162" height="10" rx="5" fill="#334155"/>
+
+  <rect x="388" y="106" width="248" height="52" rx="10" fill="#0B3C5D"/>
+  <text x="414" y="138" fill="#E2E8F0" font-family="Arial, sans-serif" font-size="18" font-weight="700">Mobile POS</text>
+
+  <rect x="388" y="170" width="118" height="66" rx="10" fill="#FFFFFF"/>
+  <rect x="518" y="170" width="118" height="66" rx="10" fill="#FFFFFF"/>
+  <rect x="388" y="248" width="248" height="138" rx="10" fill="#FFFFFF"/>
+  <rect x="388" y="398" width="248" height="74" rx="10" fill="#FFFFFF"/>
+  <rect x="388" y="484" width="120" height="52" rx="10" fill="#0B3C5D"/>
+  <rect x="516" y="484" width="120" height="52" rx="10" fill="#328CC1"/>
+
+  <circle cx="276" cy="318" r="88" fill="#7DD3FC" fill-opacity="0.22"/>
+  <circle cx="748" cy="318" r="88" fill="#7DD3FC" fill-opacity="0.22"/>
+</svg>
