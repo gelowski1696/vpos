@@ -75,6 +75,24 @@ cd /opt/vpos
 docker compose -f infra/compose/docker-compose.prod.yml up -d --build
 ```
 
+Owner-only one-command setup (production compose):
+
+```bash
+cd /opt/vpos
+chmod +x scripts/docker-setup-owner-only.sh
+COMPOSE_FILE=infra/compose/docker-compose.prod.yml \
+PG_CONTAINER=vpos-prod-postgres \
+bash scripts/docker-setup-owner-only.sh
+```
+
+Or use the VPS wrapper (same behavior, shorter command):
+
+```bash
+cd /opt/vpos
+chmod +x scripts/docker-setup-owner-only.sh scripts/docker-setup-owner-only-vps.sh
+bash scripts/docker-setup-owner-only-vps.sh
+```
+
 Check:
 
 ```bash
