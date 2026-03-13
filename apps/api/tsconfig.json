@@ -1,0 +1,23 @@
+{
+  "compilerOptions": {
+    "module": "commonjs",
+    "declaration": true,
+    "removeComments": true,
+    "emitDecoratorMetadata": true,
+    "experimentalDecorators": true,
+    "allowSyntheticDefaultImports": true,
+    "target": "ES2022",
+    "sourceMap": true,
+    "outDir": "./dist",
+    "baseUrl": "./",
+    "incremental": true,
+    "strict": true,
+    "skipLibCheck": true,
+    "paths": {
+      "@vpos/shared-types": ["../../packages/shared-types/src"],
+      "@vpos/ai-ready": ["../../packages/ai-ready/src"]
+    }
+  },
+  "include": ["src", "test", "prisma/seed.ts"],
+  "exclude": ["node_modules", "dist"]
+}

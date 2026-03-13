@@ -1,0 +1,30 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "ESNext",
+    "jsx": "react-jsx",
+    "strict": true,
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "outDir": "dist",
+    "baseUrl": ".",
+    "paths": {
+      "@vpos/offline-core": [
+        "../../packages/offline-core/src"
+      ],
+      "@vpos/printing-core": [
+        "../../packages/printing-core/src"
+      ],
+      "@vpos/shared-types": [
+        "../../packages/shared-types/src"
+      ]
+    }
+  },
+  "include": [
+    "src",
+    "test",
+    "index.ts",
+    "App.tsx"
+  ],
+  "extends": "expo/tsconfig.base"
+}

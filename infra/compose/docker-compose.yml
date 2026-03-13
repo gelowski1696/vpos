@@ -1,0 +1,58 @@
+name: vpos
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: vpos-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: vpos
+      POSTGRES_PASSWORD: vpos
+      POSTGRES_DB: vpos
+    ports:
+      - "5432:5432"
+    volumes:
+      - vpos-pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U vpos -d vpos"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  api:
+    build:
+      context: ../..
+      dockerfile: apps/api/Dockerfile
+    container_name: vpos-api
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    env_file:
+      - ../../apps/api/.env
+    environment:
+      DATABASE_URL: postgresql://vpos:vpos@postgres:5432/vpos?schema=public
+      HOST: 0.0.0.0
+      PORT: 3001
+      CORS_ORIGINS: http://localhost:3000,http://127.0.0.1:3000,http://0.0.0.0:3000
+      VPOS_DEDICATED_DB_URLS_JSON: ""
+    command: sh -c "pnpm --filter @vpos/api prisma:migrate:deploy && pnpm --filter @vpos/api start"
+    ports:
+      - "3001:3001"
+
+  web:
+    build:
+      context: ../..
+      dockerfile: apps/web/Dockerfile
+    container_name: vpos-web
+    restart: unless-stopped
+    depends_on:
+      - api
+    environment:
+      NEXT_PUBLIC_API_URL: http://localhost:3001/api
+      NEXT_PUBLIC_CLIENT_ID: DEMO
+    ports:
+      - "3000:3000"
+
+volumes:
+  vpos-pgdata:

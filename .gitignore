@@ -1,0 +1,13 @@
+node_modules
+.pnpm-store
+.env
+.env.*
+dist
+build
+coverage
+.next
+.expo
+.expo-shared
+apps/mobile/android
+apps/mobile/ios
+*.log

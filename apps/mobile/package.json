@@ -1,0 +1,43 @@
+{
+  "name": "@vpos/mobile",
+  "version": "0.1.0",
+  "private": true,
+  "main": "index.ts",
+  "scripts": {
+    "start": "expo start",
+    "android": "expo run:android",
+    "ios": "expo run:ios",
+    "build": "tsc -p tsconfig.json",
+    "apk:release": "node ./scripts/build-release-apk.mjs",
+    "apk:release:clean": "node ./scripts/build-release-apk.mjs --clean",
+    "apk:release:debug": "node ./scripts/build-release-apk.mjs --clean --debug",
+    "apk:install": "node ./scripts/install-release-apk.mjs",
+    "apk:install:build": "node ./scripts/install-release-apk.mjs --build",
+    "test": "jest --config jest.config.cjs",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "@babel/runtime": "^7.28.6",
+    "@vpos/offline-core": "workspace:*",
+    "@vpos/printing-core": "workspace:*",
+    "@vpos/shared-types": "workspace:*",
+    "expo": "^53.0.0",
+    "expo-camera": "~16.1.11",
+    "expo-dev-client": "^5.0.20",
+    "expo-image-picker": "~16.0.6",
+    "expo-sqlite": "^15.1.0",
+    "js-sha256": "^0.11.1",
+    "react": "18.3.1",
+    "react-native": "0.76.7",
+    "react-native-reanimated": "3.16.7",
+    "react-native-toast-message": "^2.3.3"
+  },
+  "devDependencies": {
+    "@types/jest": "^29.5.14",
+    "@types/react": "^18.3.19",
+    "@types/react-native": "^0.73.0",
+    "babel-preset-expo": "^55.0.10",
+    "jest": "^29.7.0",
+    "ts-jest": "^29.2.5"
+  }
+}

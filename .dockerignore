@@ -1,0 +1,13 @@
+node_modules
+**/node_modules
+.git
+.github
+**/dist
+**/.next
+**/.expo
+**/android/.gradle
+**/android/app/build
+**/build
+tmpimin
+*.log
+**/.env

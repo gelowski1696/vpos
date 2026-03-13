@@ -1,0 +1,38 @@
+{
+    "name":  "vpos",
+    "version":  "0.1.0",
+    "private":  true,
+    "packageManager":  "pnpm@10.28.2",
+    "scripts":  {
+                    "build":  "pnpm -r --if-present build",
+                    "test":  "pnpm -r --if-present test",
+                    "lint":  "pnpm -r --if-present lint",
+                    "typecheck":  "pnpm -r --if-present typecheck",
+                    "db:create":  "pnpm --filter @vpos/api db:create",
+                    "db:reset:fresh": "pnpm --filter @vpos/api db:reset:fresh",
+                    "db:reset:owner-only": "pnpm --filter @vpos/api db:reset:owner-only",
+                    "db:migrate:all": "pnpm --filter @vpos/api db:migrate:all",
+                    "docker:setup:fresh": "scripts\\docker-setup-fresh.bat",
+                    "docker:setup:owner-only": "scripts\\docker-setup-owner-only.bat",
+                    "transfer:zip": "scripts\\create-transfer-zip.bat",
+                    "mobile:apk:release": "pnpm --filter @vpos/mobile apk:release",
+                    "mobile:apk:release:clean": "pnpm --filter @vpos/mobile apk:release:clean",
+                    "mobile:apk:install": "pnpm --filter @vpos/mobile apk:install",
+                    "mobile:apk:install:build": "pnpm --filter @vpos/mobile apk:install:build",
+                    "ops:backup": "pnpm --filter @vpos/api ops:backup",
+                    "ops:retention:dry-run": "pnpm --filter @vpos/api ops:retention:dry-run",
+                    "ops:retention:apply": "pnpm --filter @vpos/api ops:retention:apply",
+                    "ops:security:check": "pnpm --filter @vpos/api ops:security:check",
+                    "ops:entitlements:health": "pnpm --filter @vpos/api ops:entitlements:health",
+                    "ops:transfers:health": "pnpm --filter @vpos/api ops:transfers:health",
+                    "ops:hybrid:health": "pnpm --filter @vpos/api ops:hybrid:health",
+                    "ops:datastore-key-rotate:dry-run": "pnpm --filter @vpos/api ops:datastore-key-rotate:dry-run",
+                    "ops:datastore-key-rotate:apply": "pnpm --filter @vpos/api ops:datastore-key-rotate:apply",
+                    "ops:maintenance": "pnpm --filter @vpos/api ops:maintenance",
+                    "tenants:cleanup:seeded":  "pnpm --filter @vpos/api tenants:cleanup:seeded"
+                },
+    "devDependencies":  {
+                            "@types/node":  "^22.13.10",
+                            "typescript":  "^5.7.3"
+                        }
+}

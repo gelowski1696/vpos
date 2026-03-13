@@ -1,0 +1,58 @@
+name: vpos-prod
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: vpos-prod-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-vpos}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-vpos}
+      POSTGRES_DB: ${POSTGRES_DB:-vpos}
+    volumes:
+      - vpos-prod-pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-vpos} -d ${POSTGRES_DB:-vpos}"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  api:
+    build:
+      context: ../..
+      dockerfile: apps/api/Dockerfile
+    container_name: vpos-prod-api
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    env_file:
+      - ../../apps/api/.env
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER:-vpos}:${POSTGRES_PASSWORD:-vpos}@postgres:5432/${POSTGRES_DB:-vpos}?schema=public
+      HOST: 0.0.0.0
+      PORT: 3001
+      VPOS_DEDICATED_DB_URLS_JSON: ${VPOS_DEDICATED_DB_URLS_JSON:-}
+    command: sh -c "pnpm --filter @vpos/api prisma:migrate:deploy && pnpm --filter @vpos/api start"
+    ports:
+      - "127.0.0.1:3101:3001"
+
+  web:
+    build:
+      context: ../..
+      dockerfile: apps/web/Dockerfile
+      args:
+        NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-https://vmjamtech.com/api}
+        NEXT_PUBLIC_CLIENT_ID: ${NEXT_PUBLIC_CLIENT_ID:-DEMO}
+    container_name: vpos-prod-web
+    restart: unless-stopped
+    depends_on:
+      - api
+    environment:
+      NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-https://vmjamtech.com/api}
+      NEXT_PUBLIC_CLIENT_ID: ${NEXT_PUBLIC_CLIENT_ID:-DEMO}
+    ports:
+      - "127.0.0.1:3100:3000"
+
+volumes:
+  vpos-prod-pgdata:

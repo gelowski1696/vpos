@@ -1,0 +1,47 @@
+{
+  "expo": {
+    "name": "VPOS",
+    "slug": "vpos",
+    "scheme": "vpos",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "userInterfaceStyle": "automatic",
+    "icon": "./assests/vpos_logo.png",
+    "splash": {
+      "image": "./assests/vpos_logo.png",
+      "resizeMode": "contain",
+      "backgroundColor": "#ffffff"
+    },
+    "android": {
+      "package": "com.vmjamtech.vpos",
+      "usesCleartextTraffic": true,
+      "adaptiveIcon": {
+        "foregroundImage": "./assests/vpos_logo.png",
+        "backgroundColor": "#ffffff"
+      },
+      "permissions": [
+        "CAMERA",
+        "BLUETOOTH",
+        "BLUETOOTH_ADMIN",
+        "BLUETOOTH_CONNECT",
+        "BLUETOOTH_SCAN",
+        "INTERNET"
+      ]
+    },
+    "plugins": [
+      "expo-dev-client",
+      [
+        "expo-image-picker",
+        {
+          "photosPermission": "Allow VPOS to access photos so you can upload a receipt logo."
+        }
+      ],
+      [
+        "expo-camera",
+        {
+          "cameraPermission": "Allow VPOS to use camera for cashier setup QR scan."
+        }
+      ]
+    ]
+  }
+}

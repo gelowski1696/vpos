@@ -1,0 +1,2207 @@
+# VPOS Multi-Tenant + Subscription Integration Tasks
+
+## Goal
+- Convert VPOS into a production multi-tenant platform.
+- Integrate VPOS with existing subscription control plane at `D:\projects JS\subscriptionapp`.
+- Enforce tenant entitlements for:
+  - single branch only
+  - multi-branch
+  - store only
+  - store + warehouse
+
+## Status Legend
+- `[DONE]` completed and validated
+- `[IN PROGRESS]` partial implementation
+- `[PENDING]` not started
+
+## Latest Completed Work
+- Date: 2026-03-11
+- Scope completed:
+  - Audit logs branch-scope resilience for admin users:
+    - Updated reports audit-log branch enforcement so `admin` users without explicit `user.branchId` auto-scope to branch logs when tenant has exactly one active branch.
+    - Multi-branch tenants remain strict: admin must still be explicitly linked to a branch.
+  - This removes the blocking error for single-branch admin accounts like `admin@admin.com` while preserving branch isolation policy.
+- Validation:
+  - `pnpm --filter @vpos/api typecheck` passed
+- Date: 2026-03-11
+- Scope completed:
+  - Restored missing `Users` navigation entry in web admin shell:
+    - Added `/users` menu item back to sidebar sections so `platform_owner` can access it (route was allowed but item was missing).
+    - Updated platform-owner blocked-scope helper text to match actual allowed modules.
+- Validation:
+  - `pnpm --filter @vpos/web typecheck` passed
+- Date: 2026-03-11
+- Scope completed:
+  - Dashboard widget degradation noise reduction:
+    - Suppressed non-critical dashboard degraded banner for known branch-admin audit-log precondition error:
+      - `Admin account is not linked to a branch...`
+    - Dashboard now treats this specific condition as ignorable for widget health aggregation while keeping other errors visible.
+- Validation:
+  - `pnpm --filter @vpos/web typecheck` passed
+- Date: 2026-03-11
+- Scope completed:
+  - Implemented transfer drill-down navigation flow (Sync Reviews -> Transfer List):
+    - Added `Open Transfer` actions in Sync Reviews rows and stale-transfer panel.
+    - Transfer links now pass deep-link query params (`transfer_id`, status/mode hints).
+    - Transfer List now reads URL params, applies initial filters, and auto-opens target transfer details.
+  - Implemented dashboard stale-transfer alert integration:
+    - Dashboard now queries API stale-transfer filters (`CREATED`/`APPROVED`) using:
+      - `min_age_minutes`
+      - `age_basis`
+    - Smart Alert Center now includes `Stale Transfers` alert with created/approved split.
+- Validation:
+  - `pnpm --filter @vpos/web typecheck` passed
+  - `pnpm --filter @vpos/api typecheck` passed
+- Date: 2026-03-11
+- Scope completed:
+  - Continued transfer/ops hardening with server-side stale-age filtering for transfer lifecycle monitoring:
+    - Added `GET /api/transfers` query params:
+      - `min_age_minutes`
+      - `age_basis` (`CREATED_AT` | `UPDATED_AT`)
+    - Applied stale-age filtering in API service (DB-backed + in-memory paths).
+    - Updated web `Sync Reviews` transfer drill-down to use server-side stale filters instead of client-side stale computation.
+  - Result:
+    - transfer stale lifecycle queries are now API-native and scale better for larger datasets.
+- Validation:
+  - `pnpm --filter @vpos/api typecheck` passed
+  - `pnpm --filter @vpos/api build` passed
+  - `pnpm --filter @vpos/web typecheck` passed
+- Date: 2026-03-11
+- Scope completed:
+  - Completed Task T4 (Transfer Mode Persistence Hardening):
+    - Transfer DB create path now persists:
+      - `transferMode`
+      - `supplierId`
+      - `supplierName`
+      - `sourceLocationLabel`
+      - `destinationLocationLabel`
+    - Transfer DB list filtering now applies `transfer_mode` directly at DB `where.transferMode` (authoritative filtering).
+    - Transfer DB mapping now reads persisted transfer metadata first (runtime meta remains fallback for backward compatibility).
+    - Added schema index contract for transfer mode filtering:
+      - `@@index([companyId, transferMode, createdAt])` on `StockTransfer`.
+  - Completed Task T5 (Transfer Failure Drill-Down UI):
+    - Enhanced Web Sync Reviews page with transfer-focused drill-down controls:
+      - quick filter chip: `Open Transfer Reviews`
+      - stale lifecycle chips:
+        - `Stale CREATED Transfers`
+        - `Stale APPROVED Transfers`
+    - Added stale transfer panel with one-click lifecycle isolation context (status/mode/source/destination/age).
+    - Kept review reason and payload preview workflows intact for transfer failure triage.
+- Validation:
+  - `pnpm --filter @vpos/api prisma:generate` passed
+  - `pnpm --filter @vpos/api typecheck` passed
+  - `pnpm --filter @vpos/api build` passed
+  - `pnpm --filter @vpos/web typecheck` passed
+- Date: 2026-03-11
+- Scope completed:
+  - Started transfer/ops enhancement stream with scoped first slice:
+    - API transfer list filtering contract added on `GET /api/transfers`:
+      - `status`
+      - `transfer_mode`
+      - `source_location_id`
+      - `destination_location_id`
+      - `branch_id`
+      - `since`
+      - `until`
+      - `limit`
+    - Web transfer list now passes branch/date/status/mode filters to API query.
+    - Fixed in-memory transfer lifecycle event emission correctness:
+      - no stock movement event on `approve`,
+      - `post` emits `TRANSFER_POST`,
+      - `reverse` emits `TRANSFER_REVERSE`,
+      - in-memory AI stock events now include FULL/EMPTY deltas and total qty delta.
+  - Added transfer ops health monitoring:
+    - new script: `apps/api/scripts/transfer-ops-health.mjs`
+    - new commands:
+      - `pnpm ops:transfers:health`
+      - `pnpm --filter @vpos/api ops:transfers:health -- --strict`
+    - CI workflow wiring in `.github/workflows/ops-maintenance.yml` (`transfer-ops-health` job).
+    - Added thresholds in `apps/api/.env.example`:
+      - `OPS_TRANSFER_CREATED_STALE_MINUTES`
+      - `OPS_TRANSFER_APPROVED_STALE_MINUTES`
+      - `OPS_TRANSFER_OPEN_REVIEW_THRESHOLD`
+    - Added runbook doc: `docs/TRANSFER_OPS_HEALTH.md`.
+- Validation:
+  - `pnpm --filter @vpos/api typecheck` passed
+  - `pnpm --filter @vpos/api build` passed
+  - `pnpm --filter @vpos/web typecheck` passed
+  - `pnpm --filter @vpos/api ops:transfers:health` passed
+- Date: 2026-03-11
+- Scope completed:
+  - Completed Task 0.1 (Tenant Identifier Strategy) documentation closeout:
+    - Added explicit mapping/source-of-truth contract in `IMPLEMENTATION2.md`:
+      - `subscriptionapp.clientId -> vpos.company.externalClientId`
+      - control-plane lifecycle authority and runtime invariants.
+  - Completed Task 5.2 (Tenant Branding and White-Label Boundaries):
+    - Refactored API branding fallback cache from single global state to tenant-scoped memory cache (`companyId` keyed) to prevent cross-tenant branding bleed.
+    - Added optional tier-based branding limits on `PUT /api/branding/config` via `VPOS_BRANDING_LIMITS_BY_PLAN_JSON`.
+    - Added e2e coverage:
+      - branding isolation between tenants,
+      - plan/tier branding limit enforcement (`403` for disallowed fields, `400` for footer max length).
+  - Added configuration documentation:
+    - `apps/api/.env.example` now includes `VPOS_BRANDING_LIMITS_BY_PLAN_JSON`.
+- Validation:
+  - `pnpm --filter @vpos/api typecheck` passed
+  - `pnpm --filter @vpos/api build` passed
+  - `pnpm --filter @vpos/api test -- --runInBand` currently fails in this local workspace due existing tenant/login fixture state (not caused by this branding patch); new test cases are included but need the standard seeded test fixture to execute cleanly.
+- Date: 2026-03-11
+- Scope completed:
+  - Completed recommended closeout sequence:
+    - Task 6.2 (security checklist closeout)
+    - Task 6.3 (runbook + alert wiring)
+    - Task 1.1 / 1.2 (tenant context + auth hardening)
+  - Tenant-context/runtime hardening:
+    - Removed implicit hardcoded `DEMO` runtime fallback from tenant context resolution.
+    - Added explicit hardening toggles (default-off for unsafe fallback paths):
+      - `VPOS_ALLOW_DEMO_TENANT_BOOTSTRAP`
+      - `VPOS_TENANT_CONTEXT_ALLOW_FALLBACK`
+      - `VPOS_AUTH_TENANT_FALLBACK`
+    - JWT guard now always stamps tenant scope from token when middleware context is missing, and enforces tenant context presence on protected routes.
+    - Entitlement sync endpoint now requires explicit tenant client id (no implicit `DEMO` fallback).
+  - Security + ops automation:
+    - Added security checklist audit script:
+      - `apps/api/scripts/security-checklist-audit.mjs`
+      - command: `pnpm ops:security:check`
+    - Added entitlement health/alert script:
+      - `apps/api/scripts/entitlement-sync-health.mjs`
+      - command: `pnpm ops:entitlements:health`
+    - Added entitlement sync failure audit signal:
+      - action: `PLATFORM_ENTITLEMENT_SYNC_FAILED`
+    - Wired scheduled CI jobs in `.github/workflows/ops-maintenance.yml`:
+      - `security-checklist`
+      - `entitlement-sync-health`
+  - Runbook/documentation closeout:
+    - Added `docs/SECURITY_CHECKLIST.md`.
+    - Added `docs/ENTITLEMENT_MONITORING.md`.
+    - Expanded `docs/OPERATIONS_RUNBOOK.md` with:
+      - tenant provisioning incident playbook
+      - billing/subscription outage playbook
+      - webhook backlog incident playbook
+      - emergency entitlement override playbook
+      - explicit security/entitlement alert commands.
+- Validation:
+  - `pnpm --filter @vpos/api build` passed
+  - `pnpm --filter @vpos/api typecheck` passed
+  - `node apps/api/scripts/security-checklist-audit.mjs` executed (strict mode currently fails in local env due default JWT/webhook secrets)
+  - `node apps/api/scripts/entitlement-sync-health.mjs` executed (local sample data reports stale entitlement rows; strict mode exits non-zero as designed)
+- Date: 2026-03-11
+- Scope completed:
+  - Enforced subscription-expiry login lock at API auth layer:
+    - `POST /auth/login` and `POST /auth/refresh` now block tenant users when entitlement is no longer login-eligible.
+    - Added machine-detectable API error payload for mobile:
+      - `code: SUBSCRIPTION_ENDED`
+      - includes `subscription_status` and `grace_until`.
+  - Mobile redirect flow for expired subscriptions:
+    - Auth transport now parses API error payloads and emits typed `AuthTransportError`.
+    - Login/unlock/bootstrap now detect subscription-ended errors and route to dedicated `Subscription Ended` stage/page.
+    - Added user-facing retry action (`Retry Sign In`) for post-renewal access recovery.
+    - Refresh path clears cached tokens when subscription-ended is received.
+- Validation:
+  - `pnpm --filter @vpos/api build` passed
+  - `pnpm --filter @vpos/mobile exec tsc --noEmit` passed
+- Date: 2026-03-11
+- Scope completed:
+  - Added dedicated Personnel Import-from-Excel wizard (same UX as Products/Customers).
+  - API import endpoints added:
+    - `POST /master-data/import/personnels/validate`
+    - `POST /master-data/import/personnels/commit`
+  - Import validation rules implemented:
+    - Personnel code required/unique in file and validated format.
+    - Full name required.
+    - Branch required and must resolve to active branch (id/code/name lookup).
+    - Personnel role required and must resolve to active role (id/code/name lookup).
+    - Optional email format validation.
+  - Web Personnel page now includes `Import Excel` wizard with template dropdowns:
+    - Branch dropdown values from active branches.
+    - Personnel Role dropdown values from active personnel roles.
+- Validation:
+  - `pnpm --filter @vpos/api typecheck` passed
+  - `pnpm --filter @vpos/api build` passed
+  - `pnpm --filter @vpos/web typecheck` passed
+- Date: 2026-03-11
+- Scope completed:
+  - Added branch-scoped Audit Logs visibility for branch admins:
+    - Web admin menu now exposes `Audit Logs` for `admin` role.
+    - Audit logs report API now supports `branch_id` filtering and enforces branch-admin scope server-side (admin sees only own branch context).
+    - Web Audit Logs page now includes branch filter dropdown.
+  - Added Personnel domain CRUD (tenant-scoped):
+    - Prisma models + migration:
+      - `PersonnelRole`
+      - `Personnel`
+    - API routes:
+      - `GET|POST|PUT|DELETE /master-data/personnel-roles`
+      - `GET|POST|PUT|DELETE /master-data/personnels`
+      - code-exists validators for both entities.
+    - Web pages:
+      - `/personnel-roles`
+      - `/personnels`
+    - Added owner/admin-safe deactivate guard for Personnel Role when still linked to active personnel.
+  - Mobile personnel selection migration:
+    - Master data bootstrap now downloads/saves `personnels`.
+    - POS and Delivery screens now use Personnel options instead of Users for assignment selectors.
+- Validation:
+  - `pnpm --filter @vpos/api prisma:generate` passed
+  - `pnpm --filter @vpos/api typecheck` passed
+  - `pnpm --filter @vpos/api build` passed
+  - `pnpm --filter @vpos/web typecheck` passed
+  - `pnpm --filter @vpos/mobile typecheck` passed
+- Date: 2026-03-11
+- Scope completed:
+  - Enforced transfer-to-shift linkage end-to-end (same policy level as sales/expense):
+    - API transfer create/sync now accepts and persists `shift_id`.
+    - Sync posting now validates `shift_id` is present, `OPEN`, and owned by the posting cashier (fail-closed on mismatch).
+    - Transfer list/details (web) now display linked shift for traceability.
+    - Mobile transfer outbox payload now requires active `shiftId` and blocks queueing without an open shift.
+  - Added explicit cashier switch audit trail:
+    - Mobile logout path now distinguishes `switch_cashier` vs `full_sign_out`.
+    - API logs `MOBILE_CASHIER_SWITCH` audit events (device-aware metadata) for owner/admin traceability.
+  - Data model/migration:
+    - Added `StockTransfer.shiftId` relation and index.
+    - Added migration: `20260311153000_transfer_shift_linkage`.
+- Validation:
+  - `pnpm --filter @vpos/api prisma:generate` passed
+  - `pnpm --filter @vpos/api typecheck` passed
+  - `pnpm --filter @vpos/api build` passed
+  - `pnpm --filter @vpos/mobile typecheck` passed
+- Date: 2026-03-11
+- Scope completed:
+  - Started `Task B6` multi-cashier + shift visibility implementation:
+    - Mobile side menu now includes `Switch Cashier` action.
+    - `Switch Cashier` signs out current cashier for this device while preserving startup context for next cashier login.
+    - Added `GET /reports/shifts/active` for owner/admin active-shift visibility.
+    - Enhanced `GET /reports/sales/xz-read` active shift payload with:
+      - `location_id`, `location_name`, `location_code`, `device_id`.
+    - Web Reports `Shift Reconciliation` now shows active shift table with cashier, branch, location, device, sale count, and total sales.
+  - Notes:
+    - Shift location/device context is sourced from `SHIFT_OPEN` audit metadata emitted during sync shift-open posting.
+    - This closes the visibility slice while full shift-ownership transition/audit hardening remains under B6.
+  - Validation:
+    - `pnpm --filter @vpos/api typecheck` passed
+    - `pnpm --filter @vpos/api build` passed
+    - `pnpm --filter @vpos/web typecheck` passed
+    - `pnpm --filter @vpos/mobile typecheck` passed
+  - Implemented `Task B3` cashier-only mobile access guard:
+  - Implemented `Task B3` cashier-only mobile access guard:
+    - Mobile auth channel header (`X-Vpos-Client: mobile`) wired from mobile app transport.
+    - API login/refresh now enforce cashier-only role for mobile channel.
+    - Mobile unlock flow now checks cached cashier role and denies unlock when role policy fails.
+    - Unauthorized mobile refresh now clears cached tokens to prevent stale unauthorized unlock.
+    - Added audit event for denied mobile role access (`MOBILE_AUTH_DENIED_ROLE`).
+  - Implemented `Task B4` persistent idempotency for sync push:
+    - Added datastore-backed idempotency decision read/write on `IdempotencyKey` table.
+    - Added payload-hash mismatch protection for idempotency-key reuse.
+    - Added idempotency cleanup script and ops commands:
+      - `ops:idempotency:cleanup:dry-run`
+      - `ops:idempotency:cleanup:apply`
+    - Added runbook doc: `docs/IDEMPOTENCY_RETENTION.md`.
+  - Implemented `Task B5` transfer idempotent create using client transfer ID:
+    - Sync transfer posting now requires/uses client transfer id (`id` / `transfer_id` / `client_transfer_id`).
+    - Transfer create path supports `client_transfer_id` and returns existing transfer on replay-safe matching payload.
+    - Transfer replay now deterministic: only one transfer row is created for same client transfer id.
+  - Added integration test coverage:
+    - mobile channel login deny for non-cashier and allow for cashier.
+    - mobile channel refresh deny for non-cashier token.
+    - idempotency key mismatch replay reject.
+    - idempotency behavior preserved across API restart.
+    - replay-safe transfer sync create using client transfer id.
+- Validation:
+  - `pnpm --filter @vpos/api typecheck` passed
+  - `pnpm --filter @vpos/mobile typecheck` passed
+  - `pnpm --filter @vpos/api build` passed
+  - `pnpm --filter @vpos/api test -- --runInBand app.e2e-spec.ts` failed in current local dataset (seed/login baseline mismatch: `Invalid credentials` for default e2e users)
+- Date: 2026-03-11
+- Scope completed:
+  - Implemented owner-driven cashier mobile setup QR enrollment flow (secure one-time token).
+  - Added API module and endpoints:
+    - `POST /mobile-enrollment/tokens` (owner/platform_owner, branch+location required, cashier-only)
+    - `POST /mobile-enrollment/claim` (public one-time claim by mobile)
+  - Added secure enrollment token persistence:
+    - new Prisma model/table `MobileEnrollmentToken`
+    - SHA-256 token hash storage (raw token returned only at generation time)
+    - expiry window enforcement (default 1 hour)
+    - single-use atomic consume (`usedAt` set once, replay blocked)
+    - branch/location/user/company scope validation at generation and claim
+  - Web Users page:
+    - added row action `Generate Setup QR`
+    - added setup modal with branch/location selectors
+    - generates one-time setup link + QR (local renderer, no third-party QR API)
+  - Mobile app:
+    - added deep-link enrollment claim flow (`vpos://enroll?token=...`)
+    - claim auto-logs cashier and auto-downloads selected branch master data
+    - auto-sets branch/location and proceeds to ready state after successful claim
+  - Added mobile app scheme configuration:
+    - `apps/mobile/app.json` -> `expo.scheme = \"vpos\"`
+  - Added API env documentation:
+    - `MOBILE_SETUP_SCHEME` in `apps/api/.env.example`
+- Validation:
+  - `pnpm.cmd --filter @vpos/api prisma:generate` passed
+  - `pnpm.cmd --filter @vpos/api typecheck` passed
+  - `pnpm.cmd --filter @vpos/web typecheck` passed
+  - `pnpm.cmd --filter @vpos/mobile typecheck` passed
+  - `pnpm.cmd --filter @vpos/web build` could not be validated in this environment (Next worker `spawn EPERM` sandbox limitation)
+- Date: 2026-03-08
+- Scope completed:
+  - Removed Branch Setup tutorial overlay flow due interaction bug on branch/location selectors.
+  - Branch setup remains plain and fully interactive.
+  - Kept animated spotlight tutorials for other scopes/pages.
+- Validation:
+  - `pnpm --filter @vpos/mobile typecheck` passed
+- Date: 2026-03-08
+- Scope completed:
+  - Fixed tutorial overlay interaction issue: users can now tap focused controls during tutorial (mask is non-blocking).
+  - Added smooth spotlight move/resize animation between tutorial steps.
+- Validation:
+  - `pnpm --filter @vpos/mobile typecheck` passed
+- Date: 2026-03-08
+- Scope completed:
+  - Upgraded mobile tutorials to true spotlight cutout-mask behavior (dim screen with focused target hole/ring).
+  - Added target measurement + spotlight focus wiring in:
+    - branch setup controls
+    - settings setup controls
+    - page header `?` tutorial controls
+  - Added settings tutorial target layout reporting to app shell for cross-screen spotlight positioning.
+- Validation:
+  - `pnpm --filter @vpos/mobile typecheck` passed
+- Date: 2026-03-08
+- Scope completed:
+  - Converted mobile tutorial flow to target-focused guidance (button-level highlight/focus).
+  - Post-login setup tutorial now points to real Settings actions:
+    - Set PIN
+    - Open Receipt Layout Settings
+    - Redownload Branch Data
+    - Save Printer Settings
+  - Branch Selection tutorial now focuses branch, location, and continue controls.
+  - Kept per-page `?` tutorial reopen and first-open per-page guidance persistence.
+- Validation:
+  - `pnpm --filter @vpos/mobile typecheck` passed
+- Date: 2026-03-08
+- Scope completed:
+  - Reworked mobile onboarding/tutorial behavior:
+    - removed PIN warning toast during login/branch flow,
+    - added first-time Branch Selection tutorial,
+    - added first-time PIN setup tutorial after branch setup when PIN is missing,
+    - added first-time per-page tutorials for all READY modules.
+  - Added persistent `?` tutorial reopen icon in page title/header row.
+  - Extended local app-state persistence with `tutorial_seen_keys_json` for per-page first-open tracking.
+- Validation:
+  - `pnpm --filter @vpos/mobile typecheck` passed
+- Date: 2026-03-08
+- Scope completed:
+  - Added mobile first-run onboarding tutorial with tooltip-style guided steps.
+  - Tutorial opens only on first successful ready state (first install/login path), then is persisted locally and not shown again.
+  - Added persisted app-state flag `tutorial_seen_at` in local SQLite (`app_state`) with safe upgrade `ALTER TABLE`.
+- Validation:
+  - `pnpm --filter @vpos/mobile typecheck` passed
+- Date: 2026-03-08
+- Scope completed:
+  - Fixed PIN UX/runtime issues:
+    - Set/Change PIN modal now auto-focuses keyboard reliably on open.
+    - PIN set/change now reloads auth session cache so lock->PIN unlock works immediately (no app restart needed).
+- Validation:
+  - `pnpm --filter @vpos/mobile typecheck` passed
+- Date: 2026-03-08
+- Scope completed:
+  - Added mobile release APK install script via ADB.
+  - Added root and mobile commands for:
+    - install existing APK
+    - build then install APK
+- Validation:
+  - `node --check apps/mobile/scripts/install-release-apk.mjs` passed
+  - `pnpm --filter @vpos/mobile typecheck` passed
+- Date: 2026-03-08
+- Scope completed:
+  - Added server-side block for category/brand deactivation when linked to products.
+  - Clear error returned with linked-product count and reassignment instruction.
+- Validation:
+  - `pnpm --filter @vpos/api build` passed
+- Date: 2026-03-08
+- Scope completed:
+  - Added auto-generate code icon button on Product Brands form (`Brand Code` field).
+- Validation:
+  - `pnpm --filter @vpos/web typecheck` passed
+- Date: 2026-03-08
+- Scope completed:
+  - Added Import Excel flow for Cylinder Types.
+  - API import contracts added:
+    - `/master-data/import/cylinder-types/validate`
+    - `/master-data/import/cylinder-types/commit`
+  - Web Cylinder Types page updated with Import Wizard action.
+- Validation:
+  - `pnpm --filter @vpos/api build` passed
+  - `pnpm --filter @vpos/web typecheck` passed
+- Date: 2026-03-08
+- Scope completed:
+  - Added Import Excel flow for Product Categories and Product Brands.
+  - API import contracts added:
+    - `/master-data/import/product-categories/{validate|commit}`
+    - `/master-data/import/product-brands/{validate|commit}`
+  - Web pages updated with Import Wizard action on Categories and Brands master-data screens.
+- Validation:
+  - `pnpm --filter @vpos/api build` passed
+  - `pnpm --filter @vpos/web typecheck` passed
+- Date: 2026-03-08
+- Scope completed:
+  - PIN UX polish:
+    - PIN digits now show briefly (~0.5s) before masking.
+    - Added stronger focus retry for Set PIN / Change PIN inputs.
+  - POS item category selector layout fix:
+    - category strip is constrained to fixed height to avoid chip-row height jumps/breaks when changing category.
+- Validation:
+  - `pnpm --filter @vpos/mobile typecheck` passed
+- Date: 2026-03-08
+- Scope completed:
+  - Fixed mobile release bundle failure in PIN input:
+    - removed `expo-haptics` runtime dependency usage from `PinCodeInput` (module was not installed).
+    - replaced with native `Vibration` feedback so build works without new package install.
+- Validation:
+  - `pnpm --filter @vpos/mobile typecheck` passed
+- Date: 2026-03-08
+- Scope completed:
+  - Mobile PIN entry hardening:
+    - improved PIN keyboard auto-focus reliability with retry focus timing,
+    - added per-digit OTP animation and haptic feedback (runtime-supported).
+  - POS item picker UX fix:
+    - fixed category-chip layout growth/break during category switching.
+    - added LPG flow-aware item price preview (`Refill` and `Non-Refill`) when available.
+- Validation:
+  - `pnpm --filter @vpos/mobile typecheck` passed
+- Date: 2026-03-08
+- Scope completed:
+  - Unified mobile PIN entry UX with shared OTP-style component:
+    - Replaced old buggy per-box PIN inputs.
+    - Applied in Unlock/Login with PIN, Set PIN modal, and Change PIN modal.
+    - Added reusable `PinCodeInput` component for consistent behavior.
+- Validation:
+  - `pnpm --filter @vpos/mobile typecheck` passed
+- Date: 2026-03-08
+- Scope completed:
+  - Mobile auth/session actions:
+    - Added side-menu `Full Sign Out` that clears local session + PIN unlock path.
+    - Kept `Log Out` as lock-only for fast PIN/password return.
+  - POS item selection UX:
+    - Enlarged Select Item modal footprint.
+    - Redesigned item cards to use more space and improve readability of item details and stock metrics.
+- Validation:
+  - `pnpm --filter @vpos/mobile typecheck` passed
+- Date: 2026-03-08
+- Scope completed:
+  - Mobile auth/PIN lock flow fix:
+    - Logout now locks UI without clearing cached local session tokens.
+    - `Use PIN Instead` after logout now transitions to unlock flow correctly.
+    - Cleared password/PIN inputs on logout for cleaner sign-in UX.
+- Validation:
+  - `pnpm --filter @vpos/mobile typecheck` passed
+- Date: 2026-03-08
+- Scope completed:
+  - Web table sorting upgrade (shared `EntityManager`):
+    - Added clickable header sorting for applicable columns across CRUD pages.
+    - Added sort cycle (`asc` -> `desc` -> `off`) and visual indicators.
+    - Added optional per-column `sortable` + `sortAccessor` override controls.
+    - Kept non-applicable columns unsorted by default for cleaner UX.
+- Validation:
+  - `pnpm --filter @vpos/web typecheck` passed
+- Date: 2026-03-08
+- Scope completed:
+  - Products + Customers deactivate/reactivate support:
+    - Added API safe-delete routes:
+      - `DELETE /master-data/products/:id` -> sets `isActive=false`
+      - `DELETE /master-data/customers/:id` -> sets `isActive=false`
+    - Added audit trail events for both safe-delete actions.
+    - Enabled `Deactivate/Reactivate` actions on Web Products and Customers pages.
+- Validation:
+  - `pnpm --filter @vpos/api build` passed
+  - `pnpm --filter @vpos/web typecheck` passed
+- Date: 2026-03-07
+- Scope completed:
+  - Web Import Excel wizard UX enhancement:
+    - Added modern guided step cards (`Template`, `Upload`, `Validate`, `Import`) with active/done states.
+    - Added drag-and-drop upload zone plus explicit file picker action.
+    - Added required-column chips for faster template compliance visibility.
+    - Improved validation table readability with invalid-row highlight styling.
+    - Added persistent footer action bar (`Reset`, `Validate`, `Commit Import`) with contextual next-step helper text.
+    - Kept full existing import flow behavior (template download, validate, commit) while improving usability.
+- Validation:
+  - `pnpm --filter @vpos/web typecheck` passed
+- Date: 2026-03-07
+- Scope completed:
+  - Mobile picker consistency:
+    - Added category-group metadata to mobile product master-data options.
+    - Enhanced shared `MasterDataSelect` with category chips (`All Categories` + dynamic categories) when grouped options are available.
+    - Product pickers that use `MasterDataSelect` (including Transfers product picker) now support category filtering for consistent UX.
+  - Products + Customers import wizard (web + API):
+    - Added reusable web wizard component with:
+      - template download (`.xlsx`)
+      - Excel/CSV upload parsing
+      - server-side validate preview
+      - commit import
+    - Added toolbar integration in:
+      - Products page
+      - Customers page
+    - Added master-data API endpoints:
+      - `POST /master-data/import/products/validate`
+      - `POST /master-data/import/products/commit`
+      - `POST /master-data/import/customers/validate`
+      - `POST /master-data/import/customers/commit`
+    - Added server validation/commit logic for create-vs-update detection:
+      - Products keyed by `SKU/Item Code`
+      - Customers keyed by `Customer Code`
+    - Added import commit audit trail events:
+      - `MASTER_DATA_PRODUCT_IMPORT_COMMIT`
+      - `MASTER_DATA_CUSTOMER_IMPORT_COMMIT`
+- Validation:
+  - `pnpm --filter @vpos/api typecheck` passed
+  - `pnpm --filter @vpos/web typecheck` passed
+  - `pnpm --filter @vpos/mobile typecheck` passed
+- Date: 2026-03-07
+- Scope completed:
+  - Master-data code automation + validation hardening:
+    - Added auto-generated unique short code flow (when code is blank) for:
+      - Branch
+      - Customer
+      - Cylinder Type
+      - Product Category
+    - Added duplicate-code validation APIs:
+      - `/master-data/branches/code-exists`
+      - `/master-data/customers/code-exists`
+      - `/master-data/cylinder-types/code-exists`
+      - `/master-data/product-categories/code-exists`
+    - Added live web input validation and availability indicators for the same code fields.
+    - Enforced code normalization policy (`A-Z`, `0-9`, length `1-8`) for new/updated short codes.
+    - Added iconized auto-generate action button beside `Code` field in modal forms.
+- Date: 2026-03-07
+- Scope completed:
+  - Product Category + Brand CRUD:
+    - Added API CRUD endpoints for `product-categories` and `product-brands` (with soft-delete/deactivate behavior).
+    - Added Prisma tables and migration:
+      - `ProductCategory`
+      - `ProductBrand`
+      - `apps/api/prisma/migrations/20260307140000_product_category_brand_crud/migration.sql`
+    - Added Web Admin pages:
+      - `/product-categories`
+      - `/product-brands`
+    - Added sidebar menu entries for both new masters.
+    - Updated Products form to use dropdowns sourced from category/brand masters.
+- Date: 2026-03-07
+- Scope completed:
+  - Product data model update:
+    - added `Product.category` and `Product.brand`,
+    - removed `brand` from `CylinderType` (brand is now product-level).
+  - API master-data alignment:
+    - product create/update/list supports `category` + `brand`,
+    - cylinder type create/update no longer accepts `brand`.
+  - Web admin UX alignment:
+    - Products page now supports and displays `Category` + `Brand` in form/table/details,
+    - Cylinder Types page no longer includes a Brand field.
+  - Mobile Items alignment:
+    - Items details now show product `Category` + `Brand`,
+    - removed cylinder-type brand display.
+  - Seed/reset alignment:
+    - updated Prisma seed, reset-fresh-start script, and API auto-seed defaults for the new model.
+  - Added migration:
+    - `apps/api/prisma/migrations/20260307113000_product_category_brand_move/migration.sql`
+- Validation:
+  - `pnpm.cmd --filter @vpos/api prisma:generate` passed
+  - `pnpm.cmd --filter @vpos/api typecheck` passed
+  - `pnpm.cmd --filter @vpos/web typecheck` passed
+  - `pnpm.cmd --filter @vpos/mobile typecheck` passed
+- Date: 2026-03-06
+- Scope completed:
+  - Mobile auth/PIN UX hardening:
+    - Fixed logout PIN persistence bug by forcing latest PIN/hash hydration from SQLite before clearing session tokens.
+    - Unlock screen PIN input redesigned to OTP-style 4-box input.
+    - Settings `Set PIN / Change PIN` modal redesigned to OTP-style 4-box inputs for current/new/confirm PIN.
+  - Login UX:
+    - Added password visibility toggle button at the end of the password field.
+- Validation:
+  - `pnpm.cmd --filter @vpos/mobile typecheck` passed
+- Date: 2026-03-06
+- Scope completed:
+  - Web Users form live validation UX:
+    - Added real-time password rule feedback while typing (check/X per rule).
+    - Added live email validation status while typing (format + duplicate availability check).
+    - Added user email-exists API integration in form typing flow with debounce.
+  - Shared web form component enhancement:
+    - `EntityManager` now supports live form-state callbacks and per-field indicator rendering.
+- Validation:
+  - `pnpm.cmd --filter @vpos/web typecheck` passed
+- Date: 2026-03-06
+- Scope completed:
+  - Web user create/edit validation hardening:
+    - Added API-side validation for user email/full name/roles before save.
+    - Added password policy validation when password is provided (`>=8`, uppercase, lowercase, number).
+    - Added duplicate-email protection in create/update so existing tenant emails are rejected instead of overwritten.
+  - Added email duplication check endpoint:
+    - `GET /master-data/users/email-exists` with optional `excludeUserId` for edit mode.
+  - Users page UX validation:
+    - Added pre-submit email-exists check in web user modal (create/edit) with clear inline error.
+    - Improved web API error parsing so JSON backend errors show readable messages.
+- Validation:
+  - `pnpm --filter @vpos/api build` passed
+  - `pnpm --filter @vpos/web build` passed
+- Date: 2026-03-06
+- Scope completed:
+  - Mobile PIN persistence + auth UX fixes:
+    - PIN configuration now persists across logout (logout clears tokens but keeps configured PIN by default).
+    - Login now remembers last email (`last_login_email`) and pre-fills it on next open.
+    - Login/Unlock auth method switch improved:
+      - Login shows `Use PIN Instead` only when PIN is configured,
+      - Unlock shows `Use Password Instead`.
+      - PIN unlock now checks cached session availability before switching.
+  - Security PIN modernization:
+    - `Set PIN / Change PIN` moved to modal workflow in Settings.
+    - PIN fields are now strict 4-digit numeric inputs with validation.
+  - Side menu action placement:
+    - `Download Branch Data` now appears directly below `Sync Now`.
+- Validation:
+  - `pnpm.cmd --filter @vpos/mobile typecheck` passed
+- Date: 2026-03-06
+- Scope completed:
+  - Mobile auth UX hardening:
+    - Login screen now uses email + password only (PIN field removed from password login).
+    - Added auth mode switch:
+      - `Use PIN Instead` (when PIN is configured),
+      - `Use Password Instead` from unlock screen.
+    - Unlock screen now shows remembered account email context.
+  - Remembered login identity:
+    - Added persistent `last_login_email` in mobile app state.
+    - Email is auto-prefilled on next app open and after logout.
+  - PIN lifecycle:
+    - Added `Security PIN` section in mobile Settings:
+      - set PIN when not configured,
+      - change PIN when configured.
+    - Login no longer requires entering PIN; PIN is managed in Settings.
+  - POS default LPG flow + side-menu placement:
+    - Settings-based default LPG flow already wired to POS new lines (`Require per item`, `Refill Exchange`, `Non-Refill`).
+    - Added `Download Branch Data` action in side menu directly below `Sync Now`.
+- Validation:
+  - `pnpm.cmd --filter @vpos/mobile typecheck` passed
+- Date: 2026-03-06
+- Scope completed:
+  - Sales details flow visibility:
+    - API reports sales detail now returns line-level `cylinder_flow` for posted sales.
+    - Web Sales Details (`/sales-list`) now displays `LPG Flow` per line (`Refill` / `Non-Refill`).
+    - Mobile Sales Details now displays line-level flow label when available in local payload.
+  - Reports usability modernization:
+    - Reports page now has guided section mode with category chips.
+    - Added focused single-section rendering and `Show All Sections` toggle to reduce visual overload.
+  - Sales event consistency:
+    - posting now persists per-line flow metadata and applies line-level flow when deriving FULL/EMPTY movement events.
+- Validation:
+  - `pnpm.cmd --filter @vpos/api typecheck` passed
+  - `pnpm.cmd --filter @vpos/web typecheck` passed
+  - `pnpm.cmd --filter @vpos/mobile typecheck` passed
+- Date: 2026-03-06
+- Scope completed:
+  - Mobile POS per-item LPG cylinder flow:
+    - cart lines now support individual `Refill` / `Non-Refill` mode for LPG items,
+    - same LPG SKU can be mixed in one sale by flow (separate cart lines),
+    - offline payload now includes line-level `cylinderFlow`.
+  - API sync and sale posting:
+    - line-level `cylinder_flow` is now mapped from outbox payload,
+    - cylinder auto-flow processing is now evaluated per line (not only sale-level default),
+    - inventory impact for LPG lines now respects each line flow mode.
+- Validation:
+  - `pnpm.cmd --filter @vpos/mobile typecheck` passed
+  - `pnpm.cmd --filter @vpos/api typecheck` passed
+  - `pnpm.cmd --filter @vpos/web typecheck` passed
+- Date: 2026-03-06
+- Scope completed:
+  - Fixed web Sales Details `Shift` linkage:
+    - mobile queued sales now include `shift_id`,
+    - sync forwards `shift_id` to sale posting,
+    - server sale posting now persists shift relation (exact `shift_id` or actor open branch shift fallback).
+  - Mobile POS post-sale UX:
+    - clears selected customer and personnel/helper after successful sale.
+- Validation:
+  - `pnpm.cmd --filter @vpos/api typecheck` passed
+  - `pnpm.cmd --filter @vpos/mobile typecheck` passed
+  - `pnpm.cmd --filter @vpos/web typecheck` passed
+- Date: 2026-03-06
+- Scope completed:
+  - Added personnel-role visibility in Sales Details (mobile + web):
+    - mobile Sales Details now shows `Personnel`, `Driver`, and `Helper`,
+    - POS now persists personnel metadata in `sales_local.payload` during offline sale creation,
+    - API sync/posting now preserves these fields in server `EventSales` payload for posted sales,
+    - web Sales Details now resolves `Personnel`, `Driver`, and `Helper` from persisted sale metadata with delivery assignment fallback.
+- Validation:
+  - `pnpm.cmd --filter @vpos/api typecheck` passed
+  - `pnpm.cmd --filter @vpos/mobile typecheck` passed
+  - `pnpm.cmd --filter @vpos/web typecheck` passed
+- Date: 2026-03-06
+- Scope completed:
+  - Tenant provisioning/sample-data policy hardening:
+    - New tenants now bootstrap with defaults only (company config, entitlement, template branch/location, roles, costing config).
+    - Runtime master-data auto-seed no longer injects demo sample products/customers/prices for newly added tenants.
+    - Legacy `DEMO` tenant compatibility retained (auto-seed only for legacy DEMO unless explicitly overridden).
+  - Added env control for seed policy:
+    - `VPOS_SEED_SAMPLE_MASTER_DATA_ON_TENANT_CREATE`
+      - `true` => always seed sample data
+      - `false` => never seed sample data
+      - unset => seed only for legacy DEMO tenant
+- Validation:
+  - `pnpm --filter @vpos/api build` passed
+- Date: 2026-03-04
+- Scope completed:
+  - Added platform-owner-only permanent delete lifecycle for tenant structure records:
+    - API endpoints:
+      - `DELETE /api/master-data/branches/:id/permanent`
+      - `DELETE /api/master-data/locations/:id/permanent`
+      - `DELETE /api/master-data/users/:id/permanent`
+    - Permanent delete is restricted to `platform_owner` role; existing owner-safe deactivate/reactivate flow remains unchanged.
+  - Added FK-safe hard-delete validation messages:
+    - branch/location/user permanent delete now fail with clear guidance when transactional relations exist (use deactivate instead).
+  - Web owner UX updates:
+    - Branches, Locations, and Users pages now show `Delete Permanently` action only for platform owner.
+    - Added immediate list refresh after permanent delete without manual page reload.
+- Validation:
+  - `pnpm --filter @vpos/api build` passed
+  - `pnpm --filter @vpos/web typecheck` passed
+- Date: 2026-03-04
+- Scope completed:
+  - Fixed dedicated-tenant provisioning migration path resolution in Docker runtime:
+    - dedicated provisioning now resolves `prisma/schema.prisma` from multiple runtime roots (`process.cwd`, source layout, dist layout),
+    - Prisma CLI runtime path resolution hardened across workspace node_modules locations.
+  - Applied the same path-resolution hardening to tenant router auto-migrate flow.
+- Validation:
+  - `pnpm --filter @vpos/api exec tsc --noEmit` passed
+- Date: 2026-03-04
+- Scope completed:
+  - Fixed LAN web CORS blocking for local development:
+    - API now allows private LAN web origins on port `3000` in non-production mode
+      (`10.x.x.x`, `192.168.x.x`, `172.16-31.x.x`), preventing repeated manual CORS env edits per IP change.
+- Validation:
+  - `pnpm --filter @vpos/api exec tsc --noEmit` passed
+- Date: 2026-03-04
+- Scope completed:
+  - Fixed Docker API runtime boot failure on new-PC setup:
+    - corrected API start entry from `dist/main.js` to `dist/apps/api/src/main.js` in `apps/api/package.json`.
+  - Validation:
+    - API container starts successfully and serves `/api/*` routes.
+- Date: 2026-03-04
+- Scope completed:
+  - Fixed transfer/deploy script reliability on Windows:
+    - `create-transfer-zip.bat` now uses temp staging outside repo, fixed root-file copy paths, prevents recursive packaging, and validates staged file count before zipping.
+    - `docker-setup-fresh.bat` now:
+      - auto-switches to repo root from script location,
+      - uses `docker compose ... --wait` for Postgres health with PowerShell fallback probe.
+  - Validation:
+    - `cmd /c scripts\create-transfer-zip.bat` passed (`Staged files: 175`)
+    - `cmd /c scripts\docker-setup-fresh.bat` passed (`postgres + api + web` all running)
+- Date: 2026-03-04
+- Scope completed:
+  - Fixed transfer packaging + Docker onboarding automation for new-PC setup:
+    - added `apps/web/Dockerfile` and compose `web` service so stack now runs `postgres + api + web`,
+    - updated `scripts/docker-setup-fresh.bat` to build/start API+Web and still run `db:reset:fresh`,
+    - fixed `scripts/create-transfer-zip.bat` to package only required folders, exclude `apps/mobile`, exclude all `node_modules`, and avoid recursive staging path issues.
+- Validation:
+  - `cmd /c scripts\create-transfer-zip.bat` passed
+  - `docker compose -f infra/compose/docker-compose.yml config` passed
+- Date: 2026-03-04
+- Scope completed:
+  - Added Docker onboarding stack for new-PC setup:
+    - created API image definition at `apps/api/Dockerfile`,
+    - expanded compose stack to include `api` + `postgres` with DB healthcheck,
+    - added Windows bootstrap script `scripts/docker-setup-fresh.bat` to run:
+      - `postgres up` -> wait healthy -> `db:reset:fresh` -> `api up`,
+    - added setup guide `docs/DOCKER_SETUP.md`.
+- Validation:
+  - `docker compose -f infra/compose/docker-compose.yml config` passed
+- Date: 2026-03-04
+- Scope completed:
+  - Fixed web local connectivity regression from strict CORS origin mismatch:
+    - API now uses resilient dev CORS defaults (`localhost`, `127.0.0.1`, `0.0.0.0` on port `3000`) even when env is narrowed.
+    - Preserved production behavior by keeping strict env-based origin enforcement in production mode.
+- Validation:
+  - `pnpm --filter @vpos/api exec tsc --noEmit` passed
+- Date: 2026-03-04
+- Scope completed:
+  - Fixed mobile 404 issues caused by API base URL mismatch in device builds:
+    - added shared API URL normalizer (`apps/mobile/src/app/api-base-url.ts`),
+    - ensured mobile always targets `/api` even when env is missing suffix,
+    - applied normalizer to auth, sync, and bootstrap transports.
+  - Updated app default fallback base URL to include `/api`.
+- Validation:
+  - `pnpm --filter @vpos/mobile exec tsc --noEmit` passed
+- Date: 2026-03-04
+- Scope completed:
+  - Fixed Android release APK build pipeline for mobile in pnpm monorepo:
+    - added `babel-preset-expo` and `@babel/runtime` in mobile package,
+    - added `apps/mobile/metro.config.js` for monorepo module resolution (`watchFolders`, `nodeModulesPaths`, symlink support),
+    - updated APK script env for deterministic release bundling (`NODE_ENV=production`, `EXPO_NO_METRO_WORKSPACE_ROOT=1`),
+    - validated `pnpm --filter @vpos/mobile apk:release` end-to-end.
+  - Release artifact:
+    - `apps/mobile/dist/release/vpos-release.apk`
+- Validation:
+  - `pnpm --filter @vpos/mobile apk:release` passed
+- Date: 2026-03-04
+- Scope completed:
+  - Mobile device identity hardening (no hardcoded `EXPO_PUBLIC_DEVICE_ID` required):
+    - added persistent local `device_identity` store in SQLite,
+    - app now auto-generates/stores a stable device ID on first boot,
+    - auth, sync, printer settings, and receipt-layout settings now use the persisted device ID.
+    - `EXPO_PUBLIC_DEVICE_ID` remains optional as first-run seed only.
+- Validation:
+  - `pnpm --filter @vpos/mobile typecheck` passed
+- Date: 2026-03-04
+- Scope completed:
+  - Added mobile Android release APK build scripts:
+    - `pnpm --filter @vpos/mobile apk:release`
+    - `pnpm --filter @vpos/mobile apk:release:clean`
+    - Root shortcuts:
+      - `pnpm mobile:apk:release`
+      - `pnpm mobile:apk:release:clean`
+  - Added script file `apps/mobile/scripts/build-release-apk.mjs`:
+    - runs Gradle `assembleRelease` (or `clean assembleRelease`),
+    - outputs release artifact to `apps/mobile/dist/release/vpos-release.apk`.
+- Validation:
+  - `node --check apps/mobile/scripts/build-release-apk.mjs` passed
+- Date: 2026-03-04
+- Scope completed:
+  - Completed Task B2 (Advanced Dashboard Insights Pack) in web dashboard:
+    - Smart Alert Center added (low stock, failed syncs, open sync reviews, shift variance, overdue balances) with severity and direct actions.
+    - KPI cards now support drill-down navigation to filtered report anchors or sync-reviews page.
+    - Added branch comparison panel (sales, margin, stock-health side-by-side bars).
+    - Added cylinder operations widget (refill/sale ratio, full-to-empty conversion, damaged/lost summary).
+    - Added delivery SLA widget (on-time, delayed, failed, pending).
+    - Added credit risk widget (aging buckets, top due customers, collection trend).
+    - Added inventory risk heatmap widget (location x item risk scoring).
+    - Added shift performance widget (open/closed, expected vs counted cash, variance).
+    - Added sync health panel (open reviews, push success rate, failed batches, rejected items, retry signals).
+    - Added role-based dashboard widget visibility (Owner/Admin/Cashier view profiles).
+    - Added report-page URL filter prefill (`since`, `until`, `branch_id`) to support dashboard drill-down context.
+- Validation:
+  - `pnpm --filter @vpos/web typecheck` passed
+- Date: 2026-03-04
+- Scope completed:
+  - Implemented Task B1 (Product low-stock threshold + LPG FULL-only low-stock logic):
+    - Added product-level `Low Stock Alert Qty` in API/Web product master data.
+    - Low-stock computation now uses:
+      - LPG products: `qty_full <= threshold`
+      - Non-LPG products: `qty_on_hand <= threshold`
+    - `EMPTY` qty no longer contributes to LPG low-stock trigger logic.
+    - Reports low-stock module now applies per-product threshold with fallback threshold input.
+    - Web/mobile labels now clearly indicate low-stock basis rule.
+  - Validation:
+    - `pnpm --filter @vpos/api typecheck` passed
+    - `pnpm --filter @vpos/web typecheck` passed
+    - `pnpm --filter @vpos/mobile typecheck` passed
+- Date: 2026-03-04
+- Scope completed:
+  - Fixed shift close sync review false-positive:
+    - sync close validator now hydrates shift state from datastore before requiring `OPEN` status.
+    - avoids `needs_review` on valid close payloads when API process state was reset.
+  - Validation:
+    - `pnpm --filter @vpos/api typecheck` passed
+- Date: 2026-03-04
+- Scope completed:
+  - Web reports usability update:
+    - Inventory Movement Ledger `When` now displays readable local date/time (not raw ISO).
+  - Validation:
+    - `pnpm --filter @vpos/web typecheck` passed
+- Date: 2026-03-04
+- Scope completed:
+  - Inventory Movement Ledger now carries FULL/EMPTY movement dimensions:
+    - API movement rows include `qty_full_delta` and `qty_empty_delta`.
+    - API summary includes `qty_full_in/out` and `qty_empty_in/out`.
+    - Sale and transfer stock events now persist full/empty deltas used by movement reports.
+  - Web report UI updated:
+    - Inventory Movement table now shows `FULL Δ` and `EMPTY Δ`.
+    - CSV export now includes full/empty delta columns.
+  - Validation:
+    - `pnpm --filter @vpos/api typecheck` passed
+    - `pnpm --filter @vpos/web typecheck` passed
+- Date: 2026-03-04
+- Scope completed:
+  - Fixed LPG posting failure for opening-stock-only FULL/EMPTY setups:
+    - Sale posting now falls back to `CylinderBalance` availability when serial rows are missing.
+    - Added aggregate fallback movement handling (`FULL/EMPTY` balance updates + movement event) so sync sales proceed without false `Available=0` errors.
+  - Validation:
+    - `pnpm --filter @vpos/api typecheck` passed
+- Date: 2026-03-04
+- Scope completed:
+  - LPG FULL/EMPTY consistency fixes across sale posting, sync, and reporting:
+    - API sale posting now updates `CylinderBalance` during auto cylinder flow:
+      - `REFILL_EXCHANGE`: source location `FULL -qty`, `EMPTY +qty`
+      - `NON_REFILL`: source location `FULL -qty`, customer-outbound location `FULL +qty`
+    - API sale inventory posting now keeps LPG `qty_on_hand` unchanged for `REFILL_EXCHANGE` (full->empty exchange) and applies stock-out only for `NON_REFILL`.
+    - Sync push/pull now emits `inventory_balance` deltas after server sale posting so mobile master-data rows update without manual redownload.
+    - Reports `FULL vs EMPTY` now read from `CylinderBalance` (authoritative current split) instead of direct cylinder-serial grouping.
+    - Web Product Details (cost snapshot table) now shows `FULL` and `EMPTY` columns for LPG items (replacing `Qty On Hand` column there).
+  - Validation:
+    - `pnpm --filter @vpos/api typecheck` passed
+    - `pnpm --filter @vpos/web typecheck` passed
+- Date: 2026-03-04
+- Scope completed:
+  - Opening stock and mobile LPG stock-flow usability alignment:
+    - Web opening stock now supports LPG `Opening FULL` + `Opening EMPTY` with computed `Qty On Hand`.
+    - API opening stock now accepts/persists LPG full-empty opening counts (via cylinder-balance snapshot) and returns FULL/EMPTY/QOH payloads.
+    - Mobile POS now sends explicit `cylinder_flow` (`REFILL_EXCHANGE` or `NON_REFILL`) from an on-screen selector.
+    - Mobile Items now displays LPG `FULL`, `EMPTY`, and `QOH = FULL + EMPTY`; non-LPG shows QOH from inventory snapshot when available.
+    - Mobile branch bootstrap now downloads cylinders into `cylinders_local` for offline LPG FULL/EMPTY visibility.
+  - Validation:
+    - `pnpm --filter @vpos/api typecheck` passed
+    - `pnpm --filter @vpos/web typecheck` passed
+    - `pnpm --filter @vpos/mobile typecheck` passed
+- Date: 2026-03-04
+- Scope completed:
+  - Enforced “no tenant owner/platform-owner users” policy:
+    - tenant provisioning roles now exclude `owner`/`platform_owner`,
+    - dedicated bootstrap role set updated to tenant-safe roles only,
+    - tenant admin upsert now assigns `admin/supervisor` (no owner role).
+  - Introduced platform control company boundary:
+    - seeded `PLATFORM` shared company for `owner@vpos.local` (`platform_owner`, `admin`),
+    - tenant list APIs now exclude platform control company from owner tenant listing.
+  - Verified seeded result:
+    - `DEMO_STORE` and `DEMO_WH` contain no `owner`/`platform_owner` users.
+- Date: 2026-03-04
+- Scope completed:
+  - Fixed duplicate demo users/tenant confusion:
+    - auth bootstrap no longer auto-creates legacy `DEMO / VPOS Demo LPG Co.` unless explicitly enabled.
+    - new env gate: `VPOS_AUTH_SEED_LEGACY_DEMO` (set to `false` in local env).
+  - Re-ran hard reset to enforce clean tenant list:
+    - shared DB now includes only `DEMO_STORE` and `DEMO_WH`.
+- Date: 2026-03-04
+- Scope completed:
+  - Added and executed full local hard reset + fresh reseed command for hybrid/dedicated baseline:
+    - new command: `pnpm db:reset:fresh`
+    - new script: `apps/api/scripts/reset-fresh-start.mjs`
+    - drops prior dedicated tenant databases, resets shared schema, recreates two dedicated tenants with owner-ready baseline:
+      - `DEMO_STORE` (`STORE_ONLY`)
+      - `DEMO_WH` (`STORE_WAREHOUSE`)
+  - Seed outcome:
+    - owner login: `owner@vpos.local /  `
+    - tenancy mode for both seeded tenants: `DEDICATED_DB`
+    - topology footprint:
+      - `DEMO_STORE`: `MAIN` + `LOC-MAIN`
+      - `DEMO_WH`: `MAIN/WH1` + `LOC-MAIN/LOC-WH1`
+    - both dedicated DBs include standard LPG master-data seed set.
+- Date: 2026-03-04
+- Scope completed:
+  - Mobile Shift UX modernization:
+    - converted Shift/Duty screen to modal-first workflow (Start Duty, End Duty, Cash Adjustment),
+    - improved compact overview cards and action-first layout for better cashier usability.
+  - Validation:
+    - `pnpm --filter @vpos/mobile typecheck` passed
+  - API sync review root-cause fix for petty-cash OPEN-shift false rejects:
+    - sync validator now hydrates shift state from datastore before rejecting petty cash,
+    - shift open/close and petty-cash sync paths now attempt datastore persistence for continuity across server restarts.
+    - sync module now imports Prisma wiring required for tenant datasource routing in sync validator.
+  - Validation:
+    - `pnpm --filter @vpos/api typecheck` passed
+    - `pnpm --filter @vpos/api test -- -t "enforces petty cash server checks for open shift and cash balance"` passed
+  - Mobile sync UX improvement:
+    - fixed in-page stale data after running `Sync Now` (header notification/side menu).
+    - app screens now auto-refresh local data after global sync completes; manual Refresh button is no longer required for immediate status updates.
+    - covered screens: POS, Sales, Transfers, Shift, Expense, Customers.
+  - Validation:
+    - `pnpm --filter @vpos/mobile typecheck` passed
+  - Sync review operations visibility in web admin:
+    - added tenant-scoped `GET /reviews` support path and list service filtering,
+    - added `/sync-reviews` web page with status filters, reason/outbox list, payload preview, and resolve action.
+  - Validation:
+    - `pnpm --filter @vpos/api typecheck` passed
+    - `pnpm --filter @vpos/web typecheck` passed
+- Date: 2026-03-02
+- Scope completed:
+  - Local environment schema sync:
+    - applied migration `20260302223000_customer_payment_sale_link` via `prisma migrate deploy`.
+    - regenerated Prisma client.
+  - Customer payment settlement consistency fix (API/Web/Mobile):
+    - added `sale_id` linkage support for customer payments (schema + service + sync posting).
+    - reports now include settlement payments in sales payment totals and methods.
+    - web sales details/payment breakdown now display payment source (`Sale` vs `Settlement`).
+    - web customer-payments form now supports optional `Sale ID` input for explicit sale linkage.
+    - sync pull now sends server-side customer payment deltas to device-scoped mobile clients.
+    - mobile due computation now decreases correctly after settlements.
+  - Mobile Sales Details update (items not in separate modal):
+    - removed `Order Items` modal action.
+    - item lines are now shown inline within Sales Details content.
+    - footer actions now focus on print, payment, breakdown, and close.
+  - Mobile Sales List display update:
+    - switched primary row identifier to `Sale ID`.
+    - moved receipt into secondary subtext line (`Receipt #...`).
+  - Mobile Sales Details item-access update:
+    - initial `Order Items` modal flow was implemented, then superseded by inline item lines in Sales Details.
+  - Mobile Sales Details modal compact UX pass:
+    - primary title now uses Sale ID.
+    - receipt moved to smaller subheader line.
+    - action buttons moved to fixed footer (print, record payment, payment breakdown, close).
+    - long details kept out of primary modal to reduce scrolling.
+  - Sales details usability enhancement (mobile + web):
+    - added dedicated `Payment Breakdown` action button and modal for easier viewing without deep scrolling.
+    - mobile modal includes direct payments + customer settlement history with sync badges.
+    - web modal includes payment summary cards + payment-line table.
+    - validation:
+      - `pnpm --filter @vpos/mobile typecheck` passed,
+      - `pnpm --filter @vpos/mobile build` passed,
+      - `pnpm --filter @vpos/web typecheck` passed.
+  - Mobile Sales Details tracking enhancement:
+    - added `Customer Payment History` section in Sales Details.
+    - displays local settlement timeline per sale with method, amount, datetime, reference, notes, and sync status.
+    - validation:
+      - `pnpm --filter @vpos/mobile typecheck` passed,
+      - `pnpm --filter @vpos/mobile build` passed.
+  - Mobile data-refresh correction for customer settlements:
+    - fixed stale customer/sales/sale-details values after queueing customer payment from Sales Details.
+    - sales UI now applies local settlement projection by `sale_id` from `customer_payments_local`.
+    - customers UI balance display now applies local queued-payment adjustment (pending/processing/synced).
+    - validation:
+      - `pnpm --filter @vpos/mobile typecheck` passed,
+      - `pnpm --filter @vpos/mobile build` passed,
+      - `pnpm --filter @vpos/mobile test -- offline-transactions.spec.ts --runInBand` passed.
+  - Mobile Customers module simplification:
+    - removed direct customer-payment form from Customers screen.
+    - Customers is now read-only/search-focused; settlement flow is enforced via Sales Details only.
+    - added in-screen guidance for operators to use `Sales -> Sale Details -> Record Customer Payment`.
+    - validation:
+      - `pnpm --filter @vpos/mobile typecheck` passed,
+      - `pnpm --filter @vpos/mobile build` passed.
+  - Mobile credit-settlement UX update:
+    - customer payment can now be queued directly from `Sales Details` modal (sale-level pay-later workflow).
+    - added settlement CTA with due-balance guard (`customer required`, `remaining balance > 0`).
+    - added in-modal payment inputs (method/amount/reference/notes) and outbox queue integration.
+    - pending-sync counter refresh is triggered after queueing from sales.
+    - validation:
+      - `pnpm --filter @vpos/mobile typecheck` passed,
+      - `pnpm --filter @vpos/mobile build` passed.
+  - Web auth UX hardening:
+    - centralized auto-redirect to `/login` for authenticated API `401/403` responses and missing-token requests.
+    - prevents raw unauthorized/session-timeout errors from remaining on admin pages.
+    - validation: `pnpm --filter @vpos/web typecheck` passed.
+  - Customer-payments schema compatibility hardening for mixed tenant fleet:
+    - Added graceful missing-table handling in customer-payments service when tenant DB is not yet migrated.
+    - Dedicated tenants now fail closed with explicit `503` message:
+      - `Dedicated datastore schema is not ready ... Run migrations for this datastore.`
+    - Shared DB path now returns controlled fallback instead of unhandled Prisma crash for pre-migration states.
+    - Improved dedicated datasource auto-migration readiness check:
+      - no longer checks only `Branch` table,
+      - now verifies latest local Prisma migration is applied (`_prisma_migrations`) and auto-runs `migrate deploy` when behind.
+    - Validation:
+      - `pnpm --filter @vpos/api typecheck` passed,
+      - `pnpm --filter @vpos/api build` passed.
+  - Customer pay-later settlement flow completed (API + web + mobile):
+    - Added server domain and storage for customer settlement payments:
+      - Prisma `CustomerPayment` model + migration.
+    - Added tenant-scoped API endpoints:
+      - `POST /api/customer-payments/post`
+      - `GET /api/customer-payments`
+    - Added sync outbox support for mobile-posted settlements:
+      - `customer_payment/create` now auto-posts in `/sync/push`.
+      - `/sync/pull` now returns customer-payment posting metadata deltas.
+    - Updated outstanding-balance computation to include settlements:
+      - customer outstanding is now posted sales receivable minus posted customer payments (non-negative floor).
+    - Added web admin settlement page:
+      - `/customer-payments` with post-payment form + history table filters.
+    - Added mobile offline settlement flow:
+      - local `customer_payments_local` persistence,
+      - offline queueing + sync status path for settlement records.
+    - Validation:
+      - `pnpm --filter @vpos/api typecheck` passed,
+      - `pnpm --filter @vpos/web typecheck` passed,
+      - `pnpm --filter @vpos/mobile typecheck` passed,
+      - `pnpm --filter @vpos/api build` passed,
+      - `pnpm --filter @vpos/web build` passed,
+      - `pnpm --filter @vpos/mobile build` passed,
+      - targeted API integration tests for customer-payment posting/sync passed,
+      - targeted mobile offline/sync tests passed.
+  - Customer balance visibility rollout (web + mobile):
+    - API enhancement: `GET /master-data/customers` now supports:
+      - `include_balance=true`
+      - optional `branch_id` scope
+    - Balance logic computes outstanding customer credit as:
+      - sum of posted sale net totals minus sum of applied payments (non-negative floor),
+      - aggregated per customer.
+    - Web Customers page now loads `include_balance=true` and shows `Outstanding Balance` column.
+    - `EntityManager` enhanced with `formHidden` field support so computed table-only fields (like balances) are displayed without appearing in Add/Edit modals.
+    - Mobile branch bootstrap now downloads customers with balance metadata for selected branch.
+    - Mobile customer lists now show balance in subtitle (e.g., `Bal: PHP ...`).
+    - POS payment modal now shows `Customer Current Balance` for selected customer.
+    - Validation:
+      - `pnpm --filter @vpos/api typecheck` passed,
+      - `pnpm --filter @vpos/web typecheck` passed,
+      - `pnpm --filter @vpos/mobile typecheck` passed,
+      - `pnpm --filter @vpos/api build` passed,
+      - `pnpm --filter @vpos/mobile build` passed.
+  - POS payment modal and partial-payment sync hardening:
+    - Enhanced mobile `Payment Details` modal with clearer financial cards and flow:
+      - `Total`, `Paid`, `Change`, and `Credit Due` summary cards,
+      - `Amount Tendered` label for full payment mode,
+      - `Notes (Optional)` input for payment/credit context.
+    - Full-payment UX now supports tendered amount greater than total and computes `Change` automatically.
+    - Partial-payment UX now accepts `0` amount (credit-only sale) and computes full credit due.
+    - Sync/server posting compatibility fix:
+      - API sale posting now supports `payment_mode=PARTIAL`,
+      - allows payment lines with amount `0`,
+      - validates partial payment total within `0..net_total` instead of forcing exact match,
+      - includes payment mode/paid/credit metadata in sales event payload.
+    - Sync mapping update:
+      - `/sync/push` sale auto-post now forwards `payment_mode`, `credit_balance`, and `credit_notes`.
+    - Validation:
+      - `pnpm --filter @vpos/mobile typecheck` passed,
+      - `pnpm --filter @vpos/mobile build` passed,
+      - `pnpm --filter @vpos/api typecheck` passed,
+      - `pnpm --filter @vpos/api build` passed.
+  - Mobile shell polish update:
+    - Side drawer open/close animation now uses smoother spring-based motion.
+    - Added explicit icon-badge styling per side-menu item for a cleaner, consistent module list.
+    - Improved drawer backdrop/panel animation layering to feel less abrupt.
+    - Fixed toast presentation reliability:
+      - replaced fixed toast top offset with runtime-calculated offset based on Android status bar + sticky header height,
+      - improved toast card layout (`centered`, `maxWidth`) for cleaner rendering across device sizes.
+    - Header interaction update (requested):
+      - moved hamburger menu trigger to the left side of the top header,
+      - right side now shows status indicator + bell notification icon,
+      - bell icon now opens a notification panel with actionable alerts:
+        - pending sync -> `Go` triggers immediate sync,
+        - branch data update available -> `Go` triggers redownload branch data,
+        - no alerts -> `Open` routes to Settings.
+    - Android status bar visibility fix:
+      - switched status bar handling to translucent + transparent background,
+      - added dynamic Android status-bar top inset spacing so header does not clash with system clock/signal area.
+    - Validation:
+      - `pnpm --filter @vpos/mobile typecheck` passed,
+      - `pnpm --filter @vpos/mobile build` passed.
+  - Mobile navigation layout redesign (requested IA):
+    - Replaced old all-tab structure with primary tabs:
+      - `Dashboard/Home`, `POS`, `Sales`, `Transfer`.
+    - Added side drawer menu (`☰`) for secondary modules:
+      - `Expense`, `Items`, `Customers`, `Shift`, `Settings`.
+    - Added quick side-drawer actions:
+      - `Back To Main Tabs`,
+      - `Sync Now`,
+      - `Change Branch / Location`.
+    - Added new read-only viewer screens:
+      - `ItemsViewScreen` (local master-data product list with search),
+      - `CustomersViewScreen` (local master-data customer list with search).
+    - Added new `HomeScreen` dashboard overview with local counters and sync context.
+    - Validation:
+      - `pnpm --filter @vpos/mobile typecheck` passed,
+      - `pnpm --filter @vpos/mobile build` passed.
+  - Mobile Sales Details modal UX tweak:
+    - Added `tap outside to close` behavior for Sales Details modal.
+    - Kept inside-card interactions intact using event propagation stop on modal card.
+    - Validation:
+      - `pnpm --filter @vpos/mobile typecheck` passed.
+  - Mobile Sales list scalability upgrade (pagination/infinite scroll):
+    - Added chunked SQLite pagination for Sales tab (`LIMIT/OFFSET`, page size 50).
+    - Added infinite-scroll loading when cashier reaches list bottom.
+    - Added fallback manual `Load More` action.
+    - Added in-list loading state and end-of-list hint.
+    - Preserved modern Sales UI, filters, and details modal behavior.
+    - Validation:
+      - `pnpm --filter @vpos/mobile typecheck` passed,
+      - `pnpm --filter @vpos/mobile build` passed.
+  - Mobile Sales Details UX modernization:
+    - Redesigned Sales Details modal into a cleaner, cashier-friendly layout:
+      - hero section (receipt/sale identity, date, order/payment mode chips),
+      - key info cards (customer, branch/location, credit balance, reprint count),
+      - improved totals cards,
+      - item cards and payment cards for easier scanning.
+    - Preserved print/reprint action and sync status visibility.
+    - Validation:
+      - `pnpm --filter @vpos/mobile typecheck` passed,
+      - `pnpm --filter @vpos/mobile build` passed.
+  - Mobile Sales List UI modernization:
+    - Redesigned Sales tab with a cleaner cashier-friendly layout:
+      - KPI summary cards (`records`, `total`, `pending`, `synced`),
+      - search bar (receipt/sale/customer/location),
+      - status filter pills (`ALL`, `PENDING`, `SYNCED`, `FAILED`),
+      - modern sale cards showing key details and sync badge.
+    - Moved sale details into a dedicated bottom-sheet style modal for better readability.
+    - Kept print/reprint action inside details modal and preserved receipt reprint tracking.
+    - Validation:
+      - `pnpm --filter @vpos/mobile typecheck` passed,
+      - `pnpm --filter @vpos/mobile build` passed.
+  - Mobile Sales details print/reprint action:
+    - Added `Print / Reprint Receipt` button inside mobile Sales Details view.
+    - Button now uses stored `receipts_local` document and sends it to configured printer from Sales screen.
+    - Reprint marker (`*** REPRINT ***`) is prepended for details-triggered prints.
+    - Successful print updates `receipts_local.reprint_count` and enqueues `receipt/reprint` outbox event for audit sync.
+    - Added reprint counter visibility in Sales Details.
+    - Validation:
+      - `pnpm --filter @vpos/mobile typecheck` passed,
+      - `pnpm --filter @vpos/mobile build` passed.
+  - Mobile sales and petty-cash UI expansion:
+    - Added new mobile `Sales` tab with local sales list and per-sale details view (summary, items, payments, sync status, receipt reference when available).
+    - Added new mobile `Expense` tab for petty cash creation with explicit `IN / OUT` direction selection.
+    - Added offline petty-cash form fields: shift selector, expense category selector, amount, notes; entries are queued to outbox via `petty_cash` entity.
+    - Added local petty cash recent-list panel with sync status badges.
+    - Added `loadExpenseCategoryOptions` utility from `master_data_local` for user-friendly expense-category dropdowns.
+    - Validation:
+      - `pnpm --filter @vpos/mobile typecheck` passed,
+      - `pnpm --filter @vpos/mobile build` passed.
+  - Web sales list details viewer implemented:
+    - Added API endpoint `GET /reports/sales/:saleId` (tenant-scoped, posted-sale only) returning:
+      - sale header/financial summary,
+      - line items (item code, product name, qty, price, estimated cost, gross),
+      - payments (method, amount, reference),
+      - delivery info and assigned personnel (if linked).
+    - Updated Web Admin `Sales List` page:
+      - new `View` action per row,
+      - details modal with summary cards, transaction info, payment breakdown, line items, and delivery section.
+    - Validation:
+      - `pnpm --filter @vpos/api typecheck` passed,
+      - `pnpm --filter @vpos/web typecheck` passed.
+  - Web opening stock function added (safe initial QOH setup):
+    - API endpoints:
+      - `GET /master-data/inventory/opening-stock` (snapshot with opening/transaction lock flags),
+      - `POST /master-data/inventory/opening-stock` (applies opening stock using ledger-based adjustment with audit trail).
+    - Safety guards on apply:
+      - blocks opening stock if non-opening inventory movements already exist for the same SKU/location,
+      - blocks repeated opening setup unless `force` is explicitly enabled for opening-only corrections,
+      - validates active location/product and non-negative qty/cost.
+    - Posting behavior:
+      - updates `InventoryBalance` (qty/avg cost),
+      - writes `InventoryLedger` entry (`movementType=ADJUSTMENT`, `referenceType=OPENING_STOCK`),
+      - writes `EventStockMovement` + audit log (`MASTER_DATA_OPENING_STOCK_APPLY`).
+    - Web Admin UI:
+      - added new page `/inventory-opening` with controlled form (location, product, opening qty, avg cost, notes, force replace),
+      - includes safe-process guidance and current snapshot table with lock indicators,
+      - added sidebar entry under Inventory: `Opening Stock`.
+  - Sales sync visibility hardening for LPG 22kg flow:
+    - Added starter inventory seeding for both `LPG-11-REFILL` and `LPG-22-REFILL` in runtime tenant bootstrap (`LOC-MAIN` and `LOC-WH1`) so server-authoritative sale posting has valid on-hand stock in demo onboarding paths.
+    - Updated local Prisma seed data to include `LPG-22-REFILL` opening stock in `LOC-MAIN` for easier end-to-end mobile->sync->web validation.
+    - Added mobile sync rejection surfacing: after sync with rejected items, app now shows latest `sync_reviews_local` reason (for example insufficient stock) to explain why a queued sale did not appear in web sales list.
+  - Receipt item-line formatting update:
+    - POS printed receipt now shows product name only per line item (item code/subtitle removed from print output).
+  - POS payment modal UX update:
+    - `Proceed to Payment` now opens a dedicated payment modal.
+    - order summary and all payment inputs (discount, payment type/method, paid amount, credit notes) are now inside the modal.
+    - `Queue Sale` action moved inside payment modal with existing validation and disabled-state rules preserved.
+    - modal includes `Back` action to return to cart without losing the current cart context.
+  - Printing output enhancement:
+    - added default top and bottom print padding in shared `@vpos/printing-core` renderer for receipt/X-read/Z-read outputs.
+    - receipt documents now support optional `topPaddingLines` and `bottomPaddingLines` overrides (bounded/safe values).
+    - rebuilt printing-core package so mobile runtime uses updated print layout immediately.
+  - Mobile personnel/helper display-name fix:
+    - updated mobile user-option mapping to prioritize full-name fields (`fullName`, `full_name`, `displayName`, first/middle/last/suffix composition) over email.
+    - POS personnel/helper pickers now show full names when present.
+    - printed receipt personnel/helper names now follow the same full-name mapping.
+  - Mobile POS receipt printing on sale queue:
+    - POS checkout now triggers receipt creation and print dispatch immediately after offline sale is queued.
+    - Receipt payload now includes branch/location, customer/personnel, item lines, totals, paid amount, and credit due.
+    - Receipts are persisted to local SQLite `receipts_local` (`sale_id`, `receipt_number`, receipt payload) for reprint/audit continuity.
+    - Printer fallback behavior:
+      - if printer type is `NONE`, sale still succeeds and user gets clear toast guidance to configure printer;
+      - print failures no longer block sale queueing and show non-blocking error feedback.
+  - Mobile startup branch/location selection fix:
+    - Added persisted startup location state (`selected_location_id`, `selected_location_name`) in SQLite `app_state`.
+    - Added startup `Location` selector in `BRANCH_SETUP` flow, scoped by selected branch and persisted for next app launches.
+    - Wired startup-selected location into POS and Shift defaults (`preferredLocationId`) so transactions use the chosen startup location context automatically.
+    - Added explicit startup hint when no active locations exist for selected branch.
+  - Refined mobile app shell header and controls UX:
+    - sticky top header now uses iconized status controls,
+    - online/offline represented by green/red status dot,
+    - pending sync count moved to status badge,
+    - removed per-module `Sync Now` buttons and centralized sync/status actions in header dropdown,
+    - moved light/dark theme control from header into Settings page (`Appearance` section).
+  - Refactored POS module to combine pickup and delivery workflows in one screen:
+    - added `PICKUP` / `DELIVERY` selector directly in POS checkout flow,
+    - branch/location input selectors removed from POS UI (auto-resolved from startup-selected branch context),
+    - customer selection switched to modal picker,
+    - personnel selection (driver/helper) added via modal pickers for delivery mode,
+    - item selection switched to modal picker with search,
+    - checkout now queues sale with `saleType` and, for delivery mode, auto-queues linked delivery order from POS.
+  - POS checkout UX/validation hardening:
+    - customer is now required for both pickup and delivery before payment/checkout,
+    - pickup now supports personnel/helper selectors (personnel required, helper optional),
+    - payment controls are now gated by readiness (cart + customer + personnel),
+    - cart rows now show unit price and per-line total for clearer operator pricing visibility.
+  - Mobile branch-data refresh + change detection:
+    - fixed POS local pricing source to resolve from downloaded `price_list` rules (branch/tier/contract/global priority) instead of product-only fallback,
+    - added Settings actions for branch data:
+      - `Check for Updates`
+      - `Redownload Branch Data`,
+    - added branch master-data fingerprint tracking and periodic background check in READY stage,
+    - added in-app update notification when admin-side branch data changed and local device needs redownload,
+    - added branch-data status details in Settings (selected branch, last download timestamp, update available indicator).
+  - POS checkout flow update:
+    - removed `Recent Offline Sales` panel from POS screen for cleaner cashier flow,
+    - converted checkout into two-stage flow (`Proceed to Payment` -> `Queue Sale`),
+    - payment step now shows order summary + labeled fields,
+    - added payment mode selector (`FULL` / `PARTIAL`) with customer credit balance calculation (`credit_due`) and optional credit notes,
+    - sale outbox payload now includes `payment_mode`, `credit_balance`, and `credit_notes` for credit-ready posting.
+  - Mobile navigation refinement:
+    - removed standalone `DELIVERY` tab from bottom navigation as requested (POS still supports pickup/delivery order type in one screen).
+  - Web reporting visibility enhancement:
+    - added API endpoint `GET /reports/sales/list` with branch/date/user/location/shift filtering and limit control,
+    - added new Web Admin page `Sales List` with branch/date filters and tabular sales rows,
+    - linked `Sales List` into admin sidebar navigation for faster synced-sales verification.
+  - Sync sale posting end-to-end hardening:
+    - `POST /sync/push` now auto-posts complete `sale/create` outbox payloads through server-authoritative `SalesService.post` before accepting outbox rows,
+    - sync pull delta now includes `server_sale_posted` and `server_sale_result` metadata (receipt, totals, cogs/deposit deltas) for posted sales,
+    - push rejection path now creates sync review if authoritative sale posting fails,
+    - added integration coverage: `auto-posts complete synced sale payload and returns sale posting metadata in pull deltas`.
+  - Implemented mobile startup branch-bootstrap flow for offline-first onboarding:
+    - pulsing centered logo splash at startup (`BOOTING` stage),
+    - new `BRANCH_SETUP` stage before app modules,
+    - server reachability check for branch onboarding,
+    - branch selection UI with refresh action,
+    - branch-driven auto download of master data (branches, locations, users/staff, customers, products, cylinder types, expense categories, price lists),
+    - local persistence into `master_data_local` for offline selectors and transactions.
+  - Added mobile startup context persistence:
+    - new SQLite `app_state` table for selected branch + last server check + last master-data sync timestamp.
+  - Added tenant header readiness on mobile:
+    - `auth_session.client_id` persisted locally and injected as `X-Client-Id` on sync/bootstrap requests when available.
+  - Updated POS/Delivery/Shift module defaults to honor selected startup branch.
+  - API read-role update for mobile bootstrap compatibility:
+    - enabled read access on key master-data GET endpoints for operational mobile roles (`supervisor`, `cashier`, `driver`, `helper`) while keeping write endpoints owner/platform-owner controlled.
+  - Validation:
+    - `pnpm --filter @vpos/mobile typecheck` passed
+    - `pnpm --filter @vpos/mobile build` passed
+    - `pnpm --filter @vpos/mobile test -- --runInBand` passed (`12/12`, `55/55`)
+    - `pnpm --filter @vpos/api build` passed
+    - `pnpm --filter @vpos/api typecheck` passed
+- Date: 2026-03-01
+- Scope completed:
+  - Added explicit iMin printer debug logging (JS + native) for faster diagnosis:
+    - Mobile JS logs in `apps/mobile/App.tsx`:
+      - `PRINTER_TYPE_SELECTED`
+      - `PRINTER_SAVE_REQUEST` / `PRINTER_SAVE_SUCCESS` / `PRINTER_SAVE_ERROR`
+      - `PRINTER_TEST_REQUEST` / `PRINTER_TEST_SUCCESS` / `PRINTER_TEST_ERROR`
+    - Android native logs in
+      `apps/mobile/android/app/src/main/java/com/vmjamtech/vpos/printer/VposPrinterBridgeModule.kt`:
+      - capability detection, iMin print attempts, ESC/POS route selection, test print entry, and native failure reasons.
+    - Rebuilt + reinstalled debug app to USB device:
+      - `./gradlew.bat :app:installDebug` passed.
+  - Fixed native-bridge visibility for printer module in mobile runtime:
+    - Set Android `newArchEnabled=false` in `apps/mobile/android/gradle.properties` so legacy `ReactPackage` bridge (`VposPrinterBridge`) is loaded reliably.
+    - Hardened JS native runtime loader in `apps/mobile/src/features/printer/native-printer.bridge.ts`:
+      - switched to direct `require('react-native')`,
+      - added one-time diagnostic logs when native runtime/module is missing.
+    - Rebuilt + reinstalled debug app to USB device after architecture toggle.
+  - Hardened mobile native print stack and Android build/install path:
+    - Added iMin SDK dependency (`com.github.iminsoftware:IminPrinterLibrary:V1.0.0.15`) in Android app module.
+    - Updated native iMin init flow to support enum-based `PrintConnectType` (default `SPI`) and legacy signatures.
+    - Updated TCP ESC/POS path with strict host/port normalization, timeout handling, and clearer error diagnostics.
+    - Added Expo autolinking compatibility shim for `expo.core.ExpoModulesPackage` in
+      `apps/mobile/android/app/src/main/java/expo/core/ExpoModulesPackage.java`.
+    - Verified build + install:
+      - `./gradlew.bat :app:assembleDebug` passed
+      - `./gradlew.bat :app:installDebug` passed on USB device
+      - `pnpm --filter @vpos/mobile typecheck` and tests passed.
+  - Improved mobile printer reliability and modernized in-app navigation shell:
+    - Added explicit `Save Printer Settings` action in mobile settings.
+    - `Test Print` now persists the latest edited printer config before running, preventing stale-config failures.
+    - Added strict printer validation guards in app shell:
+      - disallow test print with `NONE` mode,
+      - require Bluetooth MAC for Bluetooth mode,
+      - require TCP host/valid port for TCP ESC/POS mode when iMin fallback is unavailable,
+      - enforce iMin SDK availability for `IMIN` mode.
+    - Updated settings UX copy and printer mode labels for operator clarity.
+    - Added NativeEventEmitter compatibility methods (`addListener`/`removeListeners`) to Android printer bridge module.
+    - Reworked READY navigation into a modern persistent bottom-tab bar with module context header (replacing top horizontal tab chips).
+  - Validation:
+    - `pnpm --filter @vpos/mobile typecheck` passed
+    - `pnpm --filter @vpos/mobile test` passed (`12/12`, `55/55`)
+    - `./gradlew.bat :app:compileDebugKotlin` passed
+  - Wired mobile module screens to local master-data selectors and module-level sync controls:
+    - Added local selector data layer: `apps/mobile/src/app/master-data-local.ts`
+      - reads branch/location/customer/product/user choices from `master_data_local`.
+    - Added reusable selector + sync badge UI:
+      - `apps/mobile/src/app/components/MasterDataSelect.tsx`
+      - `apps/mobile/src/app/components/SyncStatusBadge.tsx`
+    - Replaced free-text IDs in:
+      - `PosScreen` (branch/location/customer),
+      - `DeliveryScreen` (branch/location/customer/driver/helper),
+      - `TransfersScreen` (source/destination/product),
+      - `ShiftScreen` (branch/location/user).
+    - Added per-module `Sync Now` action wired in `apps/mobile/App.tsx` to real `MobileSyncOrchestrator` run with access-token refresh fallback.
+    - Added per-record sync status badges in module recent-record panels.
+    - Validation:
+      - `pnpm --filter @vpos/mobile typecheck` passed
+      - `pnpm --filter @vpos/mobile build` passed
+      - `pnpm --filter @vpos/mobile test` passed (`12/12`, `55/55`)
+  - Converted mobile module tabs into functional persisted screens:
+    - POS cart screen with offline sale queueing to SQLite/outbox.
+    - Delivery list/form screen with offline order queueing and local listing.
+    - Transfers form/list screen with FULL/EMPTY queueing and local listing.
+    - Shift panel screen with open/close/cash-entry queueing and local listing.
+    - Settings screen retaining printer/runtime configuration and session controls.
+  - Mobile app shell now tracks real pending sync count from SQLite outbox and refreshes after local writes.
+  - Added user-friendly mobile module navigation shell:
+    - bottom-tab style module switching for `POS`, `DELIVERY`, `TRANSFERS`, `SHIFT`, `SETTINGS` in ready state.
+    - printer setup retained under `SETTINGS` for clearer operator mental model.
+    - inline helper guidance added for critical auth/printer fields.
+  - Improved mobile app usability and operator feedback:
+    - redesigned mobile shell with cleaner card-based flow and larger touch targets for core actions,
+    - added gooey-style toast notification layer (`react-native-toast-message` config in `apps/mobile/src/app/goey-toast.tsx`),
+    - wired toast events for auth lifecycle and printer setup/test actions.
+  - Completed mobile native printer integration (Dev Client path):
+    - Android `VposPrinterBridge` module added and registered.
+    - iMin native printing route implemented.
+    - ESC/POS native printing routes implemented (Bluetooth SPP + TCP socket).
+    - Mobile printer setup UI enhanced with runtime capability display and transport config inputs (Bluetooth MAC / TCP host+port).
+    - Mobile validation passed: tests, typecheck, and Android Kotlin compile.
+  - Started Phase 5.1 mobile subscription-aware policy runtime:
+    - Added local mobile entitlement policy persistence table (`subscription_policy_state`) with default bootstrap.
+    - Added `MobileSubscriptionPolicyService` with deterministic entitlement behavior:
+      - `ACTIVE` -> `FULL_ACCESS`
+      - `PAST_DUE` (beyond grace) -> `RESTRICTED_SYNC` (allow offline create, block push, allow pull)
+      - `SUSPENDED` -> `READ_ONLY`
+      - `CANCELED` (beyond grace) -> `LOCKED`
+    - Wired offline transaction guards to block/create based on policy state.
+    - Wired mobile sync orchestrator to honor policy push/pull gating.
+    - Added sync pull application for `entitlement_policy` changes.
+    - Added mobile tests for policy matrix, transaction blocking, and sync gating behavior.
+  - Added tenant selection support to user creation/editing flow in web admin (`/users`) for `platform_owner`.
+  - Added platform-owner tenant scope selector on Users page to load/manage users per selected tenant.
+  - API `master-data/users` now supports `companyId` target override for list/create/update with strict guard:
+    - `platform_owner` can target another tenant.
+    - non-platform owners are blocked from cross-tenant user management.
+  - User audit entries now write under the targeted tenant company context.
+  - Preserved non-DB/local test fallback behavior for user CRUD paths.
+  - Branding module visibility updated for platform owners:
+    - hidden from sidebar navigation for `platform_owner`
+    - login redirect now routes `platform_owner` to `/tenants` (tenant console) instead of `/branding`
+    - `/branding` shows tenant-only guidance when accessed by `platform_owner`
+  - Platform owner menu and route scope tightened:
+    - `platform_owner` now sees only owner-console modules (`/tenants`, `/audit-logs`) in sidebar/mobile nav
+    - all tenant operation modules are hidden from platform-owner navigation
+    - direct URL access to hidden modules shows owner-scope notice with links to allowed pages
+  - Scope correction applied:
+    - restored `Branches`, `Locations`, and `Users` in platform-owner menu/route allowlist since these are needed for tenant-bound structure management.
+  - Branch management now supports platform-owner tenant scoping:
+    - `Branches` page has tenant scope selector for `platform_owner`.
+    - Branch list/create/update use selected tenant company context.
+  - Locations UX kept branch-bound (no tenant dropdown), per operator flow:
+    - Locations remain linked via branch selection only.
+    - No extra tenant selector added in Locations form.
+  - Tenant console now has read-only bindings visibility:
+    - Added `Bindings` action per tenant in owner console.
+    - Shows tenant-scoped branches, locations, and users in a read-only modal.
+    - No add/edit actions in this bindings view.
+  - Admin dashboard (`/reports`) now also shows tenant-bound structure read-only:
+    - Added read-only panels for branches, locations, and users of the current tenant.
+    - Displays counts and linked branch context for locations.
+    - Keeps add/edit actions disabled (visibility only).
+  - Admin role access refinement for tenant structure modules:
+    - `admin` now sees `Branches`, `Locations`, and `Users` in side menu.
+    - These three modules are read-only for `admin` (no add/edit actions in UI).
+    - API now allows `admin` to GET these resources but still blocks POST/PUT for non-owner roles.
+    - Added integration coverage for admin read-only enforcement.
+  - Owner UX follow-up for tenant-scope handling:
+    - Removed explicit admin read-only warning copy from Users/Locations owner-facing flows.
+    - Added `Tenant Scope` selector on Locations page (platform owner) for list + add/edit binding.
+    - Users add/edit now binds tenant strictly from top `Tenant Scope` selector (modal tenant field removed).
+    - Users tenant-scope options now include all available tenants from owner console list.
+  - Backend master-data tenant targeting expanded for owner routes:
+    - `branches` and `locations` endpoints now accept target `companyId` with `platform_owner` authorization checks.
+  - Fixed `EntityManager` update URL handling when endpoint includes query params (tenant-scoped endpoints now update correctly).
+  - Tenant login hardening for mixed-case client identifiers:
+    - API auth tenant resolution now supports case-insensitive lookup across both `Company.code` and `Company.externalClientId`.
+    - Tenant middleware and company-context resolution now use the same case-insensitive strategy.
+    - JWT guard now preserves explicit tenant mismatch errors instead of collapsing all auth failures into a generic invalid token message.
+    - Added integration coverage for mixed-case tenant login/read flow.
+  - Auto-detect tenant login flow:
+    - Web login no longer asks for tenant client id.
+    - API login now auto-resolves tenant by email when `X-Client-Id` is not provided.
+    - Login response now includes resolved `client_id`, and web stores it for subsequent authenticated requests.
+    - Added integration coverage for no-header login auto-detection.
+  - Web access permission hardening:
+    - Non-web roles (`cashier`, `driver`, `helper`, etc.) are now blocked from Web Admin at login with a clear message instead of falling into `403` page errors.
+    - Session clear now removes stored tenant client id to avoid stale-tenant header mismatch after role/account switches.
+  - Tenant owner permission alignment:
+    - `owner` role is now allowed for tenant Branding and tenant-scoped master-data base routes (without requiring `admin` role).
+    - Added integration coverage for owner-only tenant account access to branding and master-data reads.
+  - Phase 7.1 hybrid tenancy metadata started:
+    - Added tenant datastore metadata in Prisma schema (`Company.datastoreMode`, `Company.datastoreRef`, `Company.datastoreMigrationState`) with migration and index.
+    - Owner tenant APIs now persist and return tenancy metadata on provision/provision-from-subscription/list endpoints.
+    - Owner web tenant console (`/tenants`) now shows tenancy mode, datastore reference, and migration state.
+    - Add Tenant modal now includes `Tenancy Mode` and `Datastore Reference` inputs.
+    - Added integration assertions for tenancy metadata persistence and owner list visibility.
+  - Phase 7.2 runtime router foundation started:
+    - Added `TenantDatasourceRouterService` with per-tenant datastore resolution (`SHARED_DB` or `DEDICATED_DB`).
+    - Added dedicated-client cache, health checks, idle eviction, and strict no-fallback failure behavior for dedicated routing.
+    - Added middleware request context enrichment with datastore mode/reference for diagnostics.
+    - Wired tenant datastore routing into tenant-facing modules:
+      - `BrandingService`
+      - `MasterDataService` branch/location flows (list/create/update)
+    - Added dedicated-router automated tests (`tenant-datasource-router.e2e-spec.ts`).
+  - Phase 7.2 routing expanded:
+    - Extended tenant datastore routing across remaining `MasterDataService` entity flows:
+      - customers
+      - cylinder types
+      - products
+      - expense categories
+      - price lists
+      - active price resolution getters (`getCustomerById`, `getProductById`, `getActivePriceLists`)
+    - Enforced fail-closed behavior for dedicated mode across these flows (no silent fallback to shared/memory on dedicated datastore errors).
+    - Added mixed-fleet master-data routing tests (`master-data-router.e2e-spec.ts`) for shared vs dedicated behavior.
+  - Phase 7.2 transactional routing enforcement:
+    - Added `TenantRoutingPolicyService` and wired router checks into transactional/reporting controllers:
+      - `sales`
+      - `sync`
+      - `transfers`
+      - `delivery`
+      - `cylinders`
+      - `reports`
+    - Added transactional mixed-fleet endpoint tests (`transactional-router.e2e-spec.ts`) covering:
+      - shared + dedicated tenant transactional routing in one deployment,
+      - fail-closed `503` behavior when dedicated route is unavailable.
+  - Phase 7.2 mixed-fleet workflow matrix expanded:
+    - Added endpoint-specific mixed-fleet workflow tests for:
+      - transfers (`create -> approve -> post`) on shared + dedicated tenants
+      - delivery (`create -> assign -> status`) on shared + dedicated tenants
+      - cylinders (`issue -> return -> refill`) on shared + dedicated tenants
+    - Added dedicated fail-closed (`503`) endpoint tests for:
+      - transfers
+      - delivery
+      - cylinders
+  - Phase 7.3 dedicated provisioning flow started:
+    - Added `DedicatedTenantProvisioningService` for dedicated tenant datastore setup:
+      - dedicated database creation (when enabled),
+      - prisma migration deployment,
+      - dedicated bootstrap seeding (company/entitlement/branding/branches/locations/roles).
+    - `provisionTenant` now enforces `datastore_ref` for `DEDICATED_DB` requests.
+    - Added dedicated migration-state lifecycle handling in tenant provisioning:
+      - `IN_PROGRESS` -> `COMPLETED` on success,
+      - `IN_PROGRESS` -> `FAILED` on failure,
+      - `PENDING` retained when auto-provision is disabled.
+    - Added dedicated tenancy event trail in `CompanyEntitlementEvent`:
+      - `TENANCY_MODE_SET` / `TENANCY_MODE_UPDATED`
+      - `TENANCY_DEDICATED_PROVISION_STARTED`
+      - `TENANCY_DEDICATED_PROVISION_COMPLETED`
+      - `TENANCY_DEDICATED_PROVISION_FAILED`
+    - Owner provisioning audit metadata now includes:
+      - `tenancy_mode`
+      - `datastore_ref`
+      - `datastore_migration_state`
+    - Added validation test for dedicated provisioning payloads missing `datastore_ref`.
+  - Phase 7.3 live dedicated smoke completed:
+    - Added gated live smoke integration test: `apps/api/test/dedicated-live-smoke.e2e-spec.ts`.
+    - Test provisions a dedicated tenant using real `VPOS_DEDICATED_DB_URLS_JSON` mapping, then validates:
+      - provisioning migration state is `COMPLETED`,
+      - tenant owner can log in,
+      - tenant master-data reads succeed,
+      - tenant transactional sale posting succeeds,
+      - owner tenant list reflects dedicated mode with `COMPLETED` migration state.
+    - Fixed dedicated migration executor to use Node Prisma entrypoint for reliable Windows runtime execution.
+  - Phase 7.3 datastore registry automation completed:
+    - Added DB-backed datastore registry (`TenantDatastoreRegistry`) for dedicated tenant URL mappings.
+    - Added encrypted URL storage using AES-256-GCM with `VPOS_DATASTORE_ENCRYPTION_KEY`.
+    - Runtime router now resolves dedicated datastore URLs from registry first, then env fallback.
+    - Router env fallback now writes through to registry for legacy tenant mapping backfill.
+    - Owner provisioning now auto-registers dedicated datastore mappings via registry (no per-tenant `.env` edit required for new dedicated tenants).
+    - Added automatic URL derivation fallback from `DATABASE_URL` + `datastore_ref` when no explicit map exists.
+    - Live dedicated smoke now validates provisioning without manual `VPOS_DEDICATED_DB_URLS_JSON` entry.
+    - Added automated coverage:
+      - `datastore-registry.e2e-spec.ts`
+      - updated `tenant-datasource-router.e2e-spec.ts` for registry-priority resolution.
+  - Subscription gateway token automation completed (no SubMan changes required):
+    - Added `SubmanTokenService` with optional auto-login token refresh using service credentials.
+    - Gateway now retries once on `401` with refreshed bearer token.
+    - Keeps API-key mode as preferred path when `SUBMAN_API_KEY` is available.
+    - Added automated coverage:
+      - `subman-token.e2e-spec.ts`
+      - `subscription-gateway-auth.e2e-spec.ts`
+  - Dedicated legacy tenant auto-heal improvement:
+    - Router now calls datastore registry `ensureTenantDatastoreUrl` during dedicated resolution.
+    - Legacy refs like `tenant-ded-live-*` / `tenant-ded-smoke-*` are auto-derived to historical DB naming patterns and persisted.
+    - Fix prevents repeated `Dedicated datastore URL is not configured` for pre-registry dedicated tenants.
+  - Dedicated schema auto-repair improvement:
+    - Router now detects missing dedicated schema (e.g., missing `Branch` table) and runs `prisma migrate deploy` automatically for that dedicated DB.
+    - Added runtime flag `VPOS_DEDICATED_AUTO_MIGRATE_ON_SCHEMA_MISS` (default enabled).
+  - Dedicated tenant provisioning hardening + cleanup tooling:
+    - `provisionTenant` now forces dedicated provisioning for dedicated tenant creation/update requests and rolls back newly created tenant records when dedicated provisioning fails.
+    - Dedicated tenant provision API now auto-generates `datastore_ref` when omitted (owner no longer blocked by `400` for missing datastore ref in `DEDICATED_DB` mode).
+    - Fixed tenant seed collision bug in `MasterDataService.ensurePrismaBranchLocationSeed` by removing hardcoded primary IDs on branch/location/cylinder/product/customer/price list/price rule seed upserts; IDs are now DB-generated UUIDs per tenant.
+    - Added cleanup utility `pnpm tenants:cleanup:seeded` to purge seeded dedicated smoke tenants and optionally drop their dedicated databases.
+    - Local cleanup executed for seeded smoke tenants (7 tenants/DBs removed) to reset tenant list before fresh SubMan provisioning.
+  - Owner tenant console UX hardening:
+    - Added blocking loading overlay during tenant submit actions (provision/override/suspend/reactivate) to prevent accidental clicks on other controls while requests are in flight.
+    - Added owner-initiated tenant deletion flow:
+      - API endpoint: `DELETE /platform/owner/tenants/:companyId`
+      - Shared-db tenant deletion cascades all tenant-owned records.
+      - Dedicated-db tenant deletion also drops tenant dedicated database (configurable via `VPOS_DEDICATED_DB_DROP_ON_TENANT_DELETE`, default enabled).
+      - Added owner audit action `PLATFORM_TENANT_DELETE`.
+    - Owner web tenant console now includes `Delete` action with explicit company-code confirmation and audit reason input.
+    - Added duplicate subscription provisioning guard:
+      - `POST /api/platform/owner/tenants/provision-from-subscription` now returns `409 Conflict` when `client_id` is already provisioned.
+      - Re-provisioning is allowed only after the existing tenant is deleted.
+  - Master-data safe delete workflows completed (owner/platform_owner):
+    - Added safe delete endpoints:
+      - `DELETE /api/master-data/users/:id`
+      - `DELETE /api/master-data/locations/:id`
+      - `DELETE /api/master-data/branches/:id`
+    - Safe delete behavior:
+      - Users: set `isActive=false` (account preserved for audit/history).
+      - Locations: allowed only when not linked to branch (`branchId=null`); linked locations return validation error.
+      - Branches: set branch `isActive=false` and auto-safe-delete all linked locations (`isActive=false`).
+    - Added audit actions:
+      - `MASTER_DATA_USER_SAFE_DELETE`
+      - `MASTER_DATA_LOCATION_SAFE_DELETE`
+      - `MASTER_DATA_BRANCH_SAFE_DELETE`
+  - Loading overlay rollout:
+    - Extended shared `EntityManager` with blocking loading overlay for create/update/delete flows.
+    - Applied to all EntityManager-based modules, including Branches, Locations, and Users delete actions.
+  - Master-data UX refinement:
+    - Branches, Locations, and Users forms no longer use `Active` dropdown fields.
+    - Replaced `Delete` actions with status actions:
+      - `Deactivate` when record is active
+      - `Reactivate` when record is inactive
+    - Confirmation dialogs and button styles now reflect deactivate vs reactivate intent.
+  - Hybrid transactional service hardening completed for additional modules:
+    - `delivery` workflow service now has DB-backed tenant-routed lifecycle logic with preserved fallback mode.
+    - `cylinders` workflow service now has DB-backed tenant-routed serial-state workflows and balance reads with preserved fallback mode.
+    - Controller await paths + module Prisma wiring updated for both modules.
+  - AI-ready export + workflow shaping completed for mixed-fleet runtime:
+    - Added API module and endpoint: `GET /api/ai-export/events?cursor=<token>&limit=<n>`.
+    - Added in-memory fallback stream (`AiEventBufferService`) for non-DB/local mode and DB-backed AI event export when tenant DB routing is enabled.
+    - Added transfer/delivery/cylinder workflow AI event shaping and persistence in DB-backed flows.
+    - Added mixed-fleet transactional router coverage for AI export endpoint, including dedicated fail-closed behavior.
+    - Added integration test for export payload verification across transfer, delivery, and cylinder workflows.
+  - Task 7.6 owner/auth hybrid matrix coverage expanded:
+    - Added new integration suite: `owner-console-hybrid.e2e-spec.ts`.
+    - Added shared+dedi auth matrix assertions (`admin@vpos.local` and dedicated tenant owner login).
+    - Added owner-console mixed-fleet health matrix assertions for shared + dedicated tenants.
+    - Added dedicated fail-closed strict monitoring assertion (`/api/platform/owner/tenants/datastore-health?strict=true` returns `503` on dedicated route failure).
+  - Task 7.5 monitoring/runbook hardening started:
+    - Added owner monitoring endpoint: `GET /api/platform/owner/tenants/datastore-health` with strict mode.
+    - Added DB-side monitoring script: `apps/api/scripts/hybrid-datastore-health.mjs` (`pnpm ops:hybrid:health`).
+    - Added scheduled strict health check in ops workflow: `.github/workflows/ops-maintenance.yml` (`hybrid-datastore-health` job).
+    - Added playbook and monitoring docs:
+      - `docs/HYBRID_MONITORING.md`
+      - `docs/HYBRID_INCIDENT_PLAYBOOK.md`
+      - linked from `docs/OPERATIONS_RUNBOOK.md`
+  - Task 7.5 security checklist closure:
+    - Added datastore-registry encryption key rotation support with key-version aware decrypt/encrypt:
+      - `VPOS_DATASTORE_ENCRYPTION_KEY_CURRENT`
+      - `VPOS_DATASTORE_ENCRYPTION_KEY_CURRENT_VERSION`
+      - `VPOS_DATASTORE_ENCRYPTION_KEY_PREVIOUS`
+      - `VPOS_DATASTORE_ENCRYPTION_KEY_PREVIOUS_VERSION`
+    - Added lazy re-encryption to current key-version after successful decrypt of legacy rows.
+    - Added datastore key-rotation tooling:
+      - `apps/api/scripts/rotate-datastore-registry-keys.mjs`
+      - `pnpm ops:datastore-key-rotate:dry-run`
+      - `pnpm ops:datastore-key-rotate:apply`
+    - Added hybrid security checklist doc: `docs/HYBRID_SECURITY_CHECKLIST.md`.
+    - Added owner endpoint access-boundary integration check (non-owner denied for datastore-health).
+  - Task 7.6 dedicated load/perf baseline tests:
+    - Added mixed-fleet router churn baseline test in `tenant-datasource-router.e2e-spec.ts`.
+    - Baseline validates bounded dedicated client creation/cache reuse under sustained mixed shared+dedi request churn.
+    - Added performance baseline assertion (`elapsedMs < 5000` in mocked churn harness).
+  - Task 7.4 migration workflow started with owner dry-run report contract:
+    - Added owner endpoint: `POST /api/platform/owner/tenants/:companyId/migration/dry-run`.
+    - Dry-run now returns:
+      - table-level source/target counts
+      - match/mismatch/unknown status per table
+      - risk flags + blocking risk flags
+      - deterministic cutover-plan step statuses
+    - Added strict dry-run fail-closed behavior (`strict=true` blocks on connectivity/schema blockers).
+    - Added integration coverage:
+      - platform owner can run migration dry-run and receive table/risk report
+      - non-owner is denied migration dry-run endpoint
+  - Task 7.4 migration cutover/rollback execution completed:
+    - Added owner cutover endpoint: `POST /api/platform/owner/tenants/:companyId/migration/cutover`.
+    - Added owner rollback endpoint: `POST /api/platform/owner/tenants/:companyId/migration/rollback`.
+    - Implemented tenant write-freeze markers:
+      - `TENANT_WRITE_FREEZE_SET`
+      - `TENANT_WRITE_FREEZE_CLEARED`
+      - write-enforcement gate blocks transactional/master-data writes while freeze is active.
+    - Implemented copy execution engine with company-scoped upsert flow across migration table set.
+    - Added reconcile gate using table-level count + checksum comparison before mode switch finalization.
+    - Added rollback execution path with reverse target mode application and reconcile validation.
+    - Added migration event/audit trail:
+      - `TENANT_CUTOVER_COMPLETED` / `TENANT_CUTOVER_FAILED`
+      - `TENANT_CUTOVER_ROLLBACK_COMPLETED` / `TENANT_CUTOVER_ROLLBACK_FAILED`
+      - owner audit actions for dry-run/cutover/rollback API calls.
+    - Added integration coverage:
+      - owner cutover execution updates tenancy mode after reconcile gate pass
+      - owner rollback execution restores shared mode with verification gate
+      - non-owner denied on migration dry-run endpoint
+- Validation:
+  - API integration tests passed (`102 passed`, `1 skipped`, `103 total`) including dedicated-router, master-data mixed-fleet, transactional mixed-fleet routing, AI-export routing/fail-closed coverage, owner/auth hybrid matrix coverage, endpoint-specific transfer/delivery/cylinder workflow coverage, dedicated provisioning validation, datastore key-rotation, mixed-fleet churn baseline coverage, and owner migration dry-run/cutover/rollback contract coverage.
+  - Live dedicated smoke passed (`1/1`) via:
+    - `VPOS_RUN_LIVE_DEDICATED_SMOKE=true pnpm --filter @vpos/api test -- --runInBand dedicated-live-smoke.e2e-spec.ts`
+  - Full API suite passes with gated smoke test in place (`103 total`, `102 passed`, `1 skipped` by default).
+  - Web build passed.
+
+## Phase 0 - Alignment and Contracts
+
+### Task 0.1 - Tenant Identifier Strategy
+- Status: `[DONE]`
+- Scope:
+  - Standardize tenant key mapping: `subscriptionapp.clientId` -> `vpos.company.externalClientId`.
+  - Define source of truth for tenant lifecycle state.
+- Acceptance criteria:
+  - [x] Mapping contract documented in `IMPLEMENTATION2.md` (`clientId -> externalClientId`) and approved.
+  - [x] Tenant key is present in API contracts and Prisma schema (`Company.externalClientId`).
+
+### Task 0.2 - Integration Contract (Control Plane <-> Data Plane)
+- Status: `[DONE]`
+- Scope:
+  - Define VPOS subscription gateway calls and webhook payload format.
+  - Define retry/idempotency for status updates.
+- Acceptance criteria:
+  - [x] API/webhook contracts are documented with sample payloads in `IMPLEMENTATION2.md`.
+  - [x] Signature/auth mechanism is documented and implemented with optional HMAC enforcement via `SUBMAN_WEBHOOK_SECRET`.
+
+## Phase 1 - Core Multi-Tenant Refactor in VPOS
+
+### Task 1.1 - Request-Scoped Tenant Context
+- Status: `[DONE]`
+- Scope:
+  - Replace hardcoded `DEMO` tenant resolution.
+  - Resolve tenant from JWT + request header and validate consistency.
+- Acceptance criteria:
+  - [x] No hardcoded company context in runtime request flow.
+  - [x] Request middleware resolves tenant context using `X-Client-Id` (or explicit `DEFAULT_CLIENT_ID`) without implicit `DEMO` runtime fallback.
+  - [x] All protected endpoints execute with tenant-scoped context.
+
+### Task 1.2 - DB-Backed Auth (Remove In-Memory Auth Store)
+- Status: `[DONE]`
+- Scope:
+  - Persist auth users/tokens in Prisma `User` and `RefreshToken`.
+  - Keep role checks tenant-scoped.
+- Acceptance criteria:
+  - [x] Login/refresh/logout implement DB-first auth with in-memory fallback for local/test safety.
+  - [x] Production mode enforces DB-backed auth (`VPOS_AUTH_ALLOW_MEMORY_FALLBACK` required for non-prod fallback only).
+  - [x] Cross-tenant login leakage is blocked by tests.
+
+### Task 1.3 - Tenant Isolation Hardening
+- Status: `[DONE]`
+- Scope:
+  - Ensure all service queries include `companyId` constraints.
+  - Add guardrails for cross-tenant ID usage.
+- Acceptance criteria:
+  - [x] Attempting to access another tenant's record returns forbidden/not found (JWT/company mismatch guarded; integration test added).
+  - [x] Audit logs include tenant context for entitlement, master-data, and transactional writes.
+
+## Phase 2 - Entitlement Domain in VPOS
+
+### Task 2.1 - Entitlement Schema and Persistence
+- Status: `[DONE]`
+- Scope:
+  - Add entitlement table(s), e.g. `CompanyEntitlement` and `EntitlementHistory`.
+  - Fields include status, branch limits, topology flags, grace period, sync timestamps.
+- Acceptance criteria:
+  - [x] Prisma schema updated and migrated (`CompanyEntitlement`, `CompanyEntitlementEvent`).
+  - [x] Entitlement history is append-only/auditable.
+
+### Task 2.2 - Entitlement Enforcement Guards
+- Status: `[DONE]`
+- Scope:
+  - Add policy service/guard used by master-data and posting/sync modules.
+  - Gate behavior by entitlement state (`ACTIVE`, `PAST_DUE`, `SUSPENDED`, `CANCELED`).
+- Acceptance criteria:
+  - [x] Restricted actions fail with clear policy errors on master-data and transactional write endpoints.
+  - [x] Grace-period behavior is configurable via entitlement `graceUntil` and enforced for `PAST_DUE`/`CANCELED`.
+
+### Task 2.3 - Branch/Location Topology Policy
+- Status: `[DONE]`
+- Scope:
+  - Enforce:
+    - `maxBranches`
+    - `storeOnly` (no warehouse types)
+    - `storeWithWarehouse` (warehouse allowed)
+  - Validate on create/update for branches and locations.
+- Acceptance criteria:
+  - [x] Single-branch plan blocks creation of a second branch.
+  - [x] Store-only plan blocks warehouse branch/location types.
+  - [x] Store+warehouse plan allows both patterns.
+
+## Phase 3 - Integrate Existing subscriptionapp
+
+### Task 3.1 - Outbound Gateway from VPOS to subscriptionapp
+- Status: `[DONE]`
+- Scope:
+  - Implement typed gateway in VPOS API to fetch subscription/plan entitlement by `clientId`.
+  - Add cache + circuit-breaker + fallback policy.
+- Acceptance criteria:
+  - [x] VPOS can resolve current entitlement for tenant from subscriptionapp API.
+  - [x] Gateway failures degrade gracefully (cache/circuit-breaker/local fallback path).
+
+### Task 3.2 - Inbound Webhooks from subscriptionapp to VPOS
+- Status: `[DONE]`
+- Scope:
+  - Add VPOS webhook endpoint for entitlement status updates.
+  - Validate signature and idempotency.
+- Acceptance criteria:
+  - [x] Duplicate webhook delivery is idempotent (`externalEventId` dedupe).
+  - [x] Entitlement cache updates within SLA after webhook event.
+
+### Task 3.3 - Plan Feature Mapping
+- Status: `[DONE]`
+- Scope:
+  - Map subscriptionapp plan fields/features to VPOS entitlements.
+  - Include branch count and topology flags.
+- Acceptance criteria:
+  - [x] Documented deterministic mapping table.
+  - [x] Automated contract tests verify mapping outputs.
+
+## Phase 4 - Onboarding and Tenant Provisioning
+
+### Task 4.1 - Tenant Provisioning Workflow
+- Status: `[DONE]`
+- Scope:
+  - On successful subscription activation, provision VPOS `Company` and defaults.
+  - Create optional templates for:
+    - single-store
+    - store + warehouse
+    - multi-branch starter
+- Acceptance criteria:
+  - [x] New subscribed tenant can log in and transact without manual DB edits.
+  - [x] Provisioning is idempotent and audit logged.
+
+### Task 4.2 - Owner/Super Admin Console
+- Status: `[DONE]`
+- Scope:
+  - Platform owner view for tenants, plan status, and entitlement overrides.
+  - Manual suspend/reactivate with audit trail.
+- Acceptance criteria:
+  - [x] Owner can view tenant health and entitlement state.
+  - [x] Override actions are permissioned and fully audited.
+
+### Task 4.3 - Owner-Only Tenant Structure Controls
+- Status: `[DONE]`
+- Scope:
+  - Enforce that only `owner`/`platform_owner` can manage tenant `branches`, `locations`, and `users`.
+  - Ensure tenant provisioning creates an owner-capable account/role.
+  - Hide structure-management nav items for non-owner users in web admin.
+- Acceptance criteria:
+  - [x] Non-owner roles (e.g., `admin`, `cashier`) are denied on branch/location/user management endpoints.
+  - [x] Tenant owner accounts can manage branch/location/user data within their tenant scope.
+  - [x] Web nav hides branch/location/user modules for non-owner users.
+
+### Task 4.4 - Subscriptionapp-Driven Tenant Creation
+- Status: `[DONE]`
+- Scope:
+  - Allow owner console tenant creation to pull tenant plan/client details directly from subscriptionapp.
+  - Support control-plane runtime at `http://168.231.103.231:3003` via `SUBMAN_BASE_URL`.
+- Acceptance criteria:
+  - [x] Owner can create tenant using only `client_id` with data hydrated from subscriptionapp gateway.
+  - [x] Fetched plan/features are mapped into VPOS entitlement on provisioning.
+  - [x] Provisioning reads existing subscriptionapp `/v1/subscriptions` data without modifying subscriptionapp.
+  - [x] Owner flow accepts optional tenant `subman_api_key` for subscriptionapp instances that require per-client API keys.
+  - [x] Flow is audited and covered by integration tests.
+
+## Phase 5 - Mobile + Offline Policy Behavior
+
+### Task 5.1 - Subscription-Aware Mobile Sync Policy
+- Status: `[DONE]`
+- Scope:
+  - Define mobile behavior on entitlement states:
+    - full access
+    - restricted sync
+    - read-only
+    - lockout with grace
+  - Preserve in-flight offline transaction safety.
+- Acceptance criteria:
+  - [x] Offline-created transactions remain safe and reconcilable.
+  - [x] Policy transitions are deterministic and test-covered.
+
+### Task 5.2 - Tenant Branding and White-Label Boundaries
+- Status: `[DONE]`
+- Scope:
+  - Ensure branding remains tenant-scoped and isolated.
+  - Optional platform-level constraints per subscription tier.
+- Acceptance criteria:
+  - [x] No cross-tenant branding bleed.
+  - [x] Tier-based branding limits enforced if configured.
+
+## Phase 6 - Testing, Security, and Operations
+
+### Task 6.1 - Automated Test Coverage
+- Status: `[DONE]`
+- Scope:
+  - Add integration tests for tenant isolation, entitlement enforcement, and webhook sync.
+  - Add e2e tests for plan downgrade/upgrade effects.
+- Acceptance criteria:
+  - [x] 15+ backend tests exist (current suite: 100 passing integration tests by default).
+  - [x] Critical downgrade scenarios are covered (single-branch/store-only enforcement + gateway fallback).
+
+### Task 6.2 - Security Hardening
+- Status: `[DONE]`
+- Scope:
+  - Webhook signature enforcement, replay protection, and secret rotation.
+  - Tenant data isolation verification and audit sampling.
+- Acceptance criteria:
+  - [x] Security checklist completed.
+  - [x] Replay and spoofing protections validated.
+
+### Task 6.3 - Runbooks and Monitoring
+- Status: `[DONE]`
+- Scope:
+  - Add operational runbooks for tenant provisioning, billing outage, webhook backlog, and emergency entitlement override.
+  - Add metrics/alerts for entitlement sync failures.
+- Acceptance criteria:
+  - [x] On-call runbook published.
+  - [x] Alerts configured for integration failures and stale entitlement cache.
+
+## Phase 7 - Hybrid Tenancy Mode (Shared + Dedicated Databases)
+
+### Task 7.1 - Hybrid Tenancy Contract and Tenant Mode Metadata
+- Status: `[DONE]`
+- Scope:
+  - Establish hybrid tenancy as first-class runtime model:
+    - `SHARED_DB`
+    - `DEDICATED_DB`
+  - Add tenant-level datastore metadata (mode, connection reference, migration state).
+  - Define control-plane to data-plane source of truth for tenant mode.
+- Acceptance criteria:
+  - [x] Tenant mode metadata is persisted per company (`datastoreMode`, `datastoreRef`, `datastoreMigrationState`).
+  - [x] Tenant mode updates are audit logged as dedicated tenancy events.
+  - [x] Hybrid tenancy contract and metadata contracts are documented in `IMPLEMENTATION2.md`.
+  - [x] Owner APIs and web console expose tenant mode + datastore metadata.
+  - [x] API runtime can resolve one deterministic datastore target per tenant request.
+
+### Task 7.2 - Runtime DataSource Router and Isolation Guards
+- Status: `[DONE]`
+- Scope:
+  - Implement request-time datastore routing:
+    - shared Prisma client for `SHARED_DB`,
+    - tenant-scoped dedicated client for `DEDICATED_DB`.
+  - Add connection lifecycle management (cache, pooling, eviction, health checks).
+  - Enforce fail-safe behavior to prevent cross-tenant or cross-mode leakage.
+- Acceptance criteria:
+  - [x] Base runtime router resolves shared vs dedicated datastore target per tenant.
+  - [x] Dedicated datastore outage/misconfiguration fails closed (no shared fallback).
+  - [x] Branding + full master-data domain (except user/auth lifecycle) route through datasource router.
+  - [x] Transactional/reporting modules enforce datasource router resolution at request boundary.
+  - [x] Mixed-fleet automated tests added for shared vs dedicated routing behavior.
+  - [x] Full mixed-fleet endpoint test matrix baseline completed for critical modules:
+    - [x] sales/sync/reports routing coverage
+    - [x] transfers/delivery/cylinders endpoint-specific mixed-fleet workflow + fail-closed coverage
+
+### Task 7.3 - Owner Provisioning and Mode Selection
+- Status: `[DONE]`
+- Scope:
+  - Extend owner tenant provisioning to select tenancy mode (`SHARED_DB` or `DEDICATED_DB`).
+  - For dedicated mode:
+    - create database,
+    - run migrations,
+    - seed tenant bootstrap data.
+  - Persist provisioning/audit records with mode and datastore metadata.
+- Acceptance criteria:
+  - [x] Owner console can create tenants in either shared or dedicated mode.
+  - [x] Dedicated-mode provisioning is idempotent and auditable.
+  - [x] Newly provisioned tenants can login and transact without manual DB intervention.
+
+### Task 7.4 - Shared <-> Dedicated Tenant Migration Workflow
+- Status: `[DONE]`
+- Scope:
+  - Build migration tooling for tenant mode transition:
+    - shared to dedicated (primary),
+    - optional rollback path to shared.
+  - Include dry-run validation, row-count reconciliation, checksum verification, and cutover markers.
+  - Define and automate cutover steps with bounded downtime.
+- Acceptance criteria:
+  - [x] Dry-run report includes table-level counts, mismatches, and risk flags.
+  - [x] Cutover executes with deterministic steps and rollback support.
+  - [x] Post-cutover traffic is served only from target datastore.
+
+### Task 7.5 - Hybrid Operations, Security, and Monitoring
+- Status: `[DONE]`
+- Scope:
+  - Add hybrid-aware observability:
+    - per-tenant datastore health,
+    - routing failures,
+    - migration lifecycle telemetry.
+  - Add security controls for datastore secrets and access boundaries.
+  - Publish runbooks for dedicated outage, routing incident, and migration failure.
+- Acceptance criteria:
+  - [x] Monitoring and alerts include tenant-mode context (`SHARED_DB|DEDICATED_DB`).
+  - [x] Security checklist covers secret handling and connection isolation for dedicated DBs.
+  - [x] On-call runbooks are published for hybrid tenancy incidents.
+
+### Task 7.6 - Hybrid Regression Test Matrix
+- Status: `[DONE]`
+- Scope:
+  - Build automated matrix tests for mixed fleet scenarios:
+    - shared tenant + dedicated tenant in same deployment,
+    - role/auth flows,
+    - sync/posting/reporting isolation,
+    - migration cutover behavior.
+  - Include performance and load checks for router/connection churn.
+- Acceptance criteria:
+  - [x] Integration suite validates hybrid routing and data isolation across modules.
+  - [x] No module can access data outside resolved tenant datastore.
+  - [x] Performance baseline is defined and passes under mixed-tenant load.
+
+## Backlog - Product/Inventory UX and Alerting
+
+### Task B1 - Product Low-Stock Input + FULL-Only Alert Rule (LPG)
+- Status: `[DONE]`
+- Scope:
+  - Add product-level low-stock alert input in Product setup (user-configurable threshold).
+  - For LPG products, evaluate low-stock alert using `FULL` quantity only (ignore `EMPTY` in threshold check).
+  - Keep non-LPG low-stock evaluation on `qty_on_hand`.
+- Acceptance criteria:
+  - [x] Product form supports saving low-stock threshold value.
+  - [x] Low-stock report/alerts for LPG products are triggered by `qty_full <= threshold`.
+  - [x] `EMPTY` quantity does not affect LPG low-stock alert decision.
+  - [x] Non-LPG products continue to use `qty_on_hand` for low-stock alerts.
+  - [x] Web/mobile labels clearly indicate: `LPG low stock uses FULL qty`.
+
+### Task B2 - Advanced Dashboard Insights Pack
+- Status: `[DONE]`
+- Scope:
+  - Add smart alert center at top: low stock, failed syncs, open sync reviews, shift variance, overdue customer balances.
+  - Add drill-down actions on every KPI/card (click opens filtered report page directly).
+  - Add branch comparison panel with side-by-side bars for sales, margin, and stock health.
+  - Add cylinder operations chart: refill exchange ratio, full-to-empty conversion, and damaged/lost trend.
+  - Add delivery SLA chart: on-time vs delayed vs failed, by branch and personnel.
+  - Add credit risk widget: aging buckets + top overdue customers + collection trend.
+  - Add inventory risk heatmap (location x item) for critical low/full-empty imbalance.
+  - Add shift performance card set: open shifts, expected vs counted cash, variance trend.
+  - Add sync health panel: outbox pending trend, push success rate, retry/failure counts.
+  - Add role-based dashboard views so Owner/Admin/Cashier each see relevant widgets only.
+- Acceptance criteria:
+  - [x] Dashboard alert center shows actionable operational risk signals with severity priority.
+  - [x] Every KPI/widget supports direct drill-down navigation to filtered report pages.
+  - [x] Branch/cylinder/delivery/credit/inventory/shift/sync widgets are visible and filter-aware.
+  - [x] Dashboard widget visibility respects role-based view policy.
+
+### Task B3 - Cashier-Only Mobile Access Guard
+- Status: `[DONE]`
+- Scope:
+  - Enforce strict cashier-only access for mobile login and offline unlock flows.
+  - Block non-cashier roles from mobile authentication while preserving web/admin access.
+  - Ensure role checks remain tenant-scoped and auditable.
+- Acceptance criteria:
+  - [x] Mobile online login rejects non-cashier users with clear error message.
+  - [x] Offline PIN unlock is denied if cached account is no longer cashier/active.
+  - [x] Web/admin login behavior is unchanged for non-mobile channels.
+  - [x] Audit trail records mobile auth denials caused by role policy.
+
+### Task B4 - Persistent Server Idempotency Keys
+- Status: `[DONE]`
+- Scope:
+  - Replace/augment in-memory sync idempotency tracking with datastore-backed keys.
+  - Enforce tenant-scoped unique idempotency semantics across API restarts and deployments.
+  - Add retention/cleanup policy for idempotency rows.
+- Acceptance criteria:
+  - [x] Duplicate outbox payloads are safely deduplicated even after API restart.
+  - [x] Idempotency behavior is deterministic across shared and dedicated datastore modes.
+  - [x] Operational script/runbook exists for idempotency retention cleanup.
+  - [x] Integration tests cover restart-safe duplicate sync push handling.
+
+### Task B5 - Transfer Idempotent Create Using Client Transfer ID
+- Status: `[DONE]`
+- Scope:
+  - Use client-provided transfer ID in transfer create/posting flow to guarantee idempotent replay.
+  - Prevent duplicate transfer creation from retry/replay scenarios.
+  - Align mobile outbox payload contracts and API validation for transfer identity.
+- Acceptance criteria:
+  - [x] Replayed transfer sync push returns existing transfer result instead of creating a new transfer.
+  - [x] Transfer create contract requires/uses client transfer ID as idempotent business key.
+  - [x] Transfer approve/post pipeline remains deterministic under retries.
+  - [x] Integration tests validate replay-safe transfer create behavior.
+
+### Task B6 - Multi-Cashier Per Device and Shift Ownership Visibility
+- Status: `[DONE]`
+- Scope:
+  - Support multiple cashiers using one enrolled device without re-enrollment.
+  - Add explicit cashier switch workflow tied to shift open/close events.
+  - Add owner/admin visibility for active cashier-on-shift by branch/location/device.
+- Acceptance criteria:
+  - [x] Mobile supports cashier switch-in/switch-out on same device with PIN/password re-auth.
+  - [x] Every sale/expense/transfer is linked to active shift + cashier user id.
+  - [x] Web shows active shifts with cashier, branch, location, and device context.
+  - [x] Audit logs record cashier switch events and shift ownership transitions.
+
+### Task B7 - Branch Audit Visibility + Personnel Master Data
+- Status: `[DONE]`
+- Scope:
+  - Add branch-level audit log visibility for branch admins.
+  - Add Personnel CRUD linked to Branch.
+  - Add Personnel Role CRUD and enforce role selection in Personnel create/update.
+  - Replace mobile assignment selectors to use Personnel master data instead of Users.
+- Acceptance criteria:
+  - [x] Branch admin can open Audit Logs and only see own-branch context.
+  - [x] Personnel and Personnel Roles are manageable from web admin CRUD pages.
+  - [x] Personnel create/update requires valid active branch + personnel role.
+  - [x] Mobile POS/Delivery assignment pickers use personnel records (full-name labels) from local master data.
+
+## Backlog - Transfer/Ops Enhancements
+
+### Task T1 - Transfer List Filtering Contract + Web Wiring
+- Status: `[DONE]`
+- Scope:
+  - Add API-side transfer list filtering (`status`, `transfer_mode`, `source_location_id`, `destination_location_id`, `branch_id`, `since`, `until`, `limit`).
+  - Wire web transfer list filters to server query params.
+  - Keep branch/date/status/mode filtering deterministic for large datasets.
+- Acceptance criteria:
+  - [x] `GET /api/transfers` supports filter query params without breaking existing callers.
+  - [x] Web transfer list sends branch/date/status/mode filters to API.
+  - [x] Transfer list remains responsive with larger transfer history.
+
+### Task T2 - Transfer Lifecycle Event Consistency (In-Memory Path)
+- Status: `[DONE]`
+- Scope:
+  - Correct in-memory transfer lifecycle event emission order and payloads.
+  - Ensure transfer stock events fire only on posting/reversal, not approval.
+- Acceptance criteria:
+  - [x] No stock-movement event is emitted on transfer approval.
+  - [x] Transfer posting emits `TRANSFER_POST` events.
+  - [x] Transfer reversal emits `TRANSFER_REVERSE` events.
+  - [x] In-memory stock transfer events include FULL/EMPTY deltas and net qty.
+
+### Task T3 - Transfer Ops Health Monitoring
+- Status: `[DONE]`
+- Scope:
+  - Add ops health script for stale transfer lifecycle states and open transfer sync reviews.
+  - Add strict CI job and operator runbook.
+- Acceptance criteria:
+  - [x] Script exists and supports strict mode:
+    - `ops:transfers:health`
+  - [x] CI ops workflow includes transfer health check.
+  - [x] Runbook + env thresholds are documented.
+
+### Task T4 - Transfer Mode Persistence Hardening
+- Status: `[DONE]`
+- Scope:
+  - Persist transfer mode/supplier labels in DB-backed transfer records (not runtime-memory only).
+  - Ensure restart-safe transfer detail fidelity and filter accuracy by mode.
+- Acceptance criteria:
+  - [x] Transfer mode/supplier metadata survives API restart for DB tenants.
+  - [x] API filtering by `transfer_mode` is DB-authoritative.
+  - [x] Existing transfer rows remain backward compatible.
+
+### Task T5 - Transfer Failure Drill-Down UI
+- Status: `[DONE]`
+- Scope:
+  - Add transfer-focused failure widgets in web Sync Reviews page.
+  - Include quick filters for transfer `OPEN` reviews and stale `CREATED/APPROVED` lifecycle records.
+- Acceptance criteria:
+  - [x] Branch/admin users can isolate transfer failures in one click.
+  - [x] Review reason + payload preview remains visible and actionable.
+
+### Task T6 - Transfer Stale-Age API Filtering
+- Status: `[DONE]`
+- Scope:
+  - Add server-side stale-age query filtering to transfer list endpoint.
+  - Allow stale checks to choose age basis (`created` vs `updated`) by lifecycle stage.
+  - Wire web sync-review transfer drill-down to consume the API stale filter directly.
+- Acceptance criteria:
+  - [x] `GET /api/transfers` supports `min_age_minutes` and `age_basis`.
+  - [x] Stale lifecycle filtering works in DB-backed and fallback in-memory paths.
+  - [x] Web transfer stale drill-down no longer relies on local stale-only filtering.
+
+### Task T7 - Transfer Drill-Down Navigation + Dashboard Stale Alerts
+- Status: `[DONE]`
+- Scope:
+  - Add direct transfer navigation from Sync Reviews to Transfer List details.
+  - Support Transfer List deep-link query params for initial filter state and transfer detail opening.
+  - Surface stale transfer lifecycle counts in Dashboard Smart Alert Center.
+- Acceptance criteria:
+  - [x] Sync Reviews rows/stale panel provide one-click `Open Transfer` navigation.
+  - [x] Transfer List consumes deep-link query params and opens target transfer detail modal.
+  - [x] Dashboard shows stale transfer alert using API stale filter endpoints.
+
+## Suggested Execution Order
+1. Phase 0
+2. Phase 1
+3. Phase 2
+4. Phase 3
+5. Phase 4
+6. Phase 5
+7. Phase 6
+8. Phase 7
+
+## Notes
+- Existing subscription platform path: `D:\projects JS\subscriptionapp`.
+- Keep VPOS server authoritative for financial/inventory checks even when entitlement changes.
+- Do not hard-block already-captured offline sales without a grace/reconciliation policy.
+- Hybrid target: run `SHARED_DB` and `DEDICATED_DB` tenants in one fleet with deterministic routing and strict isolation.

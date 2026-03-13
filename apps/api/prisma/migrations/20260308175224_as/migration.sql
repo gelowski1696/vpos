@@ -1,0 +1,2 @@
+-- AlterTable
+ALTER TABLE IF EXISTS "Supplier" ALTER COLUMN "updatedAt" DROP DEFAULT;

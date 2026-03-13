@@ -1,0 +1,1729 @@
+# VPOS Milestone Tasks
+
+## Progress Snapshot (Current)
+
+- Status legend:
+  - `[DONE]` completed and validated
+  - `[IN PROGRESS]` implemented partially or missing persistence/hardening
+  - `[PENDING]` not started
+- Milestone 1: `[DONE]` scaffold and validation baseline complete.
+- Milestone 2: `[IN PROGRESS]` API + Web Admin CRUD implemented with Prisma-backed persistence path and fallback mode.
+- Milestone 3: `[DONE]` offline SQLite transactions, sync reconciliation, and app-level auth session lifecycle are implemented and test-covered.
+- Milestone 4: `[IN PROGRESS]` POS offline cart/reprint flow and cylinder serial workflows are implemented; native printer integration remains pending.
+- Milestone 5: `[DONE]` transfer lifecycle, delivery audit trail, and petty cash online reporting flow are implemented.
+- Milestone 6-7: `[IN PROGRESS]`.
+
+### Latest Completed Work
+- [x] Opening Stock modal UX aligned to Price List multi-add pattern:
+  - Added `Add Multiple Products` picker modal in Opening Stock apply flow.
+  - Picker supports:
+    - category filter
+    - search by product name/item code/category
+    - checkbox multi-select
+  - Added selected products as opening-stock rows in one action (with duplicate row skip by product).
+  - Kept `Add Single Row` for manual row-by-row setup.
+  - Files:
+    - `apps/web/src/app/(admin)/inventory-opening/page.tsx`
+  - Validation:
+    - `pnpm --filter @vpos/web exec tsc --noEmit` passed
+- [x] Removed global AdminShell top status cards from web layout:
+  - Removed these fixed cards from the shell header area:
+    - `Sync Health`
+    - `Active Admin Modules`
+    - `Pricing Engine`
+    - `Server Posting`
+  - Result:
+    - cleaner page content with no repeated static status cards on every admin page.
+  - File:
+    - `apps/web/src/components/admin-shell.tsx`
+  - Validation:
+    - `pnpm --filter @vpos/web exec tsc --noEmit` passed
+- [x] Opening Stock web modal now supports multi-product setup in one apply run:
+  - Reworked `/inventory-opening` apply modal from single-product form to line-based multi-row workflow.
+  - Location is selected once; multiple product rows can be added/removed before submit.
+  - Row behavior:
+    - LPG products use `Opening FULL` + `Opening EMPTY` (qty on hand computed).
+    - Non-LPG products use direct `Opening Qty On Hand`.
+    - Per-row `Avg Cost` and optional `Notes`.
+  - Submit behavior:
+    - validates each row with clear row-indexed errors,
+    - posts rows sequentially to existing opening-stock API,
+    - supports partial success reporting and refreshes snapshot after apply.
+  - File:
+    - `apps/web/src/app/(admin)/inventory-opening/page.tsx`
+  - Validation:
+    - `pnpm --filter @vpos/web exec tsc --noEmit` passed
+- [x] Refined Price List multi-product add with LPG/non-LPG flow rules:
+  - `Add Multiple Products` now behaves by product type:
+    - LPG product -> auto-adds 2 rows:
+      - `Refill Exchange`
+      - `Non-Refill`
+    - Non-LPG product -> auto-adds 1 row:
+      - `Any Flow`
+  - Flow guardrails in edit form:
+    - Non-LPG rows are restricted to `Any Flow` only.
+    - If product changes to non-LPG, flow auto-normalizes to `Any Flow`.
+    - If product changes to LPG from `Any`, flow auto-defaults to `Refill Exchange`.
+  - Save payload normalization:
+    - Non-LPG rows are always persisted as `Any Flow`.
+  - File:
+    - `apps/web/src/app/(admin)/price-lists/page.tsx`
+  - Validation:
+    - `pnpm --filter @vpos/web exec tsc --noEmit` passed
+- [x] Enhanced Price List product adding with category filter + multi-select:
+  - Added `Add Multiple Products` picker modal in Price List Create/Edit form.
+  - Picker supports:
+    - category filter (`All Categories` + product categories)
+    - search by name/item code/category
+    - checkbox multi-select
+  - Added selected products into pricing rows in one action.
+  - Existing single-row add is still available (`Add Single Row`).
+  - File:
+    - `apps/web/src/app/(admin)/price-lists/page.tsx`
+  - Validation:
+    - `pnpm --filter @vpos/web exec tsc --noEmit` passed
+- [x] Added **Copy from existing Price List** utility in Web Price Lists:
+  - In Create/Edit Price List modal, added source selector to copy product-price rows from another price list.
+  - Added copy modes:
+    - `Append missing` (skips duplicate Product + Flow combinations)
+    - `Replace all rows` (overwrites current product price rows)
+  - Copied rows preserve:
+    - Product
+    - Flow mode (`Any Flow` / `Refill Exchange` / `Non-Refill`)
+    - Unit price
+    - Discount cap
+  - New rows automatically align priority to current selected scope (`Contract/Tier/Branch/Global`).
+  - File:
+    - `apps/web/src/app/(admin)/price-lists/page.tsx`
+  - Validation:
+    - `pnpm --filter @vpos/web exec tsc --noEmit` passed
+- [x] Removed Branch Setup tutorial overlay to prevent branch/location interaction blocking:
+  - Branch Selection stage no longer opens guide modal/spotlight.
+  - Restored fully normal interaction for branch/location selectors and continue button.
+  - Kept animated spotlight tutorial flow for other pages/scopes.
+  - Files:
+    - `apps/mobile/App.tsx`
+  - Validation:
+    - `pnpm --filter @vpos/mobile typecheck` passed
+- [x] Fixed tutorial overlay tap-through + animated spotlight transitions:
+  - Tutorial overlay now allows tapping real controls behind the mask (branch/location/select continue is usable during tutorial).
+  - Added smooth spotlight animation (move + resize) when switching tutorial steps.
+  - Files:
+    - `apps/mobile/App.tsx`
+  - Validation:
+    - `pnpm --filter @vpos/mobile typecheck` passed
+- [x] Upgraded mobile tutorial overlay to true spotlight cutout mask:
+  - Added dim-mask with target cutout (focus ring) so current tutorial step highlights the exact control.
+  - Spotlight wiring added for:
+    - Branch selection controls (`Branch`, `Location`, `Continue`)
+    - Settings setup controls (`Set PIN`, `Open Receipt Layout Settings`, `Redownload Branch Data`, `Save Printer Settings`)
+    - per-page `?` tutorial button in module header row.
+  - Files:
+    - `apps/mobile/App.tsx`
+    - `apps/mobile/src/app/screens/SettingsScreen.tsx`
+  - Validation:
+    - `pnpm --filter @vpos/mobile typecheck` passed
+- [x] Upgraded mobile tutorials from plain hints to target-focused guidance:
+  - Post-login setup tutorial now focuses actual Settings actions:
+    - `Set PIN`
+    - `Open Receipt Layout Settings`
+    - `Redownload Branch Data`
+    - `Save Printer Settings`
+  - Branch Selection tutorial now highlights branch picker, location picker, and continue action.
+  - First-open page tutorials now use focus targeting and keep `?` reopen icon in page header row.
+  - Files:
+    - `apps/mobile/App.tsx`
+    - `apps/mobile/src/app/screens/SettingsScreen.tsx`
+    - `apps/mobile/src/app/startup-state.ts`
+    - `apps/mobile/src/db/schema.ts`
+    - `apps/mobile/src/db/sqlite.ts`
+  - Validation:
+    - `pnpm --filter @vpos/mobile typecheck` passed
+- [x] Reworked mobile onboarding/tutorial flow for better first-login guidance:
+  - Removed disruptive `PIN not configured` toast from branch-selection/login transition.
+  - Added first-time tutorial for `Branch Selection` stage.
+  - Added first-time `PIN setup required` tutorial after first successful branch setup when PIN is not configured.
+  - Added first-time per-page tutorials (Home, POS, Sales, Transfer, Expense, Items, Customers, Shift, Settings).
+  - Added persistent `?` tutorial reopen button in page title/header row.
+  - Files:
+    - `apps/mobile/App.tsx`
+    - `apps/mobile/src/app/startup-state.ts`
+    - `apps/mobile/src/db/schema.ts`
+    - `apps/mobile/src/db/sqlite.ts`
+  - Validation:
+    - `pnpm --filter @vpos/mobile typecheck` passed
+- [x] Added first-run mobile app tutorial with tooltip-style guidance:
+  - Added one-time onboarding overlay after first successful branch-ready flow.
+  - Added local app-state persistence `tutorial_seen_at` so tutorial only appears on first install/login flow.
+  - Files:
+    - `apps/mobile/App.tsx`
+    - `apps/mobile/src/app/startup-state.ts`
+    - `apps/mobile/src/db/schema.ts`
+    - `apps/mobile/src/db/sqlite.ts`
+  - Validation:
+    - `pnpm --filter @vpos/mobile typecheck` passed
+- [x] Fixed PIN modal keyboard auto-focus and lock->unlock invalid PIN issue:
+  - Settings `Set PIN / Change PIN` modal now forces fresh OTP input remount per open, so keyboard auto-displays consistently.
+  - After PIN set/change, auth flow session cache is reloaded immediately, so `Log Out (Lock)` -> `Use PIN Instead` works without app restart.
+  - Files:
+    - `apps/mobile/src/features/auth/local-session.service.ts`
+    - `apps/mobile/src/features/auth/mobile-auth-flow.ts`
+    - `apps/mobile/App.tsx`
+    - `apps/mobile/src/app/screens/SettingsScreen.tsx`
+  - Validation:
+    - `pnpm --filter @vpos/mobile typecheck` passed
+- [x] Added mobile APK install script (ADB):
+  - New mobile scripts:
+    - `apk:install` -> installs existing release APK to connected device.
+    - `apk:install:build` -> builds release APK first, then installs.
+  - Root shortcuts:
+    - `mobile:apk:install`
+    - `mobile:apk:install:build`
+  - Installer supports:
+    - auto device detection,
+    - multi-device guard (requires `--serial=<deviceId>`),
+    - reinstall/downgrade flags (`adb install -r -d`).
+  - File: `apps/mobile/scripts/install-release-apk.mjs`
+  - Validation:
+    - `node --check apps/mobile/scripts/install-release-apk.mjs` passed
+    - `pnpm --filter @vpos/mobile typecheck` passed
+- [x] Added linked-product guardrails for deactivating Product Category and Product Brand:
+  - Deactivation now fails with clear error if the category/brand is still referenced by any product.
+  - Error message includes linked product count and guidance to reassign products first.
+  - Applied in shared + dedicated datastore paths and in fallback in-memory path.
+  - File: `apps/api/src/modules/master-data/master-data.service.ts`
+  - Validation: `pnpm --filter @vpos/api build` passed
+- [x] Added auto-generate code button for Product Brands:
+  - Brand form `Brand Code` now has icon action to generate short code automatically.
+  - File: `apps/web/src/app/(admin)/product-brands/page.tsx`
+  - Validation: `pnpm --filter @vpos/web typecheck` passed
+- [x] Added Excel Import Wizard support for Cylinder Types:
+  - API:
+    - Added validate/commit endpoints:
+      - `POST /master-data/import/cylinder-types/validate`
+      - `POST /master-data/import/cylinder-types/commit`
+    - Added service-side validation + commit handlers for cylinder type import (create/update by code).
+  - Web:
+    - Added import wizard action on Cylinder Types page.
+    - Added template columns: `Code`, `Name`, `Size (kg)`, `Deposit Amount (Refundable)`.
+  - Files:
+    - `apps/api/src/modules/master-data/master-data.controller.ts`
+    - `apps/api/src/modules/master-data/master-data.service.ts`
+    - `apps/web/src/components/master-data-import-wizard.tsx`
+    - `apps/web/src/app/(admin)/cylinder-types/page.tsx`
+  - Validation:
+    - `pnpm --filter @vpos/api build` passed
+    - `pnpm --filter @vpos/web typecheck` passed
+- [x] Added Excel Import Wizard support for Product Categories and Product Brands:
+  - API:
+    - Added validate/commit endpoints:
+      - `POST /master-data/import/product-categories/validate`
+      - `POST /master-data/import/product-categories/commit`
+      - `POST /master-data/import/product-brands/validate`
+      - `POST /master-data/import/product-brands/commit`
+    - Added import validation + commit handlers in master-data service for both entities.
+  - Web:
+    - Added import wizard toolbar action to:
+      - Product Categories page
+      - Product Brands page
+    - Added templates and commit flow with reload after successful import.
+  - Files:
+    - `apps/api/src/modules/master-data/master-data.controller.ts`
+    - `apps/api/src/modules/master-data/master-data.service.ts`
+    - `apps/web/src/components/master-data-import-wizard.tsx`
+    - `apps/web/src/app/(admin)/product-categories/page.tsx`
+    - `apps/web/src/app/(admin)/product-brands/page.tsx`
+  - Validation:
+    - `pnpm --filter @vpos/api build` passed
+    - `pnpm --filter @vpos/web typecheck` passed
+- [x] PIN UX polish + POS category selector stability:
+  - PIN inputs now show typed digit briefly (~0.5s) before masking.
+  - Added stronger focus retry on press/open for Set PIN / Change PIN reliability.
+  - POS Select Item category strip now uses fixed-height container to prevent layout growth/break on category changes.
+  - Files:
+    - `apps/mobile/src/app/components/PinCodeInput.tsx`
+    - `apps/mobile/src/app/screens/PosScreen.tsx`
+  - Validation:
+    - `pnpm --filter @vpos/mobile typecheck` passed
+- [x] Fixed mobile APK build blocker from PIN haptics module resolution:
+  - Removed runtime `expo-haptics` require from PIN component (Metro resolves missing module at bundle time).
+  - Switched PIN digit feedback to native `Vibration` fallback to keep tactile response without extra dependency.
+  - File: `apps/mobile/src/app/components/PinCodeInput.tsx`
+  - Validation: `pnpm --filter @vpos/mobile typecheck` passed
+- [x] Mobile PIN + POS picker UX hardening:
+  - PIN input now uses a more robust OTP-style component behavior:
+    - stronger auto-focus retry on open to bring up number keyboard reliably,
+    - per-digit micro animation for smoother entry feedback,
+    - haptic feedback per entered digit (when device/runtime supports it).
+  - POS `Select Item` modal improvements:
+    - fixed category chip layout break on select/change (single-line chips with bounded width),
+    - added LPG flow-aware price visibility in item cards:
+      - `Refill` price and `Non-Refill` price shown when available from local price lists.
+  - Files:
+    - `apps/mobile/src/app/components/PinCodeInput.tsx`
+    - `apps/mobile/src/app/screens/PosScreen.tsx`
+  - Validation:
+    - `pnpm --filter @vpos/mobile typecheck` passed
+- [x] Unified OTP-style PIN input across mobile auth and settings:
+  - Replaced buggy per-box PIN input implementations with shared `PinCodeInput` (single numeric capture + 4 visual OTP boxes).
+  - Applied to:
+    - `Login with PIN` (Unlock screen)
+    - `Set PIN` modal
+    - `Change PIN` modal
+  - Files:
+    - `apps/mobile/src/app/components/PinCodeInput.tsx`
+    - `apps/mobile/App.tsx`
+    - `apps/mobile/src/app/screens/SettingsScreen.tsx`
+  - Validation:
+    - `pnpm --filter @vpos/mobile typecheck` passed
+- [x] Mobile auth + POS UX updates:
+  - Added separate **Full Sign Out** action in mobile side menu:
+    - Full Sign Out now clears local session and PIN unlock path (PIN removed), then returns to Login.
+  - Kept **Log Out** as lock-only behavior (`Log Out (Lock)`):
+    - Returns to Login without clearing cached session, so `Use PIN Instead` works.
+  - POS `Select Item` modal redesigned for readability:
+    - Larger modal height/space usage.
+    - New item cards with clearer layout (name/subtitle, price pill, category, FULL/EMPTY/QOH chips).
+  - Files:
+    - `apps/mobile/src/features/auth/mobile-auth-flow.ts`
+    - `apps/mobile/App.tsx`
+    - `apps/mobile/src/app/screens/PosScreen.tsx`
+  - Validation:
+    - `pnpm --filter @vpos/mobile typecheck` passed
+- [x] Fixed mobile PIN lock/unlock flow after logout:
+  - Changed mobile logout behavior to lock the app UI without clearing cached local session tokens.
+  - `Use PIN Instead` now works after logout (no more `PIN Unlock unavailable` caused by missing cached session).
+  - Login screen now clears password/PIN input on logout and shows lock guidance.
+  - File: `apps/mobile/App.tsx`
+  - Validation: `pnpm --filter @vpos/mobile typecheck` passed
+- [x] Added reusable table sorting in Web `EntityManager` (applies to all CRUD master-data tables):
+  - Click column headers to sort `asc` -> `desc` -> `off`.
+  - Sorting is enabled only for applicable columns by default (`text/number/date/select/boolean`), while `textarea/password` columns are excluded.
+  - Added optional per-column controls in `tableColumnOverrides`:
+    - `sortable: boolean`
+    - `sortAccessor: (row) => unknown`
+  - Optimized filter+sort pipeline with memoized decorated sorting for stable results.
+- [x] Added Products + Customers deactivate/reactivate flow (soft-delete only):
+  - API:
+    - Added `DELETE /master-data/products/:id` -> soft deactivate (`isActive=false`).
+    - Added `DELETE /master-data/customers/:id` -> soft deactivate (`isActive=false`).
+    - Added audit logs for both safe-delete actions.
+  - Web:
+    - Enabled row-level `Deactivate/Reactivate` actions in Products page.
+    - Enabled row-level `Deactivate/Reactivate` actions in Customers page.
+  - No permanent delete added for these entities.
+- [x] Auto-code + duplicate validation for core master data codes:
+  - Added server-side short code policy (A-Z/0-9, 1-8 chars) with auto-generate when blank for:
+    - Branch
+    - Customer
+    - Cylinder Type
+    - Product Category
+  - Added server-side duplicate checks (create/update) with clear errors.
+  - Added API live-validation endpoints:
+    - `GET /master-data/branches/code-exists`
+    - `GET /master-data/customers/code-exists`
+    - `GET /master-data/cylinder-types/code-exists`
+    - `GET /master-data/product-categories/code-exists`
+  - Added Web form live validation indicators and pre-submit checks on code fields for:
+    - Branches
+    - Customers
+    - Cylinder Types
+    - Product Categories
+  - Added inline icon button on each code field to auto-generate short code instantly in the modal form.
+  - Code fields now allow blank input to use server auto-generated unique code.
+- [x] Product Category + Brand CRUD implemented (API + Web):
+  - Added master-data endpoints:
+    - `GET/POST/PUT/DELETE /master-data/product-categories`
+    - `GET/POST/PUT/DELETE /master-data/product-brands`
+  - Added Prisma master tables:
+    - `ProductCategory`
+    - `ProductBrand`
+    - migration: `apps/api/prisma/migrations/20260307140000_product_category_brand_crud/migration.sql`
+  - Added Web Admin pages:
+    - `Product Categories`
+    - `Product Brands`
+  - Added sidebar navigation entries for both pages.
+  - Updated Products page to use dropdowns sourced from category/brand master data.
+  - Added service-level soft-delete support (`DELETE` => deactivate, `PUT isActive=true` => reactivate).
+- [x] Product taxonomy + brand model update:
+  - Added `Product.category` and `Product.brand`.
+  - Moved brand ownership from `CylinderType` to `Product` (removed cylinder-type brand).
+  - Updated API master-data create/update/list contracts for products/cylinder types.
+  - Updated web admin:
+    - Products form/table/details now support and display `Category` + `Brand`.
+    - Cylinder Types form no longer asks for `Brand`.
+  - Updated mobile Items view/detail to show product `Category` + `Brand` and removed cylinder-type brand display.
+  - Updated seed/reset paths to match new model:
+    - `apps/api/prisma/seed.ts`
+    - `apps/api/scripts/reset-fresh-start.mjs`
+    - API fallback/auto-seed in master-data service.
+  - Added Prisma migration:
+    - `apps/api/prisma/migrations/20260307113000_product_category_brand_move/migration.sql`
+  - Validation:
+    - `pnpm.cmd --filter @vpos/api prisma:generate` passed
+    - `pnpm.cmd --filter @vpos/api typecheck` passed
+    - `pnpm.cmd --filter @vpos/web typecheck` passed
+    - `pnpm.cmd --filter @vpos/mobile typecheck` passed
+- [x] Option 2 flow-based LPG pricing implemented (Refill vs Non-Refill):
+  - Added Prisma enum/column for flow-aware rules:
+    - `PriceRule.flowMode` (`ANY | REFILL_EXCHANGE | NON_REFILL`)
+    - migration: `apps/api/prisma/migrations/20260306120000_price_rule_flow_mode/migration.sql`
+  - API master-data now persists/returns `flowMode` in price-list rules.
+  - Pricing resolver now supports `cylinder_flow` and applies rule matching as:
+    - exact flow match first (`REFILL_EXCHANGE` / `NON_REFILL`)
+    - fallback to `ANY` within the same scope
+    - scope precedence remains `contract > tier > branch > global`
+  - Web Price Lists UI now has per-rule flow selector (`Any Flow`, `Refill Exchange`, `Non-Refill`) and flow labels in list previews.
+  - Mobile POS local pricing now parses flow rules and auto-refreshes line unit price when LPG line flow changes.
+  - Added backend integration tests for flow precedence:
+    - branch exact flow vs `ANY`
+    - contract scope precedence over branch flow-specific rules
+  - Files:
+    - `apps/api/prisma/schema.prisma`
+    - `apps/api/src/modules/master-data/master-data.service.ts`
+    - `apps/api/src/modules/master-data/master-data.controller.ts`
+    - `apps/api/src/modules/pricing/pricing.service.ts`
+    - `apps/api/test/app.e2e-spec.ts`
+    - `apps/web/src/app/(admin)/price-lists/page.tsx`
+    - `apps/mobile/src/app/screens/PosScreen.tsx`
+    - `packages/shared-types/src/index.ts`
+  - Validation:
+    - `pnpm.cmd --filter @vpos/api prisma:generate` passed
+    - `pnpm.cmd --filter @vpos/shared-types typecheck` passed
+    - `pnpm.cmd --filter @vpos/api typecheck` passed
+    - `pnpm.cmd --filter @vpos/web typecheck` passed
+    - `pnpm.cmd --filter @vpos/mobile typecheck` passed
+- [x] Sales Details per-item LPG flow visibility + Reports guided UX refresh:
+  - Mobile Sales Details now shows `Flow: Refill` or `Flow: Non-Refill` per item line when present.
+  - Web Sales Details (Sales List modal) now includes `LPG Flow` column per line.
+  - API reports `salesDetail` endpoint now returns per-line `cylinder_flow` by reading posted sale-event line payload.
+  - Sales posting now persists per-line `cylinder_flow` in event payload and uses line-level flow for stock-event FULL/EMPTY deltas.
+  - Web Reports page now supports a cleaner guided mode:
+    - section selector chips (`Sales`, `Inventory`, `LPG`, `Operations`, `Customer/Credit`, `System/Control`)
+    - one-section-at-a-time focused view
+    - `Show All Sections` toggle for power users
+  - Files:
+    - `apps/mobile/src/app/screens/SalesScreen.tsx`
+    - `apps/web/src/app/(admin)/sales-list/page.tsx`
+    - `apps/web/src/app/(admin)/reports/page.tsx`
+    - `apps/api/src/modules/reports/reports.service.ts`
+    - `apps/api/src/modules/sales/sales.service.ts`
+  - Validation:
+    - `pnpm.cmd --filter @vpos/api typecheck` passed
+    - `pnpm.cmd --filter @vpos/web typecheck` passed
+    - `pnpm.cmd --filter @vpos/mobile typecheck` passed
+- [x] Mobile POS per-item LPG flow selection:
+  - POS cart now supports per-line `Refill` / `Non-Refill` selection for LPG items.
+  - Same LPG product can now be split in one sale by flow (example: `5kg Refill` and `5kg Non-Refill`).
+  - Offline sale payload now sends `cylinderFlow` per line.
+  - API sync + sale posting now consume line-level `cylinder_flow` and apply cylinder events/inventory impact per line (fallback to sale-level flow only when line flow is absent).
+  - Files:
+    - `apps/mobile/src/app/screens/PosScreen.tsx`
+    - `apps/mobile/src/services/offline-transaction.service.ts`
+    - `apps/api/src/modules/sync/sync.service.ts`
+    - `apps/api/src/modules/sales/sales.service.ts`
+    - `apps/api/src/modules/sales/sales.controller.ts`
+  - Validation:
+    - `pnpm.cmd --filter @vpos/mobile typecheck` passed
+    - `pnpm.cmd --filter @vpos/api typecheck` passed
+    - `pnpm.cmd --filter @vpos/web typecheck` passed
+- [x] Sales shift-link + POS selection-reset improvements:
+  - API sale posting now links posted sales to shift using `shift_id` from mobile payload (with fallback to actor's active branch shift), so web Sales Details no longer defaults to `Shift: N/A` when duty is active.
+  - Mobile POS now includes `shift_id` in queued sale payload.
+  - Mobile POS now clears `Customer` and `Personnel` selections after successful sale flow.
+  - Files:
+    - `apps/api/src/modules/sales/sales.service.ts`
+    - `apps/api/src/modules/sync/sync.service.ts`
+    - `apps/mobile/src/services/offline-transaction.service.ts`
+    - `apps/mobile/src/app/screens/PosScreen.tsx`
+  - Validation:
+    - `pnpm.cmd --filter @vpos/api typecheck` passed
+    - `pnpm.cmd --filter @vpos/mobile typecheck` passed
+    - `pnpm.cmd --filter @vpos/web typecheck` passed
+- [x] Added personnel/helper/driver visibility in Sales Details (mobile + web):
+  - Mobile Sales Details now shows `Personnel`, `Driver`, and `Helper` cards from sale payload metadata (with backward-compatible fallbacks).
+  - POS offline sale payload now persists personnel metadata (`personnel/driver/helper` ids + names) for reliable Sales Details display after reload.
+  - API sync/posting now persists personnel metadata into `EventSales` payload (`personnel/driver/helper`), so pickup sales are retained server-side.
+  - Web Sales Details now resolves `Personnel`, `Driver`, and `Helper` from persisted sale metadata, with delivery assignments as fallback.
+  - Files:
+    - `apps/api/src/modules/sync/sync.service.ts`
+    - `apps/api/src/modules/sales/sales.service.ts`
+    - `apps/api/src/modules/reports/reports.service.ts`
+    - `apps/mobile/src/services/offline-transaction.service.ts`
+    - `apps/mobile/src/app/screens/PosScreen.tsx`
+    - `apps/mobile/src/app/screens/SalesScreen.tsx`
+    - `apps/web/src/app/(admin)/sales-list/page.tsx`
+  - Validation:
+    - `pnpm.cmd --filter @vpos/api typecheck` passed
+    - `pnpm.cmd --filter @vpos/mobile typecheck` passed
+    - `pnpm.cmd --filter @vpos/web typecheck` passed
+- [x] Dashboard chart fallback + analytics card redesign:
+  - Updated `Line Chart: Daily Net Sales` to handle single-day data with a single-point visual (dot/bar) instead of showing the old insufficient-data message.
+  - Redesigned `Top Items` into ranked card rows with sales progress bars and quick metrics.
+  - Redesigned `Recent Sales` into compact modern transaction cards.
+  - Added `Customers with Balances` panel with outstanding-amount bars for fast credit visibility.
+  - File: `apps/web/src/app/(admin)/dashboard/page.tsx`
+  - Validation:
+    - `pnpm --filter @vpos/web typecheck` passed
+- [x] Dashboard interaction update (no manual date-range apply + richer chart types):
+  - Removed custom `From/To + Apply Range` controls from dashboard; dashboard now uses preset periods only (`Today`, `This Week`, `This Month`, `This Year`).
+  - Added more chart styles for modern interactive analytics:
+    - Line chart: `Daily Net Sales`
+    - Gauge chart: `Gross Margin %`
+    - Bar chart: `Sale Type Count`
+  - Kept existing interactive explorer tabs (Trend/Branch/Payments/LPG) and modern KPI cards.
+  - File: `apps/web/src/app/(admin)/dashboard/page.tsx`
+  - Validation:
+    - `pnpm --filter @vpos/web typecheck` passed
+- [x] Web Dashboard redesigned to be more interactive and modern:
+  - Replaced static chart blocks with an interactive **Analytics Explorer** tabs:
+    - `Trend` (toggle `Sales Amount` / `Transaction Count`)
+    - `Branch` (revenue vs gross profit bars)
+    - `Payments` (mix distribution bars)
+    - `LPG` (FULL/EMPTY stacked split per location + item)
+  - Added custom date range controls (`From`, `To`, `Apply Range`) while retaining period presets.
+  - Added modern realtime snapshot panel with sale-type chart bars and operational KPIs.
+  - File: `apps/web/src/app/(admin)/dashboard/page.tsx`
+  - Validation:
+    - `pnpm --filter @vpos/web typecheck` passed
+- [x] Added CSV export actions to Web Reports Center:
+  - Added per-section exports: `Sales`, `Inventory`, `LPG`, `Operations`, `Customer`, `System`.
+  - Added `Export All CSV` action to download all report packs for current filters.
+  - Exports respect selected filters (`Branch`, `From Date`, `To Date`) in filename suffix and dataset scope.
+  - File: `apps/web/src/app/(admin)/reports/page.tsx`
+  - Validation:
+    - `pnpm --filter @vpos/web typecheck` passed
+- [x] Reports filters changed to explicit date range:
+  - Removed preset period buttons (`Today`, `This Week`, `This Month`, `This Year`) from Reports.
+  - Added user-friendly `From Date` and `To Date` filters.
+  - Added validation guard: `From Date` cannot be later than `To Date`.
+  - File: `apps/web/src/app/(admin)/reports/page.tsx`
+  - Validation:
+    - `pnpm --filter @vpos/web typecheck` passed
+- [x] Reports UI modernized for user-friendly navigation and readability:
+  - Added sticky section navigator chips (`Sales`, `Inventory`, `LPG/Cylinder`, `Operations`, `Customer/Credit`, `System/Control`).
+  - Added quick KPI summary strip (Sales, Margin, Low Stock, Open Sync Reviews, Outstanding Due).
+  - Upgraded report cards and section headers with clearer hierarchy and modern visual styling.
+  - Improved table readability with hover/striped row behavior and cleaner typography.
+  - File: `apps/web/src/app/(admin)/reports/page.tsx`
+  - Validation:
+    - `pnpm --filter @vpos/web typecheck` passed
+- [x] Reworked Web `Reports` into a true report-centric workspace (not overview/dashboard):
+  - Replaced overview-style layout with a structured **Reports Center** containing 26 report modules:
+    1. Sales Summary (X/Z)
+    2. Sales by Item
+    3. Sales by Branch
+    4. Sales by Cashier
+    5. Sales by Payment Method
+    6. Sales by Sale Type
+    7. Discounts/Overrides
+    8. Inventory On Hand by Location+Item
+    9. Inventory Movement Ledger
+    10. Stock Valuation (WAC snapshot)
+    11. Low Stock/Reorder Alerts
+    12. Opening Stock vs Current Status
+    13. FULL vs EMPTY by Location+Item
+    14. Cylinder Asset Register
+    15. Cylinder Event History
+    16. Cylinder Loss/Damage + Adjustments
+    17. Deposit Liability
+    18. Transfers
+    19. Delivery Performance
+    20. Shift Reconciliation
+    21. Petty Cash/Expense
+    22. Customer Balance Aging
+    23. Customer Payment History
+    24. Unsettled/Partial Sales
+    25. Sync Reviews/Conflicts
+    26. Audit Trail
+  - Added shared report filters: branch, period (Today/Week/Month/Year), and low-stock threshold.
+  - Added graceful partial-data handling when some report sources fail.
+  - File: `apps/web/src/app/(admin)/reports/page.tsx`
+  - Validation:
+    - `pnpm --filter @vpos/web typecheck` passed
+- [x] Web routing split: `Dashboard` and `Reports` are now separate pages:
+  - Added new page: `apps/web/src/app/(admin)/dashboard/page.tsx` for **Overview + Analytics**.
+  - Converted `apps/web/src/app/(admin)/reports/page.tsx` into a dedicated **Reports Workspace** page.
+  - Sidebar now shows both:
+    - `Dashboard` (`/dashboard`)
+    - `Reports` (`/reports`)
+  - Non-platform-owner login now lands on `/dashboard` instead of `/reports`.
+  - Updated dashboard shortcut links:
+    - `apps/web/src/app/page.tsx`
+    - `apps/web/src/app/(admin)/branding/page.tsx`
+  - Validation:
+    - `pnpm --filter @vpos/web typecheck` passed
+- [x] Web Reports overview redesign (modern interactive UX):
+  - Reworked `Reports` page into an analytics-first dashboard with:
+    - branch filter
+    - period presets (`Today`, `This Week`, `This Month`, `This Year`)
+    - KPI cards
+    - sales trend bars
+    - payment mix visualization
+    - top items + recent sales cards
+    - inventory movement and quick ops sections
+  - File: `apps/web/src/app/(admin)/reports/page.tsx`
+  - Validation:
+    - `pnpm --filter @vpos/web typecheck` passed
+- [x] Shift close sync false-reject fix:
+  - Fixed `/sync/push` shift close validation to hydrate shift state from datastore before enforcing `OPEN` check.
+  - Prevents valid close payloads from going `needs_review` after API restart/in-memory state reset.
+  - File: `apps/api/src/modules/sync/sync.service.ts`
+  - Validation:
+    - `pnpm --filter @vpos/api typecheck` passed
+- [x] Reports UX polish for inventory movement timestamp:
+  - Inventory Movement Ledger `When` column now renders human-readable local date-time (instead of raw ISO string).
+  - File: `apps/web/src/app/(admin)/reports/page.tsx`
+  - Validation:
+    - `pnpm --filter @vpos/web typecheck` passed
+- [x] Inventory Movement Ledger full/empty movement enhancement:
+  - API `GET /reports/inventory/movements` now returns per-row:
+    - `qty_full_delta`
+    - `qty_empty_delta`
+  - API movement summary now includes:
+    - `qty_full_in`, `qty_full_out`
+    - `qty_empty_in`, `qty_empty_out`
+  - Movement split extraction now reads stock-event payload keys (`full_delta`, `empty_delta`) and supports legacy fallback behavior.
+  - Sale posting stock events now include `full_delta` / `empty_delta` per SALE ledger row.
+  - Transfer post/reverse stock events now include both `full_delta` and `empty_delta` (from transfer line full/empty quantities).
+  - Web Reports > Inventory Movement Ledger updated:
+    - added `FULL Δ` and `EMPTY Δ` columns,
+    - shows FULL/EMPTY in/out totals in summary line,
+    - CSV export now includes full/empty delta columns.
+  - Validation:
+    - `pnpm --filter @vpos/api typecheck` passed
+    - `pnpm --filter @vpos/web typecheck` passed
+- [x] LPG sale-posting serial-gap fallback fix:
+  - Fixed sale sync/posting failure when LPG opening stock had FULL/EMPTY in `CylinderBalance` but no serial rows in `Cylinder`.
+  - Sale auto-cylinder flow now supports aggregate fallback:
+    - validates against `CylinderBalance.qtyFull` when serial coverage is missing,
+    - applies FULL/EMPTY movements on `CylinderBalance`,
+    - records aggregate stock-movement event metadata.
+  - Prevents false error:
+    - `Insufficient FULL cylinders ... Available=0` when opening stock already has FULL counts.
+  - Validation:
+    - `pnpm --filter @vpos/api typecheck` passed
+- [x] LPG FULL/EMPTY sync/reporting consistency update:
+  - API sale posting now updates `CylinderBalance` on auto cylinder flow:
+    - `REFILL_EXCHANGE`: `FULL -qty`, `EMPTY +qty` at sale location
+    - `NON_REFILL`: `FULL -qty` at sale location, `FULL +qty` at customer-outbound location
+  - API sale inventory posting now preserves LPG `qty_on_hand` for `REFILL_EXCHANGE` and applies stock-out only for `NON_REFILL`.
+  - Sync now emits `inventory_balance` delta changes after server sale posting, allowing mobile items stock (`FULL/EMPTY/QOH`) to update on normal sync pull.
+  - Reports FULL/EMPTY endpoints now read from `CylinderBalance` so dashboard reflects current operational split (including opening-stock initialized balances).
+  - Web Product Details cost snapshot now shows `FULL` and `EMPTY` columns for LPG products (instead of `Qty On Hand` in the location table).
+  - Validation:
+    - `pnpm --filter @vpos/api typecheck` passed
+    - `pnpm --filter @vpos/web typecheck` passed
+- [x] Opening stock + mobile LPG flow enhancements:
+  - Web Opening Stock modal now supports LPG-specific `Opening FULL` + `Opening EMPTY`; `Qty On Hand` is computed as `FULL + EMPTY`.
+  - API opening-stock posting now accepts `qtyFull/qtyEmpty`, stores LPG cylinder-balance snapshot per location/cylinder-type, and returns `qtyFull/qtyEmpty/qtyOnHand` in response.
+  - Opening-stock snapshot now includes `FULL`, `EMPTY`, and computed `Qty On Hand` columns for LPG products.
+  - Mobile POS now has explicit `Cylinder Flow` selector (`Refill Exchange` vs `Non-Refill`) and sends `cylinder_flow` in queued sale payloads.
+  - Mobile Items now shows LPG stock snapshot (`FULL`, `EMPTY`, `QOH`) and uses `QOH = FULL + EMPTY`; non-LPG items show inventory-balance QOH when available, otherwise marked as not yet synced.
+  - Mobile branch bootstrap now downloads cylinders and stores them in `cylinders_local` so LPG FULL/EMPTY counts are available offline.
+  - Validation:
+    - `pnpm --filter @vpos/api typecheck` passed
+    - `pnpm --filter @vpos/web typecheck` passed
+    - `pnpm --filter @vpos/mobile typecheck` passed
+- [x] Removed tenant-side `platform_owner` / `owner` users and roles:
+  - Tenant provisioning role baseline now excludes `owner` and `platform_owner`.
+  - Dedicated tenant bootstrap role baseline now excludes `owner`.
+  - Provisioned tenant admin account roles changed from `owner/admin/supervisor` to `admin/supervisor`.
+  - Added platform control-plane company seed (`PLATFORM`) to host the platform owner account (`owner@vpos.local`) outside tenant companies.
+  - Owner tenant list now hides the platform control company.
+  - Validation after reset:
+    - `DEMO_STORE` users: `admin@vpos.local`, `cashier@vpos.local`
+    - `DEMO_WH` users: `admin.wh@vpos.local`, `cashier.wh@vpos.local`
+    - `PLATFORM` user: `owner@vpos.local` (`platform_owner`, `admin`)
+- [x] Stopped unintended legacy `DEMO` tenant auto-creation during login:
+  - Root cause: auth bootstrap (`ensureSeedUsers`) always upserted `DEMO / VPOS Demo LPG Co.` and default users (`owner@`, `admin@`, `cashier@`).
+  - Added config gate:
+    - `VPOS_AUTH_SEED_LEGACY_DEMO=false` disables legacy auto-seed.
+    - default behavior now seeds legacy demo only in `test` runtime unless explicitly enabled.
+  - Updated env files:
+    - `apps/api/.env`
+    - `apps/api/.env.example`
+  - Re-ran full reset so shared DB now contains only:
+    - `DEMO_STORE`
+    - `DEMO_WH`
+- [x] Added and executed full local reset/reseed flow for clean restart:
+  - New command: `pnpm db:reset:fresh`
+  - New script: `apps/api/scripts/reset-fresh-start.mjs`
+  - Behavior:
+    - drops existing dedicated tenant databases (derived + mapped),
+    - runs shared DB `prisma migrate reset`,
+    - recreates two dedicated tenant baselines:
+      - `DEMO_STORE` (`STORE_ONLY`) with `1` branch (`MAIN`) and `1` location (`LOC-MAIN`),
+      - `DEMO_WH` (`STORE_WAREHOUSE`) with `2` branches (`MAIN`, `WH1`) and `2` locations (`LOC-MAIN`, `LOC-WH1`),
+      - owner login retained at `owner@vpos.local / Owner@123`,
+      - standard LPG master-data seed applied to both tenants.
+  - Validation:
+    - shared DB shows both tenants in `DEDICATED_DB` mode with topology-specific counts,
+    - each dedicated DB shows seeded products/customers/price lists with matching branch/location topology.
+- [x] Mobile Shift / Duty redesigned to modal-first modern UX (aligned with Expense interaction style):
+  - Reworked Shift screen flow into guided modals:
+    - `Start Duty` modal (fixed context + opening cash),
+    - `End Duty` modal (financial checklist + actual cash + variance),
+    - `Cash Adjustment` modal (IN/OUT selector + quick amount chips + notes).
+  - Main screen now shows compact duty overview cards and action buttons, with cleaner recent activity panels.
+  - Preserved existing offline queue logic, shift validations, and sync behavior.
+  - File:
+    - `apps/mobile/src/app/screens/ShiftScreen.tsx`
+  - Validation:
+    - `pnpm --filter @vpos/mobile typecheck` passed
+- [x] API sync petty-cash/shift validation hardening (OPEN shift false-reject fix):
+  - Root cause addressed:
+    - sync validator previously relied on in-memory shift state only,
+    - after API restarts or state resets, petty-cash could be rejected even when shift was open in operational flow.
+  - Implemented in `SyncService`:
+    - async validation path for shift/petty-cash checks,
+    - shift state hydration from datastore before petty-cash rejection,
+    - shift open/close persistence hooks to datastore when branch/user context is available,
+    - petty-cash persistence hooks to datastore for stronger shift-balance continuity.
+  - Module wiring:
+    - added `PrismaModule` import to `SyncModule` so tenant datasource router is available in sync validator path.
+  - Validation:
+    - `pnpm --filter @vpos/api typecheck` passed
+    - `pnpm --filter @vpos/api test -- -t "enforces petty cash server checks for open shift and cash balance"` passed
+- [x] Mobile auto-refresh after global Sync completion (no manual Refresh needed):
+  - Fixed stale in-page data after `Sync Now` from header notification/side menu.
+  - Added sync-completion refresh listeners (`syncBusy: true -> false`) so screens auto-reload local SQLite data.
+  - Updated screens:
+    - `ExpenseScreen`
+    - `SalesScreen`
+    - `TransfersScreen`
+    - `ShiftScreen`
+    - `CustomersViewScreen`
+    - `PosScreen` (refreshes master data/catalog/active shift)
+  - Validation:
+    - `pnpm --filter @vpos/mobile typecheck` passed
+- [x] Web Sync Reviews page completed (list + reason + payload preview + resolve action):
+  - API:
+    - Added tenant-scoped `GET /reviews` endpoint with status/limit filters.
+    - Added sync service listing support (`listReviews`) with bounded limits and status filtering.
+  - Web:
+    - Added `/sync-reviews` admin page with:
+      - status filters (`OPEN`, `RESOLVED`, `ALL`),
+      - reason and outbox metadata visibility,
+      - payload preview modal,
+      - resolve action with resolution note.
+    - Added `Sync Reviews` menu entry in Admin sidebar.
+  - Validation:
+    - `pnpm --filter @vpos/api typecheck` passed
+    - `pnpm --filter @vpos/web typecheck` passed
+- [x] Mobile Items UX refinement:
+  - Removed status filter chips (`ALL / ACTIVE / INACTIVE`) from Items page.
+  - Kept type filter chips (`ALL / LPG / NON-LPG`) and modern detail-view flow.
+  - File:
+    - `apps/mobile/src/app/screens/ItemsViewScreen.tsx`
+  - Validation:
+    - `pnpm --filter @vpos/mobile typecheck` passed
+- [x] Mobile Items screen UX modernization + item detail view (cost-hidden):
+  - Redesigned Items page with cleaner, user-friendly UI:
+    - summary cards (`Total`, `Active`, `LPG`)
+    - search + quick filters (`ALL/ACTIVE/INACTIVE`, `ALL/LPG/NON-LPG`)
+    - modern item cards with status/type badges and `View` action
+  - Added item details modal for viewing linked data:
+    - item details (item code, unit, LPG flag, active status, update time)
+    - linked cylinder type details (code/name/size/brand/deposit)
+    - linked pricing rules (price list scope/unit price/priority/effectivity)
+  - Cost fields are intentionally not displayed in Items detail view.
+  - File:
+    - `apps/mobile/src/app/screens/ItemsViewScreen.tsx`
+  - Validation:
+    - `pnpm --filter @vpos/mobile typecheck` passed
+- [x] Expense / Petty Cash flow updated to modal-first UX with locked shift:
+  - Creation now opens in a dedicated modal (`Create Petty Cash Entry`) instead of inline form.
+  - Shift behavior changed:
+    - shift is no longer selectable in Expense screen,
+    - entry uses current active open shift only (read-only display),
+    - create action is disabled when no open shift exists.
+  - Expense category now uses modal picker with search (instead of inline dropdown).
+  - File:
+    - `apps/mobile/src/app/screens/ExpenseScreen.tsx`
+  - Validation:
+    - `pnpm --filter @vpos/mobile typecheck` passed
+- [x] Modernized mobile Expense / Petty Cash UX:
+  - Redesigned screen to be more user-friendly and touch-friendly:
+    - KPI summary cards (`Open Shifts`, `Pending Sync`, `Local Entries`)
+    - Cash movement summary block (`Cash IN`, `Cash OUT`)
+    - Modern form card with richer `Cash In / Cash Out` selector
+    - Amount input block with quick amount chips (`+100`, `+200`, `+500`, `+1000`)
+    - Multiline notes input and clearer queue action label with live amount preview
+  - Enhanced recent entries list:
+    - filter chips (`ALL`, `OUT`, `IN`)
+    - card-based entries with direction badge, highlighted amount, sync badge, and timestamp
+  - File:
+    - `apps/mobile/src/app/screens/ExpenseScreen.tsx`
+  - Validation:
+    - `pnpm --filter @vpos/mobile typecheck` passed
+- [x] Removed redundant module context header from mobile READY screens:
+  - Hidden repeated block (`Overview - Branch/Location`) across Home/POS/Sales/Transfer/other modules.
+  - Screen content now starts directly with each module's own UI.
+  - File:
+    - `apps/mobile/App.tsx`
+  - Validation:
+    - `pnpm --filter @vpos/mobile typecheck` passed
+- [x] POS receipt conditional visibility cleanup:
+  - Personnel and Helper lines are now hidden when value is empty/null (no more `-` placeholders).
+  - Credit Due summary line now prints only when there is actual outstanding balance (`creditBalance > 0`).
+  - File:
+    - `apps/mobile/App.tsx`
+  - Validation:
+    - `pnpm --filter @vpos/mobile typecheck` passed
+- [x] Mobile receipt identity + optional-field expansion:
+  - Cashier name now avoids email fallback:
+    - Token resolver now prioritizes real name claims only (`full_name`, `displayName`, `name`, etc.).
+    - If token lacks full name, app resolves user from local master data (`users`) by user id/email hint and uses full-name label when available.
+    - Receipt cashier line now shows full name when present, not raw email fallback.
+    - File:
+      - `apps/mobile/App.tsx`
+  - Added user-friendly optional receipt fields in Settings + print output:
+    - Business TIN (`showBusinessTin`, `businessTin`)
+    - Permit/OR Info (`showPermitOrInfo`, `permitOrInfo`)
+    - Terminal Name (`showTerminalName`, `terminalName`)
+    - Cashier Role label (`showCashierRole`, `cashierRoleLabel`)
+    - Fields are configurable in Receipt Layout modal and printed when enabled and non-empty.
+    - Files:
+      - `apps/mobile/src/app/receipt-layout-settings.ts`
+      - `apps/mobile/src/app/screens/SettingsScreen.tsx`
+      - `apps/mobile/App.tsx`
+  - Validation:
+    - `pnpm --filter @vpos/mobile typecheck` passed
+- [x] Mobile header/session receipt UX refinement:
+  - Header/hamburger visibility:
+    - Top header (hamburger + notification bell) now renders only in `READY` stage.
+    - Login/Unlock/Branch Selection screens no longer show hamburger/menu.
+    - File:
+      - `apps/mobile/App.tsx`
+  - Cashier on receipts:
+    - Added cashier identity resolution from cached JWT/session.
+    - POS queued receipt payload now includes `cashierName`.
+    - Receipt print now supports `Show Cashier` toggle and prints `Cashier: ...`.
+    - Files:
+      - `apps/mobile/App.tsx`
+      - `apps/mobile/src/app/screens/PosScreen.tsx`
+      - `apps/mobile/src/app/screens/SettingsScreen.tsx`
+  - Store contact/address receipt settings:
+    - Added receipt layout options:
+      - `Show Store Contact` + `Store Contact` input
+      - `Show Store Address` + `Store Address` input
+    - Receipt renderer now prints contact/address in header section when enabled and non-empty.
+    - Files:
+      - `apps/mobile/src/app/receipt-layout-settings.ts`
+      - `apps/mobile/src/app/screens/SettingsScreen.tsx`
+      - `apps/mobile/App.tsx`
+  - Validation:
+    - `pnpm --filter @vpos/mobile typecheck` passed
+- [x] Standardized receipt text weight defaults for key metadata/summary fields:
+  - Set `Sale ID`, `Payment Mode`, and `Notes` to emphasized text (same weight style as item rows).
+  - Added receipt footer emphasis support in printing core (`footerEmphasis`) and enabled it for POS receipts.
+  - Files:
+    - `apps/mobile/App.tsx`
+    - `packages/printing-core/src/index.ts`
+  - Validation:
+    - `pnpm --filter @vpos/printing-core build` passed
+    - `pnpm --filter @vpos/mobile typecheck` passed
+- [x] Fixed receipt logo placement accuracy + removed hardcoded header label:
+  - Removed forced `[ VPOS ]` line from receipt header.
+  - Improved native bitmap alignment to honor placement (`LEFT|CENTER|RIGHT`) consistently:
+    - logo bitmap is padded/aligned against printer paper width (`384` dots) before printing.
+    - alignment now behaves consistently for both ESC/POS raster path and iMin bitmap path.
+  - Files:
+    - `apps/mobile/App.tsx`
+    - `apps/mobile/android/app/src/main/java/com/vmjamtech/vpos/printer/VposPrinterBridgeModule.kt`
+  - Validation:
+    - `pnpm --filter @vpos/mobile typecheck` passed
+    - `./gradlew.bat :app:compileDebugKotlin` passed
+- [x] Implemented native Android image picker bridge for receipt-logo upload (independent of Expo Image Picker runtime):
+  - Added new module/package:
+    - `VposImagePickerBridge.pickImage()` using Android document picker (`ACTION_OPEN_DOCUMENT`), returning `base64` + `mimeType`.
+    - files:
+      - `apps/mobile/android/app/src/main/java/com/vmjamtech/vpos/media/VposImagePickerModule.kt`
+      - `apps/mobile/android/app/src/main/java/com/vmjamtech/vpos/media/VposImagePickerPackage.kt`
+  - Registered bridge in app package list:
+    - `apps/mobile/android/app/src/main/java/com/vmjamtech/vpos/MainApplication.kt`
+  - Updated receipt logo upload flow to prefer native bridge first:
+    - log marker: `[VPOS][RECEIPT] LOGO_PICKER_USING_NATIVE_BRIDGE`
+    - fallback behavior kept for guarded Expo module path.
+    - file:
+      - `apps/mobile/src/app/screens/SettingsScreen.tsx`
+  - Validation:
+    - `pnpm --filter @vpos/mobile typecheck` passed
+    - `./gradlew.bat :app:compileDebugKotlin` passed
+- [x] Added native-module precheck for receipt logo upload to avoid Hermes runtime error spam:
+  - Upload action now checks for `ExponentImagePicker`/`ExpoImagePicker` availability before loading image picker JS.
+  - If unavailable, it exits with user-friendly alert and does not enter failing call path.
+  - Added diagnostic log marker:
+    - `[VPOS][RECEIPT] LOGO_PICKER_NATIVE_MODULE_NOT_FOUND_PRECHECK`
+  - File:
+    - `apps/mobile/src/app/screens/SettingsScreen.tsx`
+  - Validation:
+    - `pnpm --filter @vpos/mobile typecheck` passed
+- [x] Hardened mobile logo upload flow against missing native image picker module:
+  - Added guarded runtime loading + error handling for `expo-image-picker`.
+  - Upload action now shows a user-friendly alert instead of crashing when `ExponentImagePicker` is unavailable in the running app binary.
+  - File:
+    - `apps/mobile/src/app/screens/SettingsScreen.tsx`
+  - Validation:
+    - `pnpm --filter @vpos/mobile typecheck` passed
+- [x] Added uploadable receipt logo in mobile Receipt Layout Settings (with show/hide and placement):
+  - Added layout fields:
+    - `showHeaderLogoImage`
+    - `headerLogoImageDataUrl`
+    - `headerLogoPlacement` (`LEFT|CENTER|RIGHT`)
+  - Added settings UI in mobile:
+    - Upload/replace logo button (photo picker)
+    - Remove logo action
+    - Show logo ON/OFF toggle
+    - Placement selector (Left/Center/Right)
+    - In-modal logo preview
+  - Receipt print rendering updates:
+    - injects logo image line into receipt document based on toggle + placement
+    - preserves all previous totals emphasis formatting
+  - Native print bridge updates:
+    - accepts image payload lines (`imageBase64`, `imageWidth`)
+    - iMin path attempts bitmap printing via reflection methods
+    - ESC/POS path now renders bitmap to raster command stream (`GS v 0`) for logo output
+  - Files:
+    - `apps/mobile/src/app/screens/SettingsScreen.tsx`
+    - `apps/mobile/src/app/receipt-layout-settings.ts`
+    - `apps/mobile/App.tsx`
+    - `apps/mobile/android/app/src/main/java/com/vmjamtech/vpos/printer/VposPrinterBridgeModule.kt`
+    - `packages/printing-core/src/index.ts`
+    - `apps/mobile/app.json`
+  - Validation:
+    - `pnpm --filter @vpos/printing-core build` passed
+    - `pnpm --filter @vpos/mobile typecheck` passed
+- [x] Enhanced POS receipt readability for customer-facing printouts:
+  - Added centered bold logo line at header: `[ VPOS ]`.
+  - Added bold quantity summary block near totals:
+    - `QTY TOTAL`
+    - `ITEM COUNT`
+  - Added centered bold `GRAND TOTAL` block with separator above and below.
+  - Added final centered bold settlement-status line:
+    - `BALANCE DUE` when credit remains, otherwise `CHANGE`.
+  - Kept existing financial summary lines emphasized.
+  - File:
+    - `apps/mobile/App.tsx`
+- [x] Stabilized mobile branch update notifications + emphasized key receipt totals for readability:
+  - Branch update check stability:
+    - Fingerprint generation now uses canonical/stable JSON key ordering.
+    - Customer volatile balance fields are excluded from fingerprint checks to avoid false positives from transactional changes.
+    - Fingerprint format upgraded to `v2:<hash>`.
+    - Added one-time legacy fingerprint baseline upgrade in mobile update-check flow to prevent repeated alerts after app upgrades.
+    - Files:
+      - `apps/mobile/src/features/bootstrap/master-data-bootstrap.service.ts`
+      - `apps/mobile/App.tsx`
+  - Receipt emphasis:
+    - POS receipt lines now emphasize quantity and line total rows.
+    - Financial summary rows are emphasized (`Subtotal`, `Discount`, `Total`, `Paid`, `Change`, `Credit Due`).
+    - File:
+      - `apps/mobile/App.tsx`
+- [x] Added mobile Receipt Layout Settings (modal UI) with layout-aware test print:
+  - Added user-friendly modal in Settings to configure receipt layout options:
+    - optional field toggles (header text, sale ID, receipt no, branch/location, customer/personnel/helper, payment totals, footer, etc.)
+    - top/bottom receipt spacing controls
+    - editable header/footer text
+  - Added layout actions:
+    - `Save Layout`
+    - `Test Layout Print` (prints sample receipt using the current layout configuration)
+  - Persisted receipt layout settings locally in SQLite:
+    - new table: `receipt_layout_settings`
+    - files:
+      - `apps/mobile/src/db/schema.ts`
+      - `apps/mobile/src/db/sqlite.ts`
+      - `apps/mobile/src/app/receipt-layout-settings.ts`
+  - Wired real receipt generation to layout settings:
+    - POS queued receipt now honors configured layout toggles + spacing.
+    - Settings `Test Print` now prints using current layout.
+    - file: `apps/mobile/App.tsx`
+  - Updated Settings screen implementation:
+    - file: `apps/mobile/src/app/screens/SettingsScreen.tsx`
+  - Validation:
+    - `pnpm --filter @vpos/mobile typecheck` passed
+- [x] Mobile navigation/logout UX cleanup:
+  - Replaced side-menu action `Change Branch / Location` with `Log Out`.
+  - Removed `Sign Out` button from Settings screen (logout is now centralized in side menu).
+  - Updated files:
+    - `apps/mobile/App.tsx`
+    - `apps/mobile/src/app/screens/SettingsScreen.tsx`
+  - Validation:
+    - `pnpm --filter @vpos/mobile typecheck` passed
+- [x] Mobile POS + Shift usability update (duty flow and quick navigation):
+  - POS:
+    - Added one-tap `Go to Shift` action from POS `Duty Required` banner.
+    - Wiring updated in:
+      - `apps/mobile/src/app/screens/PosScreen.tsx`
+      - `apps/mobile/App.tsx`
+    - Tapping action now opens Shift module directly.
+  - Shift:
+    - Removed branch and cashier selectors from Start Duty.
+    - Start Duty now uses startup-selected branch/location and logged-in user session identity.
+    - Added read-only context cards (Branch, Location, Cashier) for clarity.
+    - Updated in: `apps/mobile/src/app/screens/ShiftScreen.tsx`
+  - Startup session/context persistence:
+    - On app relaunch, if saved branch/location context is valid locally, app auto-resumes to `READY` without forcing branch selection step.
+    - Updated in: `apps/mobile/App.tsx`
+  - Validation:
+    - `pnpm --filter @vpos/mobile typecheck` passed
+- [x] Mobile Shift UX refactor implemented for clearer cashier flow:
+  - Reworked `apps/mobile/src/app/screens/ShiftScreen.tsx` into duty-based flow:
+    - plain-language actions: `Start Duty`, `End Duty`
+    - active-duty status banner (`Duty Active` / `No Active Duty`)
+    - end-duty checklist with computed expected cash
+    - auto variance calculation (`Actual Counted Cash - Expected Cash`)
+    - clearer cash-adjustment section (`Cash Adjustments During Duty`)
+  - Added expected cash computation from local session activity:
+    - opening cash
+    - cash sales
+    - customer cash settlements
+    - shift cash adjustments (IN/OUT)
+    - petty cash entries linked to active shift (IN/OUT)
+  - Added POS guardrail in `apps/mobile/src/app/screens/PosScreen.tsx`:
+    - payment/checkout now requires an active duty,
+    - added `Duty Required` banner in POS for operator guidance.
+  - Validation:
+    - `pnpm --filter @vpos/mobile typecheck` passed
+- [x] Increased mobile customer transaction modal height for better visibility:
+  - Updated customer transaction sheet to target `75%` screen height.
+  - File: `apps/mobile/src/app/screens/CustomersViewScreen.tsx`
+  - Validation:
+    - `pnpm --filter @vpos/mobile typecheck` passed
+- [x] Fixed buggy customer transaction scrolling in mobile Customers modal:
+  - Root cause addressed:
+    - outside-tap close wrapper (`Pressable` nesting) was interfering with scroll gestures,
+    - transaction `ScrollView` used `flexGrow: 0`, causing unstable/limited scrolling behavior.
+  - Fixes in `apps/mobile/src/app/screens/CustomersViewScreen.tsx`:
+    - restructured modal to use a separate backdrop pressable (`modalBackdrop`) and non-pressable modal card container,
+    - set transaction list container to `flex: 1` for stable scroll area sizing,
+    - enabled `nestedScrollEnabled` + `keyboardShouldPersistTaps="handled"` on transaction list.
+  - Validation:
+    - `pnpm --filter @vpos/mobile typecheck` passed
+- [x] Mobile Customers screen cleanup:
+  - Removed the `Branch Context` display card from Customers view for a cleaner layout.
+  - File: `apps/mobile/src/app/screens/CustomersViewScreen.tsx`
+  - Validation:
+    - `pnpm --filter @vpos/mobile typecheck` passed
+- [x] Improved mobile Customers UX + customer transaction drill-down:
+  - Refactored `apps/mobile/src/app/screens/CustomersViewScreen.tsx` with:
+    - cleaner customer cards and search UX,
+    - customer summary cards (`Customers`, `With Balance`, `Outstanding`),
+    - tap-to-open transaction history modal per customer.
+  - Added customer transaction modal details:
+    - local `sales_local` entries for selected customer,
+    - local `customer_payments_local` entries for selected customer,
+    - merged timeline sorted by latest date with sync-status badges.
+  - Validation:
+    - `pnpm --filter @vpos/mobile typecheck` passed
+- [x] Web Customer Payments is now view-only (creation removed from web):
+  - Removed customer-payment creation form and POST flow from:
+    - `apps/web/src/app/(admin)/customer-payments/page.tsx`
+  - Web now only shows payment history/filters.
+  - Settlement posting remains mobile-first via Sales Details.
+  - Validation:
+    - `pnpm --filter @vpos/web typecheck` passed
+- [x] Applied migration for customer-payment sale linkage on local dev DB:
+  - Executed `pnpm --filter @vpos/api prisma:migrate:deploy`.
+  - Applied migration: `20260302223000_customer_payment_sale_link`.
+  - Executed `pnpm --filter @vpos/api prisma:generate`.
+- [x] Customer payment settlement linkage + breakdown consistency fix (API/Web/Mobile):
+  - API:
+    - Added `sale_id` linkage support for customer payments.
+    - Added migration to persist sale linkage: `apps/api/prisma/migrations/20260302223000_customer_payment_sale_link/migration.sql`.
+    - Reports `sales/list` and `sales/:saleId` now include settlement payments in `payment_total` and payment methods.
+    - Sales detail payment lines now include source: `SALE` or `SETTLEMENT`.
+    - Sync pull now includes server-side customer payment deltas per device so mobile receives web-posted settlements.
+  - Web:
+    - Sales details payment tables now show payment source (`Sale` / `Settlement`) so customer payments are visible in breakdown.
+    - Customer Payments form now includes optional `Sale ID` to link settlements to a specific sale from web.
+    - Files:
+      - `apps/web/src/app/(admin)/sales-list/page.tsx`
+      - `apps/web/src/app/(admin)/customer-payments/page.tsx`
+  - Mobile:
+    - Fixed due-balance computation to decrease correctly when settlement payments are recorded.
+    - File: `apps/mobile/src/app/screens/SalesScreen.tsx`.
+  - Validation:
+    - `pnpm --filter @vpos/api typecheck` passed
+    - `pnpm --filter @vpos/web typecheck` passed
+    - `pnpm --filter @vpos/mobile typecheck` passed
+- [x] Mobile Sales Details items now inline (no separate modal):
+  - Removed `Order Items` modal flow from Sales Details.
+  - Restored `Items` section directly inside the Sales Details body.
+  - Footer now keeps action buttons for: `Print Receipt`, `Record Payment`, `Payment Breakdown`, and `Close`.
+  - File: `apps/mobile/src/app/screens/SalesScreen.tsx`.
+- [x] Mobile Sales List identifier display update:
+  - Sales list row now displays `Sale ID` as primary identifier.
+  - Receipt number is now secondary metadata (`Receipt #...`) under Sale ID.
+  - File: `apps/mobile/src/app/screens/SalesScreen.tsx`.
+- [x] Mobile Sales Details item visibility restoration:
+  - Initially added `Order Items` modal flow (now superseded by inline items in Sales Details).
+  - File: `apps/mobile/src/app/screens/SalesScreen.tsx`.
+- [x] Mobile Sales Details modal UX compacting:
+  - Sale ID is now the primary identifier in header/hero.
+  - Receipt number is now shown as a smaller subheader line.
+  - Main details body was compacted (removed long inline item/payment/history lists from this modal).
+  - Action buttons are now fixed in a footer area:
+    - Print/Reprint Receipt
+    - Record Payment
+    - Payment Breakdown
+    - Close
+  - File: `apps/mobile/src/app/screens/SalesScreen.tsx`.
+- [x] Added dedicated `Payment Breakdown` button flow for Sales Details (mobile + web):
+  - Mobile:
+    - Added `View Payment Breakdown` button in Sales Details.
+    - Added separate scrollable Payment Breakdown modal with:
+      - total/paid/settled/due summary cards
+      - direct sale payment lines
+      - customer settlement history lines (with sync status badges).
+    - File: `apps/mobile/src/app/screens/SalesScreen.tsx`.
+  - Web:
+    - Added `Payment Breakdown` button in Sales Details header.
+    - Added separate Payment Breakdown modal with summary cards and payment-line table.
+    - File: `apps/web/src/app/(admin)/sales-list/page.tsx`.
+  - Validation:
+    - `pnpm --filter @vpos/mobile typecheck` passed
+    - `pnpm --filter @vpos/mobile build` passed
+    - `pnpm --filter @vpos/web typecheck` passed
+- [x] Added Customer Payment History inside mobile Sales Details:
+  - `Sales` -> `Sale Details` now includes a `Customer Payment History` section for that sale.
+  - History source:
+    - local `customer_payments_local` (sale-linked `sale_id`) with newest-first timeline.
+  - Each history row now shows:
+    - method
+    - amount
+    - datetime
+    - reference number (if provided)
+    - notes (if provided)
+    - sync status badge (`pending`, `processing`, `synced`, `failed`, `needs_review`).
+  - Validation:
+    - `pnpm --filter @vpos/mobile typecheck` passed
+    - `pnpm --filter @vpos/mobile build` passed
+- [x] Fixed mobile stale-data issue after queuing customer payment from Sales Details:
+  - Sales/Sale Details now immediately reflect locally queued settlements:
+    - added sale-linked settlement projection (`sale_id`) in customer payment payload.
+    - Sales list and Sale Details now recompute `Paid`/`Due` using local `customer_payments_local` records (`pending|processing|synced`).
+  - Customers screen now reflects updated estimated balances without waiting for full pull:
+    - `loadCustomerOptions` now adjusts customer balance display using local queued customer payments.
+  - Validation:
+    - `pnpm --filter @vpos/mobile typecheck` passed
+    - `pnpm --filter @vpos/mobile build` passed
+    - `pnpm --filter @vpos/mobile test -- offline-transactions.spec.ts --runInBand` passed
+- [x] Mobile Customers screen is now read-only (customer payment form removed):
+  - Removed customer-payment entry UI from `apps/mobile/src/app/screens/CustomersViewScreen.tsx`.
+  - Customers module now focuses on searchable customer list + outstanding metadata display.
+  - Added explicit guidance text in Customers screen to settle credit via:
+    - `Sales` -> `Sale Details` -> `Record Customer Payment`.
+  - Validation:
+    - `pnpm --filter @vpos/mobile typecheck` passed
+    - `pnpm --filter @vpos/mobile build` passed
+- [x] Mobile pay-later settlement now available directly inside Sales Details:
+  - Added `Record Customer Payment` action in sale details modal (`apps/mobile/src/app/screens/SalesScreen.tsx`).
+  - Added in-modal settlement form:
+    - payment method (`CASH`, `CARD`, `E_WALLET`)
+    - amount
+    - reference no (optional)
+    - notes (optional)
+  - Queue action now posts to local `customer_payments_local` + outbox via existing `OfflineTransactionService.createOfflineCustomerPayment`.
+  - Sale-level guardrails:
+    - requires customer on sale,
+    - requires remaining balance > 0 before settlement action is enabled.
+  - Wired pending badge refresh after queueing payment from sales details (`apps/mobile/App.tsx`).
+  - Validation:
+    - `pnpm --filter @vpos/mobile typecheck` passed
+    - `pnpm --filter @vpos/mobile build` passed
+- [x] Web session-timeout and unauthorized handling now auto-redirects to login:
+  - Centralized in `apps/web/src/lib/api-client.ts`.
+  - Any authenticated API response with `401`/`403` now:
+    - clears local auth session,
+    - redirects to `/login`.
+  - Missing access token on authenticated requests now also redirects to `/login` instead of leaving raw error messages in pages.
+  - Validation:
+    - `pnpm --filter @vpos/web typecheck` passed.
+- [x] Implemented customer "pay later" settlement flow across API + Web + Mobile:
+  - Added server-side `CustomerPayment` domain and persistence:
+    - Prisma model + migration for `CustomerPayment`.
+    - Tenant-scoped posting/listing in new API module:
+      - `POST /api/customer-payments/post`
+      - `GET /api/customer-payments`
+  - Wired offline sync auto-post for customer payments:
+    - `SyncService.push` now accepts outbox `customer_payment/create` and posts server-authoritatively.
+    - Pull metadata includes:
+      - `server_customer_payment_posted`
+      - `server_customer_payment_result`.
+  - Updated customer outstanding balance logic:
+    - `outstanding = posted_sales_receivable - posted_customer_payments` (floored at zero).
+  - Added Web Admin page `/customer-payments`:
+    - post settlement payment form,
+    - customer outstanding preview,
+    - payment history with filters.
+  - Added Mobile offline pay-later settlement flow:
+    - new local table `customer_payments_local`,
+    - outbox queueing via `OfflineTransactionService.createOfflineCustomerPayment`,
+    - customer credit screen now supports queueing payments offline with sync badges.
+  - Added automated coverage:
+    - API integration tests for direct payment posting and sync-outbox auto-post.
+    - Mobile tests for offline queueing and sync change mapping.
+  - Validation:
+    - `pnpm --filter @vpos/api typecheck` passed
+    - `pnpm --filter @vpos/web typecheck` passed
+    - `pnpm --filter @vpos/mobile typecheck` passed
+    - `pnpm --filter @vpos/api build` passed
+    - `pnpm --filter @vpos/web build` passed
+    - `pnpm --filter @vpos/mobile build` passed
+    - targeted API tests for customer payment flow passed
+    - targeted mobile tests passed
+- [x] Added Web Admin Sales List view for synced/posted sales validation:
+  - Added API report endpoint `GET /api/reports/sales/list` with filters:
+    - `branch_id`
+    - `since`
+    - `until`
+    - `location_id`
+    - `user_id`
+    - `shift_id`
+    - `limit`
+  - Added Web page:
+    - `apps/web/src/app/(admin)/sales-list/page.tsx`
+    - includes branch/date filters and responsive sales table columns (receipt, cashier, customer, totals, payments, COGS, gross).
+  - Added sidebar navigation entry `Sales List` in admin shell.
+  - Added integration coverage for new endpoint in API e2e suite.
+- [x] Implemented sync -> authoritative sale posting bridge for dashboard visibility:
+  - `SyncService.push` now auto-posts complete `sale/create` outbox items via `SalesService.post`.
+  - Sync pull delta now carries sale-post metadata for mobile reconciliation:
+    - `server_sale_posted`
+    - `server_sale_result` (receipt + totals/cogs/deposit fields)
+  - Sync rejection now fails closed with review creation when sale posting fails.
+  - Added API integration test:
+    - sync push with complete sale payload posts successfully and exposes post metadata in pull changes.
+- [x] Implemented mobile startup bootstrap flow (splash pulse + connectivity-aware branch onboarding + local master-data cache):
+  - Added pulsing centered startup splash with VPOS logo in `apps/mobile/App.tsx` (`BOOTING` stage).
+  - Added new mobile stage: `BRANCH_SETUP` before entering module tabs.
+  - Added server reachability probe for branch onboarding:
+    - checks authenticated connectivity to API before attempting branch bootstrap.
+  - Added branch selection flow:
+    - branch picker UI at startup,
+    - refresh branch list action,
+    - continue action that downloads branch-scoped master data when online.
+  - Added automatic branch bootstrap download to SQLite:
+    - branches, locations, users/staff, customers, products, cylinder types, expense categories, and price lists
+    - persisted into `master_data_local` for offline selectors/transactions.
+  - Added startup context persistence:
+    - new local table `app_state` stores selected branch, server check status, and last master-data sync timestamp.
+    - saved branch is reused for module defaults in POS/Delivery/Shift screens.
+  - Added client-id persistence in mobile auth session:
+    - new `auth_session.client_id` local column.
+    - mobile sync/bootstrap now sends `X-Client-Id` when available for correct tenant-scoped API reads.
+  - Validation:
+    - `pnpm --filter @vpos/mobile typecheck` passed
+    - `pnpm --filter @vpos/mobile build` passed
+    - `pnpm --filter @vpos/mobile test -- --runInBand` passed (`12/12`, `55/55`)
+- [x] Hardened mobile iMin + TCP ESC/POS printing path and fixed Android Dev Client build blocker:
+  - Added iMin SDK dependency in Android app module:
+    - `com.github.iminsoftware:IminPrinterLibrary:V1.0.0.15`
+  - Improved iMin native init flow in printer bridge:
+    - supports `initPrinter()` / legacy `initPrinter(Int)` / enum-based `initPrinter(PrintConnectType)` via reflection
+    - default iMin connect type set to `SPI` for built-in printer devices.
+  - Improved TCP ESC/POS behavior:
+    - host normalization (`http://` stripped, path ignored),
+    - support for `host:port` input,
+    - strict port validation (`1..65535`),
+    - native socket connect/read timeout + clearer connection error messages.
+  - Fixed Expo autolinking Java failure (`expo.core.ExpoModulesPackage` missing) by adding compatibility shim:
+    - `apps/mobile/android/app/src/main/java/expo/core/ExpoModulesPackage.java`
+  - Validation:
+    - `pnpm --filter @vpos/mobile typecheck` passed
+    - `pnpm --filter @vpos/mobile test` passed (`12/12`, `55/55`)
+    - `./gradlew.bat :app:assembleDebug` passed
+    - `./gradlew.bat :app:installDebug` passed (USB device install successful)
+- [x] Improved mobile printer setup reliability + modernized mobile shell navigation:
+  - Fixed printer configuration flow in mobile settings:
+    - Added explicit `Save Printer Settings` action in `apps/mobile/src/app/screens/SettingsScreen.tsx`.
+    - `Test Print` now persists latest on-screen config before dispatch (no stale saved config usage).
+    - Added runtime validation guards:
+      - blocks test print when printer type is `NONE`,
+      - validates Bluetooth MAC for Bluetooth mode,
+      - validates TCP host/port for TCP ESC/POS mode,
+      - validates iMin SDK availability for `IMIN` mode.
+  - Improved printer diagnostics UX:
+    - clearer printer mode labels (`TCP ESC/POS`, `Bluetooth ESC/POS`, `iMin Built-in`),
+    - guidance message when iMin SDK is not detected in current Dev Client build.
+  - Updated Android native bridge compatibility:
+    - added `addListener` / `removeListeners` methods in
+      `apps/mobile/android/app/src/main/java/com/vmjamtech/vpos/printer/VposPrinterBridgeModule.kt`
+      to satisfy NativeEventEmitter-compatible module expectations.
+  - Modernized mobile READY shell navigation:
+    - replaced top horizontal pill tabs with a persistent modern bottom tab bar in `apps/mobile/App.tsx`,
+    - added contextual module header (`label + hint`) above each active screen.
+  - Validation:
+    - `pnpm --filter @vpos/mobile typecheck` passed
+    - `pnpm --filter @vpos/mobile test` passed (`12/12`, `55/55`)
+    - Android native compile passed:
+      - `./gradlew.bat :app:compileDebugKotlin`
+- [x] Wired mobile module screens to local master-data selectors and per-module sync actions:
+  - Added reusable local master-data layer:
+    - `apps/mobile/src/app/master-data-local.ts`
+    - loads branch/location/customer/product/user options from `master_data_local`.
+  - Added reusable mobile UI components:
+    - `apps/mobile/src/app/components/MasterDataSelect.tsx` (dropdown-style selector with search)
+    - `apps/mobile/src/app/components/SyncStatusBadge.tsx` (pending/synced/failed/review badges)
+  - Replaced free-text IDs with selectors in module screens:
+    - `apps/mobile/src/app/screens/PosScreen.tsx` (branch/location/customer selectors)
+    - `apps/mobile/src/app/screens/DeliveryScreen.tsx` (branch/location/customer/driver/helper selectors)
+    - `apps/mobile/src/app/screens/TransfersScreen.tsx` (source/destination/product selectors)
+    - `apps/mobile/src/app/screens/ShiftScreen.tsx` (branch/location/user selectors)
+  - Added `Sync Now` button per module tab and wired to real orchestrator run:
+    - `apps/mobile/App.tsx` now triggers `MobileSyncOrchestrator` with auth token refresh fallback.
+  - Added per-record sync status badges in recent lists across POS/Delivery/Transfers/Shift.
+  - Validation:
+    - `pnpm --filter @vpos/mobile typecheck` passed
+    - `pnpm --filter @vpos/mobile build` passed
+    - `pnpm --filter @vpos/mobile test` passed (`12/12`, `55/55`)
+- [x] Converted mobile tabs into real feature screens with persisted local data wiring:
+  - Added dedicated screen modules:
+    - `apps/mobile/src/app/screens/PosScreen.tsx`
+    - `apps/mobile/src/app/screens/DeliveryScreen.tsx`
+    - `apps/mobile/src/app/screens/TransfersScreen.tsx`
+    - `apps/mobile/src/app/screens/ShiftScreen.tsx`
+    - `apps/mobile/src/app/screens/SettingsScreen.tsx`
+  - Refactored mobile shell:
+    - `apps/mobile/App.tsx` now mounts real module screens by selected tab.
+    - shared SQLite DB connection is passed to module screens.
+    - live pending outbox count is read from SQLite (`outbox` table) and shown in sync card.
+  - POS screen now supports:
+    - product lookup (from `master_data_local` with fallback catalog),
+    - editable cart (add/remove qty),
+    - checkout queueing to `sales_local` + outbox via `OfflineTransactionService`.
+  - Delivery screen now supports:
+    - offline delivery order creation (customer/order type/personnel/notes),
+    - persisted list from `delivery_orders_local`.
+  - Transfers screen now supports:
+    - offline transfer queueing with FULL/EMPTY quantities,
+    - persisted list from `transfers_local`.
+  - Shift screen now supports:
+    - open shift queueing,
+    - close shift queueing,
+    - shift cash entry queueing,
+    - persisted lists from `shifts_local` and `shift_cash_entries_local`.
+  - Validation:
+    - `pnpm --filter @vpos/mobile typecheck` passed
+    - `pnpm --filter @vpos/mobile build` passed
+    - `pnpm --filter @vpos/mobile test` passed (`12/12`, `55/55`)
+- [x] Added mobile module-style navigation and more user-friendly UI flow:
+  - Introduced bottom tab navigation in READY stage with modules:
+    - `POS`
+    - `DELIVERY`
+    - `TRANSFERS`
+    - `SHIFT`
+    - `SETTINGS`
+  - Kept existing auth/printer runtime logic and moved printer management into `SETTINGS` module section.
+  - Added inline helper text for login/unlock/printer fields to reduce operator confusion.
+  - Added quick-action buttons per module section with guided toast feedback for progressive workflow rollout.
+  - Validation:
+    - `pnpm --filter @vpos/mobile typecheck` passed
+    - `pnpm --filter @vpos/mobile test` passed (`12/12`, `55/55`)
+    - `pnpm --filter @vpos/mobile build` passed
+- [x] Improved mobile UX with user-friendly layout and toast notifications:
+  - Refactored `apps/mobile/App.tsx` to a cleaner card-based, touch-friendly interface with improved spacing and readability.
+  - Added adaptive light/dark UI theme usage for the mobile shell.
+  - Added printer setup usability improvements:
+    - printer mode chips with clearer selection states
+    - inline Bluetooth MAC and TCP host/port input sections
+    - capability/status messaging in UI
+  - Added gooey-style toast notifications across auth and printer actions using `react-native-toast-message`:
+    - bootstrap/login/unlock/logout result toasts
+    - printer save/test success and failure toasts
+    - permission/config validation toast errors
+  - Added toast config helper module:
+    - `apps/mobile/src/app/goey-toast.tsx`
+  - Validation:
+    - `pnpm --filter @vpos/mobile typecheck` passed
+    - `pnpm --filter @vpos/mobile test` passed (`12/12`, `55/55`)
+    - `pnpm --filter @vpos/mobile build` passed
+- [x] Implemented native printer adapters for mobile Dev Client (Milestone 4.3 hardware integration):
+  - Added Android native module bridge `VposPrinterBridge` with:
+    - iMin printing path (`printImin`) via runtime SDK reflection integration.
+    - ESC/POS printing path (`printEscPos`) via Bluetooth SPP and TCP socket transport.
+    - native capability probing (`getCapabilities`) and `testPrint` routing.
+  - Registered native package in Android app (`MainApplication`) and added Bluetooth permissions.
+  - Updated `printing-core` adapters to call native transport (`IMIN`, `GENERIC_BUILTIN`, `BLUETOOTH`) instead of stubs.
+  - Updated mobile Printer Setup UI with:
+    - native bridge capability display,
+    - Bluetooth MAC input,
+    - TCP host/port input,
+    - permission handling for Bluetooth print on Android.
+  - Added Expo Dev Client dependency/config and generated Android native project for Dev Client flow.
+  - Validation:
+    - `pnpm --filter @vpos/mobile test` passed (`12/12`, `55/55`).
+    - `pnpm --filter @vpos/mobile typecheck` passed.
+    - Android Kotlin compile passed for printer bridge path:
+      - `NODE_ENV=development ./gradlew.bat :app:compileDebugKotlin`
+- [x] Updated mobile Expo identity/branding baseline:
+  - Android package name set to `com.vmjamtech.vpos`.
+  - Mobile app icon, splash image, and Android adaptive icon now use `apps/mobile/assests/vpos_logo.png`.
+- [x] Started mobile subscription-aware sync/access policy engine (Milestone 5.1 foundation):
+  - Added local `subscription_policy_state` SQLite table and bootstrap default (`ACTIVE`).
+  - Added `MobileSubscriptionPolicyService` with deterministic modes:
+    - `FULL_ACCESS`
+    - `RESTRICTED_SYNC`
+    - `READ_ONLY`
+    - `LOCKED`
+  - Enforced policy in offline transaction creation (`OfflineTransactionService`) and sync push/pull gating (`MobileSyncOrchestrator`).
+  - Added pull-delta application for `entitlement_policy` changes in sync merge path.
+  - Added mobile tests for policy decisions, sync gating, pull application, and transaction blocking.
+- [x] Added AI-ready export foundation and workflow event shaping:
+  - Added AI export module endpoint: `GET /api/ai-export/events?cursor=<token>&limit=<n>`.
+  - Added `AiEventBufferService` fallback stream for non-DB/local runtime and DB-backed export path when tenant DB routing is enabled.
+  - Added structured AI event persistence in DB-backed flows:
+    - transfers (`TRANSFER_POST`, `TRANSFER_REVERSE`) -> `EventStockMovement`
+    - delivery lifecycle (`CREATE`, `ASSIGN`, `STATUS_UPDATE`) -> `EventDeliveryPerformance`
+    - cylinder workflows (`ISSUE`, `RETURN`, `REFILL`, `EXCHANGE`) -> `EventStockMovement`
+  - Added integration coverage:
+    - `65) exports AI-ready events with transfer, delivery, and cylinder workflow shaping`
+    - transactional router AI export mixed-fleet + dedicated fail-closed tests.
+- [x] Upgraded delivery and cylinder workflows to hybrid server-authoritative services:
+  - `DeliveryService` now supports DB-backed transactional lifecycle (`create`, `assign`, `status`, event stream) with in-memory fallback for non-DB test/local mode.
+  - `CylindersService` now supports DB-backed serial workflows (`issue`, `return`, `refill`, `exchange`) and DB-based balance aggregation with in-memory fallback preserved.
+  - Delivery and cylinder controllers now await service lifecycle actions before writing audit records.
+  - Delivery and cylinder modules now import `PrismaModule` for tenant-routed DB execution.
+  - Verified by integration tests:
+    - cylinder workflow + validation tests,
+    - delivery audit-trail + invalid-transition tests,
+    - mixed-fleet delivery/cylinder routing + dedicated fail-closed tests.
+- [x] Hardened transfer lifecycle with server-authoritative DB posting/reversal mechanics:
+  - Restored and rebuilt `TransfersService` with hybrid execution path (DB-backed when enabled, in-memory fallback for test/local non-DB mode).
+  - `POST /api/transfers/:id/post` now performs transactional inventory posting:
+    - source/destination `InventoryBalance` updates
+    - `InventoryLedger` append-only writes (`TRANSFER_OUT` / `TRANSFER_IN`)
+    - posted state transition with deterministic validation.
+  - `POST /api/transfers/:id/reverse` now performs transactional reversal posting with balancing ledger entries (`referenceType=TRANSFER_REVERSE`).
+  - Transfers controller now properly awaits lifecycle operations before audit logging.
+  - Verified with integration tests:
+    - transfer approval -> post -> reverse lifecycle
+    - insufficient stock and pre-approval posting rejection
+    - mixed-fleet routing + dedicated fail-closed transfer scenarios.
+- [x] Reports UI now includes date-range + branch filters for milestone-6 sections:
+  - `since` / `until` filters applied to sales, margin, deposit, movement, and petty cash report requests.
+  - Branch filter applied to branch-scoped sales/gross-margin/X-Z read requests.
+- [x] Reports UI now includes export/print actions:
+  - Export Overview CSV
+  - Export Inventory Movement CSV
+  - Export Petty Cash CSV
+  - Print Report action (`window.print()`).
+- [x] Started Milestone 6.3 operational hardening baseline:
+  - Added runbook: `docs/OPERATIONS_RUNBOOK.md`
+  - Added retention maintenance script: `apps/api/scripts/retention-maintenance.mjs`
+  - Added backup script: `apps/api/scripts/backup-postgres.ps1`
+  - Added workspace commands: `pnpm ops:backup`, `pnpm ops:retention:dry-run`, `pnpm ops:retention:apply`
+- [x] Added Milestone 6.3 operations automation:
+  - GitHub scheduled workflow: `.github/workflows/ops-maintenance.yml`
+    - daily retention dry-run + backup
+    - manual dispatch retention apply
+  - Local combined maintenance runner: `apps/api/scripts/run-ops-maintenance.ps1`
+  - Added workspace command: `pnpm ops:maintenance`
+- [x] Validated Milestone 6.3 local operations baseline:
+  - `pnpm ops:retention:dry-run` executed successfully.
+  - `pnpm ops:backup` executed successfully and produced local dump files.
+  - `pnpm ops:maintenance` executed successfully and produced ops log output.
+- [x] Started Milestone 6.1 reporting implementation with server-authoritative report APIs:
+  - `GET /api/reports/sales/summary`
+  - `GET /api/reports/sales/by-sku`
+  - `GET /api/reports/sales/by-branch`
+  - `GET /api/reports/sales/by-cashier`
+  - `GET /api/reports/sales/xz-read`
+  - `GET /api/reports/inventory/movements`
+  - `GET /api/reports/inventory/full-empty`
+  - `GET /api/reports/financial/gross-margin`
+  - `GET /api/reports/financial/deposit-liability`
+  - `GET /api/reports/audit-logs`
+- [x] Reports are now tenant-routed and DB-backed when runtime DB mode is enabled, with existing fallback behavior preserved for non-DB test/local fallback modes.
+- [x] Web reports dashboard now surfaces milestone-6 report cards/tables:
+  - Sales/COGS/Gross Profit/Deposit Liability KPIs.
+  - X-read and Z-read summaries.
+  - Inventory movement ledger summary.
+  - FULL vs EMPTY cylinder counts by location.
+- [x] Audit Logs page now loads live tenant audit stream from reports API instead of placeholder scaffold.
+- [x] Added backend integration test coverage for report endpoint contracts and query validation (`62-64` in `app.e2e-spec.ts`).
+- [x] Products page now includes a dedicated **Product Details View** that shows complete product attributes and linked references:
+  - Cylinder type linkage with detailed cylinder info (code, name, size, brand, deposit amount).
+  - Pricing linkage table showing related price lists, scope target, prices, effectivity, and active state.
+- [x] Products table/card actions now include **View** that opens a modal with full product details and linked data (cylinder + pricing).
+- [x] Fixed duplicate pricing rows in product detail modal by hardening API seed concurrency and adding backend/frontend rule deduping.
+- [x] Added Product **Cost Snapshot (WAC)** flow:
+  - API endpoint: `GET /api/master-data/products/:id/cost-snapshot` (location-based qty/avg cost/value + movement hints).
+  - Web Product View modal now displays per-location cost snapshot and totals (weighted avg, inventory value).
+- [x] Hardened Product validation: LPG items now require a valid cylinder type (`isLpg=true` cannot save without tenant-valid `cylinderTypeId`).
+- [x] Replaced sales posting placeholder COGS with server-authoritative posting:
+  - Writes sale, line, payment, receipt, inventory balance/ledger, deposit liability, and event records in one DB transaction.
+  - Final COGS is computed from per-location WAC (`InventoryBalance.avgCost`) at posting time.
+  - Reprint flow is now DB-backed (`Receipt.isReprint` + updated `printedAt`).
+- [x] Added configurable **Costing Setup** flow (no hardcoded COGS formula path):
+  - API: `GET /api/master-data/costing-config`, `PUT /api/master-data/costing-config`.
+  - Web Admin: new `Costing Setup` page (`/costing`) with user-friendly dropdown/toggle controls.
+  - Sale posting engine now reads tenant costing policy (`WAC`, `STANDARD`, `LAST_PURCHASE`, `MANUAL_OVERRIDE`) and negative-stock behavior.
+  - Added product-level `standardCost` field and surfaced it in product table/modal/form.
+  - Added integration test: `61) updates costing setup through master-data endpoint`.
+
+## Milestone 1 - Foundation
+
+### Task 1.1 - Initialize Monorepo and Workspace Tooling
+- Status: `[DONE]`
+- Scope:
+  - Setup pnpm workspaces for `apps/*` and `packages/*`.
+  - Add root scripts for `build`, `test`, `lint`, `typecheck`.
+  - Add base TypeScript config and shared lint package.
+- Acceptance criteria:
+  - [x] `pnpm install` resolves all workspace projects.
+  - [x] `pnpm -r --if-present build` runs package-level build commands.
+  - [x] Monorepo folder structure matches architecture specification.
+
+### Task 1.2 - Bootstrap API with NestJS + Prisma + PostgreSQL Baseline
+- Status: `[DONE]`
+- Scope:
+  - Implement NestJS app bootstrap and module wiring.
+  - Add Prisma schema with hybrid-ready `companyId` tenancy fields.
+  - Provide `.env.example` and local Docker Postgres compose file.
+- Acceptance criteria:
+  - [x] API bootstrap/module wiring is implemented.
+  - [x] Prisma client generation succeeds.
+  - [x] Schema contains auth, sync, inventory, cylinder, and audit foundations.
+
+### Task 1.3 - Implement Auth (JWT + Refresh Rotation + RBAC Skeleton)
+- Status: `[DONE]`
+- Scope:
+  - Endpoints: `POST /auth/login`, `POST /auth/refresh`, `POST /auth/logout`.
+  - JWT access guard + public route metadata.
+  - Role-based route control and admin-only sample endpoint.
+- Acceptance criteria:
+  - [x] Valid login returns access and refresh tokens.
+  - [x] Refresh rotates token and blocks reuse.
+  - [x] Admin-only endpoint returns `403` for cashier role.
+
+### Task 1.4 - Implement Sync API Skeleton
+- Status: `[DONE]`
+- Scope:
+  - Endpoints: `POST /sync/push`, `GET /sync/pull`, `POST /reviews/:id/resolve`.
+  - Idempotency key handling behavior.
+  - Conflict review creation when payload validation fails.
+- Acceptance criteria:
+  - [x] Duplicate idempotency key does not create duplicate side effects.
+  - [x] Pull returns `changes`, `conflicts`, `next_token`.
+  - [x] Rejected pushes produce resolvable review records.
+
+### Task 1.5 - Seed Data for Demo Domain
+- Status: `[DONE]`
+- Scope:
+  - Seed demo company, branding, branches, locations, users, LPG products, cylinder types, cylinders, and price lists.
+- Acceptance criteria:
+  - [x] Seed script for required demo entities is implemented.
+  - [x] Demo users include admin, supervisor, cashier, and driver.
+  - [x] LPG products include 11kg and 22kg refill SKUs.
+
+### Task 1.6 - Milestone 1 Integration Tests (Backend)
+- Status: `[DONE]`
+- Scope:
+  - Add at least 10 integration tests for auth and sync behavior.
+- Acceptance criteria:
+  - [x] `pnpm --filter @vpos/api test` executes 10+ tests.
+  - [x] Coverage includes refresh reuse rejection, RBAC, idempotency, pull tokening, and conflict review flow.
+
+## Milestone 2 - Web Admin Master Data + Branding
+
+### Task 2.1 - Web Admin App Shell and Route Groups
+- Status: `[DONE]`
+- Scope:
+  - Build Next.js App Router admin shell and route modules.
+  - Add scaffold pages for all required admin domains.
+- Acceptance criteria:
+  - [x] Web app starts and navigates to all planned route modules.
+  - [x] Branding variables apply to shell components.
+
+### Task 2.2 - Branding Config CRUD + Preview
+- Status: `[IN PROGRESS]`
+- Scope:
+  - Persist branding fields from DB.
+  - Add web preview and 58mm receipt preview.
+- Acceptance criteria:
+  - [x] Saved branding updates preview immediately.
+  - [x] Light/dark and receipt logo fields supported.
+  - [x] Branding persistence has DB-backed path (with fallback when DB is unavailable).
+
+### Task 2.3 - Master Data CRUD APIs + Web Screens
+- Status: `[IN PROGRESS]`
+- Scope:
+  - Branches, locations, users, customers, products, cylinder types, price lists, expense categories.
+- Acceptance criteria:
+  - [x] CRUD operations available for each domain.
+  - [x] Permission checks enforce role-based access.
+  - [x] CRUD repositories have Prisma-backed path (with fallback when DB is unavailable).
+  - [x] Supplier master data supports Excel import (validate/commit API + web import wizard).
+
+## Milestone 3 - Mobile Offline Core + Sync Engine
+
+### Task 3.1 - SQLite Schema + Repository Layer
+- Status: `[DONE]`
+- Scope:
+  - Add local tables (outbox, sync_state, auth_session, transactional stores).
+  - Create local-first repository methods.
+- Acceptance criteria:
+  - [x] Local table definitions exist (schema drafted).
+  - [x] Outbox records include required fields and statuses.
+  - [x] SQLite outbox repository and DB bootstrap are implemented.
+  - [x] SQLite local transaction tables and service methods exist for POS sale, transfer, and petty cash.
+  - [x] Full transactional repositories including delivery and shift flows are SQLite-backed.
+
+### Task 3.2 - Outbox + Sync Orchestrator
+- Status: `[DONE]`
+- Scope:
+  - Deterministic push order, retry strategy, pull merge behavior.
+  - Needs-review handling for rejected records.
+- Acceptance criteria:
+  - [x] Pending outbox transitions to synced/retry/needs_review correctly.
+  - [x] Pull updates master data while preserving unsynced local transactions.
+  - [x] Mobile sync orchestrator is implemented for persisted sync token + outbox replay.
+  - [x] Offline sync harness covers delivery/shift entities for queueing and pull-merge safety.
+  - [x] Full production mobile sync flow is wired across all transactional modules.
+
+### Task 3.3 - Offline Session + PIN Reauth
+- Status: `[DONE]`
+- Scope:
+  - Cache encrypted session and enforce local PIN unlock offline.
+- Acceptance criteria:
+  - [x] Valid PIN unlocks cached session.
+  - [x] Invalid PIN blocks access.
+  - [x] SQLite-backed local session persistence and refresh-token transport primitives are implemented.
+  - [x] Fully integrated app-level auth session flow with server refresh lifecycle.
+
+### Task 3.4 - Mobile Offline Test Suite
+- Status: `[DONE]`
+- Scope:
+  - Add 10+ tests covering offline enqueue, sync state transitions, data merge, auth PIN, and printer test path.
+- Acceptance criteria:
+  - [x] `pnpm --filter @vpos/mobile test` executes 10+ tests.
+  - [x] Offline transaction service tests cover sale/transfer/petty cash/delivery/shift local enqueue behavior.
+  - [x] Sync/auth transport and SQLite orchestrator reconciliation tests are implemented.
+  - [x] Test outcomes match conflict and retry policy.
+
+## Milestone 4 - POS + Cylinders + Printing
+
+### Task 4.1 - POS Offline Transaction Flow
+- Status: `[DONE]`
+- Scope:
+  - Cart, search, barcode, discounts, split payments, receipts.
+- Acceptance criteria:
+  - [x] Sale can be created and queued offline.
+  - [x] Reprint includes `REPRINT` marker.
+
+### Task 4.2 - Cylinder Serial Workflow Engine
+- Status: `[DONE]`
+- Scope:
+  - Issue, return, exchange, refill, damage/loss, transfer full/empty.
+- Acceptance criteria:
+  - [x] Serial state transitions validated and logged.
+  - [x] Full/empty location counts remain consistent.
+
+### Task 4.3 - Printing Abstraction Integration
+- Status: `[DONE]`
+- Scope:
+  - Implement `printReceipt`, `printXRead`, `printZRead`, `testPrint` with adapter selection.
+- Acceptance criteria:
+  - [x] `printReceipt`, `printXRead`, `printZRead`, `testPrint` are implemented in `printing-core`.
+  - [x] iMin adapter is implemented and routed through native bridge in Dev Client runtime.
+  - [x] Mobile runtime printer setup UI + device preference persistence + offline test print dispatch are implemented.
+  - [x] Native device integration for iMin/ESC-POS hardware is implemented in mobile runtime via Android bridge + Dev Client path.
+
+## Milestone 5 - Transfers + Delivery + Petty Cash
+
+### Task 5.1 - Transfers Module
+- Status: `[DONE]`
+- Scope:
+  - Create and sync transfers between branch/warehouse/truck/personnel.
+- Acceptance criteria:
+  - [x] Server validates quantity sufficiency on sync.
+  - [x] Full transfer module lifecycle (approval/posting/reversal) is implemented.
+  - [x] Mobile transfer flow supports advanced movement modes (supplier restock in/out, inter-store, store/warehouse directions) with separate FULL/EMPTY line entry.
+  - [x] Web transfer list page is available with branch/date filters and transfer details view.
+
+### Task 5.2 - Delivery Workflow
+- Status: `[DONE]`
+- Scope:
+  - Multi-personnel assignments and full status lifecycle.
+- Acceptance criteria:
+  - [x] Delivery status transitions are server-validated on sync posting.
+  - [x] Delivery statuses transition with audit trail.
+
+### Task 5.3 - Petty Cash + Shift Linking
+- Status: `[DONE]`
+- Scope:
+  - Cash in/out by category with notes and shift linkage.
+- Acceptance criteria:
+  - [x] Petty cash sync posting enforces open-shift and cash-balance checks.
+  - [x] Petty cash entries available offline and reportable online.
+
+## Milestone 6 - Reports, Costing, Audit, Hardening
+
+### Task 6.1 - Reporting Endpoints and Dashboards
+- Status: `[DONE]`
+- Scope:
+  - Sales summary, SKU/branch/cashier, movement ledger, full/empty, margin, deposit liability, audit logs.
+- Acceptance criteria:
+  - [x] Report totals reconcile against posted ledgers.
+  - [x] Dashboard FULL/EMPTY view supports `Location + Item Code + Product` rows for non-technical reading.
+
+### Task 6.2 - WAC and Financial Posting Hardening
+- Status: `[IN PROGRESS]`
+- Scope:
+  - Final server-side COGS and avg cost updates.
+  - Deposit liability accounting enforcement.
+- Acceptance criteria:
+  - [x] Product cost snapshot view implemented for location-based WAC visibility.
+  - [x] Opening Stock apply workflow is now modal-based for safer guided entry.
+  - [x] LPG sale posting supports automatic cylinder flow:
+    - Refill exchange: FULL decreases and EMPTY increases.
+    - Non-refill: FULL decreases (moved to outbound customer circulation location).
+  - [x] Posting is deterministic and auditable.
+
+### Task 6.3 - Security + Operational Hardening
+- Status: `[IN PROGRESS]`
+- Scope:
+  - Security review, retention controls, backups, runbooks.
+- Acceptance criteria:
+  - [x] 7-year audit/event retention strategy documented.
+  - [ ] Operational runbook verified in staging.
+
+## Milestone 7 - Subscription Billing (Future Scope, No Implementation Yet)
+
+### Task 7.1 - Subscription Domain and Entitlement Model
+- Status: `[PENDING]`
+- Scope:
+  - Define subscription plans, billing cycles, trial period rules, account status, and feature entitlements.
+  - Support tenant-level subscription status checks (`ACTIVE`, `PAST_DUE`, `SUSPENDED`, `CANCELED`).
+- Acceptance criteria:
+  - [ ] Subscription and entitlement data model is documented in implementation plan.
+  - [ ] API contract for entitlement lookup and status validation is defined.
+
+### Task 7.2 - Mobile Subscription-Aware Access Rules
+- Status: `[PENDING]`
+- Scope:
+  - Define how mobile app behaves by subscription state (online check, grace period, restricted mode).
+  - Preserve offline safety for in-flight transactions during temporary billing issues.
+- Acceptance criteria:
+  - [ ] Mobile access policy per subscription state is documented.
+  - [ ] Grace-period and lockout rules include offline-first edge cases.
+
+### Task 7.3 - Billing Provider Integration Design
+- Status: `[PENDING]`
+- Scope:
+  - Select and document billing provider strategy (web checkout, invoices, webhook events, retries).
+  - Define webhook processing and audit logging requirements.
+- Acceptance criteria:
+  - [ ] Provider integration sequence and webhook contract are specified.
+  - [ ] Failed payment and retry lifecycle is documented with operational actions.
+
+### Task 7.4 - Subscription Admin UX and Reporting
+- Status: `[PENDING]`
+- Scope:
+  - Add future web admin tasks for plan management, billing history, invoices, and account status visibility.
+  - Define support/admin tools for manual suspension/reactivation with audit trail.
+- Acceptance criteria:
+  - [ ] Admin UX requirements for subscription lifecycle are listed.
+  - [ ] Subscription audit/reporting requirements are defined.
