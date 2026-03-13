@@ -381,7 +381,7 @@ export function AdminShell({ children }: { children: React.ReactNode }): JSX.Ele
   if (!ready) {
     return (
       <main className="flex min-h-screen items-center justify-center px-6">
-        <div className="rounded-2xl border border-amber-300/35 bg-black/70 px-6 py-4 text-sm text-amber-100 shadow-sm">
+        <div className="rounded-2xl border border-slate-300/60 bg-white/80 px-6 py-4 text-sm text-slate-700 shadow-sm dark:border-slate-700 dark:bg-slate-900/70 dark:text-slate-200">
           Loading admin workspace...
         </div>
       </main>
@@ -391,10 +391,10 @@ export function AdminShell({ children }: { children: React.ReactNode }): JSX.Ele
   if (!hasToken) {
     return (
       <main className="flex min-h-screen items-center justify-center px-6">
-        <section className="mx-auto w-full max-w-xl rounded-2xl border border-amber-300/45 bg-black/75 p-6 text-amber-100 shadow-sm">
+        <section className="mx-auto w-full max-w-xl rounded-2xl border border-slate-300/60 bg-white/85 p-6 text-slate-700 shadow-sm dark:border-slate-700 dark:bg-slate-900/70 dark:text-slate-200">
           <h1 className="text-xl font-semibold">Authentication Required</h1>
           <p className="mt-2 text-sm">Please login to access the VPOS Web Admin modules.</p>
-          <Link className="mt-4 inline-flex rounded-lg bg-amber-300 px-4 py-2 text-sm font-semibold text-slate-900" href="/login">
+          <Link className="mt-4 inline-flex rounded-lg bg-slate-900 px-4 py-2 text-sm font-semibold text-white dark:bg-slate-100 dark:text-slate-900" href="/login">
             Go to Login
           </Link>
         </section>
@@ -405,12 +405,12 @@ export function AdminShell({ children }: { children: React.ReactNode }): JSX.Ele
   if (!canAccessWebAdmin) {
     return (
       <main className="flex min-h-screen items-center justify-center px-6">
-        <section className="mx-auto w-full max-w-xl rounded-2xl border border-amber-300/45 bg-black/75 p-6 text-amber-100 shadow-sm">
+        <section className="mx-auto w-full max-w-xl rounded-2xl border border-slate-300/60 bg-white/85 p-6 text-slate-700 shadow-sm dark:border-slate-700 dark:bg-slate-900/70 dark:text-slate-200">
           <h1 className="text-xl font-semibold">Web Admin Access Required</h1>
           <p className="mt-2 text-sm">This account is intended for mobile/POS use. Login using an owner/admin account for Web Admin.</p>
           <div className="mt-4 flex gap-2">
             <button
-              className="rounded-lg bg-amber-300 px-4 py-2 text-sm font-semibold text-slate-900"
+              className="rounded-lg bg-slate-900 px-4 py-2 text-sm font-semibold text-white dark:bg-slate-100 dark:text-slate-900"
               onClick={() => {
                 clearAuthSession();
                 window.location.href = '/login';
@@ -428,16 +428,16 @@ export function AdminShell({ children }: { children: React.ReactNode }): JSX.Ele
   return (
     <div className="min-h-screen">
       <aside
-        className={`fixed inset-y-0 left-0 z-30 hidden border-r border-amber-300/20 bg-black/90 text-amber-50 shadow-2xl shadow-black/70 transition-[width] duration-200 md:block ${sidebarCollapsed ? 'w-20' : 'w-72'}`}
+        className={`fixed inset-y-0 left-0 z-30 hidden border-r border-slate-200/70 bg-white/90 text-slate-700 shadow-2xl shadow-slate-300/20 transition-[width] duration-200 dark:border-slate-800 dark:bg-slate-950/90 dark:text-slate-200 dark:shadow-black/40 md:block ${sidebarCollapsed ? 'w-20' : 'w-72'}`}
       >
-        <div className={`flex h-16 items-center border-b border-amber-300/20 ${sidebarCollapsed ? 'justify-center px-2' : 'gap-3 px-6'}`}>
-          <div className="flex h-9 w-9 items-center justify-center overflow-hidden rounded-lg border border-amber-300/50 bg-black/70">
+        <div className={`flex h-16 items-center border-b border-slate-200/70 dark:border-slate-800 ${sidebarCollapsed ? 'justify-center px-2' : 'gap-3 px-6'}`}>
+          <div className="flex h-9 w-9 items-center justify-center overflow-hidden rounded-lg border border-slate-300/60 bg-white/70 dark:border-slate-700 dark:bg-slate-900/70">
             <Image src="/logo.png" alt="VPOS logo" width={32} height={32} className="h-8 w-8 object-contain p-0.5" />
           </div>
           {!sidebarCollapsed ? (
             <div>
-              <p className="text-xs uppercase tracking-[0.2em] text-amber-300/80">System</p>
-              <p className="text-base font-semibold text-amber-100">{brandName}</p>
+              <p className="text-xs uppercase tracking-[0.2em] text-slate-500 dark:text-slate-400">System</p>
+              <p className="text-base font-semibold text-slate-900 dark:text-slate-100">{brandName}</p>
             </div>
           ) : null}
         </div>
@@ -446,7 +446,7 @@ export function AdminShell({ children }: { children: React.ReactNode }): JSX.Ele
           {visibleNavSections.map((section) => (
             <div className="mb-6" key={section.title}>
               {!sidebarCollapsed ? (
-                <p className="mb-2 px-2 text-xs font-semibold uppercase tracking-[0.18em] text-amber-300/70">{section.title}</p>
+                <p className="mb-2 px-2 text-xs font-semibold uppercase tracking-[0.18em] text-slate-500 dark:text-slate-400">{section.title}</p>
               ) : null}
               <nav className="space-y-1">
                 {section.items.map((item) => {
@@ -455,8 +455,8 @@ export function AdminShell({ children }: { children: React.ReactNode }): JSX.Ele
                     <Link
                       className={`flex items-center rounded-xl px-3 py-2 text-sm transition ${sidebarCollapsed ? 'justify-center' : 'justify-between'} ${
                         isActive
-                          ? 'bg-amber-300 text-slate-900 shadow-lg shadow-black/30'
-                          : 'text-amber-50/90 hover:bg-amber-300/12 hover:text-amber-200'
+                          ? 'bg-slate-900 text-white shadow-lg shadow-slate-400/30 dark:bg-slate-100 dark:text-slate-900'
+                          : 'text-slate-700 hover:bg-slate-200/60 hover:text-slate-900 dark:text-slate-300 dark:hover:bg-slate-800/70 dark:hover:text-slate-100'
                       }`}
                       href={item.href}
                       key={item.href}
@@ -471,7 +471,7 @@ export function AdminShell({ children }: { children: React.ReactNode }): JSX.Ele
                             <span>{item.label}</span>
                           </span>
                           {item.badge ? (
-                            <span className="rounded-md bg-amber-300/15 px-2 py-0.5 text-[10px] uppercase tracking-wide text-amber-100">
+                            <span className="rounded-md bg-slate-200 px-2 py-0.5 text-[10px] uppercase tracking-wide text-slate-700 dark:bg-slate-800 dark:text-slate-300">
                               {item.badge}
                             </span>
                           ) : null}
@@ -487,12 +487,12 @@ export function AdminShell({ children }: { children: React.ReactNode }): JSX.Ele
       </aside>
 
       <div className={`transition-[padding] duration-200 ${sidebarCollapsed ? 'md:pl-20' : 'md:pl-72'}`}>
-        <header className="sticky top-0 z-20 border-b border-amber-300/20 bg-black/85 backdrop-blur-md">
+        <header className="sticky top-0 z-20 border-b border-slate-200/70 bg-white/85 backdrop-blur-md dark:border-slate-800 dark:bg-slate-950/85">
           <div className="flex flex-wrap items-center justify-between gap-3 px-4 py-3 md:px-6">
             <div className="flex min-w-[220px] flex-1 items-center gap-2">
               <button
                 aria-label={sidebarCollapsed ? 'Expand sidebar' : 'Collapse sidebar'}
-                className="hidden rounded-lg border border-amber-300/40 p-2 text-amber-100 hover:bg-amber-300/10 md:inline-flex"
+                className="hidden rounded-lg border border-slate-300/70 p-2 text-slate-700 hover:bg-slate-200/70 dark:border-slate-700 dark:text-slate-200 dark:hover:bg-slate-800/70 md:inline-flex"
                 onClick={toggleSidebar}
                 type="button"
               >
@@ -505,17 +505,17 @@ export function AdminShell({ children }: { children: React.ReactNode }): JSX.Ele
                 </svg>
               </button>
               <div>
-                <p className="text-xs uppercase tracking-[0.16em] text-amber-300/70">{brandName}</p>
-                <h1 className="text-lg font-semibold text-amber-100">{pageTitle}</h1>
+                <p className="text-xs uppercase tracking-[0.16em] text-slate-500 dark:text-slate-400">{brandName}</p>
+                <h1 className="text-lg font-semibold text-slate-900 dark:text-slate-100">{pageTitle}</h1>
               </div>
             </div>
 
-            <div className="flex w-full max-w-xl items-center gap-2 rounded-xl border border-amber-300/30 bg-white/10 px-3 py-2 md:w-auto md:flex-1">
-              <svg aria-hidden="true" className="h-4 w-4 text-amber-200/70" fill="none" viewBox="0 0 24 24">
+            <div className="flex w-full max-w-xl items-center gap-2 rounded-xl border border-slate-300/70 bg-white px-3 py-2 dark:border-slate-700 dark:bg-slate-900 md:w-auto md:flex-1">
+              <svg aria-hidden="true" className="h-4 w-4 text-slate-400 dark:text-slate-500" fill="none" viewBox="0 0 24 24">
                 <path d="M21 21L16.65 16.65M10 18a8 8 0 1 1 0-16 8 8 0 0 1 0 16Z" stroke="currentColor" strokeLinecap="round" strokeWidth="2" />
               </svg>
               <input
-                className="w-full bg-transparent text-sm text-amber-50 outline-none placeholder:text-amber-200/45"
+                className="w-full bg-transparent text-sm text-slate-700 outline-none placeholder:text-slate-400 dark:text-slate-200 dark:placeholder:text-slate-500"
                 placeholder="Type to search module, customer, product..."
               />
             </div>
@@ -523,7 +523,7 @@ export function AdminShell({ children }: { children: React.ReactNode }): JSX.Ele
             <div className="flex items-center gap-2">
               <button
                 aria-label={theme === 'light' ? 'Switch to dark mode' : 'Switch to light mode'}
-                className="rounded-lg border border-amber-300/40 p-2 text-amber-100 transition hover:bg-amber-300/10"
+                className="rounded-lg border border-slate-300/70 p-2 text-slate-700 transition hover:bg-slate-200/70 dark:border-slate-700 dark:text-slate-200 dark:hover:bg-slate-800/70"
                 onClick={() => switchTheme(theme === 'light' ? 'dark' : 'light')}
                 type="button"
               >
@@ -550,7 +550,7 @@ export function AdminShell({ children }: { children: React.ReactNode }): JSX.Ele
                 )}
               </button>
               <button
-                className="rounded-lg border border-amber-300/40 bg-amber-300 px-3 py-1.5 text-xs font-semibold uppercase tracking-wide text-slate-900 transition hover:bg-amber-200"
+                className="rounded-lg border border-slate-300/70 bg-slate-900 px-3 py-1.5 text-xs font-semibold uppercase tracking-wide text-white transition hover:bg-slate-700 dark:border-slate-700 dark:bg-slate-100 dark:text-slate-900 dark:hover:bg-slate-200"
                 onClick={() => {
                   clearAuthSession();
                   window.location.href = '/login';
@@ -567,7 +567,7 @@ export function AdminShell({ children }: { children: React.ReactNode }): JSX.Ele
               const isActive = routeIsActive(active, item.href);
               return (
                 <Link
-                  className={`whitespace-nowrap rounded-full px-3 py-1.5 text-xs font-semibold ${isActive ? 'bg-amber-300 text-slate-900' : 'border border-amber-300/40 text-amber-100'}`}
+                  className={`whitespace-nowrap rounded-full px-3 py-1.5 text-xs font-semibold ${isActive ? 'bg-slate-900 text-white dark:bg-slate-100 dark:text-slate-900' : 'border border-slate-300/70 text-slate-700 dark:border-slate-700 dark:text-slate-300'}`}
                   href={item.href}
                   key={item.href}
                 >
@@ -582,18 +582,18 @@ export function AdminShell({ children }: { children: React.ReactNode }): JSX.Ele
         </header>
 
         <main className="px-4 py-4 md:px-6 md:py-5">
-          <section className="rounded-2xl border border-amber-300/20 bg-black/55 p-4 shadow-sm md:p-6">
+          <section className="rounded-2xl border border-slate-200/70 bg-white/80 p-4 shadow-sm dark:border-slate-800 dark:bg-slate-900/55 md:p-6">
             {platformOwnerRouteBlocked ? (
-              <div className="rounded-2xl border border-amber-300/45 bg-amber-300/12 p-5 text-amber-100">
+              <div className="rounded-2xl border border-slate-300/70 bg-slate-100 p-5 text-slate-700 dark:border-slate-700 dark:bg-slate-800/80 dark:text-slate-200">
                 <h2 className="text-xl font-semibold">Platform Console Scope</h2>
                 <p className="mt-2 text-sm">
                   This module is outside the current platform-owner menu scope. Use Tenants, Branches, Locations, Users, Sync Reviews, and Audit Logs from the left menu.
                 </p>
                 <div className="mt-4 flex flex-wrap gap-2">
-                  <Link className="rounded-lg bg-amber-300 px-3 py-2 text-sm font-semibold text-slate-900" href="/tenants">
+                  <Link className="rounded-lg bg-slate-900 px-3 py-2 text-sm font-semibold text-white dark:bg-slate-100 dark:text-slate-900" href="/tenants">
                     Open Tenants
                   </Link>
-                  <Link className="rounded-lg border border-amber-300/45 px-3 py-2 text-sm font-semibold text-amber-100" href="/audit-logs">
+                  <Link className="rounded-lg border border-slate-300/70 px-3 py-2 text-sm font-semibold text-slate-700 dark:border-slate-700 dark:text-slate-200" href="/audit-logs">
                     Open Audit Logs
                   </Link>
                 </div>

@@ -3,17 +3,17 @@
 @tailwind utilities;
 
 :root {
-  --brand-primary: #b68a3d;
-  --brand-secondary: #f0c86f;
-  --app-bg: #080808;
-  --app-fg: #f7ecd2;
+  --brand-primary: #2563eb;
+  --brand-secondary: #0ea5e9;
+  --app-bg: #f8fafc;
+  --app-fg: #0f172a;
 }
 
 body {
   min-height: 100vh;
   background:
-    radial-gradient(circle at 20% 0%, rgba(240, 200, 111, 0.16), transparent 45%),
-    radial-gradient(circle at 100% 0%, rgba(182, 138, 61, 0.18), transparent 35%),
+    radial-gradient(circle at 20% 0%, rgba(37, 99, 235, 0.09), transparent 45%),
+    radial-gradient(circle at 100% 0%, rgba(14, 165, 233, 0.1), transparent 35%),
     var(--app-bg);
   color: var(--app-fg);
   font-family: var(--font-body), 'Segoe UI', sans-serif;
@@ -31,8 +31,8 @@ h6 {
 }
 
 html.dark {
-  --app-bg: #060606;
-  --app-fg: #f7ecd2;
+  --app-bg: #020617;
+  --app-fg: #e2e8f0;
 }
 
 * {

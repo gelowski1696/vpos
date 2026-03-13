@@ -57,24 +57,30 @@ export default function LoginPage(): JSX.Element {
   }
 
   return (
-    <main className="min-h-screen bg-[radial-gradient(circle_at_15%_10%,rgba(240,200,111,0.18),transparent_35%),radial-gradient(circle_at_85%_10%,rgba(182,138,61,0.16),transparent_32%),linear-gradient(125deg,#060606,#16120d,#050505)] px-6 py-10">
-      <section className="mx-auto max-w-md rounded-2xl border border-amber-300/40 bg-black/65 p-6 shadow-2xl shadow-black/60 backdrop-blur">
+    <main className="flex min-h-screen items-center justify-center bg-[radial-gradient(circle_at_12%_10%,rgba(240,200,111,0.18),transparent_35%),radial-gradient(circle_at_88%_6%,rgba(182,138,61,0.18),transparent_30%),linear-gradient(130deg,#060606,#15110b,#050505)] px-4 py-8 sm:px-6">
+      <section className="w-full max-w-md rounded-3xl border border-amber-300/35 bg-black/65 p-5 shadow-2xl shadow-black/50 backdrop-blur-md sm:p-6">
         <div className="mb-4 flex items-center gap-3">
           <Image
             src="/logo.png"
             alt="VPOS logo"
-            width={42}
-            height={42}
-            className="h-10 w-10 rounded-lg border border-amber-300/60 bg-black/40 object-cover p-1"
+            width={44}
+            height={44}
+            className="h-11 w-11 rounded-lg border border-amber-300/60 bg-black/30 p-1"
             priority
           />
           <div>
-            <p className="text-[10px] uppercase tracking-[0.22em] text-amber-300/90">VMJAMTECH</p>
+            <p className="text-xs uppercase tracking-[0.22em] text-amber-300/90">VMJAMTECH</p>
             <p className="text-sm font-semibold text-amber-100">VPOS Platform</p>
           </div>
         </div>
-        <h1 className="text-2xl font-bold text-amber-200">VPOS Admin Login</h1>
-        <p className="mt-1 text-sm text-slate-300">Authenticate to access online master data and branding modules.</p>
+
+        <div className="mb-2 flex items-center justify-between">
+          <h2 className="text-2xl font-bold text-amber-200">Admin Login</h2>
+          <span className="rounded-full border border-amber-300/40 bg-amber-300/10 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wider text-amber-100">
+            Secure
+          </span>
+        </div>
+        <p className="text-sm text-slate-300">Use your owner/admin credentials to continue.</p>
 
         <form autoComplete="off" className="mt-5 space-y-3" onSubmit={onSubmit}>
           <label className="block text-sm">
@@ -82,7 +88,7 @@ export default function LoginPage(): JSX.Element {
             <input
               autoComplete="off"
               autoCorrect="off"
-              className="w-full rounded-lg border border-amber-300/40 bg-slate-900/80 px-3 py-2 text-amber-50 placeholder:text-slate-400"
+              className="w-full rounded-xl border border-amber-300/35 bg-slate-900/85 px-3 py-2.5 text-amber-50 placeholder:text-slate-400 outline-none transition focus:border-amber-200/75 focus:ring-2 focus:ring-amber-300/20"
               name="vpos_email"
               onChange={(event) => setEmail(event.target.value)}
               required
@@ -97,7 +103,7 @@ export default function LoginPage(): JSX.Element {
             <div className="relative">
               <input
                 autoComplete="new-password"
-                className="w-full rounded-lg border border-amber-300/40 bg-slate-900/80 px-3 py-2 pr-11 text-amber-50 placeholder:text-slate-400"
+                className="w-full rounded-xl border border-amber-300/35 bg-slate-900/85 px-3 py-2.5 pr-11 text-amber-50 placeholder:text-slate-400 outline-none transition focus:border-amber-200/75 focus:ring-2 focus:ring-amber-300/20"
                 name="vpos_password"
                 onChange={(event) => setPassword(event.target.value)}
                 required
@@ -127,7 +133,11 @@ export default function LoginPage(): JSX.Element {
             </div>
           </label>
 
-          <button className="w-full rounded-lg bg-amber-300 px-4 py-2 font-semibold text-slate-900 hover:bg-amber-200" disabled={loading} type="submit">
+          <button
+            className="mt-1 w-full rounded-xl bg-amber-300 px-4 py-2.5 font-semibold text-slate-900 transition hover:bg-amber-200 disabled:cursor-not-allowed disabled:opacity-70"
+            disabled={loading}
+            type="submit"
+          >
             {loading ? 'Signing in...' : 'Sign In'}
           </button>
         </form>
