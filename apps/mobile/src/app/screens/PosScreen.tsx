@@ -7,6 +7,11 @@ import type { AppTheme } from '../theme';
 import { useTutorialTarget } from '../tutorial/tutorial-provider';
 import { SwipeToDeleteRow } from '../components/SwipeToDeleteRow';
 import {
+  loadPendingInventoryDeltaByProductForLocation,
+  mergeInventoryWithDeltas,
+  type ProjectedInventoryTotals
+} from '../local-stock-projection';
+import {
   type MasterDataOption,
   loadBranchOptions,
   loadCustomerOptions,
@@ -495,6 +500,9 @@ export function PosScreen({
   const [personnels, setPersonnels] = useState<MasterDataOption[]>([]);
   const [priceLists, setPriceLists] = useState<LocalPriceList[]>([]);
   const [customerProfile, setCustomerProfile] = useState<CustomerProfile | null>(null);
+  const [projectedInventoryByProduct, setProjectedInventoryByProduct] = useState<
+    Map<string, ProjectedInventoryTotals>
+  >(new Map());
   const [discount, setDiscount] = useState('0');
   const [deliveryFee, setDeliveryFee] = useState('0.00');
   const [paymentMode, setPaymentMode] = useState<'FULL' | 'PARTIAL'>('FULL');
@@ -621,6 +629,29 @@ export function PosScreen({
       })
       .slice(0, 120);
   }, [catalog, itemSearch, itemCategoryFilter]);
+
+  const resolveProjectedStock = (
+    product: Pick<Product, 'id' | 'qtyOnHand' | 'qtyFull' | 'qtyEmpty'>
+  ): ProjectedInventoryTotals | null => {
+    const fromProjection = projectedInventoryByProduct.get(product.id);
+    if (fromProjection) {
+      return fromProjection;
+    }
+    const fallbackOnHand =
+      typeof product.qtyOnHand === 'number' && Number.isFinite(product.qtyOnHand) ? product.qtyOnHand : null;
+    const fallbackFull =
+      typeof product.qtyFull === 'number' && Number.isFinite(product.qtyFull) ? product.qtyFull : null;
+    const fallbackEmpty =
+      typeof product.qtyEmpty === 'number' && Number.isFinite(product.qtyEmpty) ? product.qtyEmpty : null;
+    if (fallbackOnHand === null && fallbackFull === null && fallbackEmpty === null) {
+      return null;
+    }
+    return {
+      qtyOnHand: fallbackOnHand ?? 0,
+      qtyFull: fallbackFull ?? 0,
+      qtyEmpty: fallbackEmpty ?? 0
+    };
+  };
 
   const itemFlowPrices = useMemo(() => {
     const map = new Map<
@@ -870,6 +901,7 @@ export function PosScreen({
 
     if (!productRows.length) {
       setCatalog(FALLBACK_PRODUCTS);
+      setProjectedInventoryByProduct(new Map());
       return;
     }
 
@@ -918,7 +950,7 @@ export function PosScreen({
       'inventory_balance',
       'inventory_balances'
     );
-    const inventoryByProduct = new Map<string, { qtyOnHand: number; qtyFull: number; qtyEmpty: number }>();
+    const inventoryByProduct = new Map<string, ProjectedInventoryTotals>();
     for (const row of inventoryRows) {
       const snapshot = parseInventorySnapshot(parseRecord<Record<string, unknown>>(row.payload, {}));
       if (!snapshot) {
@@ -933,6 +965,9 @@ export function PosScreen({
       current.qtyEmpty += snapshot.qtyEmpty;
       inventoryByProduct.set(snapshot.productId, current);
     }
+    const pendingDeltaByProduct = await loadPendingInventoryDeltaByProductForLocation(db, locationId.trim());
+    const projectedInventory = mergeInventoryWithDeltas(inventoryByProduct, pendingDeltaByProduct);
+    setProjectedInventoryByProduct(projectedInventory);
 
     for (const row of productRows) {
       const payload = parseRecord<Record<string, unknown>>(row.payload, {});
@@ -996,7 +1031,7 @@ export function PosScreen({
             atIso: nowIso,
             flowMode: null
           });
-      const stock = inventoryByProduct.get(id);
+      const stock = projectedInventory.get(id);
 
       dedupe.set(id, {
         id,
@@ -1086,9 +1121,9 @@ export function PosScreen({
     product: Product,
     nextTotalQty: number
   ): string | null => {
+    const stock = resolveProjectedStock(product);
     if (product.isLpg) {
-      const availableFull =
-        typeof product.qtyFull === 'number' && Number.isFinite(product.qtyFull) ? Math.max(0, product.qtyFull) : null;
+      const availableFull = stock ? Math.max(0, stock.qtyFull) : null;
       if (availableFull === null) {
         return `${product.name}: no stock data available yet. Download/sync branch data first.`;
       }
@@ -1097,8 +1132,7 @@ export function PosScreen({
       }
       return null;
     }
-    const availableOnHand =
-      typeof product.qtyOnHand === 'number' && Number.isFinite(product.qtyOnHand) ? Math.max(0, product.qtyOnHand) : null;
+    const availableOnHand = stock ? Math.max(0, stock.qtyOnHand) : null;
     if (availableOnHand === null) {
       return `${product.name}: no stock data available yet. Download/sync branch data first.`;
     }
@@ -1109,14 +1143,15 @@ export function PosScreen({
   };
 
   const isItemOutOfStock = (product: Product): boolean => {
+    const stock = resolveProjectedStock(product);
     if (product.isLpg) {
-      const full = typeof product.qtyFull === 'number' && Number.isFinite(product.qtyFull) ? product.qtyFull : null;
+      const full = stock ? stock.qtyFull : null;
       if (full === null) {
         return true;
       }
       return full <= 0;
     }
-    const qoh = typeof product.qtyOnHand === 'number' && Number.isFinite(product.qtyOnHand) ? product.qtyOnHand : null;
+    const qoh = stock ? stock.qtyOnHand : null;
     if (qoh === null) {
       return true;
     }
@@ -1226,40 +1261,9 @@ export function PosScreen({
       return [];
     }
 
-    const rows = await db.getAllAsync<{ payload: string }>(
-      `
-      SELECT payload
-      FROM master_data_local
-      WHERE entity IN (?, ?)
-      ORDER BY updated_at DESC
-      `,
-      'inventory_balance',
-      'inventory_balances'
-    );
-
-    if (!rows.length) {
-      return [];
-    }
-
-    const inventoryByProduct = new Map<string, { qtyOnHand: number; qtyFull: number; qtyEmpty: number }>();
-    for (const row of rows) {
-      const snapshot = parseInventorySnapshot(parseRecord<Record<string, unknown>>(row.payload, {}));
-      if (!snapshot) {
-        continue;
-      }
-      if (snapshot.locationId && snapshot.locationId !== locationId.trim()) {
-        continue;
-      }
-      const current = inventoryByProduct.get(snapshot.productId) ?? { qtyOnHand: 0, qtyFull: 0, qtyEmpty: 0 };
-      current.qtyOnHand += snapshot.qtyOnHand;
-      current.qtyFull += snapshot.qtyFull;
-      current.qtyEmpty += snapshot.qtyEmpty;
-      inventoryByProduct.set(snapshot.productId, current);
-    }
-
     const errors: string[] = [];
     for (const line of cart) {
-      const inventory = inventoryByProduct.get(line.id) ?? { qtyOnHand: 0, qtyFull: 0, qtyEmpty: 0 };
+      const inventory = resolveProjectedStock(line) ?? { qtyOnHand: 0, qtyFull: 0, qtyEmpty: 0 };
       const required = round2(line.quantity);
       if (line.isLpg) {
         if (!line.cylinderFlow) {
@@ -1548,6 +1552,7 @@ export function PosScreen({
       setDriverSearch('');
       setHelperId('');
       setHelperSearch('');
+      await refreshCatalog();
       await onDataChanged?.();
     } catch (cause) {
       toastError('POS checkout failed', cause instanceof Error ? cause.message : 'Unable to queue sale.');

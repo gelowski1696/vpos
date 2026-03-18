@@ -7,6 +7,11 @@ import type { AppTheme } from '../theme';
 import { SyncStatusBadge } from '../components/SyncStatusBadge';
 import { SwipeToDeleteRow } from '../components/SwipeToDeleteRow';
 import {
+  loadPendingInventoryDeltaByProductForLocation,
+  mergeInventoryWithDeltas,
+  type ProjectedInventoryTotals
+} from '../local-stock-projection';
+import {
   type MasterDataOption,
   loadLocationOptions,
   loadProductOptions,
@@ -615,7 +620,7 @@ export function TransfersScreen({ db, theme, onDataChanged, syncBusy = false }: 
 
   const buildInventoryByProductForLocation = async (
     locationId: string
-  ): Promise<Map<string, { qtyOnHand: number; qtyFull: number; qtyEmpty: number }>> => {
+  ): Promise<Map<string, ProjectedInventoryTotals>> => {
     const rows = await db.getAllAsync<{ payload: string }>(
       `
       SELECT payload
@@ -642,7 +647,8 @@ export function TransfersScreen({ db, theme, onDataChanged, syncBusy = false }: 
       current.qtyEmpty += snapshot.qtyEmpty;
       inventoryByProduct.set(snapshot.productId, current);
     }
-    return inventoryByProduct;
+    const pendingDeltaByProduct = await loadPendingInventoryDeltaByProductForLocation(db, locationId);
+    return mergeInventoryWithDeltas(inventoryByProduct, pendingDeltaByProduct);
   };
 
   useEffect(() => {
@@ -660,7 +666,7 @@ export function TransfersScreen({ db, theme, onDataChanged, syncBusy = false }: 
     return () => {
       cancelled = true;
     };
-  }, [activeSourceLocationId, syncBusy]);
+  }, [activeSourceLocationId, syncBusy, rows]);
 
   const resolveAvailableQtyForBucket = (productId: string, bucket: 'full' | 'empty'): number => {
     const stock = sourceInventoryByProduct.get(productId) ?? { qtyOnHand: 0, qtyFull: 0, qtyEmpty: 0 };
