@@ -1,6 +1,8 @@
 'use client';
 
+import type { Route } from 'next';
 import { useEffect, useMemo, useState } from 'react';
+import { usePathname, useRouter, useSearchParams } from 'next/navigation';
 import { EntityManager } from '../../../components/entity-manager';
 import {
   MasterDataImportWizard,
@@ -153,6 +155,9 @@ function flowModeLabel(value: 'ANY' | 'REFILL_EXCHANGE' | 'NON_REFILL'): string 
 }
 
 export default function ProductsPage(): JSX.Element {
+  const router = useRouter();
+  const pathname = usePathname();
+  const searchParams = useSearchParams();
   const [reloadSignal, setReloadSignal] = useState(0);
   const [products, setProducts] = useState<ProductRecord[]>([]);
   const [cylinderTypes, setCylinderTypes] = useState<CylinderTypeRecord[]>([]);
@@ -167,6 +172,7 @@ export default function ProductsPage(): JSX.Element {
   const [costSnapshot, setCostSnapshot] = useState<ProductCostSnapshotRecord | null>(null);
   const [costLoading, setCostLoading] = useState(false);
   const [costError, setCostError] = useState<string | null>(null);
+  const [handledSearchProductId, setHandledSearchProductId] = useState<string | null>(null);
 
   async function loadDetailData(): Promise<void> {
     setDetailLoading(true);
@@ -227,6 +233,30 @@ export default function ProductsPage(): JSX.Element {
   useEffect(() => {
     void loadDetailData();
   }, []);
+
+  useEffect(() => {
+    const productId = searchParams.get('product_id')?.trim();
+    if (!productId || detailLoading) {
+      setHandledSearchProductId(null);
+      return;
+    }
+    if (handledSearchProductId === productId) {
+      return;
+    }
+    if (!products.some((row) => row.id === productId)) {
+      return;
+    }
+    setHandledSearchProductId(productId);
+    setViewProductId(productId);
+    setCostSnapshot(null);
+    setCostError(null);
+    void loadCostSnapshot(productId);
+    const params = new URLSearchParams(searchParams.toString());
+    params.delete('product_id');
+    const nextQuery = params.toString();
+    router.replace((nextQuery ? `${pathname}?${nextQuery}` : pathname) as Route);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [detailLoading, handledSearchProductId, pathname, products, router, searchParams]);
 
   async function loadCostSnapshot(productId: string): Promise<void> {
     setCostLoading(true);

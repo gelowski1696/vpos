@@ -26,6 +26,7 @@ type SalesReportQuery = ReportRangeQuery & {
   location_id?: string;
   user_id?: string;
   shift_id?: string;
+  customer_id?: string;
 };
 
 type InventoryMovementQuery = ReportRangeQuery & {
@@ -2057,6 +2058,11 @@ export class ReportsService {
       ...(query.shift_id?.trim()
         ? {
             shiftId: query.shift_id.trim()
+          }
+        : {}),
+      ...(query.customer_id?.trim()
+        ? {
+            customerId: query.customer_id.trim()
           }
         : {})
     };

@@ -3,8 +3,8 @@
 import type { Route } from 'next';
 import Image from 'next/image';
 import Link from 'next/link';
-import { usePathname } from 'next/navigation';
-import { useEffect, useMemo, useState } from 'react';
+import { usePathname, useRouter } from 'next/navigation';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { AdminWalkthrough, type AdminTourStep } from './admin-walkthrough';
 import { apiRequest, clearAuthSession, getAccessToken, getSessionRoles } from '../lib/api-client';
 
@@ -21,6 +21,55 @@ type NavItem = {
   label: string;
   icon: NavIconName;
   badge?: string;
+};
+
+type NavSearchItem = NavItem & {
+  sectionTitle: string;
+};
+
+type GlobalSalesSearchRow = {
+  sale_id: string;
+  receipt_number: string | null;
+  branch_code: string;
+  branch_name: string;
+  location_code: string;
+  location_name: string;
+  customer_name: string | null;
+  customer_code: string | null;
+  total_amount: number;
+  posted_at: string | null;
+  created_at: string;
+};
+
+type GlobalCustomerSearchRow = {
+  id: string;
+  code: string;
+  name: string;
+  type: string;
+  tier: string | null;
+  isActive: boolean;
+};
+
+type GlobalProductSearchRow = {
+  id: string;
+  sku: string;
+  name: string;
+  category: string | null;
+  isLpg: boolean;
+  isActive: boolean;
+};
+
+type SearchResultGroup = 'Pages' | 'Sales' | 'Customers' | 'Products';
+
+type SearchResultItem = {
+  id: string;
+  group: SearchResultGroup;
+  label: string;
+  description: string;
+  target: string;
+  route: Route;
+  icon: NavIconName;
+  trailing?: string;
 };
 
 type NavIconName =
@@ -467,6 +516,7 @@ function NavIcon({ name, className }: { name: NavIconName; className?: string })
 
 export function AdminShell({ children }: { children: React.ReactNode }): JSX.Element {
   const pathname = usePathname();
+  const router = useRouter();
   const [ready, setReady] = useState(false);
   const [hasToken, setHasToken] = useState(false);
   const [theme, setTheme] = useState<ThemeMode>('light');
@@ -476,6 +526,17 @@ export function AdminShell({ children }: { children: React.ReactNode }): JSX.Ele
   const [walkthroughOpen, setWalkthroughOpen] = useState(false);
   const [walkthroughSteps, setWalkthroughSteps] = useState<AdminTourStep[]>(ADMIN_WALKTHROUGH_STEPS);
   const [walkthroughDoneKeys, setWalkthroughDoneKeys] = useState<string[]>([ADMIN_WALKTHROUGH_DONE_KEY]);
+  const [searchQuery, setSearchQuery] = useState('');
+  const [searchOpen, setSearchOpen] = useState(false);
+  const [searchHighlightIndex, setSearchHighlightIndex] = useState(0);
+  const [searchLoading, setSearchLoading] = useState(false);
+  const [searchLoadError, setSearchLoadError] = useState<string | null>(null);
+  const [globalSalesRows, setGlobalSalesRows] = useState<GlobalSalesSearchRow[]>([]);
+  const [globalCustomerRows, setGlobalCustomerRows] = useState<GlobalCustomerSearchRow[]>([]);
+  const [globalProductRows, setGlobalProductRows] = useState<GlobalProductSearchRow[]>([]);
+  const [globalSearchLoadedAt, setGlobalSearchLoadedAt] = useState(0);
+  const searchContainerRef = useRef<HTMLDivElement | null>(null);
+  const searchInputRef = useRef<HTMLInputElement | null>(null);
 
   useEffect(() => {
     const initialTheme = resolveInitialTheme();
@@ -561,6 +622,150 @@ export function AdminShell({ children }: { children: React.ReactNode }): JSX.Ele
   );
 
   const visibleNavItems = useMemo(() => visibleNavSections.flatMap((section) => section.items), [visibleNavSections]);
+  const navSearchItems = useMemo<NavSearchItem[]>(
+    () =>
+      visibleNavSections.flatMap((section) =>
+        section.items.map((item) => ({
+          ...item,
+          sectionTitle: section.title
+        }))
+      ),
+    [visibleNavSections]
+  );
+  const pageSearchItems = useMemo<SearchResultItem[]>(() => {
+    const term = searchQuery.trim().toLowerCase();
+    const filtered = navSearchItems
+      .filter((item) => {
+        if (!term) {
+          return true;
+        }
+        return (
+          item.label.toLowerCase().includes(term) ||
+          item.href.toLowerCase().includes(term) ||
+          item.sectionTitle.toLowerCase().includes(term)
+        );
+      })
+      .slice(0, term ? 8 : 6);
+    return filtered.map((item) => ({
+      id: `page:${item.href}`,
+      group: 'Pages',
+      label: item.label,
+      description: item.sectionTitle,
+      target: item.href,
+      route: item.href,
+      icon: item.icon
+    }));
+  }, [navSearchItems, searchQuery]);
+
+  const salesSearchItems = useMemo<SearchResultItem[]>(() => {
+    const term = searchQuery.trim().toLowerCase();
+    if (term.length < 2) {
+      return [];
+    }
+    return globalSalesRows
+      .filter((row) =>
+        [
+          row.sale_id,
+          row.receipt_number ?? '',
+          row.customer_name ?? '',
+          row.customer_code ?? '',
+          row.branch_name,
+          row.branch_code,
+          row.location_name,
+          row.location_code
+        ]
+          .join(' ')
+          .toLowerCase()
+          .includes(term)
+      )
+      .slice(0, 6)
+      .map((row) => ({
+        id: `sale:${row.sale_id}`,
+        group: 'Sales',
+        label: row.sale_id,
+        description: `${row.receipt_number ? `Receipt ${row.receipt_number} | ` : ''}${row.customer_name ?? 'Walk-in'} | ${row.branch_code}`,
+        target: `/sales-list?sale_id=${encodeURIComponent(row.sale_id)}`,
+        route: '/sales-list' as Route,
+        icon: 'sales',
+        trailing: row.total_amount.toLocaleString('en-US', {
+          minimumFractionDigits: 2,
+          maximumFractionDigits: 2
+        })
+      }));
+  }, [globalSalesRows, searchQuery]);
+
+  const customerSearchItems = useMemo<SearchResultItem[]>(() => {
+    const term = searchQuery.trim().toLowerCase();
+    if (term.length < 2) {
+      return [];
+    }
+    return globalCustomerRows
+      .filter((row) =>
+        [row.code, row.name, row.type, row.tier ?? '']
+          .join(' ')
+          .toLowerCase()
+          .includes(term)
+      )
+      .slice(0, 6)
+      .map((row) => ({
+        id: `customer:${row.id}`,
+        group: 'Customers',
+        label: row.name,
+        description: `${row.code} | ${row.type}${row.tier ? ` | ${row.tier}` : ''}${row.isActive ? '' : ' | Inactive'}`,
+        target: `/customers?customer_id=${encodeURIComponent(row.id)}`,
+        route: '/customers' as Route,
+        icon: 'customer'
+      }));
+  }, [globalCustomerRows, searchQuery]);
+
+  const productSearchItems = useMemo<SearchResultItem[]>(() => {
+    const term = searchQuery.trim().toLowerCase();
+    if (term.length < 2) {
+      return [];
+    }
+    return globalProductRows
+      .filter((row) =>
+        [row.sku, row.name, row.category ?? '', row.isLpg ? 'lpg' : '']
+          .join(' ')
+          .toLowerCase()
+          .includes(term)
+      )
+      .slice(0, 6)
+      .map((row) => ({
+        id: `product:${row.id}`,
+        group: 'Products',
+        label: row.name,
+        description: `${row.sku}${row.category ? ` | ${row.category}` : ''}${row.isLpg ? ' | LPG' : ''}${row.isActive ? '' : ' | Inactive'}`,
+        target: `/products?product_id=${encodeURIComponent(row.id)}`,
+        route: '/products' as Route,
+        icon: 'product'
+      }));
+  }, [globalProductRows, searchQuery]);
+
+  const groupedSearchItems = useMemo<
+    Array<{ group: SearchResultGroup; items: SearchResultItem[] }>
+  >(
+    () =>
+      [
+        { group: 'Pages' as const, items: pageSearchItems },
+        { group: 'Sales' as const, items: salesSearchItems },
+        { group: 'Customers' as const, items: customerSearchItems },
+        { group: 'Products' as const, items: productSearchItems }
+      ].filter((entry) => entry.items.length > 0),
+    [pageSearchItems, salesSearchItems, customerSearchItems, productSearchItems]
+  );
+
+  const flatSearchItems = useMemo(
+    () => groupedSearchItems.flatMap((entry) => entry.items),
+    [groupedSearchItems]
+  );
+  const flatSearchIndexById = useMemo(() => {
+    const indexById = new Map<string, number>();
+    flatSearchItems.forEach((item, index) => {
+      indexById.set(item.id, index);
+    });
+    return indexById;
+  }, [flatSearchItems]);
 
   const active = useMemo(() => pathname ?? '/', [pathname]);
   const activeRouteKey = useMemo(() => {
@@ -621,6 +826,123 @@ export function AdminShell({ children }: { children: React.ReactNode }): JSX.Ele
       setWalkthroughOpen(true);
     }
   }, [hasToken, isPlatformOwner, ready, roles.length, routeDoneKey, routeSpecificSteps, walkthroughOpen]);
+
+  useEffect(() => {
+    const term = searchQuery.trim();
+    if (!searchOpen || term.length < 2) {
+      setSearchLoading(false);
+      setSearchLoadError(null);
+      return;
+    }
+
+    const now = Date.now();
+    const cacheWindowMs = 90 * 1000;
+    if (globalSearchLoadedAt > 0 && now - globalSearchLoadedAt < cacheWindowMs) {
+      return;
+    }
+
+    let cancelled = false;
+    const timeoutId = window.setTimeout(() => {
+      setSearchLoading(true);
+      setSearchLoadError(null);
+      Promise.all([
+        apiRequest<{ rows: GlobalSalesSearchRow[] }>('/reports/sales/list?limit=250'),
+        apiRequest<GlobalCustomerSearchRow[]>('/master-data/customers'),
+        apiRequest<GlobalProductSearchRow[]>('/master-data/products')
+      ])
+        .then(([salesRes, customersRes, productsRes]) => {
+          if (cancelled) {
+            return;
+          }
+          setGlobalSalesRows(Array.isArray(salesRes?.rows) ? salesRes.rows : []);
+          setGlobalCustomerRows(Array.isArray(customersRes) ? customersRes : []);
+          setGlobalProductRows(Array.isArray(productsRes) ? productsRes : []);
+          setGlobalSearchLoadedAt(Date.now());
+        })
+        .catch(() => {
+          if (cancelled) {
+            return;
+          }
+          setSearchLoadError('Unable to load global records right now.');
+        })
+        .finally(() => {
+          if (cancelled) {
+            return;
+          }
+          setSearchLoading(false);
+        });
+    }, 220);
+
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timeoutId);
+    };
+  }, [globalSearchLoadedAt, searchOpen, searchQuery]);
+
+  useEffect(() => {
+    setSearchOpen(false);
+    setSearchHighlightIndex(0);
+    setSearchQuery('');
+    setSearchLoadError(null);
+  }, [active]);
+
+  useEffect(() => {
+    setSearchHighlightIndex((current) => {
+      if (flatSearchItems.length === 0) {
+        return 0;
+      }
+      return Math.min(current, flatSearchItems.length - 1);
+    });
+  }, [flatSearchItems]);
+
+  useEffect(() => {
+    const handlePointerDown = (event: MouseEvent) => {
+      if (!searchContainerRef.current) {
+        return;
+      }
+      if (searchContainerRef.current.contains(event.target as Node)) {
+        return;
+      }
+      setSearchOpen(false);
+    };
+
+    const handleShortcut = (event: KeyboardEvent) => {
+      const target = event.target as HTMLElement | null;
+      const targetTag = target?.tagName?.toLowerCase();
+      const targetEditable = target instanceof HTMLElement && target.isContentEditable;
+      const isTypingContext =
+        targetTag === 'input' ||
+        targetTag === 'textarea' ||
+        targetTag === 'select' ||
+        targetEditable;
+
+      if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'k') {
+        if (isTypingContext && target !== searchInputRef.current) {
+          return;
+        }
+        event.preventDefault();
+        searchInputRef.current?.focus();
+        setSearchOpen(true);
+      }
+    };
+
+    document.addEventListener('mousedown', handlePointerDown);
+    window.addEventListener('keydown', handleShortcut);
+    return () => {
+      document.removeEventListener('mousedown', handlePointerDown);
+      window.removeEventListener('keydown', handleShortcut);
+    };
+  }, []);
+
+  function openSearchResult(item: SearchResultItem): void {
+    setSearchOpen(false);
+    setSearchHighlightIndex(0);
+    setSearchQuery('');
+    if (routeIsActive(active, item.route) && item.target === item.route) {
+      return;
+    }
+    router.push(item.target as Route);
+  }
 
   function openManualTutorial(): void {
     const shellDone = window.localStorage.getItem(ADMIN_WALKTHROUGH_DONE_KEY) === '1';
@@ -781,14 +1103,131 @@ export function AdminShell({ children }: { children: React.ReactNode }): JSX.Ele
               </div>
             </div>
 
-            <div data-tour="global-search" className="flex w-full max-w-xl items-center gap-2 rounded-xl border border-slate-300/70 bg-white px-3 py-2 dark:border-slate-700 dark:bg-slate-900 md:w-auto md:flex-1">
+            <div
+              data-tour="global-search"
+              ref={searchContainerRef}
+              className="relative flex w-full max-w-xl items-center gap-2 rounded-xl border border-slate-300/70 bg-white px-3 py-2 dark:border-slate-700 dark:bg-slate-900 md:w-auto md:flex-1"
+            >
               <svg aria-hidden="true" className="h-4 w-4 text-slate-400 dark:text-slate-500" fill="none" viewBox="0 0 24 24">
                 <path d="M21 21L16.65 16.65M10 18a8 8 0 1 1 0-16 8 8 0 0 1 0 16Z" stroke="currentColor" strokeLinecap="round" strokeWidth="2" />
               </svg>
               <input
+                ref={searchInputRef}
                 className="w-full bg-transparent text-sm text-slate-700 outline-none placeholder:text-slate-400 dark:text-slate-200 dark:placeholder:text-slate-500"
-                placeholder="Type to search module, customer, product..."
+                onChange={(event) => {
+                  setSearchQuery(event.target.value);
+                  setSearchOpen(true);
+                }}
+                onFocus={() => setSearchOpen(true)}
+                onKeyDown={(event) => {
+                  if (!searchOpen && (event.key === 'ArrowDown' || event.key === 'ArrowUp')) {
+                    setSearchOpen(true);
+                    return;
+                  }
+                  if (event.key === 'Escape') {
+                    setSearchOpen(false);
+                    return;
+                  }
+                  if (event.key === 'ArrowDown') {
+                    event.preventDefault();
+                    setSearchHighlightIndex((current) =>
+                      flatSearchItems.length === 0
+                        ? 0
+                        : (current + 1) % flatSearchItems.length
+                    );
+                    return;
+                  }
+                  if (event.key === 'ArrowUp') {
+                    event.preventDefault();
+                    setSearchHighlightIndex((current) =>
+                      flatSearchItems.length === 0
+                        ? 0
+                        : (current - 1 + flatSearchItems.length) % flatSearchItems.length
+                    );
+                    return;
+                  }
+                  if (event.key === 'Enter') {
+                    event.preventDefault();
+                    const selected =
+                      flatSearchItems[searchHighlightIndex] ?? flatSearchItems[0];
+                    if (selected) {
+                      openSearchResult(selected);
+                    }
+                  }
+                }}
+                placeholder="Search pages, sales, customers, products... (Ctrl/Cmd + K)"
+                value={searchQuery}
               />
+              <span className="hidden rounded-md border border-slate-300 px-1.5 py-0.5 text-[10px] font-semibold text-slate-500 dark:border-slate-600 dark:text-slate-400 md:inline">
+                Ctrl K
+              </span>
+              {searchOpen ? (
+                <div className="absolute left-0 right-0 top-[calc(100%+8px)] z-40 overflow-hidden rounded-xl border border-slate-200 bg-white shadow-xl dark:border-slate-700 dark:bg-slate-900">
+                  <div className="max-h-96 overflow-y-auto py-1">
+                    {searchLoadError ? (
+                      <p className="px-3 py-2 text-xs text-rose-600 dark:text-rose-300">{searchLoadError}</p>
+                    ) : null}
+                    {searchLoading ? (
+                      <p className="px-3 py-2 text-xs text-slate-500 dark:text-slate-400">Loading global records...</p>
+                    ) : null}
+                    {flatSearchItems.length === 0 ? (
+                      <p className="px-3 py-2 text-xs text-slate-500 dark:text-slate-400">
+                        No results found. Try another keyword.
+                      </p>
+                    ) : (
+                      groupedSearchItems.map((group) => (
+                        <div key={group.group}>
+                          <p className="px-3 pb-1 pt-2 text-[10px] font-semibold uppercase tracking-[0.14em] text-slate-500 dark:text-slate-400">
+                            {group.group}
+                          </p>
+                          <ul>
+                            {group.items.map((item) => {
+                              const itemIndex = flatSearchIndexById.get(item.id) ?? 0;
+                              const highlighted = itemIndex === searchHighlightIndex;
+                              const isCurrent = routeIsActive(active, item.route);
+                              return (
+                                <li key={item.id}>
+                                  <button
+                                    className={`flex w-full items-start justify-between gap-3 px-3 py-2 text-left transition ${
+                                      highlighted
+                                        ? 'bg-slate-100 dark:bg-slate-800'
+                                        : 'hover:bg-slate-50 dark:hover:bg-slate-800/70'
+                                    }`}
+                                    onClick={() => openSearchResult(item)}
+                                    onMouseEnter={() => setSearchHighlightIndex(itemIndex)}
+                                    type="button"
+                                  >
+                                    <span className="flex min-w-0 items-start gap-2">
+                                      <NavIcon className="mt-0.5 h-3.5 w-3.5 shrink-0 text-slate-500 dark:text-slate-400" name={item.icon} />
+                                      <span className="min-w-0">
+                                        <span className="block truncate text-sm font-semibold text-slate-800 dark:text-slate-100">
+                                          {item.label}
+                                        </span>
+                                        <span className="block truncate text-[11px] text-slate-500 dark:text-slate-400">
+                                          {item.description}
+                                        </span>
+                                      </span>
+                                    </span>
+                                    {isCurrent ? (
+                                      <span className="rounded-full border border-emerald-300 bg-emerald-50 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-emerald-700 dark:border-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-300">
+                                        Current
+                                      </span>
+                                    ) : (
+                                      <span className="shrink-0 text-[11px] text-slate-400 dark:text-slate-500">
+                                        {item.trailing ?? item.route}
+                                      </span>
+                                    )}
+                                  </button>
+                                </li>
+                              );
+                            })}
+                          </ul>
+                        </div>
+                      ))
+                    )}
+                  </div>
+                </div>
+              ) : null}
             </div>
 
             <div className="flex items-center gap-2">

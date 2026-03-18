@@ -1,6 +1,8 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import type { Route } from 'next';
+import { useEffect, useRef, useState } from 'react';
+import { usePathname, useRouter, useSearchParams } from 'next/navigation';
 import { apiRequest } from '../../../lib/api-client';
 
 type BranchRecord = {
@@ -122,6 +124,9 @@ function splitCsvNames(value: string | null | undefined): string[] {
 }
 
 export default function SalesListPage(): JSX.Element {
+  const router = useRouter();
+  const pathname = usePathname();
+  const searchParams = useSearchParams();
   const [branches, setBranches] = useState<BranchRecord[]>([]);
   const [branchFilter, setBranchFilter] = useState('ALL');
   const [since, setSince] = useState('');
@@ -134,6 +139,7 @@ export default function SalesListPage(): JSX.Element {
   const [detailsLoading, setDetailsLoading] = useState(false);
   const [detailsError, setDetailsError] = useState<string | null>(null);
   const [paymentBreakdownOpen, setPaymentBreakdownOpen] = useState(false);
+  const handledSearchSaleIdRef = useRef<string | null>(null);
 
   async function loadBranches(): Promise<void> {
     try {
@@ -179,6 +185,25 @@ export default function SalesListPage(): JSX.Element {
     void loadSales();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [branchFilter, since, until]);
+
+  useEffect(() => {
+    const saleId = searchParams.get('sale_id')?.trim();
+    if (!saleId) {
+      handledSearchSaleIdRef.current = null;
+      return;
+    }
+    if (handledSearchSaleIdRef.current === saleId) {
+      return;
+    }
+    handledSearchSaleIdRef.current = saleId;
+    void openDetails(saleId).finally(() => {
+      const params = new URLSearchParams(searchParams.toString());
+      params.delete('sale_id');
+      const nextQuery = params.toString();
+      router.replace((nextQuery ? `${pathname}?${nextQuery}` : pathname) as Route);
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pathname, router, searchParams]);
 
   async function openDetails(saleId: string): Promise<void> {
     setSelectedSaleId(saleId);

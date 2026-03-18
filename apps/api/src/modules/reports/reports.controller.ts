@@ -144,6 +144,7 @@ export class ReportsController {
       location_id?: string;
       user_id?: string;
       shift_id?: string;
+      customer_id?: string;
       limit?: string;
     }
   ): Promise<ReturnType<ReportsService['salesList']>> {

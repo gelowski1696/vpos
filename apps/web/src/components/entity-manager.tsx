@@ -81,6 +81,8 @@ type EntityManagerProps = {
       sortAccessor?: (row: Record<string, unknown>) => unknown;
     }
   >;
+  deepLinkEditId?: string | null;
+  onDeepLinkHandled?: (result: { id: string; found: boolean }) => void;
 };
 
 type DialogMode = 'create' | 'edit' | null;
@@ -140,7 +142,9 @@ export function EntityManager({
   allowDelete = false,
   deleteConfirmText,
   reactivateConfirmText,
-  tableColumnOverrides = {}
+  tableColumnOverrides = {},
+  deepLinkEditId = null,
+  onDeepLinkHandled
 }: EntityManagerProps): JSX.Element {
   const [items, setItems] = useState<Array<Record<string, unknown>>>([]);
   const [form, setForm] = useState<Record<string, unknown>>({ ...defaultValues });
@@ -158,6 +162,7 @@ export function EntityManager({
   const [sortState, setSortState] = useState<{ column: string; direction: 'asc' | 'desc' } | null>(
     null
   );
+  const handledDeepLinkRef = useRef<string | null>(null);
   const onFormStateChangeRef = useRef(onFormStateChange);
   const tourSlug = useMemo(
     () =>
@@ -202,6 +207,27 @@ export function EntityManager({
   useEffect(() => {
     onFormStateChangeRef.current = onFormStateChange;
   }, [onFormStateChange]);
+
+  useEffect(() => {
+    if (!deepLinkEditId) {
+      handledDeepLinkRef.current = null;
+      return;
+    }
+    if (handledDeepLinkRef.current === deepLinkEditId) {
+      return;
+    }
+    if (loading) {
+      return;
+    }
+    const match = items.find((item) => String(item.id ?? '') === deepLinkEditId);
+    handledDeepLinkRef.current = deepLinkEditId;
+    if (!match) {
+      onDeepLinkHandled?.({ id: deepLinkEditId, found: false });
+      return;
+    }
+    openEdit(match);
+    onDeepLinkHandled?.({ id: deepLinkEditId, found: true });
+  }, [deepLinkEditId, items, loading, onDeepLinkHandled]);
 
   useEffect(() => {
     if (!dialogMode) {
