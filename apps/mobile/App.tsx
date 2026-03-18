@@ -93,7 +93,7 @@ const env = (
   globalThis as { process?: { env?: Record<string, string | undefined> } }
 ).process?.env;
 const API_BASE_URL = normalizeApiBaseUrl(
-  env?.EXPO_PUBLIC_API_BASE_URL ?? "http://192.168.1.14:3001/api",
+  env?.EXPO_PUBLIC_API_BASE_URL ?? "https://vmjamtech.com/api",
 );
 const CONFIGURED_DEVICE_ID = env?.EXPO_PUBLIC_DEVICE_ID ?? "";
 const APP_LOGO = require("./assests/vpos_logo.png");
@@ -3086,9 +3086,6 @@ function AppShell(): JSX.Element {
               {startupConnectivityChecking ? "Checking..." : "Retry"}
             </Text>
           </Pressable>
-          <Text style={[styles.apiText, { color: theme.subtext }]}>
-            API: {API_BASE_URL}
-          </Text>
         </View>
         <Toast config={goeyToastConfig} />
       </SafeAreaView>
@@ -3665,9 +3662,6 @@ function AppShell(): JSX.Element {
           </View>
         ) : null}
 
-        <Text style={[styles.apiText, { color: theme.subtext }]}>
-          API: {API_BASE_URL}
-        </Text>
       </ScrollView>
       {stage === "READY" && notificationMenuOpen ? (
         <View style={styles.notificationOverlay}>
@@ -4688,10 +4682,6 @@ const styles = StyleSheet.create({
   errorText: {
     color: "#FFD8E4",
     fontSize: 13,
-  },
-  apiText: {
-    marginTop: 4,
-    fontSize: 12,
   },
 });
 

@@ -5,6 +5,7 @@ import Image from 'next/image';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import { useEffect, useMemo, useState } from 'react';
+import { AdminWalkthrough, type AdminTourStep } from './admin-walkthrough';
 import { apiRequest, clearAuthSession, getAccessToken, getSessionRoles } from '../lib/api-client';
 
 type ThemeMode = 'light' | 'dark';
@@ -44,6 +45,207 @@ type NavIconName =
 
 const THEME_STORAGE_KEY = 'vpos_admin_theme';
 const SIDEBAR_STORAGE_KEY = 'vpos_admin_sidebar_collapsed';
+const ADMIN_WALKTHROUGH_DONE_KEY = 'vpos_web_admin_walkthrough_v1_done';
+const ADMIN_ROUTE_WALKTHROUGH_DONE_PREFIX = 'vpos_web_admin_walkthrough_route_';
+
+const ADMIN_WALKTHROUGH_STEPS: AdminTourStep[] = [
+  {
+    id: 'workspace',
+    title: 'Welcome to Web Admin',
+    description: 'This is your workspace. You can manage operations, track sales, and maintain branch master data from here.',
+    selectors: ['[data-tour="workspace"]'],
+    placement: 'bottom'
+  },
+  {
+    id: 'sidebar',
+    title: 'Use the left menu to navigate',
+    description: 'Modules are grouped by business flow: Sales, Inventory, Stock Movement, and Settings.',
+    selectors: ['[data-tour="sidebar-nav"]', '[data-tour="mobile-nav-list"]'],
+    placement: 'auto'
+  },
+  {
+    id: 'dashboard',
+    title: 'Start with Dashboard',
+    description: 'Use Dashboard for daily KPIs, branch health, and quick visibility of operations.',
+    selectors: ['[data-tour="nav-dashboard"]', '[data-tour="mobile-nav-dashboard"]'],
+    placement: 'bottom'
+  },
+  {
+    id: 'sales-list',
+    title: 'Sales list and transaction details',
+    description: 'Open Sales List to review posted transactions, balances, personnel, and payment breakdowns.',
+    selectors: ['[data-tour="nav-sales-list"]', '[data-tour="mobile-nav-sales-list"]'],
+    placement: 'bottom'
+  },
+  {
+    id: 'products',
+    title: 'Maintain products and stock rules',
+    description: 'Configure products, categories, brands, and pricing so POS and reports stay accurate.',
+    selectors: ['[data-tour="nav-products"]', '[data-tour="mobile-nav-products"]'],
+    placement: 'bottom'
+  },
+  {
+    id: 'search',
+    title: 'Quick module search',
+    description: 'Use search to quickly jump your attention while working across many modules.',
+    selectors: ['[data-tour="global-search"]'],
+    placement: 'bottom'
+  },
+  {
+    id: 'theme',
+    title: 'Personalize your display mode',
+    description: 'Toggle between light and dark mode for comfort during long operating hours.',
+    selectors: ['[data-tour="theme-toggle"]'],
+    placement: 'bottom'
+  },
+  {
+    id: 'logout',
+    title: 'Secure logout',
+    description: 'Use Logout whenever you leave the workstation to keep business data protected.',
+    selectors: ['[data-tour="logout"]'],
+    placement: 'top'
+  }
+];
+
+function routeToTourToken(href: string): string {
+  const token = href.replace(/^\/+/, '').replace(/\//g, '-').trim();
+  return token.length > 0 ? token : 'dashboard';
+}
+
+function routeWalkthroughDoneKey(route: string): string {
+  return `${ADMIN_ROUTE_WALKTHROUGH_DONE_PREFIX}${routeToTourToken(route)}`;
+}
+
+function buildEntityRouteSteps(route: string, slug: string, label: string): AdminTourStep[] {
+  const token = routeToTourToken(route);
+  return [
+    {
+      id: `${token}-intro`,
+      title: `${label} module`,
+      description: `This page manages ${label.toLowerCase()} records for your branch operations.`,
+      selectors: [`[data-tour="nav-${token}"]`, `[data-tour="mobile-nav-${token}"]`, '[data-tour="header-page-title"]'],
+      placement: 'bottom'
+    },
+    {
+      id: `${token}-search`,
+      title: 'Search and locate records',
+      description: 'Use search to quickly find existing entries before creating new records.',
+      selectors: [`[data-tour="${slug}-entity-search"]`],
+      placement: 'bottom'
+    },
+    {
+      id: `${token}-add`,
+      title: 'Add new record',
+      description: 'Click Add New to open the modal form, then save your changes.',
+      selectors: [`[data-tour="${slug}-entity-add"]`],
+      placement: 'bottom'
+    },
+    {
+      id: `${token}-table`,
+      title: 'Review and update records',
+      description: 'Use table actions like View, Edit, Deactivate, and Reactivate to keep data clean.',
+      selectors: [`[data-tour="${slug}-entity-table"]`],
+      placement: 'top'
+    }
+  ];
+}
+
+const ROUTE_SPECIFIC_WALKTHROUGHS: Record<string, AdminTourStep[]> = {
+  '/sales-list': [
+    {
+      id: 'sales-list-overview',
+      title: 'Sales list overview',
+      description: 'This page shows posted transactions from mobile and web, with branch and date filters.',
+      selectors: ['[data-tour="sales-list-root"]', '[data-tour="header-page-title"]'],
+      placement: 'bottom'
+    },
+    {
+      id: 'sales-list-filters',
+      title: 'Filter by branch and date',
+      description: 'Use these filters first, then click Refresh to load the sales records you need.',
+      selectors: ['[data-tour="sales-list-filters"]'],
+      placement: 'bottom'
+    },
+    {
+      id: 'sales-list-table',
+      title: 'Open transaction details',
+      description: 'Click View on any row to open full sale details, line items, and payment breakdown.',
+      selectors: ['[data-tour="sales-list-view"]', '[data-tour="sales-list-table"]'],
+      placement: 'top'
+    }
+  ],
+  '/products': [
+    {
+      id: 'products-overview',
+      title: 'Products setup',
+      description: 'Maintain LPG and non-LPG items, linked cylinder type, and stock alert settings here.',
+      selectors: ['[data-tour="products-entity-root"]', '[data-tour="header-page-title"]'],
+      placement: 'bottom'
+    },
+    {
+      id: 'products-search',
+      title: 'Find product records',
+      description: 'Search by item code or product name to avoid duplicates before adding a new record.',
+      selectors: ['[data-tour="products-entity-search"]'],
+      placement: 'bottom'
+    },
+    {
+      id: 'products-add',
+      title: 'Add product',
+      description: 'Use Add New to define product basics, LPG flag, cylinder type, and pricing-related fields.',
+      selectors: ['[data-tour="products-entity-add"]'],
+      placement: 'bottom'
+    },
+    {
+      id: 'products-table',
+      title: 'View and maintain',
+      description: 'Use the table actions to view details, edit records, and manage active status.',
+      selectors: ['[data-tour="products-entity-table"]'],
+      placement: 'top'
+    }
+  ],
+  '/reports': [
+    {
+      id: 'reports-overview',
+      title: 'Reports center',
+      description: 'This page combines sales, inventory, LPG, operations, and customer reports in one workspace.',
+      selectors: ['[data-tour="reports-root"]', '[data-tour="header-page-title"]'],
+      placement: 'bottom'
+    },
+    {
+      id: 'reports-filters',
+      title: 'Set branch and date range',
+      description: 'Start here so all report widgets and tables reflect the same filter scope.',
+      selectors: ['[data-tour="reports-filters"]'],
+      placement: 'bottom'
+    },
+    {
+      id: 'reports-tabs',
+      title: 'Switch report sections',
+      description: 'Choose a section or use Show All Sections depending on how detailed your review needs to be.',
+      selectors: ['[data-tour="reports-tabs"]'],
+      placement: 'top'
+    },
+    {
+      id: 'reports-export',
+      title: 'Export and print',
+      description: 'Use Export buttons for CSV files and Print for quick sharing during operations review.',
+      selectors: ['[data-tour="reports-export"]'],
+      placement: 'bottom'
+    }
+  ],
+  '/branches': buildEntityRouteSteps('/branches', 'branches', 'Branches'),
+  '/locations': buildEntityRouteSteps('/locations', 'locations', 'Locations'),
+  '/users': buildEntityRouteSteps('/users', 'users', 'Users'),
+  '/customers': buildEntityRouteSteps('/customers', 'customers', 'Customers'),
+  '/product-categories': buildEntityRouteSteps('/product-categories', 'product-categories', 'Product Categories'),
+  '/product-brands': buildEntityRouteSteps('/product-brands', 'product-brands', 'Product Brands'),
+  '/cylinder-types': buildEntityRouteSteps('/cylinder-types', 'cylinder-types', 'Cylinder Types'),
+  '/expenses': buildEntityRouteSteps('/expenses', 'expense-categories', 'Expense Categories'),
+  '/suppliers': buildEntityRouteSteps('/suppliers', 'suppliers', 'Suppliers'),
+  '/personnels': buildEntityRouteSteps('/personnels', 'personnel', 'Personnel'),
+  '/personnel-roles': buildEntityRouteSteps('/personnel-roles', 'personnel-roles', 'Personnel Roles')
+};
 
 const NAV_SECTIONS: Array<{ title: string; items: NavItem[] }> = [
   {
@@ -271,6 +473,9 @@ export function AdminShell({ children }: { children: React.ReactNode }): JSX.Ele
   const [brandName, setBrandName] = useState('VPOS');
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [roles, setRoles] = useState<string[]>([]);
+  const [walkthroughOpen, setWalkthroughOpen] = useState(false);
+  const [walkthroughSteps, setWalkthroughSteps] = useState<AdminTourStep[]>(ADMIN_WALKTHROUGH_STEPS);
+  const [walkthroughDoneKeys, setWalkthroughDoneKeys] = useState<string[]>([ADMIN_WALKTHROUGH_DONE_KEY]);
 
   useEffect(() => {
     const initialTheme = resolveInitialTheme();
@@ -358,13 +563,76 @@ export function AdminShell({ children }: { children: React.ReactNode }): JSX.Ele
   const visibleNavItems = useMemo(() => visibleNavSections.flatMap((section) => section.items), [visibleNavSections]);
 
   const active = useMemo(() => pathname ?? '/', [pathname]);
+  const activeRouteKey = useMemo(() => {
+    const exactMatch = visibleNavItems.find((item) => routeIsActive(active, item.href));
+    return exactMatch?.href ?? active;
+  }, [active, visibleNavItems]);
+  const pageTitle = useMemo(() => visibleNavItems.find((item) => routeIsActive(active, item.href))?.label ?? 'Web Admin', [active, visibleNavItems]);
+  const routeSpecificSteps = useMemo<AdminTourStep[]>(() => {
+    const found = ROUTE_SPECIFIC_WALKTHROUGHS[activeRouteKey];
+    if (found && found.length > 0) {
+      return found;
+    }
+
+    const token = routeToTourToken(activeRouteKey);
+    return [
+      {
+        id: `${token}-route-nav`,
+        title: `${pageTitle} module`,
+        description: 'Use this module menu item to return quickly while moving across admin pages.',
+        selectors: [`[data-tour="nav-${token}"]`, `[data-tour="mobile-nav-${token}"]`, '[data-tour="header-page-title"]'],
+        placement: 'bottom' as const
+      },
+      {
+        id: `${token}-route-workspace`,
+        title: 'Main work area',
+        description: 'The main content for this module appears in this workspace section.',
+        selectors: ['[data-tour="workspace"]'],
+        placement: 'top' as const
+      }
+    ];
+  }, [activeRouteKey, pageTitle]);
+  const routeDoneKey = useMemo(() => routeWalkthroughDoneKey(activeRouteKey), [activeRouteKey]);
   const platformOwnerRouteBlocked = useMemo(
     () =>
       isPlatformOwner &&
       !PLATFORM_OWNER_ALLOWED_ROUTES.some((route) => routeIsActive(active, route)),
     [active, isPlatformOwner]
   );
-  const pageTitle = useMemo(() => visibleNavItems.find((item) => routeIsActive(active, item.href))?.label ?? 'Web Admin', [active, visibleNavItems]);
+
+  useEffect(() => {
+    if (!ready || !hasToken || roles.length === 0 || isPlatformOwner || walkthroughOpen) {
+      return;
+    }
+
+    const shellDone = window.localStorage.getItem(ADMIN_WALKTHROUGH_DONE_KEY) === '1';
+    const routeDone = window.localStorage.getItem(routeDoneKey) === '1';
+
+    if (!shellDone) {
+      setWalkthroughSteps([...ADMIN_WALKTHROUGH_STEPS, ...routeSpecificSteps]);
+      setWalkthroughDoneKeys([ADMIN_WALKTHROUGH_DONE_KEY, routeDoneKey]);
+      setWalkthroughOpen(true);
+      return;
+    }
+
+    if (!routeDone && routeSpecificSteps.length > 0) {
+      setWalkthroughSteps(routeSpecificSteps);
+      setWalkthroughDoneKeys([routeDoneKey]);
+      setWalkthroughOpen(true);
+    }
+  }, [hasToken, isPlatformOwner, ready, roles.length, routeDoneKey, routeSpecificSteps, walkthroughOpen]);
+
+  function openManualTutorial(): void {
+    const shellDone = window.localStorage.getItem(ADMIN_WALKTHROUGH_DONE_KEY) === '1';
+    if (shellDone) {
+      setWalkthroughSteps(routeSpecificSteps);
+      setWalkthroughDoneKeys([routeDoneKey]);
+    } else {
+      setWalkthroughSteps([...ADMIN_WALKTHROUGH_STEPS, ...routeSpecificSteps]);
+      setWalkthroughDoneKeys([ADMIN_WALKTHROUGH_DONE_KEY, routeDoneKey]);
+    }
+    setWalkthroughOpen(true);
+  }
 
   function switchTheme(nextTheme: ThemeMode): void {
     setTheme(nextTheme);
@@ -428,6 +696,7 @@ export function AdminShell({ children }: { children: React.ReactNode }): JSX.Ele
   return (
     <div className="min-h-screen">
       <aside
+        data-tour="sidebar"
         className={`fixed inset-y-0 left-0 z-30 hidden border-r border-slate-200/70 bg-white/90 text-slate-700 shadow-2xl shadow-slate-300/20 transition-[width] duration-200 dark:border-slate-800 dark:bg-slate-950/90 dark:text-slate-200 dark:shadow-black/40 md:block ${sidebarCollapsed ? 'w-20' : 'w-72'}`}
       >
         <div className={`flex h-16 items-center border-b border-slate-200/70 dark:border-slate-800 ${sidebarCollapsed ? 'justify-center px-2' : 'gap-3 px-6'}`}>
@@ -442,7 +711,7 @@ export function AdminShell({ children }: { children: React.ReactNode }): JSX.Ele
           ) : null}
         </div>
 
-        <div className={`h-[calc(100vh-4rem)] overflow-y-auto py-5 ${sidebarCollapsed ? 'px-2' : 'px-4'}`}>
+        <div data-tour="sidebar-nav" className={`h-[calc(100vh-4rem)] overflow-y-auto py-5 ${sidebarCollapsed ? 'px-2' : 'px-4'}`}>
           {visibleNavSections.map((section) => (
             <div className="mb-6" key={section.title}>
               {!sidebarCollapsed ? (
@@ -451,8 +720,10 @@ export function AdminShell({ children }: { children: React.ReactNode }): JSX.Ele
               <nav className="space-y-1">
                 {section.items.map((item) => {
                   const isActive = routeIsActive(active, item.href);
+                  const dataTour = `nav-${routeToTourToken(item.href)}`;
                   return (
                     <Link
+                      data-tour={dataTour}
                       className={`flex items-center rounded-xl px-3 py-2 text-sm transition ${sidebarCollapsed ? 'justify-center' : 'justify-between'} ${
                         isActive
                           ? 'bg-slate-900 text-white shadow-lg shadow-slate-400/30 dark:bg-slate-100 dark:text-slate-900'
@@ -506,11 +777,11 @@ export function AdminShell({ children }: { children: React.ReactNode }): JSX.Ele
               </button>
               <div>
                 <p className="text-xs uppercase tracking-[0.16em] text-slate-500 dark:text-slate-400">{brandName}</p>
-                <h1 className="text-lg font-semibold text-slate-900 dark:text-slate-100">{pageTitle}</h1>
+                <h1 className="text-lg font-semibold text-slate-900 dark:text-slate-100" data-tour="header-page-title">{pageTitle}</h1>
               </div>
             </div>
 
-            <div className="flex w-full max-w-xl items-center gap-2 rounded-xl border border-slate-300/70 bg-white px-3 py-2 dark:border-slate-700 dark:bg-slate-900 md:w-auto md:flex-1">
+            <div data-tour="global-search" className="flex w-full max-w-xl items-center gap-2 rounded-xl border border-slate-300/70 bg-white px-3 py-2 dark:border-slate-700 dark:bg-slate-900 md:w-auto md:flex-1">
               <svg aria-hidden="true" className="h-4 w-4 text-slate-400 dark:text-slate-500" fill="none" viewBox="0 0 24 24">
                 <path d="M21 21L16.65 16.65M10 18a8 8 0 1 1 0-16 8 8 0 0 1 0 16Z" stroke="currentColor" strokeLinecap="round" strokeWidth="2" />
               </svg>
@@ -522,6 +793,7 @@ export function AdminShell({ children }: { children: React.ReactNode }): JSX.Ele
 
             <div className="flex items-center gap-2">
               <button
+                data-tour="theme-toggle"
                 aria-label={theme === 'light' ? 'Switch to dark mode' : 'Switch to light mode'}
                 className="rounded-lg border border-slate-300/70 p-2 text-slate-700 transition hover:bg-slate-200/70 dark:border-slate-700 dark:text-slate-200 dark:hover:bg-slate-800/70"
                 onClick={() => switchTheme(theme === 'light' ? 'dark' : 'light')}
@@ -549,7 +821,17 @@ export function AdminShell({ children }: { children: React.ReactNode }): JSX.Ele
                   </svg>
                 )}
               </button>
+              {!isPlatformOwner ? (
+                <button
+                  className="rounded-lg border border-slate-300/70 px-3 py-1.5 text-xs font-semibold uppercase tracking-wide text-slate-700 transition hover:bg-slate-200/70 dark:border-slate-700 dark:text-slate-200 dark:hover:bg-slate-800/70"
+                  onClick={openManualTutorial}
+                  type="button"
+                >
+                  Tutorial
+                </button>
+              ) : null}
               <button
+                data-tour="logout"
                 className="rounded-lg border border-slate-300/70 bg-slate-900 px-3 py-1.5 text-xs font-semibold uppercase tracking-wide text-white transition hover:bg-slate-700 dark:border-slate-700 dark:bg-slate-100 dark:text-slate-900 dark:hover:bg-slate-200"
                 onClick={() => {
                   clearAuthSession();
@@ -562,11 +844,13 @@ export function AdminShell({ children }: { children: React.ReactNode }): JSX.Ele
             </div>
           </div>
 
-          <div className="no-scrollbar flex gap-2 overflow-x-auto px-4 pb-3 md:hidden">
+          <div data-tour="mobile-nav-list" className="no-scrollbar flex gap-2 overflow-x-auto px-4 pb-3 md:hidden">
             {visibleNavItems.map((item) => {
               const isActive = routeIsActive(active, item.href);
+              const dataTour = `mobile-nav-${routeToTourToken(item.href)}`;
               return (
                 <Link
+                  data-tour={dataTour}
                   className={`whitespace-nowrap rounded-full px-3 py-1.5 text-xs font-semibold ${isActive ? 'bg-slate-900 text-white dark:bg-slate-100 dark:text-slate-900' : 'border border-slate-300/70 text-slate-700 dark:border-slate-700 dark:text-slate-300'}`}
                   href={item.href}
                   key={item.href}
@@ -582,7 +866,7 @@ export function AdminShell({ children }: { children: React.ReactNode }): JSX.Ele
         </header>
 
         <main className="px-4 py-4 md:px-6 md:py-5">
-          <section className="rounded-2xl border border-slate-200/70 bg-white/80 p-4 shadow-sm dark:border-slate-800 dark:bg-slate-900/55 md:p-6">
+          <section data-tour="workspace" className="rounded-2xl border border-slate-200/70 bg-white/80 p-4 shadow-sm dark:border-slate-800 dark:bg-slate-900/55 md:p-6">
             {platformOwnerRouteBlocked ? (
               <div className="rounded-2xl border border-slate-300/70 bg-slate-100 p-5 text-slate-700 dark:border-slate-700 dark:bg-slate-800/80 dark:text-slate-200">
                 <h2 className="text-xl font-semibold">Platform Console Scope</h2>
@@ -604,6 +888,20 @@ export function AdminShell({ children }: { children: React.ReactNode }): JSX.Ele
           </section>
         </main>
       </div>
+      {!isPlatformOwner ? (
+        <AdminWalkthrough
+          onClose={() => {
+            walkthroughDoneKeys.forEach((key) => window.localStorage.setItem(key, '1'));
+            setWalkthroughOpen(false);
+          }}
+          onComplete={() => {
+            walkthroughDoneKeys.forEach((key) => window.localStorage.setItem(key, '1'));
+            setWalkthroughOpen(false);
+          }}
+          open={walkthroughOpen}
+          steps={walkthroughSteps}
+        />
+      ) : null}
     </div>
   );
 }

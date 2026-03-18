@@ -226,8 +226,11 @@ export default function SalesListPage(): JSX.Element {
   })();
 
   return (
-    <section className="space-y-4">
-      <div className="rounded-2xl border border-slate-200 bg-white p-4 dark:border-slate-800 dark:bg-slate-900">
+    <section className="space-y-4" data-tour="sales-list-root">
+      <div
+        className="rounded-2xl border border-slate-200 bg-white p-4 dark:border-slate-800 dark:bg-slate-900"
+        data-tour="sales-list-filters"
+      >
         <h1 className="text-2xl font-bold text-brandPrimary">Sales List</h1>
         <p className="mt-1 text-sm text-slate-600 dark:text-slate-300">
           Posted server sales from mobile and web, filterable by branch and date range.
@@ -296,7 +299,7 @@ export default function SalesListPage(): JSX.Element {
             {rows.length} row(s)
           </span>
         </div>
-        <div className="overflow-x-auto">
+        <div className="overflow-x-auto" data-tour="sales-list-table">
           <table className="min-w-[1300px] text-sm">
             <thead className="bg-slate-50 text-left text-xs uppercase tracking-wide text-slate-600 dark:bg-slate-800/80 dark:text-slate-300">
               <tr>
@@ -347,6 +350,7 @@ export default function SalesListPage(): JSX.Element {
                     <td className="px-3 py-2 text-slate-700 dark:text-slate-200">{row.payment_methods.join(', ') || 'N/A'}</td>
                     <td className="px-3 py-2 text-center">
                       <button
+                        data-tour="sales-list-view"
                         className="rounded-md border border-slate-300 px-2.5 py-1 text-xs font-semibold text-slate-700 hover:bg-slate-100 dark:border-slate-600 dark:text-slate-200 dark:hover:bg-slate-800"
                         onClick={() => void openDetails(row.sale_id)}
                         type="button"

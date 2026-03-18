@@ -159,6 +159,16 @@ export function EntityManager({
     null
   );
   const onFormStateChangeRef = useRef(onFormStateChange);
+  const tourSlug = useMemo(
+    () =>
+      title
+        .trim()
+        .toLowerCase()
+        .replace(/[^a-z0-9]+/g, '-')
+        .replace(/^-+|-+$/g, '') || 'entity',
+    [title]
+  );
+  const tourPrefix = `${tourSlug}-entity`;
 
   const columns = useMemo(() => fields.filter((field) => !field.tableHidden).map((field) => field.key), [fields]);
   const formFields = useMemo(() => fields.filter((field) => !field.formHidden), [fields]);
@@ -531,7 +541,7 @@ export function EntityManager({
           : 'Processing request...';
 
   return (
-    <div>
+    <div data-tour={`${tourPrefix}-root`}>
       <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
         <div>
           <h1 className="text-2xl font-bold text-brandPrimary">{title}</h1>
@@ -539,6 +549,7 @@ export function EntityManager({
         </div>
         <div className="flex items-center gap-2">
           <input
+            data-tour={`${tourPrefix}-search`}
             className="w-52 rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 dark:border-slate-600 dark:bg-slate-900 dark:text-slate-100"
             onChange={(event) => setSearchTerm(event.target.value)}
             placeholder="Search records..."
@@ -547,6 +558,7 @@ export function EntityManager({
           {toolbarActions}
           {!readOnly ? (
             <button
+              data-tour={`${tourPrefix}-add`}
               className="rounded-lg bg-brandPrimary px-3 py-2 text-sm font-semibold text-white hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-60"
               disabled={saving}
               onClick={openCreate}
@@ -565,7 +577,7 @@ export function EntityManager({
         </p>
       ) : null}
 
-      <div className="rounded-2xl border border-slate-200 bg-white shadow-sm dark:border-slate-800 dark:bg-slate-900">
+      <div data-tour={`${tourPrefix}-table`} className="rounded-2xl border border-slate-200 bg-white shadow-sm dark:border-slate-800 dark:bg-slate-900">
         {loading ? (
           <p className="p-4 text-sm text-slate-500 dark:text-slate-400">Loading records...</p>
         ) : filteredItems.length === 0 ? (

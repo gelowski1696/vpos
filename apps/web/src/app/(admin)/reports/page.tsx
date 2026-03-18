@@ -914,8 +914,8 @@ export default function ReportsPage(): JSX.Element {
     showAllSections || reportSection === section;
 
   return (
-    <main className="reports-modern space-y-4">
-      <section className="rounded-2xl border border-slate-200 bg-gradient-to-br from-white via-slate-50 to-slate-100/80 p-5 shadow-sm dark:border-slate-700 dark:from-slate-900 dark:via-slate-900 dark:to-slate-800/70">
+    <main className="reports-modern space-y-4" data-tour="reports-root">
+      <section className="rounded-2xl border border-slate-200 bg-gradient-to-br from-white via-slate-50 to-slate-100/80 p-5 shadow-sm dark:border-slate-700 dark:from-slate-900 dark:via-slate-900 dark:to-slate-800/70" data-tour="reports-filters">
         <div className="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
           <div>
             <h1 className="text-2xl font-bold text-slate-900 dark:text-slate-100">Reports Center</h1>
@@ -923,7 +923,7 @@ export default function ReportsPage(): JSX.Element {
               Modern, action-focused reporting for LPG operations. Filter once, review all modules in one place.
             </p>
           </div>
-          <div className="flex flex-wrap justify-end gap-2">
+          <div className="flex flex-wrap justify-end gap-2" data-tour="reports-export">
             <Link className="rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-100 dark:border-slate-600 dark:bg-slate-900 dark:text-slate-200 dark:hover:bg-slate-800" href={'/dashboard' as Route}>Open Dashboard</Link>
             <button className="rounded-xl bg-brandPrimary px-3 py-2 text-sm font-semibold text-white" onClick={() => window.print()} type="button">Print</button>
             <button className="rounded-xl border border-slate-300 bg-white px-3 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-100 dark:border-slate-600 dark:bg-slate-900 dark:text-slate-200 dark:hover:bg-slate-800" onClick={() => exportSectionCsv('sales')} type="button">Export Sales CSV</button>
@@ -986,7 +986,7 @@ export default function ReportsPage(): JSX.Element {
         </div>
       </section>
 
-      <section className="sticky top-20 z-10 rounded-xl border border-slate-200 bg-white/95 px-3 py-3 backdrop-blur dark:border-slate-700 dark:bg-slate-900/95">
+      <section className="sticky top-20 z-10 rounded-xl border border-slate-200 bg-white/95 px-3 py-3 backdrop-blur dark:border-slate-700 dark:bg-slate-900/95" data-tour="reports-tabs">
         <div className="flex flex-wrap items-center gap-2">
           {([
             { key: 'sales', label: 'Sales' },
