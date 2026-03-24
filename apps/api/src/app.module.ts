@@ -18,6 +18,7 @@ import { EntitlementsModule } from './modules/entitlements/entitlements.module';
 import { AuditModule } from './modules/audit/audit.module';
 import { CustomerPaymentsModule } from './modules/customer-payments/customer-payments.module';
 import { MobileEnrollmentModule } from './modules/mobile-enrollment/mobile-enrollment.module';
+import { NfcModule } from './modules/nfc/nfc.module';
 
 @Module({
   imports: [
@@ -37,6 +38,7 @@ import { MobileEnrollmentModule } from './modules/mobile-enrollment/mobile-enrol
     DeliveryModule,
     CustomerPaymentsModule,
     MobileEnrollmentModule,
+    NfcModule,
     ReportsModule,
     AiExportModule
   ],

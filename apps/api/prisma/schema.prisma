@@ -155,6 +155,24 @@ enum TenancyMigrationState {
   FAILED
 }
 
+enum NfcCardOwnerType {
+  USER
+}
+
+enum NfcCardStatus {
+  ACTIVE
+  INACTIVE
+  REVOKED
+}
+
+enum NfcCardEventType {
+  BIND
+  REASSIGN
+  DEACTIVATE
+  REACTIVATE
+  REVOKE
+}
+
 model Company {
   id            String                   @id @default(uuid())
   code          String                   @unique
@@ -211,6 +229,8 @@ model Company {
   eventBehavior     EventUserBehavior[]
   tenantDatastores  TenantDatastoreRegistry[]
   mobileEnrollmentTokens MobileEnrollmentToken[]
+  nfcCards          NfcCard[]
+  nfcCardEvents     NfcCardEvent[]
 }
 
 model TenantDatastoreRegistry {
@@ -407,6 +427,8 @@ model User {
   postedCustomerPayments CustomerPayment[]
   mobileEnrollmentTokens MobileEnrollmentToken[] @relation("MobileEnrollmentUser")
   createdMobileEnrollmentTokens MobileEnrollmentToken[] @relation("MobileEnrollmentCreator")
+  ownedNfcCards       NfcCard[]                 @relation("NfcCardOwner")
+  nfcCardEvents       NfcCardEvent[]            @relation("NfcCardEventActor")
 
   @@unique([companyId, email])
   @@index([companyId, updatedAt])
@@ -437,6 +459,44 @@ model MobileEnrollmentToken {
 
   @@index([companyId, userId, createdAt])
   @@index([companyId, expiresAt, usedAt, revokedAt])
+}
+
+model NfcCard {
+  id         String           @id @default(uuid())
+  companyId  String
+  uid        String
+  ownerType  NfcCardOwnerType @default(USER)
+  ownerId    String
+  status     NfcCardStatus    @default(ACTIVE)
+  assignedAt DateTime         @default(now())
+  revokedAt  DateTime?
+  createdAt  DateTime         @default(now())
+  updatedAt  DateTime         @updatedAt
+
+  company Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  owner   User    @relation("NfcCardOwner", fields: [ownerId], references: [id], onDelete: Restrict)
+  events  NfcCardEvent[]
+
+  @@unique([companyId, uid])
+  @@index([companyId, status, updatedAt])
+  @@index([companyId, ownerId, status])
+}
+
+model NfcCardEvent {
+  id          String           @id @default(uuid())
+  companyId   String
+  cardId      String
+  eventType   NfcCardEventType
+  actorUserId String?
+  payload     Json?
+  createdAt   DateTime         @default(now())
+
+  company Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  card    NfcCard  @relation(fields: [cardId], references: [id], onDelete: Cascade)
+  actor   User?    @relation("NfcCardEventActor", fields: [actorUserId], references: [id], onDelete: SetNull)
+
+  @@index([companyId, createdAt])
+  @@index([cardId, createdAt])
 }
 
 model Role {
