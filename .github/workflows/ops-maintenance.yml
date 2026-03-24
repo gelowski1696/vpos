@@ -1,0 +1,238 @@
+name: Ops Maintenance
+
+on:
+  schedule:
+    - cron: '30 2 * * *'
+  workflow_dispatch:
+    inputs:
+      run_backup:
+        description: Run database backup job
+        required: false
+        default: true
+        type: boolean
+      run_retention_dry_run:
+        description: Run retention dry-run job
+        required: false
+        default: true
+        type: boolean
+      run_retention_apply:
+        description: Run retention apply job
+        required: false
+        default: false
+        type: boolean
+      run_hybrid_health:
+        description: Run hybrid datastore health job
+        required: false
+        default: true
+        type: boolean
+      run_security_check:
+        description: Run security checklist audit
+        required: false
+        default: true
+        type: boolean
+      run_entitlement_health:
+        description: Run entitlement sync/stale-cache health checks
+        required: false
+        default: true
+        type: boolean
+      run_transfer_health:
+        description: Run transfer lifecycle/review health checks
+        required: false
+        default: true
+        type: boolean
+      retention_years:
+        description: Retention years
+        required: false
+        default: '7'
+        type: string
+
+concurrency:
+  group: ops-maintenance-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  security-checklist:
+    if: github.event_name == 'schedule' || inputs.run_security_check == true
+    runs-on: ubuntu-latest
+    env:
+      DATABASE_URL: ${{ secrets.OPS_DATABASE_URL }}
+      JWT_ACCESS_SECRET: ${{ secrets.JWT_ACCESS_SECRET }}
+      JWT_REFRESH_SECRET: ${{ secrets.JWT_REFRESH_SECRET }}
+      SUBMAN_WEBHOOK_SECRET_CURRENT: ${{ secrets.SUBMAN_WEBHOOK_SECRET_CURRENT }}
+      SUBMAN_WEBHOOK_SECRET_NEXT: ${{ secrets.SUBMAN_WEBHOOK_SECRET_NEXT }}
+      CORS_ORIGINS: ${{ vars.CORS_ORIGINS }}
+      VPOS_ALLOW_DEMO_TENANT_BOOTSTRAP: 'false'
+      VPOS_TENANT_CONTEXT_ALLOW_FALLBACK: 'false'
+      VPOS_AUTH_TENANT_FALLBACK: 'false'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.28.2
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile=false
+      - run: pnpm --filter @vpos/api ops:security:check
+
+  entitlement-sync-health:
+    if: github.event_name == 'schedule' || inputs.run_entitlement_health == true
+    runs-on: ubuntu-latest
+    env:
+      DATABASE_URL: ${{ secrets.OPS_DATABASE_URL }}
+      OPS_ENTITLEMENT_STALE_MINUTES: ${{ vars.OPS_ENTITLEMENT_STALE_MINUTES || '120' }}
+      OPS_ENTITLEMENT_SYNC_FAILURE_LOOKBACK_MINUTES: ${{ vars.OPS_ENTITLEMENT_SYNC_FAILURE_LOOKBACK_MINUTES || '60' }}
+      OPS_ENTITLEMENT_SYNC_FAILURE_THRESHOLD: ${{ vars.OPS_ENTITLEMENT_SYNC_FAILURE_THRESHOLD || '1' }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.28.2
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - name: Validate database secret
+        run: |
+          if [ -z "$DATABASE_URL" ]; then
+            echo "OPS_DATABASE_URL secret is missing."
+            exit 1
+          fi
+      - run: pnpm install --frozen-lockfile=false
+      - run: pnpm --filter @vpos/api prisma:generate
+      - run: pnpm --filter @vpos/api ops:entitlements:health -- --strict
+
+  transfer-ops-health:
+    if: github.event_name == 'schedule' || inputs.run_transfer_health == true
+    runs-on: ubuntu-latest
+    env:
+      DATABASE_URL: ${{ secrets.OPS_DATABASE_URL }}
+      OPS_TRANSFER_CREATED_STALE_MINUTES: ${{ vars.OPS_TRANSFER_CREATED_STALE_MINUTES || '30' }}
+      OPS_TRANSFER_APPROVED_STALE_MINUTES: ${{ vars.OPS_TRANSFER_APPROVED_STALE_MINUTES || '30' }}
+      OPS_TRANSFER_OPEN_REVIEW_THRESHOLD: ${{ vars.OPS_TRANSFER_OPEN_REVIEW_THRESHOLD || '1' }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.28.2
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - name: Validate database secret
+        run: |
+          if [ -z "$DATABASE_URL" ]; then
+            echo "OPS_DATABASE_URL secret is missing."
+            exit 1
+          fi
+      - run: pnpm install --frozen-lockfile=false
+      - run: pnpm --filter @vpos/api prisma:generate
+      - run: pnpm --filter @vpos/api ops:transfers:health -- --strict
+
+  hybrid-datastore-health:
+    if: github.event_name == 'schedule' || inputs.run_hybrid_health == true
+    runs-on: ubuntu-latest
+    env:
+      DATABASE_URL: ${{ secrets.OPS_DATABASE_URL }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.28.2
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - name: Validate database secret
+        run: |
+          if [ -z "$DATABASE_URL" ]; then
+            echo "OPS_DATABASE_URL secret is missing."
+            exit 1
+          fi
+      - run: pnpm install --frozen-lockfile=false
+      - run: pnpm --filter @vpos/api prisma:generate
+      - run: pnpm --filter @vpos/api ops:hybrid:health -- --strict
+
+  retention-dry-run:
+    if: github.event_name == 'schedule' || inputs.run_retention_dry_run == true
+    runs-on: ubuntu-latest
+    env:
+      DATABASE_URL: ${{ secrets.OPS_DATABASE_URL }}
+      RETENTION_YEARS: ${{ github.event_name == 'workflow_dispatch' && inputs.retention_years || '7' }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.28.2
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - name: Validate database secret
+        run: |
+          if [ -z "$DATABASE_URL" ]; then
+            echo "OPS_DATABASE_URL secret is missing."
+            exit 1
+          fi
+      - run: pnpm install --frozen-lockfile=false
+      - run: pnpm --filter @vpos/api prisma:generate
+      - run: pnpm --filter @vpos/api ops:retention:dry-run -- --years "$RETENTION_YEARS"
+
+  retention-apply:
+    if: >
+      (github.event_name == 'workflow_dispatch' && inputs.run_retention_apply == true) ||
+      (github.event_name == 'schedule' && vars.OPS_RETENTION_AUTO_APPLY == 'true')
+    runs-on: ubuntu-latest
+    env:
+      DATABASE_URL: ${{ secrets.OPS_DATABASE_URL }}
+      RETENTION_YEARS: ${{ github.event_name == 'workflow_dispatch' && inputs.retention_years || '7' }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.28.2
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - name: Validate database secret
+        run: |
+          if [ -z "$DATABASE_URL" ]; then
+            echo "OPS_DATABASE_URL secret is missing."
+            exit 1
+          fi
+      - run: pnpm install --frozen-lockfile=false
+      - run: pnpm --filter @vpos/api prisma:generate
+      - run: pnpm --filter @vpos/api ops:retention:apply -- --years "$RETENTION_YEARS"
+
+  backup:
+    if: github.event_name == 'schedule' || inputs.run_backup == true
+    runs-on: ubuntu-latest
+    env:
+      DATABASE_URL: ${{ secrets.OPS_DATABASE_URL }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.28.2
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - name: Validate database secret
+        run: |
+          if [ -z "$DATABASE_URL" ]; then
+            echo "OPS_DATABASE_URL secret is missing."
+            exit 1
+          fi
+      - name: Install PostgreSQL client
+        run: sudo apt-get update && sudo apt-get install -y postgresql-client
+      - run: pnpm install --frozen-lockfile=false
+      - run: pnpm --filter @vpos/api ops:backup -- -DatabaseUrl "$DATABASE_URL" -OutputDir "./backups"
+      - name: Upload backup artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: vpos-backup-${{ github.run_id }}
+          path: apps/api/backups/*.dump
+          if-no-files-found: error
