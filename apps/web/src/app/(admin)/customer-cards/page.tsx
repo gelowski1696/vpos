@@ -40,6 +40,32 @@ type PointsLedger = {
   remarks: string | null;
   created_at: string;
 };
+type CustomerCardsTab = 'customer-cards' | 'points-policy' | 'points-actions';
+type AssignmentFilter = 'ALL' | 'ASSIGNED' | 'UNASSIGNED';
+
+function hashText(value: string): number {
+  let hash = 0;
+  for (let i = 0; i < value.length; i += 1) {
+    hash = (hash * 31 + value.charCodeAt(i)) >>> 0;
+  }
+  return hash;
+}
+
+function maskCardNumber(value: string): string {
+  const normalized = value.replace(/\s+/g, '');
+  if (normalized.length <= 4) return normalized;
+  const tail = normalized.slice(-4);
+  return `•••• •••• •••• ${tail}`;
+}
+
+const CARD_THEME_CLASSES = [
+  'from-indigo-700 via-blue-600 to-cyan-500',
+  'from-fuchsia-600 via-purple-600 to-indigo-600',
+  'from-slate-900 via-slate-800 to-slate-700',
+  'from-pink-600 via-rose-500 to-orange-400',
+  'from-emerald-700 via-teal-600 to-cyan-500',
+  'from-violet-700 via-purple-700 to-fuchsia-600'
+];
 
 function fmtDate(value: string | null | undefined): string {
   if (!value) return '-';
@@ -68,11 +94,9 @@ export default function CustomerCardsPage(): JSX.Element {
   const [customers, setCustomers] = useState<Customer[]>([]);
   const [branchId, setBranchId] = useState('');
   const [customerId, setCustomerId] = useState('');
-  const [assignCardId, setAssignCardId] = useState('');
 
   const [inventoryCards, setInventoryCards] = useState<InventoryCard[]>([]);
   const [customerCards, setCustomerCards] = useState<CustomerCard[]>([]);
-  const [selectedCustomerCardId, setSelectedCustomerCardId] = useState('');
   const [reassignCustomerId, setReassignCustomerId] = useState('');
 
   const [policy, setPolicy] = useState<PointsPolicy | null>(null);
@@ -90,16 +114,80 @@ export default function CustomerCardsPage(): JSX.Element {
   const [pointsValue, setPointsValue] = useState('');
   const [pointsRemarks, setPointsRemarks] = useState('');
   const [ledger, setLedger] = useState<PointsLedger[]>([]);
-
-  const selectedCard = useMemo(
-    () => customerCards.find((r) => r.id === selectedCustomerCardId) ?? null,
-    [customerCards, selectedCustomerCardId]
-  );
-  const assignableCards = useMemo(
-    () => inventoryCards.filter((r) => r.status === 'UNASSIGNED'),
-    [inventoryCards]
+  const [activeTab, setActiveTab] = useState<CustomerCardsTab>('customer-cards');
+  const [cardSearch, setCardSearch] = useState('');
+  const [assignmentFilter, setAssignmentFilter] = useState<AssignmentFilter>('ALL');
+  const [assignConfirm, setAssignConfirm] = useState<{
+    cardId: string;
+    cardNumber: string;
+  } | null>(null);
+  const [cardActionCardId, setCardActionCardId] = useState<string | null>(null);
+  const [assignTargetCustomerId, setAssignTargetCustomerId] = useState('');
+  const [assignCustomerSearch, setAssignCustomerSearch] = useState('');
+  const selectedBranch = useMemo(
+    () => branches.find((row) => row.id === branchId) ?? null,
+    [branches, branchId]
   );
   const customerNameById = useMemo(() => new Map(customers.map((c) => [c.id, c.name])), [customers]);
+  const filteredAssignCustomers = useMemo(() => {
+    const query = assignCustomerSearch.trim().toLowerCase();
+    return customers.filter((row) => {
+      if (!query) {
+        return true;
+      }
+      return (
+        row.name.toLowerCase().includes(query) ||
+        row.code.toLowerCase().includes(query)
+      );
+    });
+  }, [assignCustomerSearch, customers]);
+  const assignedByInventoryId = useMemo(() => {
+    const map = new Map<string, CustomerCard>();
+    for (const row of customerCards) {
+      if (row.status !== 'ACTIVE') {
+        continue;
+      }
+      map.set(row.card.id, row);
+    }
+    return map;
+  }, [customerCards]);
+  const visualCards = useMemo(() => {
+    const search = cardSearch.trim().toLowerCase();
+    return inventoryCards
+      .map((card) => {
+        const assigned = assignedByInventoryId.get(card.id) ?? null;
+        const isAssigned = card.status === 'ASSIGNED' || Boolean(assigned);
+        return {
+          ...card,
+          customerName: assigned?.customer.name ?? null,
+          isAssigned
+        };
+      })
+      .filter((row) => {
+        if (assignmentFilter === 'ASSIGNED' && !row.isAssigned) {
+          return false;
+        }
+        if (assignmentFilter === 'UNASSIGNED' && row.isAssigned) {
+          return false;
+        }
+        if (!search) {
+          return true;
+        }
+        return (
+          (row.customerName ?? '').toLowerCase().includes(search) ||
+          row.card_number.toLowerCase().includes(search) ||
+          (row.serial_number ?? '').toLowerCase().includes(search)
+        );
+      });
+  }, [assignedByInventoryId, assignmentFilter, cardSearch, inventoryCards]);
+  const activeActionCard = useMemo(
+    () => (cardActionCardId ? visualCards.find((row) => row.id === cardActionCardId) ?? null : null),
+    [cardActionCardId, visualCards]
+  );
+  const activeActionBinding = useMemo(
+    () => (activeActionCard ? assignedByInventoryId.get(activeActionCard.id) ?? null : null),
+    [activeActionCard, assignedByInventoryId]
+  );
 
   function getErrorMessage(cause: unknown, fallback: string): string {
     if (cause instanceof Error && cause.message.trim()) {
@@ -134,13 +222,9 @@ export default function CustomerCardsPage(): JSX.Element {
     const branchBound = (bound ?? []).filter((row) => row.card.branch_id === branchId);
     setInventoryCards(inventory ?? []);
     setCustomerCards(branchBound);
-    setAssignCardId((current) => {
-      if (current && (inventory ?? []).some((x) => x.id === current && x.status === 'UNASSIGNED')) return current;
-      return (inventory ?? []).find((x) => x.status === 'UNASSIGNED')?.id ?? '';
-    });
-    setSelectedCustomerCardId((current) => {
-      if (current && branchBound.some((x) => x.id === current)) return current;
-      return branchBound[0]?.id ?? '';
+    setCardActionCardId((current) => {
+      if (current && (inventory ?? []).some((x) => x.id === current)) return current;
+      return null;
     });
   }
 
@@ -210,26 +294,97 @@ export default function CustomerCardsPage(): JSX.Element {
     }
   }
 
-  async function assign(): Promise<void> {
-    if (!customerId || !assignCardId) {
-      toastInfo('Select customer and card first');
-      return;
+  async function assign(cardId: string, targetCustomerId: string): Promise<boolean> {
+    if (!targetCustomerId || !cardId) {
+      toastInfo('Target customer is required.');
+      return false;
     }
     setBusy(true);
     try {
       await apiRequest('/vcard/cards/assign', {
         method: 'POST',
-        body: { customer_id: customerId, card_inventory_id: assignCardId }
+        body: { customer_id: targetCustomerId, card_inventory_id: cardId }
       });
       toastSuccess('Card assigned');
-      setPointsCustomerId(customerId);
+      setCustomerId(targetCustomerId);
+      setPointsCustomerId(targetCustomerId);
       await loadCards();
-      await loadLedger(customerId);
+      await loadLedger(targetCustomerId);
+      return true;
     } catch (cause) {
       toastError('Assign failed', { description: cause instanceof Error ? cause.message : 'Failed' });
+      return false;
     } finally {
       setBusy(false);
     }
+  }
+
+  async function openCardActions(card: { id: string; card_number: string; isAssigned: boolean }): Promise<void> {
+    if (customers.length === 0) {
+      toastInfo('No customers available for assignment.');
+      return;
+    }
+    const bound = assignedByInventoryId.get(card.id) ?? null;
+    const defaultCustomerId = bound?.customer.id || customerId || customers[0]?.id || '';
+    setAssignTargetCustomerId(defaultCustomerId);
+    setReassignCustomerId(defaultCustomerId);
+    setAssignCustomerSearch('');
+    setCardActionCardId(card.id);
+    setAssignConfirm({
+      cardId: card.id,
+      cardNumber: card.card_number
+    });
+  }
+
+  async function confirmAssignCard(): Promise<void> {
+    if (!assignConfirm) {
+      return;
+    }
+    if (!assignTargetCustomerId) {
+      toastInfo('Select customer to continue.');
+      return;
+    }
+    const ok = await assign(assignConfirm.cardId, assignTargetCustomerId);
+    if (ok) {
+      setAssignConfirm(null);
+      setCardActionCardId(null);
+      setAssignTargetCustomerId('');
+      setAssignCustomerSearch('');
+    }
+  }
+
+  async function reassignFromCardModal(): Promise<void> {
+    if (!activeActionBinding) return;
+    if (!reassignCustomerId) {
+      toastInfo('Select customer for reassign');
+      return;
+    }
+    setBusy(true);
+    try {
+      await apiRequest(`/vcard/cards/${encodeURIComponent(activeActionBinding.id)}/reassign`, {
+        method: 'PATCH',
+        body: { customer_id: reassignCustomerId }
+      });
+      toastSuccess('Card reassigned');
+      setPointsCustomerId(reassignCustomerId);
+      setAssignTargetCustomerId(reassignCustomerId);
+      await loadCards();
+      await loadLedger(reassignCustomerId);
+    } catch (cause) {
+      toastError('Reassign failed', { description: cause instanceof Error ? cause.message : 'Failed' });
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  function openPointsForCard(): void {
+    if (!activeActionBinding) return;
+    setPointsCustomerId(activeActionBinding.customer.id);
+    setPointsCardId(activeActionBinding.card.id);
+    setActiveTab('points-actions');
+    toastInfo('Opened Points Actions for selected card');
+    setCardActionCardId(null);
+    setAssignConfirm(null);
   }
 
   async function doStatus(id: string, status: 'ACTIVE' | 'INACTIVE' | 'REVOKED'): Promise<void> {
@@ -256,28 +411,6 @@ export default function CustomerCardsPage(): JSX.Element {
       await loadCards();
     } catch (cause) {
       toastError('Unassign failed', { description: cause instanceof Error ? cause.message : 'Failed' });
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  async function reassign(id: string): Promise<void> {
-    if (!reassignCustomerId) {
-      toastInfo('Select customer for reassign');
-      return;
-    }
-    setBusy(true);
-    try {
-      await apiRequest(`/vcard/cards/${encodeURIComponent(id)}/reassign`, {
-        method: 'PATCH',
-        body: { customer_id: reassignCustomerId }
-      });
-      toastSuccess('Card reassigned');
-      setPointsCustomerId(reassignCustomerId);
-      await loadCards();
-      await loadLedger(reassignCustomerId);
-    } catch (cause) {
-      toastError('Reassign failed', { description: cause instanceof Error ? cause.message : 'Failed' });
     } finally {
       setBusy(false);
     }
@@ -364,107 +497,322 @@ export default function CustomerCardsPage(): JSX.Element {
         <p className="mt-1 text-sm text-slate-600 dark:text-slate-300">Branch card assignment, revoke/reactivate, and points in one non-technical workflow.</p>
       </div>
 
-      <div className="rounded-2xl border border-slate-200 bg-white p-4 dark:border-slate-800 dark:bg-slate-900">
-        <div className="grid gap-3 md:grid-cols-4">
-          <select className="rounded-lg border border-slate-300 bg-white px-3 py-2 dark:border-slate-600 dark:bg-slate-800" value={branchId} onChange={(e) => setBranchId(e.target.value)}>
-            <option value="">Select branch...</option>
-            {branches.map((b) => <option key={b.id} value={b.id}>{b.name} ({b.code})</option>)}
-          </select>
-          <select className="rounded-lg border border-slate-300 bg-white px-3 py-2 dark:border-slate-600 dark:bg-slate-800" value={customerId} onChange={(e) => setCustomerId(e.target.value)}>
-            <option value="">Select customer...</option>
-            {customers.map((c) => <option key={c.id} value={c.id}>{c.name} ({c.code})</option>)}
-          </select>
-          <select className="rounded-lg border border-slate-300 bg-white px-3 py-2 dark:border-slate-600 dark:bg-slate-800" value={assignCardId} onChange={(e) => setAssignCardId(e.target.value)}>
-            <option value="">Select unassigned card...</option>
-            {assignableCards.map((c) => <option key={c.id} value={c.id}>{c.card_number} | {c.card_uid}</option>)}
-          </select>
-          <div className="flex gap-2">
-            <button type="button" className="flex-1 rounded-lg bg-brandPrimary px-3 py-2 text-sm font-semibold text-white disabled:opacity-60" disabled={busy || !branchId || !customerId || !assignCardId} onClick={() => void assign()}>Assign</button>
-            <button type="button" className="rounded-lg border border-slate-300 px-3 py-2 text-sm font-semibold dark:border-slate-600 disabled:opacity-60" disabled={busy} onClick={() => void refresh()}>{busy ? '...' : 'Refresh'}</button>
-          </div>
-        </div>
-        <p className="mt-2 text-xs text-slate-500 dark:text-slate-400">Only cards created for the selected branch are shown.</p>
-      </div>
-
       {error ? <div className="rounded-xl border border-rose-300 bg-rose-50 p-3 text-sm text-rose-700 dark:border-rose-700 dark:bg-rose-950/40 dark:text-rose-200">{error}</div> : null}
 
       <div className="rounded-2xl border border-slate-200 bg-white p-4 dark:border-slate-800 dark:bg-slate-900">
-        <h2 className="text-sm font-semibold text-slate-800 dark:text-slate-100">Assigned Cards (Branch)</h2>
-        <div className="mt-3 overflow-x-auto">
-          <table className="min-w-[820px] text-sm">
-            <thead className="bg-slate-50 text-left text-xs uppercase tracking-wide text-slate-600 dark:bg-slate-800/80 dark:text-slate-300"><tr><th className="px-3 py-2">Customer</th><th className="px-3 py-2">Card</th><th className="px-3 py-2">UID</th><th className="px-3 py-2">Status</th><th className="px-3 py-2">Points</th><th className="px-3 py-2">Assigned</th></tr></thead>
-            <tbody>
-              {customerCards.length === 0 ? <tr><td className="px-3 py-6 text-center text-slate-500 dark:text-slate-400" colSpan={6}>No assigned cards in this branch.</td></tr> : customerCards.map((row) => (
-                <tr key={row.id} className={`cursor-pointer border-t border-slate-100 dark:border-slate-800 ${row.id === selectedCustomerCardId ? 'bg-blue-50 dark:bg-blue-950/30' : ''}`} onClick={() => { setSelectedCustomerCardId(row.id); setReassignCustomerId(row.customer.id); setPointsCustomerId(row.customer.id); setPointsCardId(row.card.id); }}>
-                  <td className="px-3 py-2">{row.customer.name}</td><td className="px-3 py-2">{row.card.card_number}</td><td className="px-3 py-2">{row.card.card_uid}</td><td className="px-3 py-2">{row.status}</td><td className="px-3 py-2">{row.customer.points_balance}</td><td className="px-3 py-2">{fmtDate(row.assigned_at)}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
+        <div className="flex flex-wrap gap-2">
+          {([
+            { key: 'customer-cards', label: 'Customer Cards' },
+            { key: 'points-policy', label: 'Points Policy' },
+            { key: 'points-actions', label: 'Points Actions' }
+          ] as const).map((tab) => (
+            <button
+              key={tab.key}
+              type="button"
+              className={`rounded-lg px-3 py-2 text-sm font-semibold transition-colors ${
+                activeTab === tab.key
+                  ? 'bg-brandPrimary text-white'
+                  : 'border border-slate-300 bg-white text-slate-700 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-200'
+              }`}
+              onClick={() => setActiveTab(tab.key)}
+            >
+              {tab.label}
+            </button>
+          ))}
         </div>
+      </div>
 
-        {selectedCard ? (
-          <div className="mt-3 grid gap-2 rounded-xl border border-slate-200 p-3 dark:border-slate-700 md:grid-cols-[1fr_auto_auto_auto_auto]">
-            <select className="rounded-lg border border-slate-300 bg-white px-3 py-2 dark:border-slate-600 dark:bg-slate-800" value={reassignCustomerId} onChange={(e) => setReassignCustomerId(e.target.value)}>
-              <option value="">Select customer for reassign...</option>
+      {activeTab === 'customer-cards' ? (
+        <div className="rounded-2xl border border-slate-200 bg-white p-4 dark:border-slate-800 dark:bg-slate-900">
+          <h2 className="text-sm font-semibold text-slate-800 dark:text-slate-100">Customer Cards</h2>
+          <div className="mt-2 flex flex-wrap items-center gap-2 text-xs text-slate-500 dark:text-slate-400">
+            <span className="rounded-full border border-slate-300 px-2 py-1 dark:border-slate-700">
+              Branch: {selectedBranch ? `${selectedBranch.name} (${selectedBranch.code})` : '-'}
+            </span>
+            <button type="button" className="rounded-full border border-slate-300 px-2 py-1 text-xs font-semibold dark:border-slate-700 disabled:opacity-60" disabled={busy} onClick={() => void refresh()}>
+              {busy ? 'Refreshing...' : 'Refresh'}
+            </button>
+          </div>
+          <p className="mt-3 text-xs text-slate-500 dark:text-slate-400">
+            Only cards created for the selected branch are shown. Click any card to open assign/reassign/status/revoke/unassign actions.
+          </p>
+
+          <div className="mt-4 grid gap-2 md:grid-cols-[1fr_auto]">
+            <input
+              className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-800"
+              value={cardSearch}
+              onChange={(e) => setCardSearch(e.target.value)}
+              placeholder="Search by customer, card number, or serial"
+            />
+            <div className="flex flex-wrap items-center gap-2">
+              {(['ALL', 'ASSIGNED', 'UNASSIGNED'] as const).map((value) => (
+                <button
+                  key={value}
+                  type="button"
+                  className={`rounded-lg border px-3 py-2 text-xs font-semibold ${
+                    assignmentFilter === value
+                      ? 'border-brandPrimary bg-brandPrimary text-white'
+                      : 'border-slate-300 bg-white text-slate-700 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-200'
+                  }`}
+                  onClick={() => setAssignmentFilter(value)}
+                >
+                  {value === 'ALL' ? 'All Cards' : value}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          <div className="mt-2 text-xs text-slate-500 dark:text-slate-400">
+            Showing {visualCards.length} card(s)
+          </div>
+
+          <div className="mt-3 grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
+            {visualCards.length === 0 ? (
+              <div className="rounded-xl border border-dashed border-slate-300 bg-slate-50 p-5 text-sm text-slate-500 dark:border-slate-700 dark:bg-slate-800/50 dark:text-slate-300">
+                No cards found for this filter/search.
+              </div>
+            ) : (
+              visualCards.map((card) => {
+                const themeClass = CARD_THEME_CLASSES[hashText(card.id) % CARD_THEME_CLASSES.length];
+                const assigned = assignedByInventoryId.get(card.id) ?? null;
+                return (
+                  <button
+                    key={card.id}
+                    type="button"
+                    className={`relative overflow-hidden rounded-2xl bg-gradient-to-br ${themeClass} p-4 text-white shadow-lg transition-transform ${
+                      busy ? 'opacity-90' : 'cursor-pointer hover:-translate-y-0.5'
+                    }`}
+                    onClick={() => void openCardActions(card)}
+                    disabled={busy}
+                  >
+                    <div className="pointer-events-none absolute -right-8 -top-8 h-24 w-24 rounded-full bg-white/20" />
+                    <div className="pointer-events-none absolute -bottom-10 -left-10 h-24 w-24 rounded-full bg-white/15" />
+
+                    <div className="relative flex items-start justify-between">
+                      <p className="text-xs font-semibold uppercase tracking-wide text-white/90">
+                        VMJAMTECH CARD
+                      </p>
+                      <span className={`rounded-full px-2 py-0.5 text-[10px] font-semibold ${card.isAssigned ? 'bg-emerald-400/25 text-emerald-100' : 'bg-amber-300/25 text-amber-100'}`}>
+                        {card.isAssigned ? 'Assigned' : 'Unassigned'}
+                      </span>
+                    </div>
+
+                    <p className="relative mt-5 font-mono text-lg tracking-[0.18em]">
+                      {maskCardNumber(card.card_number)}
+                    </p>
+
+                    <div className="relative mt-5 flex items-end justify-between gap-3 text-xs">
+                      <div className="min-w-0">
+                        <p className="text-[10px] uppercase tracking-wide text-white/70">Customer</p>
+                        <p className="truncate font-semibold">
+                          {card.customerName ?? 'Available for assignment'}
+                        </p>
+                      </div>
+                      <div className="text-right">
+                        <p className="text-[10px] uppercase tracking-wide text-white/70">Serial</p>
+                        <p className="font-mono">{card.serial_number ?? '-'}</p>
+                      </div>
+                    </div>
+
+                    <div className="relative mt-3 flex items-center justify-between text-[11px] text-white/85">
+                      <span>Status: {card.status}</span>
+                      <span>Points: {assigned?.customer.points_balance ?? 0}</span>
+                    </div>
+                  </button>
+                );
+              })
+            )}
+          </div>
+        </div>
+      ) : null}
+
+      {activeTab === 'points-policy' ? (
+        <div className="rounded-2xl border border-slate-200 bg-white p-4 dark:border-slate-800 dark:bg-slate-900">
+          <h2 className="text-sm font-semibold text-slate-800 dark:text-slate-100">Points Policy</h2>
+          <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">Updated: {fmtDate(policy?.updated_at ?? null)}</p>
+          <div className="mt-3 grid gap-2 md:grid-cols-5">
+            <label className="flex flex-col gap-1 text-xs font-medium text-slate-600 dark:text-slate-300">
+              <span>Earn Peso Per Point</span>
+              <input className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-800" value={earnRatio} onChange={(e) => setEarnRatio(e.target.value)} placeholder="100" />
+            </label>
+            <label className="flex flex-col gap-1 text-xs font-medium text-slate-600 dark:text-slate-300">
+              <span>Redeem Peso Per Point</span>
+              <input className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-800" value={redeemRatio} onChange={(e) => setRedeemRatio(e.target.value)} placeholder="1" />
+            </label>
+            <label className="flex flex-col gap-1 text-xs font-medium text-slate-600 dark:text-slate-300">
+              <span>Minimum Spend For Earn</span>
+              <input className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-800" value={minSpend} onChange={(e) => setMinSpend(e.target.value)} placeholder="0" />
+            </label>
+            <label className="flex flex-col gap-1 text-xs font-medium text-slate-600 dark:text-slate-300">
+              <span>Max Redeem Points (Optional)</span>
+              <input className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-800" value={maxRedeem} onChange={(e) => setMaxRedeem(e.target.value)} placeholder="Unlimited" />
+            </label>
+            <label className="flex flex-col gap-1 text-xs font-medium text-slate-600 dark:text-slate-300">
+              <span>Points Expiry Days (Optional)</span>
+              <input className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-800" value={expiryDays} onChange={(e) => setExpiryDays(e.target.value)} placeholder="No expiry" />
+            </label>
+          </div>
+          <button type="button" className="mt-3 rounded-lg bg-brandPrimary px-4 py-2 text-sm font-semibold text-white disabled:opacity-60" disabled={policyBusy} onClick={() => void savePolicy()}>{policyBusy ? 'Saving...' : 'Save Policy'}</button>
+        </div>
+      ) : null}
+
+      {activeTab === 'points-actions' ? (
+        <div className="rounded-2xl border border-slate-200 bg-white p-4 dark:border-slate-800 dark:bg-slate-900">
+          <h2 className="text-sm font-semibold text-slate-800 dark:text-slate-100">Points Actions</h2>
+          <div className="mt-3 grid gap-2 md:grid-cols-5">
+            <select className="rounded-lg border border-slate-300 bg-white px-3 py-2 dark:border-slate-600 dark:bg-slate-800" value={pointsCustomerId} onChange={(e) => setPointsCustomerId(e.target.value)}>
+              <option value="">Select customer...</option>
               {customers.map((c) => <option key={c.id} value={c.id}>{c.name} ({c.code})</option>)}
             </select>
-            <button type="button" className="rounded-lg border border-slate-300 px-3 py-2 text-sm font-semibold dark:border-slate-600 disabled:opacity-60" disabled={busy} onClick={() => void reassign(selectedCard.id)}>Reassign</button>
-            <button type="button" className="rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-sm font-semibold text-amber-900 dark:border-amber-700 dark:bg-amber-950/40 dark:text-amber-100 disabled:opacity-60" disabled={busy} onClick={() => void doStatus(selectedCard.id, selectedCard.status === 'INACTIVE' ? 'ACTIVE' : 'INACTIVE')}>{selectedCard.status === 'INACTIVE' ? 'Reactivate' : 'Deactivate'}</button>
-            <button type="button" className="rounded-lg border border-rose-300 bg-rose-50 px-3 py-2 text-sm font-semibold text-rose-900 dark:border-rose-700 dark:bg-rose-950/40 dark:text-rose-100 disabled:opacity-60" disabled={busy} onClick={() => void doStatus(selectedCard.id, selectedCard.status === 'REVOKED' ? 'ACTIVE' : 'REVOKED')}>{selectedCard.status === 'REVOKED' ? 'Reactivate' : 'Revoke'}</button>
-            <button type="button" className="rounded-lg border border-slate-300 px-3 py-2 text-sm font-semibold dark:border-slate-600 disabled:opacity-60" disabled={busy} onClick={() => void unassign(selectedCard.id)}>Unassign</button>
+            <input className="rounded-lg border border-slate-300 bg-white px-3 py-2 dark:border-slate-600 dark:bg-slate-800" value={pointsCardId} onChange={(e) => setPointsCardId(e.target.value)} placeholder="Card ID (optional)" />
+            <input className="rounded-lg border border-slate-300 bg-white px-3 py-2 dark:border-slate-600 dark:bg-slate-800" value={pointsAmount} onChange={(e) => setPointsAmount(e.target.value)} placeholder="Amount (optional)" />
+            <input className="rounded-lg border border-slate-300 bg-white px-3 py-2 dark:border-slate-600 dark:bg-slate-800" value={pointsValue} onChange={(e) => setPointsValue(e.target.value)} placeholder="Points / Delta" />
+            <input className="rounded-lg border border-slate-300 bg-white px-3 py-2 dark:border-slate-600 dark:bg-slate-800" value={pointsRemarks} onChange={(e) => setPointsRemarks(e.target.value)} placeholder="Remarks" />
           </div>
-        ) : null}
-      </div>
+          <div className="mt-3 flex gap-2">
+            <button type="button" className="rounded-lg border border-slate-300 px-3 py-2 text-sm font-semibold dark:border-slate-600 disabled:opacity-60" disabled={pointsBusy} onClick={() => void submitPoints('earn')}>Earn</button>
+            <button type="button" className="rounded-lg border border-slate-300 px-3 py-2 text-sm font-semibold dark:border-slate-600 disabled:opacity-60" disabled={pointsBusy} onClick={() => void submitPoints('redeem')}>Redeem</button>
+            <button type="button" className="rounded-lg border border-slate-300 px-3 py-2 text-sm font-semibold dark:border-slate-600 disabled:opacity-60" disabled={pointsBusy} onClick={() => void submitPoints('adjust')}>Adjust</button>
+          </div>
+          <div className="mt-3 overflow-x-auto">
+            <table className="min-w-[760px] text-sm">
+              <thead className="bg-slate-50 text-left text-xs uppercase tracking-wide text-slate-600 dark:bg-slate-800/80 dark:text-slate-300"><tr><th className="px-3 py-2">Date</th><th className="px-3 py-2">Customer</th><th className="px-3 py-2">Type</th><th className="px-3 py-2">Points</th><th className="px-3 py-2">Source</th><th className="px-3 py-2">Remarks</th></tr></thead>
+              <tbody>
+                {ledger.length === 0 ? <tr><td className="px-3 py-6 text-center text-slate-500 dark:text-slate-400" colSpan={6}>No points transactions found.</td></tr> : ledger.slice(0, 100).map((row) => (
+                  <tr key={row.id} className="border-t border-slate-100 dark:border-slate-800">
+                    <td className="px-3 py-2">{fmtDate(row.created_at)}</td>
+                    <td className="px-3 py-2">{customerNameById.get(row.customer_id) ?? row.customer_id}</td>
+                    <td className="px-3 py-2">{row.txn_type}</td>
+                    <td className="px-3 py-2">{row.points}</td>
+                    <td className="px-3 py-2">{row.source_type}</td>
+                    <td className="px-3 py-2">{row.remarks ?? '-'}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      ) : null}
 
-      <div className="rounded-2xl border border-slate-200 bg-white p-4 dark:border-slate-800 dark:bg-slate-900">
-        <h2 className="text-sm font-semibold text-slate-800 dark:text-slate-100">Points Policy</h2>
-        <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">Updated: {fmtDate(policy?.updated_at ?? null)}</p>
-        <div className="mt-3 grid gap-2 md:grid-cols-5">
-          <input className="rounded-lg border border-slate-300 bg-white px-3 py-2 dark:border-slate-600 dark:bg-slate-800" value={earnRatio} onChange={(e) => setEarnRatio(e.target.value)} placeholder="Earn PHP/point" />
-          <input className="rounded-lg border border-slate-300 bg-white px-3 py-2 dark:border-slate-600 dark:bg-slate-800" value={redeemRatio} onChange={(e) => setRedeemRatio(e.target.value)} placeholder="Redeem PHP/point" />
-          <input className="rounded-lg border border-slate-300 bg-white px-3 py-2 dark:border-slate-600 dark:bg-slate-800" value={minSpend} onChange={(e) => setMinSpend(e.target.value)} placeholder="Min spend" />
-          <input className="rounded-lg border border-slate-300 bg-white px-3 py-2 dark:border-slate-600 dark:bg-slate-800" value={maxRedeem} onChange={(e) => setMaxRedeem(e.target.value)} placeholder="Max redeem points (optional)" />
-          <input className="rounded-lg border border-slate-300 bg-white px-3 py-2 dark:border-slate-600 dark:bg-slate-800" value={expiryDays} onChange={(e) => setExpiryDays(e.target.value)} placeholder="Expiry days (optional)" />
+      {assignConfirm ? (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/55 p-4"
+          onClick={() => {
+            setAssignConfirm(null);
+            setCardActionCardId(null);
+          }}
+        >
+          <div
+            className="w-full max-w-2xl rounded-2xl border border-slate-200 bg-white p-5 shadow-2xl dark:border-slate-700 dark:bg-slate-900"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <h3 className="text-base font-semibold text-slate-900 dark:text-slate-100">Card Actions</h3>
+            <p className="mt-2 text-sm text-slate-600 dark:text-slate-300">
+              Card: <span className="font-semibold text-slate-900 dark:text-slate-100">{maskCardNumber(assignConfirm.cardNumber)}</span>
+            </p>
+            <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">
+              {activeActionBinding
+                ? `Current customer: ${activeActionBinding.customer.name} (${activeActionBinding.customer.code})`
+                : 'No customer assigned yet.'}
+            </p>
+            <input
+              className="mt-3 w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-800"
+              value={assignCustomerSearch}
+              onChange={(e) => setAssignCustomerSearch(e.target.value)}
+              placeholder="Search customer..."
+            />
+            <div className="mt-3 max-h-56 space-y-2 overflow-auto rounded-lg border border-slate-200 p-2 dark:border-slate-700">
+              {filteredAssignCustomers.length === 0 ? (
+                <p className="px-2 py-1 text-xs text-slate-500 dark:text-slate-400">No customer found.</p>
+              ) : (
+                filteredAssignCustomers.map((row) => {
+                  const active = row.id === assignTargetCustomerId;
+                  return (
+                    <button
+                      key={row.id}
+                      type="button"
+                      className={`w-full rounded-lg border px-3 py-2 text-left text-sm ${
+                        active
+                          ? 'border-brandPrimary bg-brandPrimary/10 text-brandPrimary'
+                          : 'border-slate-200 bg-white text-slate-700 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200'
+                      }`}
+                      onClick={() => setAssignTargetCustomerId(row.id)}
+                    >
+                      <div className="font-semibold">{row.name}</div>
+                      <div className="text-xs opacity-80">{row.code}</div>
+                    </button>
+                  );
+                })
+              )}
+            </div>
+            {activeActionBinding ? (
+              <div className="mt-4 grid gap-2 rounded-xl border border-slate-200 p-3 dark:border-slate-700 md:grid-cols-2">
+                <button
+                  type="button"
+                  className="rounded-lg border border-slate-300 px-3 py-2 text-sm font-semibold dark:border-slate-600 disabled:opacity-60"
+                  onClick={() => void reassignFromCardModal()}
+                  disabled={busy || !reassignCustomerId}
+                >
+                  Reassign
+                </button>
+                <button
+                  type="button"
+                  className="rounded-lg border border-slate-300 px-3 py-2 text-sm font-semibold dark:border-slate-600 disabled:opacity-60"
+                  onClick={openPointsForCard}
+                  disabled={busy}
+                >
+                  Open Points Actions
+                </button>
+                <button
+                  type="button"
+                  className="rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-sm font-semibold text-amber-900 dark:border-amber-700 dark:bg-amber-950/40 dark:text-amber-100 disabled:opacity-60"
+                  onClick={() => void doStatus(activeActionBinding.id, activeActionBinding.status === 'INACTIVE' ? 'ACTIVE' : 'INACTIVE')}
+                  disabled={busy}
+                >
+                  {activeActionBinding.status === 'INACTIVE' ? 'Reactivate' : 'Deactivate'}
+                </button>
+                <button
+                  type="button"
+                  className="rounded-lg border border-rose-300 bg-rose-50 px-3 py-2 text-sm font-semibold text-rose-900 dark:border-rose-700 dark:bg-rose-950/40 dark:text-rose-100 disabled:opacity-60"
+                  onClick={() => void doStatus(activeActionBinding.id, activeActionBinding.status === 'REVOKED' ? 'ACTIVE' : 'REVOKED')}
+                  disabled={busy}
+                >
+                  {activeActionBinding.status === 'REVOKED' ? 'Reactivate' : 'Revoke'}
+                </button>
+                <button
+                  type="button"
+                  className="rounded-lg border border-slate-300 px-3 py-2 text-sm font-semibold dark:border-slate-600 disabled:opacity-60 md:col-span-2"
+                  onClick={() => void unassign(activeActionBinding.id)}
+                  disabled={busy || activeActionBinding.status === 'REVOKED'}
+                >
+                  Unassign
+                </button>
+              </div>
+            ) : null}
+            <div className="mt-5 flex justify-end gap-2">
+              <button
+                type="button"
+                className="rounded-lg border border-slate-300 px-4 py-2 text-sm font-semibold text-slate-700 dark:border-slate-600 dark:text-slate-200"
+                onClick={() => {
+                  setAssignConfirm(null);
+                  setCardActionCardId(null);
+                }}
+                disabled={busy}
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                className="rounded-lg bg-brandPrimary px-4 py-2 text-sm font-semibold text-white disabled:opacity-60"
+                onClick={() => void confirmAssignCard()}
+                disabled={busy || !assignTargetCustomerId || Boolean(activeActionBinding)}
+              >
+                {busy ? 'Assigning...' : activeActionBinding ? 'Already Assigned' : 'Confirm Assign'}
+              </button>
+            </div>
+          </div>
         </div>
-        <button type="button" className="mt-3 rounded-lg bg-brandPrimary px-4 py-2 text-sm font-semibold text-white disabled:opacity-60" disabled={policyBusy} onClick={() => void savePolicy()}>{policyBusy ? 'Saving...' : 'Save Policy'}</button>
-      </div>
-
-      <div className="rounded-2xl border border-slate-200 bg-white p-4 dark:border-slate-800 dark:bg-slate-900">
-        <h2 className="text-sm font-semibold text-slate-800 dark:text-slate-100">Points Actions</h2>
-        <div className="mt-3 grid gap-2 md:grid-cols-5">
-          <select className="rounded-lg border border-slate-300 bg-white px-3 py-2 dark:border-slate-600 dark:bg-slate-800" value={pointsCustomerId} onChange={(e) => setPointsCustomerId(e.target.value)}>
-            <option value="">Select customer...</option>
-            {customers.map((c) => <option key={c.id} value={c.id}>{c.name} ({c.code})</option>)}
-          </select>
-          <input className="rounded-lg border border-slate-300 bg-white px-3 py-2 dark:border-slate-600 dark:bg-slate-800" value={pointsCardId} onChange={(e) => setPointsCardId(e.target.value)} placeholder="Card ID (optional)" />
-          <input className="rounded-lg border border-slate-300 bg-white px-3 py-2 dark:border-slate-600 dark:bg-slate-800" value={pointsAmount} onChange={(e) => setPointsAmount(e.target.value)} placeholder="Amount (optional)" />
-          <input className="rounded-lg border border-slate-300 bg-white px-3 py-2 dark:border-slate-600 dark:bg-slate-800" value={pointsValue} onChange={(e) => setPointsValue(e.target.value)} placeholder="Points / Delta" />
-          <input className="rounded-lg border border-slate-300 bg-white px-3 py-2 dark:border-slate-600 dark:bg-slate-800" value={pointsRemarks} onChange={(e) => setPointsRemarks(e.target.value)} placeholder="Remarks" />
-        </div>
-        <div className="mt-3 flex gap-2">
-          <button type="button" className="rounded-lg border border-slate-300 px-3 py-2 text-sm font-semibold dark:border-slate-600 disabled:opacity-60" disabled={pointsBusy} onClick={() => void submitPoints('earn')}>Earn</button>
-          <button type="button" className="rounded-lg border border-slate-300 px-3 py-2 text-sm font-semibold dark:border-slate-600 disabled:opacity-60" disabled={pointsBusy} onClick={() => void submitPoints('redeem')}>Redeem</button>
-          <button type="button" className="rounded-lg border border-slate-300 px-3 py-2 text-sm font-semibold dark:border-slate-600 disabled:opacity-60" disabled={pointsBusy} onClick={() => void submitPoints('adjust')}>Adjust</button>
-        </div>
-        <div className="mt-3 overflow-x-auto">
-          <table className="min-w-[760px] text-sm">
-            <thead className="bg-slate-50 text-left text-xs uppercase tracking-wide text-slate-600 dark:bg-slate-800/80 dark:text-slate-300"><tr><th className="px-3 py-2">Date</th><th className="px-3 py-2">Customer</th><th className="px-3 py-2">Type</th><th className="px-3 py-2">Points</th><th className="px-3 py-2">Source</th><th className="px-3 py-2">Remarks</th></tr></thead>
-            <tbody>
-              {ledger.length === 0 ? <tr><td className="px-3 py-6 text-center text-slate-500 dark:text-slate-400" colSpan={6}>No points transactions found.</td></tr> : ledger.slice(0, 100).map((row) => (
-                <tr key={row.id} className="border-t border-slate-100 dark:border-slate-800">
-                  <td className="px-3 py-2">{fmtDate(row.created_at)}</td>
-                  <td className="px-3 py-2">{customerNameById.get(row.customer_id) ?? row.customer_id}</td>
-                  <td className="px-3 py-2">{row.txn_type}</td>
-                  <td className="px-3 py-2">{row.points}</td>
-                  <td className="px-3 py-2">{row.source_type}</td>
-                  <td className="px-3 py-2">{row.remarks ?? '-'}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      </div>
+      ) : null}
     </section>
   );
 }
