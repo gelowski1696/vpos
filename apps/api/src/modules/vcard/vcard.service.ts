@@ -572,6 +572,7 @@ export class VcardService {
     const actorUserId = this.normalizeOptional(input.actorUserId);
 
     const row = await binding.client.$transaction(async (tx) => {
+      const effectiveActorUserId = await this.resolveActorUserIdForCompany(tx, companyId, actorUserId);
       const customer = await tx.customer.findFirst({
         where: { id: customerId, companyId, isActive: true },
         select: { id: true }
@@ -607,7 +608,7 @@ export class VcardService {
             customerId: customer.id,
             cardInventoryId: card.id,
             status: CustomerCardStatus.ACTIVE,
-            assignedByUserId: actorUserId
+            assignedByUserId: effectiveActorUserId
           }
         });
         customerCardId = created.id;
@@ -625,7 +626,7 @@ export class VcardService {
           data: {
             customerId: customer.id,
             status: CustomerCardStatus.ACTIVE,
-            assignedByUserId: actorUserId,
+            assignedByUserId: effectiveActorUserId,
             assignedAt: now,
             unassignedAt: null,
             revokedAt: null
@@ -665,6 +666,7 @@ export class VcardService {
     const actorUserId = this.normalizeOptional(input.actorUserId);
 
     const row = await binding.client.$transaction(async (tx) => {
+      const effectiveActorUserId = await this.resolveActorUserIdForCompany(tx, companyId, actorUserId);
       const customer = await tx.customer.findFirst({
         where: { id: customerId, companyId, isActive: true },
         select: { id: true }
@@ -694,7 +696,7 @@ export class VcardService {
         data: {
           customerId: customer.id,
           status: CustomerCardStatus.ACTIVE,
-          assignedByUserId: actorUserId,
+          assignedByUserId: effectiveActorUserId,
           assignedAt: now,
           unassignedAt: null,
           revokedAt: null
@@ -739,13 +741,14 @@ export class VcardService {
       }
 
       const now = new Date();
+      const effectiveActorUserId = await this.resolveActorUserIdForCompany(tx, companyId, actorId);
       const nextStatus =
         existing.status === CustomerCardStatus.REVOKED ? CustomerCardStatus.REVOKED : CustomerCardStatus.INACTIVE;
       const updated = await tx.customerCard.update({
         where: { id: existing.id },
         data: {
           status: nextStatus,
-          assignedByUserId: actorId ?? existing.assignedByUserId,
+          assignedByUserId: effectiveActorUserId ?? existing.assignedByUserId,
           unassignedAt: now
         }
       });
@@ -813,11 +816,12 @@ export class VcardService {
       }
 
       const now = new Date();
+      const effectiveActorUserId = await this.resolveActorUserIdForCompany(tx, companyId, actorId);
       const updated = await tx.customerCard.update({
         where: { id: existing.id },
         data: {
           status: nextStatus,
-          assignedByUserId: actorId ?? existing.assignedByUserId,
+          assignedByUserId: effectiveActorUserId ?? existing.assignedByUserId,
           assignedAt: nextStatus === CustomerCardStatus.ACTIVE ? now : existing.assignedAt,
           unassignedAt: nextStatus === CustomerCardStatus.ACTIVE ? null : now,
           revokedAt: nextStatus === CustomerCardStatus.REVOKED ? now : null
@@ -1006,6 +1010,7 @@ export class VcardService {
       input.idempotencyKey,
       hashPayload,
       async (tx) => {
+        const effectiveActorUserId = await this.resolveActorUserIdForCompany(tx, companyId, actorUserId);
         const customer = await tx.customer.findFirst({
           where: { id: customerId, companyId, isActive: true },
           select: { id: true, pointsBalance: true }
@@ -1034,7 +1039,7 @@ export class VcardService {
             sourceId,
             points,
             remarks,
-            createdByUserId: actorUserId
+            createdByUserId: effectiveActorUserId
           }
         });
         return this.mapPointsLedger(ledger);
@@ -1099,6 +1104,7 @@ export class VcardService {
       input.idempotencyKey,
       hashPayload,
       async (tx) => {
+        const effectiveActorUserId = await this.resolveActorUserIdForCompany(tx, companyId, actorUserId);
         const customer = await tx.customer.findFirst({
           where: { id: customerId, companyId, isActive: true },
           select: { id: true, pointsBalance: true }
@@ -1133,7 +1139,7 @@ export class VcardService {
             sourceId,
             points: -points,
             remarks,
-            createdByUserId: actorUserId
+            createdByUserId: effectiveActorUserId
           }
         });
         return this.mapPointsLedger(ledger);
@@ -1170,6 +1176,7 @@ export class VcardService {
       input.idempotencyKey,
       hashPayload,
       async (tx) => {
+        const effectiveActorUserId = await this.resolveActorUserIdForCompany(tx, companyId, actorUserId);
         const customer = await tx.customer.findFirst({
           where: { id: customerId, companyId, isActive: true },
           select: { id: true, pointsBalance: true }
@@ -1204,7 +1211,7 @@ export class VcardService {
             sourceId,
             points: deltaPoints,
             remarks,
-            createdByUserId: actorUserId
+            createdByUserId: effectiveActorUserId
           }
         });
         return this.mapPointsLedger(ledger);
@@ -1697,6 +1704,21 @@ export class VcardService {
     }
     const value = String(raw).trim();
     return value.length > 0 ? value : null;
+  }
+
+  private async resolveActorUserIdForCompany(
+    tx: Prisma.TransactionClient,
+    companyId: string,
+    actorUserId: string | null
+  ): Promise<string | null> {
+    if (!actorUserId) {
+      return null;
+    }
+    const actor = await tx.user.findFirst({
+      where: { id: actorUserId, companyId },
+      select: { id: true }
+    });
+    return actor?.id ?? null;
   }
 
   private normalizePointsPolicyInput(
