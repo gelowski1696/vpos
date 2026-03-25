@@ -173,6 +173,38 @@ enum NfcCardEventType {
   REVOKE
 }
 
+enum CardInventoryStatus {
+  UNASSIGNED
+  ASSIGNED
+  INACTIVE
+  REVOKED
+}
+
+enum CardTagType {
+  NFC
+  RFID_UID
+}
+
+enum CustomerCardStatus {
+  ACTIVE
+  INACTIVE
+  REVOKED
+}
+
+enum CustomerPointsTxnType {
+  EARN
+  REDEEM
+  ADJUST_UP
+  ADJUST_DOWN
+  EXPIRE
+}
+
+enum CustomerPointsSourceType {
+  SALE
+  MANUAL
+  SYSTEM
+}
+
 model Company {
   id            String                   @id @default(uuid())
   code          String                   @unique
@@ -210,6 +242,7 @@ model Company {
   inventoryLedgers  InventoryLedger[]
   stockTransfers    StockTransfer[]
   costingConfig     CostingConfig?
+  vcardPointsPolicy VcardPointsPolicy?
   cylinders         Cylinder[]
   cylinderEvents    CylinderEvent[]
   cylinderBalances  CylinderBalance[]
@@ -231,6 +264,9 @@ model Company {
   mobileEnrollmentTokens MobileEnrollmentToken[]
   nfcCards          NfcCard[]
   nfcCardEvents     NfcCardEvent[]
+  cardInventory     CardInventory[]
+  customerCards     CustomerCard[]
+  customerPointsLedger CustomerPointsLedger[]
 }
 
 model TenantDatastoreRegistry {
@@ -308,6 +344,20 @@ model BrandingConfig {
   company Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
 }
 
+model VcardPointsPolicy {
+  id                   String   @id @default(uuid())
+  companyId            String   @unique
+  earnPesoPerPoint     Decimal  @default(100) @db.Decimal(12, 2)
+  redeemPesoPerPoint   Decimal  @default(1) @db.Decimal(12, 2)
+  minSpendForEarn      Decimal  @default(0) @db.Decimal(12, 2)
+  maxRedeemPointsPerTxn Int?
+  pointsExpiryDays     Int?
+  createdAt            DateTime @default(now())
+  updatedAt            DateTime @updatedAt
+
+  company Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
+}
+
 model Branch {
   id         String   @id @default(uuid())
   companyId  String
@@ -328,6 +378,7 @@ model Branch {
   customerPayments CustomerPayment[]
   mobileEnrollmentTokens MobileEnrollmentToken[]
   personnels      Personnel[]
+  cardInventory   CardInventory[]
 
   @@unique([companyId, code])
   @@index([companyId, updatedAt])
@@ -396,6 +447,7 @@ model Location {
   syncCursors        SyncCursor[]
   suppliers          Supplier[]
   mobileEnrollmentTokens MobileEnrollmentToken[]
+  cardInventory      CardInventory[]
 
   @@unique([companyId, code])
   @@index([companyId, updatedAt])
@@ -429,6 +481,8 @@ model User {
   createdMobileEnrollmentTokens MobileEnrollmentToken[] @relation("MobileEnrollmentCreator")
   ownedNfcCards       NfcCard[]                 @relation("NfcCardOwner")
   nfcCardEvents       NfcCardEvent[]            @relation("NfcCardEventActor")
+  assignedCustomerCards CustomerCard[]          @relation("CustomerCardAssignedBy")
+  createdCustomerPointsEntries CustomerPointsLedger[] @relation("CustomerPointsCreatedBy")
 
   @@unique([companyId, email])
   @@index([companyId, updatedAt])
@@ -497,6 +551,82 @@ model NfcCardEvent {
 
   @@index([companyId, createdAt])
   @@index([cardId, createdAt])
+}
+
+model CardInventory {
+  id           String              @id @default(uuid())
+  companyId    String
+  branchId     String?
+  locationId   String?
+  cardUid      String
+  cardNumber   String
+  serialNumber String?
+  cardUrl      String?
+  status       CardInventoryStatus @default(UNASSIGNED)
+  tagType      CardTagType         @default(NFC)
+  writable     Boolean             @default(false)
+  metadata     Json?
+  assignedAt   DateTime?
+  revokedAt    DateTime?
+  createdAt    DateTime            @default(now())
+  updatedAt    DateTime            @updatedAt
+
+  company       Company        @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  branch        Branch?        @relation(fields: [branchId], references: [id], onDelete: SetNull)
+  location      Location?      @relation(fields: [locationId], references: [id], onDelete: SetNull)
+  customerCards CustomerCard[]
+  pointsLedger  CustomerPointsLedger[]
+
+  @@unique([companyId, cardUid])
+  @@unique([companyId, cardNumber])
+  @@index([companyId, status, updatedAt])
+  @@index([companyId, branchId, locationId, status])
+}
+
+model CustomerCard {
+  id               String             @id @default(uuid())
+  companyId        String
+  customerId       String
+  cardInventoryId  String             @unique
+  status           CustomerCardStatus @default(ACTIVE)
+  assignedByUserId String?
+  assignedAt       DateTime           @default(now())
+  unassignedAt     DateTime?
+  revokedAt        DateTime?
+  createdAt        DateTime           @default(now())
+  updatedAt        DateTime           @updatedAt
+
+  company       Company       @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  customer      Customer      @relation(fields: [customerId], references: [id], onDelete: Cascade)
+  cardInventory CardInventory @relation(fields: [cardInventoryId], references: [id], onDelete: Cascade)
+  assignedBy    User?         @relation("CustomerCardAssignedBy", fields: [assignedByUserId], references: [id], onDelete: SetNull)
+
+  @@index([companyId, customerId, status, updatedAt])
+  @@index([companyId, status, updatedAt])
+}
+
+model CustomerPointsLedger {
+  id              String                   @id @default(uuid())
+  companyId       String
+  customerId      String
+  cardInventoryId String?
+  txnType         CustomerPointsTxnType
+  sourceType      CustomerPointsSourceType
+  sourceId        String?
+  points          Int
+  remarks         String?
+  metadata        Json?
+  createdByUserId String?
+  createdAt       DateTime                 @default(now())
+
+  company       Company        @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  customer      Customer       @relation(fields: [customerId], references: [id], onDelete: Cascade)
+  cardInventory CardInventory? @relation(fields: [cardInventoryId], references: [id], onDelete: SetNull)
+  createdBy     User?          @relation("CustomerPointsCreatedBy", fields: [createdByUserId], references: [id], onDelete: SetNull)
+
+  @@index([companyId, customerId, createdAt])
+  @@index([companyId, txnType, createdAt])
+  @@index([cardInventoryId, createdAt])
 }
 
 model Role {
@@ -590,6 +720,7 @@ model Customer {
   tier              String?
   contractPrice     Decimal?     @db.Decimal(12, 2)
   depositBalance    Decimal      @default(0) @db.Decimal(12, 2)
+  pointsBalance     Int          @default(0)
   isActive          Boolean      @default(true)
   createdAt         DateTime     @default(now())
   updatedAt         DateTime     @updatedAt
@@ -597,6 +728,8 @@ model Customer {
   company Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
   sales   Sale[]
   customerPayments CustomerPayment[]
+  customerCards CustomerCard[]
+  pointsLedger  CustomerPointsLedger[]
 
   @@unique([companyId, code])
   @@index([companyId, updatedAt])

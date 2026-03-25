@@ -64,7 +64,13 @@ async function bootstrap(): Promise<void> {
       callback(new Error(`CORS blocked origin: ${origin}`), false);
     },
     methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
-    allowedHeaders: ["Content-Type", "Authorization", "X-Client-Id"],
+    allowedHeaders: [
+      "Content-Type",
+      "Authorization",
+      "X-Client-Id",
+      "X-Platform-Owner-Key",
+      "X-Vcard-Admin-Key"
+    ],
     credentials: true,
   });
 

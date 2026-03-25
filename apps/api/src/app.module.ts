@@ -19,6 +19,7 @@ import { AuditModule } from './modules/audit/audit.module';
 import { CustomerPaymentsModule } from './modules/customer-payments/customer-payments.module';
 import { MobileEnrollmentModule } from './modules/mobile-enrollment/mobile-enrollment.module';
 import { NfcModule } from './modules/nfc/nfc.module';
+import { VcardModule } from './modules/vcard/vcard.module';
 
 @Module({
   imports: [
@@ -39,6 +40,7 @@ import { NfcModule } from './modules/nfc/nfc.module';
     CustomerPaymentsModule,
     MobileEnrollmentModule,
     NfcModule,
+    VcardModule,
     ReportsModule,
     AiExportModule
   ],

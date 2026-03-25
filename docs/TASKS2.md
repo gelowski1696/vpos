@@ -15,6 +15,38 @@
 - `[PENDING]` not started
 
 ## Latest Completed Work
+- Date: 2026-03-18
+- Scope completed:
+  - Web Customers now supports transaction history view similar to mobile:
+    - Added `Transactions` action per customer row.
+    - Added customer transactions modal showing combined `SALE` and `PAYMENT` timeline.
+    - Added summary cards: Sales count, Payments count, Sales total, Payments total, Outstanding.
+  - API enhancement for customer-scoped sales history:
+    - Added `customer_id` filter support in `GET /reports/sales/list`.
+    - Enables exact-customer sales fetch for transaction history UIs.
+- Validation:
+  - `pnpm --filter @vpos/api typecheck` passed
+  - `pnpm --filter @vpos/web exec tsc --noEmit` passed
+- Date: 2026-03-18
+- Scope completed:
+  - Global search deep-link behavior completed:
+    - Sales search result now opens Sales List and auto-opens the exact sale details modal (`sale_id`).
+    - Customer search result now opens Customers and auto-opens the exact customer record form (`customer_id`).
+    - Product search result now opens Products and auto-opens the exact product details modal (`product_id`).
+  - Added URL param consume/cleanup after deep-link open to avoid repeated auto-open loops.
+- Validation:
+  - `pnpm --filter @vpos/web exec tsc --noEmit` passed
+- Date: 2026-03-18
+- Scope completed:
+  - Web global navbar search upgraded to grouped record search:
+    - keeps `Pages` results
+    - adds `Sales`, `Customers`, and `Products` grouped results in the same dropdown
+    - keyboard navigation works across all grouped results
+    - uses debounced loading + short cache window to reduce repeated API calls
+  - Task tracking hygiene update:
+    - completed updates are now recorded in both `TASKS2.md` and `TASKS.md` after implementation batches.
+- Validation:
+  - `pnpm --filter @vpos/web exec tsc --noEmit` passed
 - Date: 2026-03-11
 - Scope completed:
   - Audit logs branch-scope resilience for admin users:

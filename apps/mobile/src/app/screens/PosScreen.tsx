@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { Alert, Modal, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
+import { Alert, Modal, Pressable, ScrollView, StyleSheet, Text, TextInput, View, useWindowDimensions } from 'react-native';
 import type { SQLiteDatabase } from 'expo-sqlite';
 import { OfflineTransactionService } from '../../services/offline-transaction.service';
 import { toastError, toastInfo, toastSuccess } from '../goey-toast';
@@ -114,6 +114,7 @@ type Props = {
   preferredBranchId?: string;
   preferredLocationId?: string;
   defaultLpgFlowForNewItem?: 'NONE' | CylinderFlowSelection;
+  inventoryProjectionVersion?: number;
   onDataChanged?: () => Promise<void> | void;
   onPrintQueuedSaleReceipt?: (payload: PosQueuedSaleReceiptPayload) => Promise<PosQueuedSaleReceiptResult>;
   onGoToShift?: () => void;
@@ -477,11 +478,16 @@ export function PosScreen({
   preferredBranchId,
   preferredLocationId,
   defaultLpgFlowForNewItem = 'NONE',
+  inventoryProjectionVersion = 0,
   onDataChanged,
   onPrintQueuedSaleReceipt,
   onGoToShift,
   syncBusy = false
 }: Props): JSX.Element {
+  const { width, height } = useWindowDimensions();
+  const shortEdge = Math.min(width, height);
+  const longEdge = Math.max(width, height);
+  const isCompactLayout = shortEdge <= 360 || longEdge <= 740;
   const tutorialOrderType = useTutorialTarget('pos-order-type');
   const tutorialCustomer = useTutorialTarget('pos-customer');
   const tutorialItemSelector = useTutorialTarget('pos-item-selector');
@@ -725,7 +731,7 @@ export function PosScreen({
 
   useEffect(() => {
     void refreshCatalog();
-  }, [branchId, customerId, locationId]);
+  }, [branchId, customerId, locationId, inventoryProjectionVersion]);
 
   useEffect(() => {
     if (prevSyncBusyRef.current && !syncBusy) {
@@ -1585,10 +1591,18 @@ export function PosScreen({
   };
 
   return (
-    <View style={[styles.card, { backgroundColor: theme.card, borderColor: theme.cardBorder }]}>
+    <View
+      style={[
+        styles.card,
+        isCompactLayout ? { paddingHorizontal: 10, paddingVertical: 10, gap: 8, borderRadius: 14 } : null,
+        { backgroundColor: theme.card, borderColor: theme.cardBorder }
+      ]}
+    >
       <View style={styles.header}>
-        <Text style={[styles.title, { color: theme.heading }]}>POS Sales</Text>
-        <Text style={[styles.sub, { color: theme.subtext }]}>Pickup and delivery in one checkout flow.</Text>
+        <Text style={[styles.title, isCompactLayout ? { fontSize: 16 } : null, { color: theme.heading }]}>POS Sales</Text>
+        <Text style={[styles.sub, isCompactLayout ? { fontSize: 12 } : null, { color: theme.subtext }]}>
+          Pickup and delivery in one checkout flow.
+        </Text>
       </View>
 
       <View
@@ -1619,12 +1633,32 @@ export function PosScreen({
         ) : null}
       </View>
 
-      <View style={[styles.contextBar, { borderColor: theme.cardBorder, backgroundColor: theme.pillBg }]}>
-        <Text style={[styles.contextText, { color: theme.pillText }]}>Branch: {branch?.label ?? branchId}</Text>
-        <Text style={[styles.contextText, { color: theme.pillText }]}>Location: {location?.label ?? locationId}</Text>
+      <View
+        style={[
+          styles.contextBar,
+          isCompactLayout ? { paddingHorizontal: 8, paddingVertical: 6 } : null,
+          { borderColor: theme.cardBorder, backgroundColor: theme.pillBg }
+        ]}
+      >
+        <Text
+          style={[styles.contextText, isCompactLayout ? { fontSize: 11 } : null, { color: theme.pillText }]}
+          numberOfLines={1}
+        >
+          Branch: {branch?.label ?? branchId}
+        </Text>
+        <Text
+          style={[styles.contextText, isCompactLayout ? { fontSize: 11 } : null, { color: theme.pillText }]}
+          numberOfLines={1}
+        >
+          Location: {location?.label ?? locationId}
+        </Text>
       </View>
 
-      <View ref={tutorialOrderType.ref} onLayout={tutorialOrderType.onLayout} style={styles.row}>
+      <View
+        ref={tutorialOrderType.ref}
+        onLayout={tutorialOrderType.onLayout}
+        style={[styles.row, isCompactLayout ? { gap: 6 } : null]}
+      >
         {(['PICKUP', 'DELIVERY'] as const).map((mode) => {
           const selected = orderType === mode;
           return (
@@ -1633,11 +1667,14 @@ export function PosScreen({
               onPress={() => setOrderType(mode)}
               style={[
                 styles.modePill,
+                isCompactLayout ? { minHeight: 36 } : null,
                 { backgroundColor: selected ? theme.primary : theme.pillBg },
                 tutorialOrderType.active ? styles.tutorialTargetFocus : null
               ]}
             >
-              <Text style={{ color: selected ? '#FFFFFF' : theme.pillText, fontWeight: '700', fontSize: 12 }}>{mode}</Text>
+              <Text style={{ color: selected ? '#FFFFFF' : theme.pillText, fontWeight: '700', fontSize: isCompactLayout ? 11 : 12 }}>
+                {mode}
+              </Text>
             </Pressable>
           );
         })}
@@ -1651,25 +1688,33 @@ export function PosScreen({
           }}
           style={[
             styles.selectorButton,
+            isCompactLayout ? { paddingHorizontal: 10, paddingVertical: 9 } : null,
             { borderColor: theme.cardBorder, backgroundColor: theme.inputBg },
             tutorialCustomer.active ? styles.tutorialTargetFocus : null
           ]}
         >
           <Text style={[styles.selectorLabel, { color: theme.subtext }]}>Customer</Text>
-          <Text style={[styles.selectorValue, { color: theme.inputText }]}>{selectedCustomer?.label ?? 'Select customer'}</Text>
+          <Text style={[styles.selectorValue, isCompactLayout ? { fontSize: 13 } : null, { color: theme.inputText }]} numberOfLines={1}>
+            {selectedCustomer?.label ?? 'Select customer'}
+          </Text>
         </Pressable>
       </View>
 
-      <View style={styles.row}>
+      <View style={[styles.row, isCompactLayout ? { flexDirection: 'column', gap: 6 } : null]}>
         <Pressable
           onPress={() => {
             setDriverSearch('');
             setDriverModalOpen(true);
           }}
-          style={[styles.selectorButton, styles.selectorHalf, { borderColor: theme.cardBorder, backgroundColor: theme.inputBg }]}
+          style={[
+            styles.selectorButton,
+            styles.selectorHalf,
+            isCompactLayout ? { paddingHorizontal: 10, paddingVertical: 9 } : null,
+            { borderColor: theme.cardBorder, backgroundColor: theme.inputBg }
+          ]}
         >
           <Text style={[styles.selectorLabel, { color: theme.subtext }]}>{personnelLabel} (Required)</Text>
-          <Text style={[styles.selectorValue, { color: theme.inputText }]}>
+          <Text style={[styles.selectorValue, isCompactLayout ? { fontSize: 13 } : null, { color: theme.inputText }]} numberOfLines={1}>
             {selectedDriver?.label ?? `Select ${personnelLabel.toLowerCase()}`}
           </Text>
         </Pressable>
@@ -1678,10 +1723,17 @@ export function PosScreen({
             setHelperSearch('');
             setHelperModalOpen(true);
           }}
-          style={[styles.selectorButton, styles.selectorHalf, { borderColor: theme.cardBorder, backgroundColor: theme.inputBg }]}
+          style={[
+            styles.selectorButton,
+            styles.selectorHalf,
+            isCompactLayout ? { paddingHorizontal: 10, paddingVertical: 9 } : null,
+            { borderColor: theme.cardBorder, backgroundColor: theme.inputBg }
+          ]}
         >
           <Text style={[styles.selectorLabel, { color: theme.subtext }]}>Helper (Optional)</Text>
-          <Text style={[styles.selectorValue, { color: theme.inputText }]}>{selectedHelper?.label ?? 'Select helper'}</Text>
+          <Text style={[styles.selectorValue, isCompactLayout ? { fontSize: 13 } : null, { color: theme.inputText }]} numberOfLines={1}>
+            {selectedHelper?.label ?? 'Select helper'}
+          </Text>
         </Pressable>
       </View>
 
@@ -1694,6 +1746,7 @@ export function PosScreen({
           }}
           style={[
             styles.selectorButton,
+            isCompactLayout ? { paddingHorizontal: 10, paddingVertical: 9 } : null,
             { borderColor: theme.cardBorder, backgroundColor: theme.inputBg },
             tutorialItemSelector.active ? styles.tutorialTargetFocus : null
           ]}
@@ -1724,12 +1777,12 @@ export function PosScreen({
               disabled={saving || syncBusy}
               deleteLabel="Remove"
             >
-              <View style={styles.cartRow}>
+              <View style={[styles.cartRow, isCompactLayout ? { alignItems: 'flex-start' } : null]}>
                 <View style={{ flex: 1 }}>
                   <Text style={[styles.cartName, { color: theme.heading }]}>{line.name}</Text>
                   <Text style={[styles.cartCode, { color: theme.subtext }]}>{line.subtitle ?? line.id}</Text>
                   {line.isLpg ? (
-                    <View style={styles.row}>
+                    <View style={[styles.row, isCompactLayout ? { flexWrap: 'wrap', gap: 6 } : null]}>
                       {([
                         { value: 'REFILL_EXCHANGE', label: 'Refill' },
                         { value: 'NON_REFILL', label: 'Non-Refill' }
@@ -1741,6 +1794,7 @@ export function PosScreen({
                             onPress={() => setLineCylinderFlow(line.lineId, flow.value)}
                             style={[
                               styles.flowChip,
+                              isCompactLayout ? { minHeight: 22, marginTop: 4, paddingHorizontal: 9 } : null,
                               { backgroundColor: selected ? theme.primary : theme.pillBg }
                             ]}
                           >
@@ -1757,15 +1811,25 @@ export function PosScreen({
                   ) : null}
                   <Text style={[styles.cartPrice, { color: theme.subtext }]}>PHP {line.unitPrice.toFixed(2)} each</Text>
                 </View>
-                <Text style={[styles.cartLineTotal, { color: theme.heading }]}>PHP {(line.unitPrice * line.quantity).toFixed(2)}</Text>
-                <View style={styles.qtyWrap}>
-                  <Pressable style={[styles.qtyBtn, { backgroundColor: theme.pillBg }]} onPress={() => updateQty(line.lineId, line.quantity - 1)}>
-                    <Text style={[styles.qtyText, { color: theme.pillText }]}>-</Text>
-                  </Pressable>
-                  <Text style={[styles.qtyValue, { color: theme.heading }]}>{line.quantity}</Text>
-                  <Pressable style={[styles.qtyBtn, { backgroundColor: theme.pillBg }]} onPress={() => updateQty(line.lineId, line.quantity + 1)}>
-                    <Text style={[styles.qtyText, { color: theme.pillText }]}>+</Text>
-                  </Pressable>
+                <View style={[styles.cartRightRail, isCompactLayout ? { minWidth: 88 } : null]}>
+                  <Text
+                    style={[
+                      styles.cartLineTotal,
+                      isCompactLayout ? { minWidth: 0, textAlign: 'right' } : null,
+                      { color: theme.heading }
+                    ]}
+                  >
+                    PHP {(line.unitPrice * line.quantity).toFixed(2)}
+                  </Text>
+                  <View style={styles.qtyWrap}>
+                    <Pressable style={[styles.qtyBtn, { backgroundColor: theme.pillBg }]} onPress={() => updateQty(line.lineId, line.quantity - 1)}>
+                      <Text style={[styles.qtyText, { color: theme.pillText }]}>-</Text>
+                    </Pressable>
+                    <Text style={[styles.qtyValue, { color: theme.heading }]}>{line.quantity}</Text>
+                    <Pressable style={[styles.qtyBtn, { backgroundColor: theme.pillBg }]} onPress={() => updateQty(line.lineId, line.quantity + 1)}>
+                      <Text style={[styles.qtyText, { color: theme.pillText }]}>+</Text>
+                    </Pressable>
+                  </View>
                 </View>
               </View>
             </SwipeToDeleteRow>
@@ -1843,7 +1907,13 @@ export function PosScreen({
       <Modal visible={itemModalOpen} transparent animationType="fade" onRequestClose={() => setItemModalOpen(false)}>
         <View style={styles.modalBackdrop}>
           <Pressable style={StyleSheet.absoluteFillObject} onPress={() => setItemModalOpen(false)} />
-          <View style={[styles.itemSelectModalCard, { backgroundColor: theme.card, borderColor: theme.cardBorder }]}>
+          <View
+            style={[
+              styles.itemSelectModalCard,
+              isCompactLayout ? { minHeight: '86%', maxHeight: '96%', paddingHorizontal: 10, paddingVertical: 10, gap: 8 } : null,
+              { backgroundColor: theme.card, borderColor: theme.cardBorder }
+            ]}
+          >
             <Text style={[styles.modalTitle, { color: theme.heading }]}>Select Item</Text>
             <TextInput
               value={itemSearch}
@@ -1852,7 +1922,7 @@ export function PosScreen({
               placeholderTextColor={theme.inputPlaceholder}
               style={[styles.modalSearch, { backgroundColor: theme.inputBg, color: theme.inputText }]}
             />
-            <View style={styles.itemCategoryWrap}>
+            <View style={[styles.itemCategoryWrap, isCompactLayout ? { height: 38 } : null]}>
               <ScrollView
                 horizontal
                 showsHorizontalScrollIndicator={false}
@@ -1863,13 +1933,18 @@ export function PosScreen({
                   onPress={() => setItemCategoryFilter('ALL')}
                   style={[
                     styles.itemCategoryChip,
+                    isCompactLayout ? { height: 28, maxWidth: 150, paddingHorizontal: 10 } : null,
                     { backgroundColor: itemCategoryFilter === 'ALL' ? theme.primary : theme.pillBg }
                   ]}
                 >
                   <Text
                     numberOfLines={1}
                     ellipsizeMode='tail'
-                    style={[styles.itemCategoryChipText, { color: itemCategoryFilter === 'ALL' ? '#FFFFFF' : theme.pillText }]}
+                    style={[
+                      styles.itemCategoryChipText,
+                      isCompactLayout ? { maxWidth: 130, fontSize: 10 } : null,
+                      { color: itemCategoryFilter === 'ALL' ? '#FFFFFF' : theme.pillText }
+                    ]}
                   >
                     All Categories
                   </Text>
@@ -1882,13 +1957,18 @@ export function PosScreen({
                       onPress={() => setItemCategoryFilter(category)}
                       style={[
                         styles.itemCategoryChip,
+                        isCompactLayout ? { height: 28, maxWidth: 150, paddingHorizontal: 10 } : null,
                         { backgroundColor: selected ? theme.primary : theme.pillBg }
                       ]}
                     >
                       <Text
                         numberOfLines={1}
                         ellipsizeMode='tail'
-                        style={[styles.itemCategoryChipText, { color: selected ? '#FFFFFF' : theme.pillText }]}
+                        style={[
+                          styles.itemCategoryChipText,
+                          isCompactLayout ? { maxWidth: 130, fontSize: 10 } : null,
+                          { color: selected ? '#FFFFFF' : theme.pillText }
+                        ]}
                       >
                         {category}
                       </Text>
@@ -1922,6 +2002,7 @@ export function PosScreen({
                       disabled={outOfStock}
                       style={[
                         styles.itemSelectCard,
+                        isCompactLayout ? { paddingHorizontal: 10, paddingVertical: 10, gap: 6 } : null,
                         outOfStock ? styles.itemSelectCardDisabled : null,
                         { borderColor: theme.cardBorder, backgroundColor: theme.inputBg }
                       ]}
@@ -1941,14 +2022,14 @@ export function PosScreen({
                           {product.subtitle ?? product.id}
                         </Text>
                       </View>
-                      <View style={[styles.itemSelectPricePill, { backgroundColor: theme.pillBg }]}>
+                      <View style={[styles.itemSelectPricePill, isCompactLayout ? { paddingHorizontal: 8, paddingVertical: 4 } : null, { backgroundColor: theme.pillBg }]}>
                         <Text style={[styles.itemSelectPriceText, { color: theme.pillText }]}>
                           PHP {product.unitPrice.toFixed(2)}
                         </Text>
                       </View>
                     </View>
                     {product.isLpg ? (
-                      <View style={styles.itemFlowPriceRow}>
+                      <View style={[styles.itemFlowPriceRow, isCompactLayout ? { flexDirection: 'column', alignItems: 'flex-start', gap: 2 } : null]}>
                         <Text style={[styles.itemFlowPriceText, { color: theme.subtext }]}>
                           Refill: {flowPrice.refill !== null ? `PHP ${flowPrice.refill.toFixed(2)}` : '-'}
                         </Text>
@@ -1960,16 +2041,16 @@ export function PosScreen({
                     {product.category ? (
                       <Text style={[styles.itemSelectCardMeta, { color: theme.subtext }]}>Category: {product.category}</Text>
                     ) : null}
-                    <View style={styles.itemStockMetrics}>
-                      <View style={[styles.itemStockChip, { backgroundColor: theme.pillBg }]}>
+                    <View style={[styles.itemStockMetrics, isCompactLayout ? { flexWrap: 'wrap', gap: 6 } : null]}>
+                      <View style={[styles.itemStockChip, isCompactLayout ? { minWidth: '31%', flexBasis: '31%' } : null, { backgroundColor: theme.pillBg }]}>
                         <Text style={[styles.itemStockChipLabel, { color: theme.subtext }]}>FULL</Text>
                         <Text style={[styles.itemStockChipValue, { color: theme.heading }]}>{formatQty(product.qtyFull)}</Text>
                       </View>
-                      <View style={[styles.itemStockChip, { backgroundColor: theme.pillBg }]}>
+                      <View style={[styles.itemStockChip, isCompactLayout ? { minWidth: '31%', flexBasis: '31%' } : null, { backgroundColor: theme.pillBg }]}>
                         <Text style={[styles.itemStockChipLabel, { color: theme.subtext }]}>EMPTY</Text>
                         <Text style={[styles.itemStockChipValue, { color: theme.heading }]}>{formatQty(product.qtyEmpty)}</Text>
                       </View>
-                      <View style={[styles.itemStockChip, { backgroundColor: theme.pillBg }]}>
+                      <View style={[styles.itemStockChip, isCompactLayout ? { minWidth: '31%', flexBasis: '31%' } : null, { backgroundColor: theme.pillBg }]}>
                         <Text style={[styles.itemStockChipLabel, { color: theme.subtext }]}>QOH</Text>
                         <Text style={[styles.itemStockChipValue, { color: theme.heading }]}>{formatQty(product.qtyOnHand)}</Text>
                       </View>
@@ -2005,9 +2086,16 @@ export function PosScreen({
               }
             }}
           />
-          <View style={[styles.modalCard, styles.paymentModalCard, { backgroundColor: theme.card, borderColor: theme.cardBorder }]}>
+          <View
+            style={[
+              styles.modalCard,
+              styles.paymentModalCard,
+              isCompactLayout ? { height: '88%', maxHeight: '92%', paddingHorizontal: 10, paddingVertical: 10, gap: 8 } : null,
+              { backgroundColor: theme.card, borderColor: theme.cardBorder }
+            ]}
+          >
             <Text style={[styles.modalTitle, { color: theme.heading }]}>Payment Details</Text>
-            <Text style={[styles.paymentHint, { color: theme.subtext }]}>
+            <Text style={[styles.paymentHint, isCompactLayout ? { fontSize: 11 } : null, { color: theme.subtext }]}>
               {paymentMode === 'FULL'
                 ? 'Full payment: amount tendered can be equal or higher than total (change is auto-calculated).'
                 : 'Partial payment: collect any amount from 0 up to less than total; remaining becomes customer credit.'}
@@ -2028,7 +2116,7 @@ export function PosScreen({
               </View>
 
               <Text style={[styles.fieldLabel, { color: theme.subtext }]}>Payment Type</Text>
-              <View style={styles.row}>
+              <View style={[styles.row, isCompactLayout ? { gap: 6 } : null]}>
                 {(['FULL', 'PARTIAL'] as const).map((mode) => {
                   const selected = paymentMode === mode;
                   return (
@@ -2036,6 +2124,7 @@ export function PosScreen({
                       key={mode}
                       style={[
                         styles.methodPill,
+                        isCompactLayout ? { minHeight: 36 } : null,
                         {
                           backgroundColor: selected ? theme.primary : theme.pillBg
                         }
@@ -2048,14 +2137,16 @@ export function PosScreen({
                       }}
                       disabled={saving}
                     >
-                      <Text style={{ color: selected ? '#FFFFFF' : theme.pillText, fontWeight: '700', fontSize: 12 }}>{mode}</Text>
+                      <Text style={{ color: selected ? '#FFFFFF' : theme.pillText, fontWeight: '700', fontSize: isCompactLayout ? 11 : 12 }}>
+                        {mode}
+                      </Text>
                     </Pressable>
                   );
                 })}
               </View>
 
               <Text style={[styles.fieldLabel, { color: theme.subtext }]}>Payment Method</Text>
-              <View style={styles.row}>
+              <View style={[styles.row, isCompactLayout ? { flexWrap: 'wrap', gap: 6 } : null]}>
                 {(['CASH', 'CARD', 'E_WALLET'] as const).map((method) => {
                   const selected = method === paymentMethod;
                   return (
@@ -2063,6 +2154,7 @@ export function PosScreen({
                       key={method}
                       style={[
                         styles.methodPill,
+                        isCompactLayout ? { flex: 0, width: '32%', minHeight: 36 } : null,
                         {
                           backgroundColor: selected ? theme.primary : theme.pillBg
                         }
@@ -2070,7 +2162,9 @@ export function PosScreen({
                       onPress={() => setPaymentMethod(method)}
                       disabled={saving}
                     >
-                      <Text style={{ color: selected ? '#FFFFFF' : theme.pillText, fontWeight: '700', fontSize: 12 }}>{method}</Text>
+                      <Text style={{ color: selected ? '#FFFFFF' : theme.pillText, fontWeight: '700', fontSize: isCompactLayout ? 10 : 12 }}>
+                        {method}
+                      </Text>
                     </Pressable>
                   );
                 })}
@@ -2115,7 +2209,7 @@ export function PosScreen({
                 style={[styles.input, { backgroundColor: theme.inputBg, color: theme.inputText }]}
               />
 
-              <View style={styles.paymentKpiRow}>
+              <View style={[styles.paymentKpiRow, isCompactLayout ? { flexDirection: 'column', gap: 6 } : null]}>
                 <View style={[styles.paymentKpiCard, { borderColor: theme.cardBorder, backgroundColor: theme.inputBg }]}>
                   <Text style={[styles.paymentKpiLabel, { color: theme.subtext }]}>Total</Text>
                   <Text style={[styles.paymentKpiValue, { color: theme.heading }]}>PHP {total.toFixed(2)}</Text>
@@ -2126,7 +2220,7 @@ export function PosScreen({
                 </View>
               </View>
 
-              <View style={styles.paymentKpiRow}>
+              <View style={[styles.paymentKpiRow, isCompactLayout ? { flexDirection: 'column', gap: 6 } : null]}>
                 <View style={[styles.paymentKpiCard, { borderColor: theme.cardBorder, backgroundColor: theme.inputBg }]}>
                   <Text style={[styles.paymentKpiLabel, { color: theme.subtext }]}>Change</Text>
                   <Text style={[styles.paymentKpiValue, { color: theme.heading }]}>PHP {changeAmount.toFixed(2)}</Text>
@@ -2164,7 +2258,7 @@ export function PosScreen({
               </View>
             </ScrollView>
 
-            <View style={styles.paymentModalActions}>
+            <View style={[styles.paymentModalActions, isCompactLayout ? { flexDirection: 'column', gap: 6 } : null]}>
               <Pressable
                 onPress={() => setShowPaymentStep(false)}
                 disabled={saving}
@@ -2173,7 +2267,11 @@ export function PosScreen({
                 <Text style={[styles.modalSecondaryText, { color: saving ? '#FFFFFF' : theme.pillText }]}>Back</Text>
               </Pressable>
               <Pressable
-                style={[styles.modalPrimaryBtn, { backgroundColor: saving || !paymentReady ? theme.primaryMuted : theme.primary }]}
+                style={[
+                  styles.modalPrimaryBtn,
+                  isCompactLayout ? { width: '100%' } : null,
+                  { backgroundColor: saving || !paymentReady ? theme.primaryMuted : theme.primary }
+                ]}
                 onPress={promptQueueSale}
                 disabled={saving || syncBusy || !paymentReady}
               >
@@ -2326,6 +2424,10 @@ const styles = StyleSheet.create({
     fontSize: 12,
     fontWeight: '700'
   },
+  cartRightRail: {
+    alignItems: 'flex-end',
+    gap: 6
+  },
   qtyWrap: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -2410,15 +2512,16 @@ const styles = StyleSheet.create({
   },
   modalBackdrop: {
     flex: 1,
-    backgroundColor: 'rgba(10, 16, 28, 0.56)',
-    paddingHorizontal: 16,
-    paddingVertical: 28,
-    justifyContent: 'center'
+    backgroundColor: 'rgba(2, 8, 23, 0.55)',
+    paddingTop: 12,
+    justifyContent: 'flex-end'
   },
   modalCard: {
     borderWidth: 1,
-    borderRadius: 16,
-    maxHeight: '78%',
+    borderTopLeftRadius: 18,
+    borderTopRightRadius: 18,
+    maxHeight: '90%',
+    minHeight: '72%',
     paddingHorizontal: 12,
     paddingVertical: 12,
     gap: 10
@@ -2429,9 +2532,10 @@ const styles = StyleSheet.create({
   },
   itemSelectModalCard: {
     borderWidth: 1,
-    borderRadius: 18,
+    borderTopLeftRadius: 18,
+    borderTopRightRadius: 18,
     width: '100%',
-    maxHeight: '92%',
+    maxHeight: '94%',
     minHeight: '80%',
     paddingHorizontal: 12,
     paddingVertical: 12,

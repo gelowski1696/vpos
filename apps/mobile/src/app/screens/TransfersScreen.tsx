@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { Modal, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
+import { Modal, Pressable, ScrollView, StyleSheet, Text, TextInput, View, useWindowDimensions } from 'react-native';
 import type { SQLiteDatabase } from 'expo-sqlite';
 import { OfflineTransactionService } from '../../services/offline-transaction.service';
 import { toastError, toastSuccess } from '../goey-toast';
@@ -70,6 +70,7 @@ type InventoryBalanceSnapshot = {
 type Props = {
   db: SQLiteDatabase;
   theme: AppTheme;
+  inventoryProjectionVersion?: number;
   onDataChanged?: () => Promise<void> | void;
   syncBusy?: boolean;
 };
@@ -242,7 +243,17 @@ function PickerModal(props: PickerModalProps): JSX.Element {
   );
 }
 
-export function TransfersScreen({ db, theme, onDataChanged, syncBusy = false }: Props): JSX.Element {
+export function TransfersScreen({
+  db,
+  theme,
+  inventoryProjectionVersion = 0,
+  onDataChanged,
+  syncBusy = false
+}: Props): JSX.Element {
+  const { width, height } = useWindowDimensions();
+  const shortEdge = Math.min(width, height);
+  const longEdge = Math.max(width, height);
+  const isCompactLayout = shortEdge <= 360 || longEdge <= 740;
   const tutorialSource = useTutorialTarget('transfer-source');
   const tutorialProduct = useTutorialTarget('transfer-product');
   const tutorialQueue = useTutorialTarget('transfer-queue');
@@ -666,7 +677,7 @@ export function TransfersScreen({ db, theme, onDataChanged, syncBusy = false }: 
     return () => {
       cancelled = true;
     };
-  }, [activeSourceLocationId, syncBusy, rows]);
+  }, [activeSourceLocationId, syncBusy, rows, inventoryProjectionVersion]);
 
   const resolveAvailableQtyForBucket = (productId: string, bucket: 'full' | 'empty'): number => {
     const stock = sourceInventoryByProduct.get(productId) ?? { qtyOnHand: 0, qtyFull: 0, qtyEmpty: 0 };
@@ -977,7 +988,13 @@ export function TransfersScreen({ db, theme, onDataChanged, syncBusy = false }: 
       : locationById.get(destinationLocationId)?.label ?? 'Select destination';
 
   const renderLineTable = (bucket: 'full' | 'empty', lines: LineInput[]): JSX.Element => (
-    <View style={[styles.block, { borderColor: theme.cardBorder, backgroundColor: theme.inputBg }]}>
+    <View
+      style={[
+        styles.block,
+        isCompactLayout ? { paddingHorizontal: 8, paddingVertical: 8, gap: 6 } : null,
+        { borderColor: theme.cardBorder, backgroundColor: theme.inputBg }
+      ]}
+    >
       <View style={styles.blockHeader}>
         <Text style={[styles.blockTitle, { color: theme.heading }]}>
           {bucket === 'full' ? 'FULL Items' : 'EMPTY Items'}
@@ -998,21 +1015,32 @@ export function TransfersScreen({ db, theme, onDataChanged, syncBusy = false }: 
           disabled={saving || syncBusy || lines.length <= 1}
           deleteLabel="Remove"
         >
-          <View style={[styles.lineItemCard, { borderColor: theme.cardBorder, backgroundColor: theme.card }]}>
+          <View
+            style={[
+              styles.lineItemCard,
+              isCompactLayout ? { paddingHorizontal: 8, paddingVertical: 8, gap: 6 } : null,
+              { borderColor: theme.cardBorder, backgroundColor: theme.card }
+            ]}
+          >
             <View style={styles.lineItemHead}>
               <Text style={[styles.lineItemLabel, { color: theme.subtext }]}>
                 {bucket === 'full' ? 'FULL' : 'EMPTY'} Line {index + 1}
               </Text>
             </View>
 
-            <View style={styles.lineRow}>
+            <View style={[styles.lineRow, isCompactLayout ? { flexDirection: 'column', alignItems: 'stretch', gap: 6 } : null]}>
               <Pressable
                 onPress={() => openItemPicker(bucket, line.key)}
-                style={[styles.selectorButton, styles.selectorHalf, { borderColor: theme.cardBorder, backgroundColor: theme.inputBg }]}
+                style={[
+                  styles.selectorButton,
+                  styles.selectorHalf,
+                  isCompactLayout ? { paddingHorizontal: 10, paddingVertical: 9 } : null,
+                  { borderColor: theme.cardBorder, backgroundColor: theme.inputBg }
+                ]}
                 disabled={saving || syncBusy}
               >
                 <Text style={[styles.selectorLabel, { color: theme.subtext }]}>Item</Text>
-                <Text style={[styles.selectorValue, { color: theme.inputText }]}>
+                <Text style={[styles.selectorValue, isCompactLayout ? { fontSize: 13 } : null, { color: theme.inputText }]} numberOfLines={1}>
                   {productById.get(line.productId)?.label ?? 'Select item'}
                 </Text>
                 {(productById.get(line.productId)?.subtitle ?? productById.get(line.productId)?.group) ? (
@@ -1021,12 +1049,12 @@ export function TransfersScreen({ db, theme, onDataChanged, syncBusy = false }: 
                   </Text>
                 ) : null}
               </Pressable>
-              <View style={styles.qtyWrap}>
+              <View style={[styles.qtyWrap, isCompactLayout ? { alignItems: 'flex-start' } : null]}>
                 <Text style={[styles.qtyLabel, { color: theme.subtext }]}>Qty</Text>
-                <View style={styles.qtyStepper}>
+                <View style={[styles.qtyStepper, isCompactLayout ? { gap: 4 } : null]}>
                   <Pressable
                     onPress={() => stepLineQtyChecked(bucket, line.key, -1)}
-                    style={[styles.qtyBtn, { backgroundColor: theme.pillBg }]}
+                    style={[styles.qtyBtn, isCompactLayout ? { width: 30, height: 30 } : null, { backgroundColor: theme.pillBg }]}
                     disabled={saving || syncBusy}
                   >
                     <Text style={[styles.qtyBtnText, { color: theme.pillText }]}>-</Text>
@@ -1039,12 +1067,13 @@ export function TransfersScreen({ db, theme, onDataChanged, syncBusy = false }: 
                     placeholderTextColor={theme.inputPlaceholder}
                     style={[
                       styles.qtyInput,
+                      isCompactLayout ? { width: 68, paddingHorizontal: 8, paddingVertical: 8 } : null,
                       { backgroundColor: theme.inputBg, color: theme.inputText, borderColor: theme.cardBorder }
                     ]}
                   />
                   <Pressable
                     onPress={() => stepLineQtyChecked(bucket, line.key, 1)}
-                    style={[styles.qtyBtn, { backgroundColor: theme.pillBg }]}
+                    style={[styles.qtyBtn, isCompactLayout ? { width: 30, height: 30 } : null, { backgroundColor: theme.pillBg }]}
                     disabled={saving || syncBusy}
                   >
                     <Text style={[styles.qtyBtnText, { color: theme.pillText }]}>+</Text>
@@ -1059,16 +1088,26 @@ export function TransfersScreen({ db, theme, onDataChanged, syncBusy = false }: 
   );
 
   return (
-    <View style={[styles.card, { backgroundColor: theme.card, borderColor: theme.cardBorder }]}>
-      <View style={styles.header}>
+    <View
+      style={[
+        styles.card,
+        isCompactLayout ? { paddingHorizontal: 10, paddingVertical: 10, gap: 8, borderRadius: 14 } : null,
+        { backgroundColor: theme.card, borderColor: theme.cardBorder }
+      ]}
+    >
+      <View style={[styles.header, isCompactLayout ? { flexDirection: 'column', gap: 8 } : null]}>
         <View style={{ flex: 1 }}>
-          <Text style={[styles.title, { color: theme.heading }]}>Advanced Transfers</Text>
-          <Text style={[styles.sub, { color: theme.subtext }]}>
+          <Text style={[styles.title, isCompactLayout ? { fontSize: 16 } : null, { color: theme.heading }]}>Advanced Transfers</Text>
+          <Text style={[styles.sub, isCompactLayout ? { fontSize: 12 } : null, { color: theme.subtext }]}>
             Supplier, store, and warehouse stock movements with FULL/EMPTY control.
           </Text>
         </View>
         <Pressable
-          style={[styles.refreshBtn, { backgroundColor: saving || syncBusy ? theme.primaryMuted : theme.primary }]}
+          style={[
+            styles.refreshBtn,
+            isCompactLayout ? { alignSelf: 'stretch' } : null,
+            { backgroundColor: saving || syncBusy ? theme.primaryMuted : theme.primary }
+          ]}
           onPress={() => {
             void refresh();
             void refreshMasterData();
@@ -1079,26 +1118,48 @@ export function TransfersScreen({ db, theme, onDataChanged, syncBusy = false }: 
         </Pressable>
       </View>
 
-      <View style={styles.kpiRow}>
-        <View style={[styles.kpiCard, { borderColor: theme.cardBorder, backgroundColor: theme.inputBg }]}>
+      <View style={[styles.kpiRow, isCompactLayout ? { flexWrap: 'wrap', gap: 6 } : null]}>
+        <View
+          style={[
+            styles.kpiCard,
+            isCompactLayout ? { minWidth: '48%', flexBasis: '48%', paddingHorizontal: 8, paddingVertical: 6 } : null,
+            { borderColor: theme.cardBorder, backgroundColor: theme.inputBg }
+          ]}
+        >
           <Text style={[styles.kpiLabel, { color: theme.subtext }]}>Pending</Text>
           <Text style={[styles.kpiValue, { color: transferStats.pending > 0 ? theme.danger : theme.heading }]}>
             {transferStats.pending}
           </Text>
         </View>
-        <View style={[styles.kpiCard, { borderColor: theme.cardBorder, backgroundColor: theme.inputBg }]}>
+        <View
+          style={[
+            styles.kpiCard,
+            isCompactLayout ? { minWidth: '48%', flexBasis: '48%', paddingHorizontal: 8, paddingVertical: 6 } : null,
+            { borderColor: theme.cardBorder, backgroundColor: theme.inputBg }
+          ]}
+        >
           <Text style={[styles.kpiLabel, { color: theme.subtext }]}>Needs Review</Text>
           <Text style={[styles.kpiValue, { color: transferStats.needsReview > 0 ? theme.danger : theme.heading }]}>
             {transferStats.needsReview}
           </Text>
         </View>
-        <View style={[styles.kpiCard, { borderColor: theme.cardBorder, backgroundColor: theme.inputBg }]}>
+        <View
+          style={[
+            styles.kpiCard,
+            isCompactLayout ? { minWidth: '48%', flexBasis: '48%', paddingHorizontal: 8, paddingVertical: 6 } : null,
+            { borderColor: theme.cardBorder, backgroundColor: theme.inputBg }
+          ]}
+        >
           <Text style={[styles.kpiLabel, { color: theme.subtext }]}>Synced</Text>
           <Text style={[styles.kpiValue, { color: theme.heading }]}>{transferStats.synced}</Text>
         </View>
       </View>
 
-      <ScrollView style={{ maxHeight: 620 }} contentContainerStyle={{ gap: 10 }} nestedScrollEnabled>
+      <ScrollView
+        style={{ maxHeight: isCompactLayout ? 560 : 620 }}
+        contentContainerStyle={{ gap: isCompactLayout ? 8 : 10 }}
+        nestedScrollEnabled
+      >
         <View ref={tutorialSource.ref} onLayout={tutorialSource.onLayout}>
           <Pressable
             onPress={() => {
@@ -1108,11 +1169,15 @@ export function TransfersScreen({ db, theme, onDataChanged, syncBusy = false }: 
               setTransferTypeSearch('');
               setTransferTypeModalOpen(true);
             }}
-            style={[styles.selectorButton, { borderColor: theme.cardBorder, backgroundColor: theme.inputBg }]}
+            style={[
+              styles.selectorButton,
+              isCompactLayout ? { paddingHorizontal: 10, paddingVertical: 9 } : null,
+              { borderColor: theme.cardBorder, backgroundColor: theme.inputBg }
+            ]}
             disabled={saving || syncBusy}
           >
             <Text style={[styles.selectorLabel, { color: theme.subtext }]}>Transfer Type</Text>
-            <Text style={[styles.selectorValue, { color: theme.inputText }]}>
+            <Text style={[styles.selectorValue, isCompactLayout ? { fontSize: 13 } : null, { color: theme.inputText }]} numberOfLines={1}>
               {selectedMode?.label ?? 'Select transfer type'}
             </Text>
           </Pressable>
@@ -1128,11 +1193,15 @@ export function TransfersScreen({ db, theme, onDataChanged, syncBusy = false }: 
               setSupplierSearch('');
               setSupplierModalOpen(true);
             }}
-            style={[styles.selectorButton, { borderColor: theme.cardBorder, backgroundColor: theme.inputBg }]}
+            style={[
+              styles.selectorButton,
+              isCompactLayout ? { paddingHorizontal: 10, paddingVertical: 9 } : null,
+              { borderColor: theme.cardBorder, backgroundColor: theme.inputBg }
+            ]}
             disabled={saving || syncBusy}
           >
             <Text style={[styles.selectorLabel, { color: theme.subtext }]}>Supplier</Text>
-            <Text style={[styles.selectorValue, { color: theme.inputText }]}>
+            <Text style={[styles.selectorValue, isCompactLayout ? { fontSize: 13 } : null, { color: theme.inputText }]} numberOfLines={1}>
               {selectedSupplier?.label ?? 'Select supplier'}
             </Text>
           </Pressable>
@@ -1147,11 +1216,15 @@ export function TransfersScreen({ db, theme, onDataChanged, syncBusy = false }: 
               setSourceSearch('');
               setSourceModalOpen(true);
             }}
-            style={[styles.selectorButton, { borderColor: theme.cardBorder, backgroundColor: theme.inputBg }]}
+            style={[
+              styles.selectorButton,
+              isCompactLayout ? { paddingHorizontal: 10, paddingVertical: 9 } : null,
+              { borderColor: theme.cardBorder, backgroundColor: theme.inputBg }
+            ]}
             disabled={saving || syncBusy}
           >
             <Text style={[styles.selectorLabel, { color: theme.subtext }]}>Source Location</Text>
-            <Text style={[styles.selectorValue, { color: theme.inputText }]}>
+            <Text style={[styles.selectorValue, isCompactLayout ? { fontSize: 13 } : null, { color: theme.inputText }]} numberOfLines={1}>
               {selectedSourceLocation?.label ?? 'Select source'}
             </Text>
           </Pressable>
@@ -1166,17 +1239,27 @@ export function TransfersScreen({ db, theme, onDataChanged, syncBusy = false }: 
               setDestinationSearch('');
               setDestinationModalOpen(true);
             }}
-            style={[styles.selectorButton, { borderColor: theme.cardBorder, backgroundColor: theme.inputBg }]}
+            style={[
+              styles.selectorButton,
+              isCompactLayout ? { paddingHorizontal: 10, paddingVertical: 9 } : null,
+              { borderColor: theme.cardBorder, backgroundColor: theme.inputBg }
+            ]}
             disabled={saving || syncBusy}
           >
             <Text style={[styles.selectorLabel, { color: theme.subtext }]}>Destination Location</Text>
-            <Text style={[styles.selectorValue, { color: theme.inputText }]}>
+            <Text style={[styles.selectorValue, isCompactLayout ? { fontSize: 13 } : null, { color: theme.inputText }]} numberOfLines={1}>
               {selectedDestinationLocation?.label ?? 'Select destination'}
             </Text>
           </Pressable>
         ) : null}
 
-        <View style={[styles.endpointCard, { borderColor: theme.cardBorder, backgroundColor: theme.pillBg }]}>
+        <View
+          style={[
+            styles.endpointCard,
+            isCompactLayout ? { paddingHorizontal: 10, paddingVertical: 8 } : null,
+            { borderColor: theme.cardBorder, backgroundColor: theme.pillBg }
+          ]}
+        >
           <Text style={[styles.endpointTitle, { color: theme.pillText }]}>Transfer Route</Text>
           <Text style={[styles.endpointText, { color: theme.pillText }]}>{endpointSourceLabel}</Text>
           <Text style={[styles.endpointArrow, { color: theme.pillText }]}>→</Text>
@@ -1188,7 +1271,13 @@ export function TransfersScreen({ db, theme, onDataChanged, syncBusy = false }: 
           {renderLineTable('empty', emptyLines)}
         </View>
 
-        <View style={[styles.summaryCard, { borderColor: theme.cardBorder, backgroundColor: theme.inputBg }]}>
+        <View
+          style={[
+            styles.summaryCard,
+            isCompactLayout ? { paddingHorizontal: 8, paddingVertical: 8 } : null,
+            { borderColor: theme.cardBorder, backgroundColor: theme.inputBg }
+          ]}
+        >
           <Text style={[styles.summaryText, { color: theme.subtext }]}>
             Active Shift: {activeShiftId ?? 'No active shift'}
           </Text>
@@ -1283,7 +1372,13 @@ export function TransfersScreen({ db, theme, onDataChanged, syncBusy = false }: 
               setItemPickerTarget(null);
             }}
           />
-          <View style={[styles.itemSelectModalCard, { backgroundColor: theme.card, borderColor: theme.cardBorder }]}>
+          <View
+            style={[
+              styles.itemSelectModalCard,
+              isCompactLayout ? { minHeight: '86%', maxHeight: '96%', paddingHorizontal: 10, paddingVertical: 10, gap: 8 } : null,
+              { backgroundColor: theme.card, borderColor: theme.cardBorder }
+            ]}
+          >
             <Text style={[styles.modalTitle, { color: theme.heading }]}>Select Item</Text>
             <TextInput
               value={itemSearch}
@@ -1292,16 +1387,24 @@ export function TransfersScreen({ db, theme, onDataChanged, syncBusy = false }: 
               placeholderTextColor={theme.inputPlaceholder}
               style={[styles.modalSearch, { backgroundColor: theme.inputBg, color: theme.inputText }]}
             />
-            <View style={styles.itemCategoryWrap}>
+            <View style={[styles.itemCategoryWrap, isCompactLayout ? { height: 38 } : null]}>
               <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.itemCategoryRow}>
                 <Pressable
                   onPress={() => setItemCategoryFilter('ALL')}
-                  style={[styles.itemCategoryChip, { backgroundColor: itemCategoryFilter === 'ALL' ? theme.primary : theme.pillBg }]}
+                  style={[
+                    styles.itemCategoryChip,
+                    isCompactLayout ? { height: 28, maxWidth: 150, paddingHorizontal: 10 } : null,
+                    { backgroundColor: itemCategoryFilter === 'ALL' ? theme.primary : theme.pillBg }
+                  ]}
                 >
                   <Text
                     numberOfLines={1}
                     ellipsizeMode="tail"
-                    style={[styles.itemCategoryChipText, { color: itemCategoryFilter === 'ALL' ? '#FFFFFF' : theme.pillText }]}
+                    style={[
+                      styles.itemCategoryChipText,
+                      isCompactLayout ? { maxWidth: 130, fontSize: 10 } : null,
+                      { color: itemCategoryFilter === 'ALL' ? '#FFFFFF' : theme.pillText }
+                    ]}
                   >
                     All Categories
                   </Text>
@@ -1312,12 +1415,20 @@ export function TransfersScreen({ db, theme, onDataChanged, syncBusy = false }: 
                     <Pressable
                       key={category}
                       onPress={() => setItemCategoryFilter(category)}
-                      style={[styles.itemCategoryChip, { backgroundColor: selected ? theme.primary : theme.pillBg }]}
+                      style={[
+                        styles.itemCategoryChip,
+                        isCompactLayout ? { height: 28, maxWidth: 150, paddingHorizontal: 10 } : null,
+                        { backgroundColor: selected ? theme.primary : theme.pillBg }
+                      ]}
                     >
                       <Text
                         numberOfLines={1}
                         ellipsizeMode="tail"
-                        style={[styles.itemCategoryChipText, { color: selected ? '#FFFFFF' : theme.pillText }]}
+                        style={[
+                          styles.itemCategoryChipText,
+                          isCompactLayout ? { maxWidth: 130, fontSize: 10 } : null,
+                          { color: selected ? '#FFFFFF' : theme.pillText }
+                        ]}
                       >
                         {category}
                       </Text>
@@ -1356,6 +1467,7 @@ export function TransfersScreen({ db, theme, onDataChanged, syncBusy = false }: 
                       disabled={disabled}
                       style={[
                         styles.itemSelectCard,
+                        isCompactLayout ? { paddingHorizontal: 10, paddingVertical: 10, gap: 6 } : null,
                         disabled ? styles.itemSelectCardDisabled : null,
                         { borderColor: theme.cardBorder, backgroundColor: theme.inputBg }
                       ]}
@@ -1373,7 +1485,7 @@ export function TransfersScreen({ db, theme, onDataChanged, syncBusy = false }: 
                           <Text style={[styles.itemSelectCardTitle, { color: theme.heading }]}>{product.label}</Text>
                           <Text style={[styles.itemSelectCardSub, { color: theme.subtext }]}>{product.subtitle ?? product.id}</Text>
                         </View>
-                        <View style={[styles.itemSelectPricePill, { backgroundColor: theme.pillBg }]}>
+                        <View style={[styles.itemSelectPricePill, isCompactLayout ? { paddingHorizontal: 8, paddingVertical: 4 } : null, { backgroundColor: theme.pillBg }]}>
                           <Text style={[styles.itemSelectPriceText, { color: theme.pillText }]}>{product.group ?? 'General'}</Text>
                         </View>
                       </View>
@@ -1616,24 +1728,25 @@ const styles = StyleSheet.create({
   },
   modalBackdrop: {
     flex: 1,
-    backgroundColor: 'rgba(10, 16, 28, 0.56)',
-    paddingHorizontal: 16,
-    paddingVertical: 24,
-    justifyContent: 'center'
+    backgroundColor: 'rgba(2, 8, 23, 0.55)',
+    paddingTop: 12,
+    justifyContent: 'flex-end'
   },
   modalCard: {
     borderWidth: 1,
-    borderRadius: 16,
+    borderTopLeftRadius: 18,
+    borderTopRightRadius: 18,
     width: '100%',
-    minHeight: '80%',
-    maxHeight: '92%',
+    minHeight: '72%',
+    maxHeight: '90%',
     paddingHorizontal: 12,
     paddingVertical: 12,
     gap: 10
   },
   itemSelectModalCard: {
     borderWidth: 1,
-    borderRadius: 18,
+    borderTopLeftRadius: 18,
+    borderTopRightRadius: 18,
     width: '100%',
     maxHeight: '92%',
     minHeight: '80%',

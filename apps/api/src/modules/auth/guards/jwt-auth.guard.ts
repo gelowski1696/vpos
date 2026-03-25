@@ -20,18 +20,23 @@ export class JwtAuthGuard implements CanActivate {
     }
 
     const request = context.switchToHttp().getRequest<{
-      headers: Record<string, string | undefined>;
+      headers: Record<string, string | string[] | undefined>;
+      url?: string;
+      originalUrl?: string;
       clientId?: string;
       companyId?: string;
       user?: { sub: string; email: string; roles: string[]; company_id: string };
     }>();
 
-    const header = request.headers.authorization;
-    if (!header?.startsWith('Bearer ')) {
+    const authorization = this.pickHeader(request.headers.authorization);
+    if (!authorization?.startsWith('Bearer ')) {
+      if (this.tryPlatformOwnerKeyAuth(request)) {
+        return true;
+      }
       throw new UnauthorizedException('Missing bearer token');
     }
 
-    const token = header.slice('Bearer '.length);
+    const token = authorization.slice('Bearer '.length);
     try {
       const payload = this.jwtService.verify(token, {
         secret: process.env.JWT_ACCESS_SECRET ?? 'dev-access-secret'
@@ -63,5 +68,67 @@ export class JwtAuthGuard implements CanActivate {
       }
       throw new UnauthorizedException('Invalid token');
     }
+  }
+
+  private pickHeader(input: string | string[] | undefined): string | null {
+    if (Array.isArray(input)) {
+      return input[0]?.trim() || null;
+    }
+    if (typeof input === 'string') {
+      return input.trim() || null;
+    }
+    return null;
+  }
+
+  private tryPlatformOwnerKeyAuth(request: {
+    headers: Record<string, string | string[] | undefined>;
+    url?: string;
+    originalUrl?: string;
+    companyId?: string;
+    user?: { sub: string; email: string; roles: string[]; company_id: string };
+  }): boolean {
+    const expected =
+      process.env.VCARD_PLATFORM_OWNER_KEY?.trim() ??
+      process.env.VPOS_PLATFORM_OWNER_KEY?.trim() ??
+      '';
+    if (!expected) {
+      return false;
+    }
+
+    const provided =
+      this.pickHeader(request.headers['x-platform-owner-key']) ??
+      this.pickHeader(request.headers['x-vcard-admin-key']) ??
+      '';
+    if (!provided || provided !== expected) {
+      return false;
+    }
+
+    const path = (request.originalUrl ?? request.url ?? '').toLowerCase();
+    const allowedPrefixes = [
+      '/api/vcard',
+      '/vcard',
+      '/api/nfc',
+      '/nfc',
+      '/api/master-data/branches',
+      '/master-data/branches',
+      '/api/master-data/locations',
+      '/master-data/locations',
+      '/api/master-data/customers',
+      '/master-data/customers'
+    ];
+    if (!allowedPrefixes.some((prefix) => path.startsWith(prefix))) {
+      return false;
+    }
+
+    if (!request.companyId) {
+      request.companyId = 'platform-owner';
+    }
+    request.user = {
+      sub: 'platform-owner-service',
+      email: 'platform-owner-service@vmjamtech.local',
+      roles: ['platform_owner'],
+      company_id: request.companyId
+    };
+    return true;
   }
 }

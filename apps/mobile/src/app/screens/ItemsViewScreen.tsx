@@ -1,12 +1,18 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { Modal, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 import type { SQLiteDatabase } from 'expo-sqlite';
 import type { AppTheme } from '../theme';
 import { useTutorialTarget } from '../tutorial/tutorial-provider';
+import {
+  loadPendingInventoryDeltaByProductForLocation,
+  mergeInventoryWithDeltas
+} from '../local-stock-projection';
 
 type Props = {
   db: SQLiteDatabase;
   theme: AppTheme;
+  inventoryProjectionVersion?: number;
+  syncBusy?: boolean;
 };
 
 type MasterDataRow = {
@@ -330,9 +336,15 @@ function describePriceScope(list: PriceListRecord): string {
   return 'Global';
 }
 
-export function ItemsViewScreen({ db, theme }: Props): JSX.Element {
+export function ItemsViewScreen({
+  db,
+  theme,
+  inventoryProjectionVersion = 0,
+  syncBusy = false
+}: Props): JSX.Element {
   const tutorialSearch = useTutorialTarget('items-search');
   const tutorialFirstCard = useTutorialTarget('items-first-card');
+  const prevSyncBusyRef = useRef(syncBusy);
   const [query, setQuery] = useState('');
   const [rows, setRows] = useState<ProductRecord[]>([]);
   const [cylinderMap, setCylinderMap] = useState<Record<string, CylinderTypeRecord>>({});
@@ -429,11 +441,15 @@ export function ItemsViewScreen({ db, theme }: Props): JSX.Element {
         existing.qtyEmpty += parsed.qtyEmpty;
         inventoryByProduct.set(parsed.productId, existing);
       }
+      const pendingDeltaByProduct = activeLocationId
+        ? await loadPendingInventoryDeltaByProductForLocation(db, activeLocationId)
+        : new Map();
+      const projectedInventoryByProduct = mergeInventoryWithDeltas(inventoryByProduct, pendingDeltaByProduct);
 
       const nextStockByProduct: Record<string, ProductStockMetrics> = {};
       for (const product of nextProducts) {
         if (product.isLpg && product.cylinderTypeId) {
-          const inventory = inventoryByProduct.get(product.id);
+          const inventory = projectedInventoryByProduct.get(product.id);
           if (inventory) {
             nextStockByProduct[product.id] = {
               qtyFull: inventory.qtyFull,
@@ -456,7 +472,7 @@ export function ItemsViewScreen({ db, theme }: Props): JSX.Element {
           continue;
         }
 
-        const qtyOnHand = inventoryByProduct.get(product.id)?.qtyOnHand;
+        const qtyOnHand = projectedInventoryByProduct.get(product.id)?.qtyOnHand;
         nextStockByProduct[product.id] = {
           qtyFull: 0,
           qtyEmpty: 0,
@@ -486,7 +502,14 @@ export function ItemsViewScreen({ db, theme }: Props): JSX.Element {
     return () => {
       mounted = false;
     };
-  }, [db]);
+  }, [db, inventoryProjectionVersion]);
+
+  useEffect(() => {
+    if (prevSyncBusyRef.current && !syncBusy) {
+      void refresh();
+    }
+    prevSyncBusyRef.current = syncBusy;
+  }, [syncBusy]);
 
   const categoryOptions = useMemo<string[]>(() => {
     const set = new Set<string>();
@@ -971,24 +994,28 @@ const styles = StyleSheet.create({
   },
   modalOverlay: {
     flex: 1,
-    justifyContent: 'flex-end'
+    justifyContent: 'flex-end',
+    paddingTop: 12
   },
   modalBackdrop: {
     ...StyleSheet.absoluteFillObject,
-    backgroundColor: 'rgba(3, 16, 28, 0.52)'
+    backgroundColor: 'rgba(2, 8, 23, 0.55)'
   },
   modalCard: {
+    maxHeight: '90%',
+    minHeight: '72%',
     borderTopLeftRadius: 18,
     borderTopRightRadius: 18,
     borderWidth: 1,
-    paddingHorizontal: 14,
-    paddingVertical: 12,
-    gap: 10,
-    maxHeight: '86%'
+    paddingHorizontal: 12,
+    paddingTop: 12,
+    paddingBottom: 14,
+    gap: 10
   },
   modalHeader: {
     flexDirection: 'row',
     alignItems: 'center',
+    justifyContent: 'space-between',
     gap: 8
   },
   modalTitle: {
@@ -1002,6 +1029,7 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderRadius: 10,
     minHeight: 34,
+    minWidth: 72,
     paddingHorizontal: 12,
     alignItems: 'center',
     justifyContent: 'center'

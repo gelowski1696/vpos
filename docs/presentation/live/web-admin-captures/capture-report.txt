@@ -1,0 +1,46 @@
+Base URL: https://vmjamtech.com
+Captured files: 38
+ - 00-login-success.png
+ - 01-dashboard.png
+ - function-global-search.png
+ - 02-reports.png
+ - 03-sales-list.png
+ - function-sales-detail-modal.png
+ - 04-customer-payments.png
+ - 05-customers.png
+ - function-customer-transactions-modal.png
+ - function-customers-create-modal.png
+ - 06-products.png
+ - function-product-view.png
+ - function-products-create-modal.png
+ - 07-product-categories.png
+ - function-product-categories-create-modal.png
+ - 08-product-brands.png
+ - function-product-brands-create-modal.png
+ - 09-cylinder-types.png
+ - function-cylinder-types-create-modal.png
+ - 10-opening-stock.png
+ - function-opening-stock-create-modal.png
+ - 11-price-lists.png
+ - 12-costing-setup.png
+ - 13-transfer-list.png
+ - 14-branches.png
+ - 15-locations.png
+ - 16-users.png
+ - 17-personnel.png
+ - function-personnel-create-modal.png
+ - 18-suppliers.png
+ - function-suppliers-create-modal.png
+ - 19-branding.png
+ - 20-personnel-roles.png
+ - function-personnel-roles-create-modal.png
+ - 21-expense-categories.png
+ - function-expense-categories-create-modal.png
+ - 22-sync-reviews.png
+ - 23-audit-logs.png
+
+Skipped items: 4
+ - opening-stock-modal (no matching element)
+ - create-modal /branches (no matching element)
+ - create-modal /locations (no matching element)
+ - create-modal /users (no matching element)

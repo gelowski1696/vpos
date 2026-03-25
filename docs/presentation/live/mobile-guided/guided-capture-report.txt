@@ -1,0 +1,16 @@
+﻿Guided capture generated at: 2026-03-18T21:05:28
+Files:
+ - 20260318-210304-00-current.png
+ - 20260318-210308-01-tab-home-ok.png
+ - 20260318-210312-02-tab-pos-ok.png
+ - 20260318-210316-03-tab-sales-history-ok.png
+ - 20260318-210320-04-tab-transfer-create-ok.png
+ - 20260318-210325-05-tab-transfers-history-ok.png
+ - 20260318-210333-06-side-menu-open.png
+ - 20260318-210345-07-menu-shift-ok.png
+ - 20260318-210413-08-menu-expense-notfound.png
+ - 20260318-210425-09-menu-items-ok.png
+ - 20260318-210437-10-menu-customers-ok.png
+ - 20260318-210449-11-menu-settings-ok.png
+ - 20260318-210516-12-menu-sync-now-notfound.png
+ - 20260318-210528-13-menu-download-branch-data-ok.png

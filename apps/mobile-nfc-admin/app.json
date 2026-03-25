@@ -1,0 +1,26 @@
+{
+  "expo": {
+    "name": "V-CARD",
+    "slug": "vpos-nfc-admin",
+    "scheme": "vposnfcadmin",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "userInterfaceStyle": "automatic",
+    "icon": "./assests/vpos_logo.png",
+    "splash": {
+      "image": "./assests/vpos_logo.png",
+      "resizeMode": "contain",
+      "backgroundColor": "#ffffff"
+    },
+    "android": {
+      "package": "com.vmjamtech.vcard",
+      "usesCleartextTraffic": true,
+      "adaptiveIcon": {
+        "foregroundImage": "./assests/vpos_logo.png",
+        "backgroundColor": "#ffffff"
+      },
+      "permissions": ["INTERNET", "NFC"]
+    },
+    "plugins": ["expo-dev-client", "./plugins/withNfcAndroid"]
+  }
+}

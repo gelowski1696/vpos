@@ -14,6 +14,57 @@
 - Milestone 6-7: `[IN PROGRESS]`.
 
 ### Latest Completed Work
+- [x] Web Customers transaction history (similar to mobile) implemented:
+  - Added per-row `Transactions` action on Customers table.
+  - Added transaction modal that merges:
+    - customer sales history
+    - customer payment history
+  - Added summary cards in modal:
+    - sales count
+    - payments count
+    - sales total
+    - payments total
+    - outstanding balance
+  - Added API support for sales-by-customer:
+    - `GET /reports/sales/list` now accepts `customer_id` filter.
+  - Files:
+    - `apps/web/src/app/(admin)/customers/page.tsx`
+    - `apps/api/src/modules/reports/reports.service.ts`
+    - `apps/api/src/modules/reports/reports.controller.ts`
+  - Validation:
+    - `pnpm --filter @vpos/api typecheck` passed
+    - `pnpm --filter @vpos/web exec tsc --noEmit` passed
+- [x] Global search results now deep-link to exact records:
+  - Sales:
+    - search result routes to `/sales-list?sale_id=<id>` and auto-opens the matched Sale Details modal.
+  - Customers:
+    - search result routes to `/customers?customer_id=<id>` and auto-opens the matched customer record form.
+  - Products:
+    - search result routes to `/products?product_id=<id>` and auto-opens the matched Product Details modal.
+  - Added URL parameter cleanup after record open to prevent repeat auto-open.
+  - Files:
+    - `apps/web/src/components/admin-shell.tsx`
+    - `apps/web/src/app/(admin)/sales-list/page.tsx`
+    - `apps/web/src/app/(admin)/customers/page.tsx`
+    - `apps/web/src/app/(admin)/products/page.tsx`
+    - `apps/web/src/components/entity-manager.tsx`
+  - Validation:
+    - `pnpm --filter @vpos/web exec tsc --noEmit` passed
+- [x] Web global search now includes grouped records in one dropdown:
+  - Added grouped results for:
+    - `Pages`
+    - `Sales`
+    - `Customers`
+    - `Products`
+  - Search behavior:
+    - single navbar search input
+    - grouped dropdown sections
+    - keyboard navigation across groups
+    - debounced global-data loading with short cache window for smoother UX
+  - File:
+    - `apps/web/src/components/admin-shell.tsx`
+  - Validation:
+    - `pnpm --filter @vpos/web exec tsc --noEmit` passed
 - [x] Opening Stock modal UX aligned to Price List multi-add pattern:
   - Added `Add Multiple Products` picker modal in Opening Stock apply flow.
   - Picker supports:

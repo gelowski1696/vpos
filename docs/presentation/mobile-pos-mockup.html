@@ -1,0 +1,96 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>VPOS Mobile POS Mockup</title>
+    <style>
+      body {
+        margin: 0;
+        background: radial-gradient(circle at center, #1a1a1a 0%, #070707 60%);
+        font-family: "Segoe UI", Arial, sans-serif;
+        color: #f2f2f2;
+      }
+      .wrap {
+        width: 1366px;
+        min-height: 768px;
+        margin: 0 auto;
+        padding: 34px;
+        box-sizing: border-box;
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 28px;
+        align-items: center;
+      }
+      .title {
+        font-size: 38px;
+        margin: 0 0 12px 0;
+      }
+      .tag {
+        color: #f3c64f;
+        letter-spacing: 0.16em;
+        font-size: 11px;
+        text-transform: uppercase;
+        margin-bottom: 8px;
+      }
+      .note {
+        color: #c9c9c9;
+        font-size: 17px;
+        line-height: 1.55;
+      }
+      .phone {
+        width: 360px;
+        margin: 0 auto;
+        border: 11px solid #181818;
+        border-radius: 36px;
+        padding: 12px;
+        background: #000;
+        box-shadow: 0 26px 60px rgba(0, 0, 0, 0.5);
+      }
+      .phone img {
+        width: 100%;
+        border-radius: 24px;
+        display: block;
+      }
+      .kpis {
+        margin-top: 18px;
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 10px;
+      }
+      .kpi {
+        border: 1px solid rgba(243, 198, 79, 0.26);
+        border-radius: 10px;
+        padding: 10px;
+        background: rgba(255, 255, 255, 0.03);
+      }
+      .kpi b {
+        display: block;
+        color: #f3c64f;
+      }
+    </style>
+  </head>
+  <body>
+    <main class="wrap">
+      <section>
+        <div class="tag">VMJAMTECH VPOS</div>
+        <h1 class="title">Mobile POS & Field Operations</h1>
+        <p class="note">
+          Designed for cashier lane, delivery rider, and barangay route workflows.
+          Works with offline queueing, sync, shift control, and thermal printing.
+        </p>
+        <div class="kpis">
+          <div class="kpi"><b>Offline-First</b><span>Queue + Sync</span></div>
+          <div class="kpi"><b>PIN Lock</b><span>Fast Access</span></div>
+          <div class="kpi"><b>Transfers</b><span>FULL/EMPTY Tracking</span></div>
+          <div class="kpi"><b>Receipts</b><span>Printer Ready</span></div>
+        </div>
+      </section>
+      <section>
+        <div class="phone">
+          <img src="../../apps/web/public/illustrations/mockup-mobile-pos.svg" alt="Mobile POS Mockup" />
+        </div>
+      </section>
+    </main>
+  </body>
+</html>

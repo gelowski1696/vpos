@@ -1,0 +1,16 @@
+VPOS Mobile Printer Diagnostic
+Timestamp: 2026-03-22T21:03:59
+Serial: 
+
+Manufacturer: SENRAISE
+Brand: SENRAISE
+Model: H10
+Device: H10
+Android: 14 (SDK 34)
+No obvious printer vendor package found via pm list packages.
+package:/data/app/~~ZQxgBqv2GecFWGI6z86e-Q==/com.vmjamtech.vpos-KAPs-JVJcYIIXtWxs_vR2g==/base.apk
+No printer logs found in last 400 lines.
+SDK hint from packages: UNKNOWN
+1) In VPOS Settings > Printer, run Test Print with TCP ESC/POS first if printer has LAN IP:9100.
+2) If printer is paired over Bluetooth, use Bluetooth ESC/POS and set MAC.
+3) If device has built-in printer and sdkHint is not IMIN, custom native integration is required for that vendor SDK.

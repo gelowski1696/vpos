@@ -548,16 +548,16 @@ const styles = StyleSheet.create({
   },
   modalOverlay: {
     flex: 1,
-    justifyContent: 'flex-end'
+    justifyContent: 'flex-end',
+    paddingTop: 12
   },
   modalBackdrop: {
     ...StyleSheet.absoluteFillObject,
     backgroundColor: 'rgba(2, 8, 23, 0.55)'
   },
   modalCard: {
-    height: '75%',
-    maxHeight: '88%',
-    minHeight: '75%',
+    maxHeight: '90%',
+    minHeight: '72%',
     borderTopLeftRadius: 18,
     borderTopRightRadius: 18,
     borderWidth: 1,
@@ -569,6 +569,7 @@ const styles = StyleSheet.create({
   modalHead: {
     flexDirection: 'row',
     alignItems: 'center',
+    justifyContent: 'space-between',
     gap: 8
   },
   modalTitle: {
@@ -581,6 +582,7 @@ const styles = StyleSheet.create({
   },
   closeBtn: {
     minHeight: 34,
+    minWidth: 72,
     borderWidth: 1,
     borderRadius: 10,
     alignItems: 'center',

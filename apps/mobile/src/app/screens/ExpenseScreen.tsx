@@ -786,35 +786,40 @@ const styles = StyleSheet.create({
   },
   modalOverlay: {
     flex: 1,
-    justifyContent: 'flex-end'
+    justifyContent: 'flex-end',
+    paddingTop: 12
   },
   modalBackdrop: {
     ...StyleSheet.absoluteFillObject,
-    backgroundColor: 'rgba(3, 16, 28, 0.52)'
+    backgroundColor: 'rgba(2, 8, 23, 0.55)'
   },
   modalCard: {
+    maxHeight: '90%',
+    minHeight: '72%',
     borderTopLeftRadius: 18,
     borderTopRightRadius: 18,
     borderWidth: 1,
-    paddingHorizontal: 14,
-    paddingVertical: 12,
-    gap: 10,
-    maxHeight: '84%'
+    paddingHorizontal: 12,
+    paddingTop: 12,
+    paddingBottom: 14,
+    gap: 10
   },
   pickerCard: {
-    marginHorizontal: 16,
-    marginVertical: 80,
-    borderRadius: 14,
+    maxHeight: '90%',
+    minHeight: '72%',
+    borderTopLeftRadius: 18,
+    borderTopRightRadius: 18,
     borderWidth: 1,
     paddingHorizontal: 12,
-    paddingVertical: 12,
-    gap: 10,
-    flex: 1
+    paddingTop: 12,
+    paddingBottom: 14,
+    gap: 10
   },
   modalHead: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 10
+    justifyContent: 'space-between',
+    gap: 8
   },
   modalTitle: {
     fontSize: 16,
@@ -825,6 +830,7 @@ const styles = StyleSheet.create({
   },
   modalClose: {
     minHeight: 34,
+    minWidth: 72,
     borderRadius: 10,
     borderWidth: 1,
     paddingHorizontal: 12,
@@ -925,7 +931,7 @@ const styles = StyleSheet.create({
   },
   quickRow: {
     flexDirection: 'row',
-    gap: 6
+    gap: 8
   },
   quickChip: {
     paddingHorizontal: 10,

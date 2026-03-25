@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
+import { Pressable, ScrollView, StyleSheet, Text, TextInput, View, useWindowDimensions } from 'react-native';
 import type { AppTheme } from '../theme';
 import type { MasterDataOption } from '../master-data-local';
 
@@ -24,6 +24,8 @@ export function MasterDataSelect({
   disabled = false,
   optional = false
 }: Props): JSX.Element {
+  const { width, height } = useWindowDimensions();
+  const compactLayout = Math.min(width, height) <= 360 || Math.max(width, height) <= 740;
   const [open, setOpen] = useState(false);
   const [search, setSearch] = useState('');
   const [groupFilter, setGroupFilter] = useState('ALL');
@@ -71,7 +73,15 @@ export function MasterDataSelect({
 
   return (
     <View style={styles.wrap}>
-      <Text style={[styles.label, { color: theme.subtext }]}>{label}</Text>
+      <Text
+        style={[
+          styles.label,
+          { color: theme.subtext },
+          compactLayout ? { fontSize: 11 } : null
+        ]}
+      >
+        {label}
+      </Text>
       <Pressable
         onPress={() => {
           if (!disabled) {
@@ -80,6 +90,13 @@ export function MasterDataSelect({
         }}
         style={[
           styles.trigger,
+          compactLayout
+            ? {
+                minHeight: 48,
+                paddingHorizontal: 10,
+                paddingVertical: 7
+              }
+            : null,
           {
             backgroundColor: theme.inputBg,
             borderColor: open ? theme.primary : theme.cardBorder,
@@ -88,10 +105,28 @@ export function MasterDataSelect({
         ]}
       >
         <View style={{ flex: 1 }}>
-          <Text style={[styles.triggerText, { color: selected ? theme.inputText : theme.inputPlaceholder }]}>
+          <Text
+            style={[
+              styles.triggerText,
+              { color: selected ? theme.inputText : theme.inputPlaceholder },
+              compactLayout ? { fontSize: 13 } : null
+            ]}
+            numberOfLines={1}
+          >
             {selected ? selected.label : placeholder}
           </Text>
-          {selected?.subtitle ? <Text style={[styles.triggerSub, { color: theme.subtext }]}>{selected.subtitle}</Text> : null}
+          {selected?.subtitle ? (
+            <Text
+              style={[
+                styles.triggerSub,
+                { color: theme.subtext },
+                compactLayout ? { fontSize: 10 } : null
+              ]}
+              numberOfLines={1}
+            >
+              {selected.subtitle}
+            </Text>
+          ) : null}
         </View>
         <Text style={[styles.chevron, { color: theme.subtext }]}>{open ? '▲' : '▼'}</Text>
       </Pressable>
@@ -103,7 +138,11 @@ export function MasterDataSelect({
             onChangeText={setSearch}
             placeholder="Search..."
             placeholderTextColor={theme.inputPlaceholder}
-            style={[styles.search, { backgroundColor: theme.inputBg, color: theme.inputText }]}
+            style={[
+              styles.search,
+              { backgroundColor: theme.inputBg, color: theme.inputText },
+              compactLayout ? { fontSize: 12, paddingVertical: 8 } : null
+            ]}
           />
 
           {hasGroupFilter ? (
@@ -152,7 +191,10 @@ export function MasterDataSelect({
             </Pressable>
           ) : null}
 
-          <ScrollView nestedScrollEnabled style={styles.list}>
+          <ScrollView
+            nestedScrollEnabled
+            style={[styles.list, compactLayout ? { maxHeight: 156 } : null]}
+          >
             {filtered.length === 0 ? (
               <Text style={[styles.empty, { color: theme.subtext }]}>No records available.</Text>
             ) : (
@@ -174,8 +216,28 @@ export function MasterDataSelect({
                       }
                     ]}
                   >
-                    <Text style={[styles.optionLabel, { color: theme.inputText }]}>{option.label}</Text>
-                    {option.subtitle ? <Text style={[styles.optionSub, { color: theme.subtext }]}>{option.subtitle}</Text> : null}
+                    <Text
+                      style={[
+                        styles.optionLabel,
+                        { color: theme.inputText },
+                        compactLayout ? { fontSize: 12 } : null
+                      ]}
+                      numberOfLines={1}
+                    >
+                      {option.label}
+                    </Text>
+                    {option.subtitle ? (
+                      <Text
+                        style={[
+                          styles.optionSub,
+                          { color: theme.subtext },
+                          compactLayout ? { fontSize: 10 } : null
+                        ]}
+                        numberOfLines={1}
+                      >
+                        {option.subtitle}
+                      </Text>
+                    ) : null}
                   </Pressable>
                 );
               })

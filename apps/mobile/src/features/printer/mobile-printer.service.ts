@@ -51,8 +51,21 @@ export type MobilePrinterRuntimeCapabilities = {
   platform: string;
   isAndroid: boolean;
   hasIminSdk: boolean;
+  hasIminSdkLibrary: boolean;
+  hasIminDeviceHint: boolean;
+  hasSunmiSdk: boolean;
+  hasUrovoSdk: boolean;
+  hasPaxSdk: boolean;
+  hasWiseasySdk: boolean;
+  hasNewlandSdk: boolean;
+  hasAndroidPrintService: boolean;
   hasBluetooth: boolean;
   supportsTcpEscPos: boolean;
+  detectedPrinterSdk: string;
+  recommendedPrinterType: PrinterType;
+  deviceModel: string;
+  deviceManufacturer: string;
+  deviceBrand: string;
 };
 
 const DEFAULT_DEVICE_ID = 'mobile-device-local';
@@ -109,7 +122,7 @@ export class MobilePrinterService {
   }
 
   getAvailablePrinterTypes(): PrinterType[] {
-    return ['IMIN', 'GENERIC_BUILTIN', 'BLUETOOTH', 'NONE'];
+    return ['IMIN', 'GENERIC_BUILTIN'];
   }
 
   async getRuntimeCapabilities(): Promise<MobilePrinterRuntimeCapabilities> {

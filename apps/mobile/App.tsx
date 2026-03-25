@@ -2,11 +2,9 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import {
   ActivityIndicator,
   Animated,
-  Dimensions,
   Easing,
   Image,
   Linking,
-  PermissionsAndroid,
   Platform,
   Pressable,
   SafeAreaView,
@@ -16,6 +14,7 @@ import {
   Text,
   TextInput,
   useColorScheme,
+  useWindowDimensions,
   View,
 } from "react-native";
 import type { SQLiteDatabase } from "expo-sqlite";
@@ -271,6 +270,60 @@ function logPrinterDebug(
   }
 }
 
+function normalizeErrorUnknown(cause: unknown): {
+  name: string;
+  message: string;
+  stack: string | null;
+  code: string | null;
+  nativeStackAndroid: string[] | null;
+} {
+  const fallbackMessage = "Unknown printer error";
+  if (cause instanceof Error) {
+    const anyCause = cause as unknown as {
+      code?: unknown;
+      nativeStackAndroid?: unknown;
+    };
+    const code =
+      typeof anyCause.code === "string" && anyCause.code.trim()
+        ? anyCause.code.trim()
+        : null;
+    const nativeStackAndroid = Array.isArray(anyCause.nativeStackAndroid)
+      ? anyCause.nativeStackAndroid
+          .map((line) => (typeof line === "string" ? line.trim() : ""))
+          .filter((line) => line.length > 0)
+      : null;
+    return {
+      name: cause.name || "Error",
+      message: cause.message || fallbackMessage,
+      stack: cause.stack || null,
+      code,
+      nativeStackAndroid:
+        nativeStackAndroid && nativeStackAndroid.length > 0
+          ? nativeStackAndroid
+          : null,
+    };
+  }
+
+  const anyCause = cause as { message?: unknown; code?: unknown } | null;
+  const message =
+    typeof anyCause?.message === "string" && anyCause.message.trim()
+      ? anyCause.message.trim()
+      : typeof cause === "string" && cause.trim()
+        ? cause.trim()
+        : fallbackMessage;
+  const code =
+    typeof anyCause?.code === "string" && anyCause.code.trim()
+      ? anyCause.code.trim()
+      : null;
+  return {
+    name: "UnknownError",
+    message,
+    stack: null,
+    code,
+    nativeStackAndroid: null,
+  };
+}
+
 function normalizeTcpHost(input: string): string {
   const trimmed = input.trim();
   if (!trimmed) {
@@ -306,6 +359,18 @@ function parseTcpHostAndPort(
     return null;
   }
   return { host: normalizedHost, port: parsedPort };
+}
+
+function resolveBuiltInPrinterType(
+  capabilities: MobilePrinterRuntimeCapabilities | null,
+): PrinterType {
+  return capabilities?.hasIminSdk ? "IMIN" : "GENERIC_BUILTIN";
+}
+
+function isCompactPhoneLayout(width: number, height: number): boolean {
+  const shortEdge = Math.min(width, height);
+  const longEdge = Math.max(width, height);
+  return shortEdge <= 360 || longEdge <= 740;
 }
 
 function readEnrollmentTokenFromUrl(rawUrl: string | null | undefined): string | null {
@@ -583,6 +648,8 @@ function buildPosReceiptDocument(
 }
 
 function AppShell(): JSX.Element {
+  const { width: windowWidth, height: windowHeight } = useWindowDimensions();
+  const compactLayout = isCompactPhoneLayout(windowWidth, windowHeight);
   const scheme = useColorScheme();
   const [themeMode, setThemeMode] = useState<ThemeMode>(
     scheme === "light" ? "LIGHT" : "DARK",
@@ -654,6 +721,7 @@ function AppShell(): JSX.Element {
   const [showPassword, setShowPassword] = useState(false);
 
   const [pendingCount, setPendingCount] = useState(0);
+  const [inventoryProjectionVersion, setInventoryProjectionVersion] = useState(0);
   const [syncBusy, setSyncBusy] = useState(false);
   const [headerMenuOpen, setHeaderMenuOpen] = useState(false);
   const [notificationMenuOpen, setNotificationMenuOpen] = useState(false);
@@ -669,6 +737,9 @@ function AppShell(): JSX.Element {
     useState<MobilePrinterRuntimeCapabilities | null>(null);
   const [printerBusy, setPrinterBusy] = useState(false);
   const [printerMessage, setPrinterMessage] = useState<string | null>(null);
+  const [printerDebugDetails, setPrinterDebugDetails] = useState<string | null>(
+    null,
+  );
   const [receiptLayoutSettings, setReceiptLayoutSettings] =
     useState<ReceiptLayoutSettings>(DEFAULT_RECEIPT_LAYOUT_SETTINGS);
   const [posDefaultLpgFlow, setPosDefaultLpgFlow] =
@@ -698,9 +769,9 @@ function AppShell(): JSX.Element {
   const isTutorialTargetActive = tutorialActions.isTargetActive;
   const androidStatusInset =
     Platform.OS === "android" ? (StatusBar.currentHeight ?? 0) : 0;
-  const headerTopPadding = 10 + androidStatusInset;
-  const contentTopPaddingNoHeader = 16 + androidStatusInset;
-  const contentTopPadding = 80 + androidStatusInset;
+  const headerTopPadding = (compactLayout ? 6 : 10) + androidStatusInset;
+  const contentTopPaddingNoHeader = (compactLayout ? 10 : 16) + androidStatusInset;
+  const contentTopPadding = (compactLayout ? 68 : 80) + androidStatusInset;
   const showTopHeader = stage === "READY";
   const notificationCount =
     (pendingCount > 0 ? 1 : 0) + (masterDataUpdateAvailable ? 1 : 0);
@@ -729,9 +800,8 @@ function AppShell(): JSX.Element {
     if (!scroll) {
       return;
     }
-    const windowHeight = Dimensions.get("window").height;
-    const topBound = headerTopPadding + 70;
-    const bottomBound = windowHeight - 180;
+    const topBound = headerTopPadding + (compactLayout ? 62 : 70);
+    const bottomBound = windowHeight - (compactLayout ? 148 : 180);
     const currentScrollY = contentScrollYRef.current;
 
     if (rect.y < topBound) {
@@ -745,7 +815,7 @@ function AppShell(): JSX.Element {
       const delta = rectBottom - bottomBound + 20;
       scroll.scrollTo({ y: Math.max(currentScrollY + delta, 0), animated: true });
     }
-  }, [stage, headerTopPadding]);
+  }, [compactLayout, headerTopPadding, stage, windowHeight]);
 
   const refreshTutorialViewportOffset = useCallback(() => {
     const root = rootViewRef.current;
@@ -904,7 +974,7 @@ function AppShell(): JSX.Element {
     return () => clearTimeout(id);
   }, [stage, currentReadyView, refreshTutorialViewportOffset]);
 
-  const refreshPendingCount = async (): Promise<void> => {
+  const refreshPendingCount = useCallback(async (): Promise<void> => {
     if (!db) {
       setPendingCount(0);
       return;
@@ -919,7 +989,12 @@ function AppShell(): JSX.Element {
       "failed",
     );
     setPendingCount(Number(row?.total ?? 0));
-  };
+  }, [db]);
+
+  const handleLocalDataChanged = useCallback(async (): Promise<void> => {
+    await refreshPendingCount();
+    setInventoryProjectionVersion((current) => current + 1);
+  }, [refreshPendingCount]);
 
   const refreshCashierIdentity = async (
     localDb: SQLiteDatabase,
@@ -1129,24 +1204,33 @@ function AppShell(): JSX.Element {
         setHasCachedSession(session.hasCachedSession());
         setActivePrimaryTab("HOME");
         setActiveSideModule(null);
-        setPrinterType(preference.printerType);
+        const autoBuiltInType = resolveBuiltInPrinterType(capabilities);
+        const normalizedPreference =
+          preference.printerType === autoBuiltInType
+            ? preference
+            : await printerService.setPreference({
+                printerType: autoBuiltInType,
+                config:
+                  autoBuiltInType === "IMIN" ? { connectType: "SPI" } : null,
+              });
+        setPrinterType(normalizedPreference.printerType);
         setReceiptLayoutSettings(savedReceiptLayout);
         setPrinterCapabilities(capabilities);
         setPrinterBluetoothMac(
-          typeof preference.config?.bluetoothMac === "string"
-            ? preference.config.bluetoothMac
+          typeof normalizedPreference.config?.bluetoothMac === "string"
+            ? normalizedPreference.config.bluetoothMac
             : "",
         );
         setPrinterTcpHost(
-          typeof preference.config?.tcpHost === "string"
-            ? preference.config.tcpHost
+          typeof normalizedPreference.config?.tcpHost === "string"
+            ? normalizedPreference.config.tcpHost
             : "",
         );
         setPrinterTcpPort(
-          typeof preference.config?.tcpPort === "number"
-            ? String(preference.config.tcpPort)
-            : typeof preference.config?.tcpPort === "string"
-              ? preference.config.tcpPort
+          typeof normalizedPreference.config?.tcpPort === "number"
+            ? String(normalizedPreference.config.tcpPort)
+            : typeof normalizedPreference.config?.tcpPort === "string"
+              ? normalizedPreference.config.tcpPort
               : "9100",
         );
         await refreshPendingCount();
@@ -1402,27 +1486,6 @@ function AppShell(): JSX.Element {
       enrollmentListenerRef.current = null;
     };
   }, []);
-
-  const requestBluetoothPermissions = async (): Promise<boolean> => {
-    if (Platform.OS !== "android") {
-      return true;
-    }
-
-    try {
-      const result = await PermissionsAndroid.requestMultiple([
-        PermissionsAndroid.PERMISSIONS.BLUETOOTH_CONNECT,
-        PermissionsAndroid.PERMISSIONS.BLUETOOTH_SCAN,
-      ]);
-      return (
-        result[PermissionsAndroid.PERMISSIONS.BLUETOOTH_CONNECT] ===
-          PermissionsAndroid.RESULTS.GRANTED &&
-        result[PermissionsAndroid.PERMISSIONS.BLUETOOTH_SCAN] ===
-          PermissionsAndroid.RESULTS.GRANTED
-      );
-    } catch {
-      return false;
-    }
-  };
 
   const enterBranchSetup = async (localDb: SQLiteDatabase): Promise<void> => {
     setBranchSetupBusy(true);
@@ -2344,16 +2407,52 @@ function AppShell(): JSX.Element {
     await handleSyncNow(currentReadyView);
   };
 
+  const recordPrinterFailure = (
+    event: string,
+    cause: unknown,
+    context?: Record<string, unknown>,
+  ): void => {
+    const normalized = normalizeErrorUnknown(cause);
+    const payload = {
+      timestamp: new Date().toISOString(),
+      event,
+      printerType,
+      device: {
+        platform: Platform.OS,
+        model: printerCapabilities?.deviceModel ?? "Unknown",
+        manufacturer: printerCapabilities?.deviceManufacturer ?? "Unknown",
+        brand: printerCapabilities?.deviceBrand ?? "Unknown",
+      },
+      capabilities: printerCapabilities
+        ? {
+            moduleAvailable: printerCapabilities.moduleAvailable,
+            detectedPrinterSdk: printerCapabilities.detectedPrinterSdk,
+            recommendedPrinterType: printerCapabilities.recommendedPrinterType,
+            hasIminSdk: printerCapabilities.hasIminSdk,
+            hasIminSdkLibrary: printerCapabilities.hasIminSdkLibrary,
+            hasIminDeviceHint: printerCapabilities.hasIminDeviceHint,
+            hasAndroidPrintService:
+              printerCapabilities.hasAndroidPrintService,
+          }
+        : null,
+      context: context ?? null,
+      error: normalized,
+    };
+    setPrinterDebugDetails(JSON.stringify(payload, null, 2));
+  };
+
   const handlePrinterTypeSelect = async (
     nextType: PrinterType,
   ): Promise<void> => {
+    const autoType = resolveBuiltInPrinterType(printerCapabilities);
     logPrinterDebug("PRINTER_TYPE_SELECTED", {
       selectedType: nextType,
+      appliedType: autoType,
       currentType: printerType,
       hasIminSdk: printerCapabilities?.hasIminSdk ?? false,
       moduleAvailable: printerCapabilities?.moduleAvailable ?? false,
     });
-    await savePrinterPreference(nextType, false);
+    await savePrinterPreference(autoType, false);
   };
 
   const resolvePrinterConfig = (
@@ -2362,7 +2461,7 @@ function AppShell(): JSX.Element {
     if (type === "NONE") {
       return {
         config: null,
-        validationError: "Select a printer type before running test print.",
+        validationError: "Built-in printer mode is required.",
       };
     }
 
@@ -2371,7 +2470,7 @@ function AppShell(): JSX.Element {
         return {
           config: null,
           validationError:
-            "iMin SDK is not detected. Rebuild Dev Client with iMin SDK or use Bluetooth/TCP ESC-POS.",
+            "iMin SDK is not detected on this device build.",
         };
       }
       return { config: { connectType: "SPI" } };
@@ -2381,34 +2480,14 @@ function AppShell(): JSX.Element {
       if (!printerBluetoothMac.trim()) {
         return {
           config: null,
-          validationError:
-            "Bluetooth MAC is required for Bluetooth printer mode.",
+          validationError: "Bluetooth printer mode is disabled in this build.",
         };
       }
       return { config: { bluetoothMac: printerBluetoothMac.trim() } };
     }
 
     if (type === "GENERIC_BUILTIN") {
-      const normalizedHost = normalizeTcpHost(printerTcpHost);
-      const parsed = parseTcpHostAndPort(printerTcpHost, printerTcpPort);
-      if (!parsed) {
-        if (!normalizedHost && !printerCapabilities?.hasIminSdk) {
-          return {
-            config: null,
-            validationError:
-              "TCP Host is required for Generic Built-in. You can input 192.168.x.x or host:port (for example 192.168.1.50:9100).",
-          };
-        }
-        if (normalizedHost) {
-          return {
-            config: null,
-            validationError:
-              "TCP Port is invalid. Use a value between 1 and 65535 (default 9100).",
-          };
-        }
-        return { config: null };
-      }
-      return { config: { tcpHost: parsed.host, tcpPort: parsed.port } };
+      return { config: null };
     }
 
     return { config: null };
@@ -2435,15 +2514,6 @@ function AppShell(): JSX.Element {
         tcpHost: normalizeTcpHost(printerTcpHost) || null,
         tcpPort: printerTcpPort || null,
       });
-      if (nextType === "BLUETOOTH") {
-        const granted = await requestBluetoothPermissions();
-        if (!granted) {
-          throw new Error(
-            "Bluetooth permission is required for ESC/POS Bluetooth printing.",
-          );
-        }
-      }
-
       const { config, validationError } = resolvePrinterConfig(nextType);
       if (validationError) {
         logPrinterDebug("PRINTER_SAVE_VALIDATION_ERROR", {
@@ -2477,6 +2547,10 @@ function AppShell(): JSX.Element {
         message,
         stack: stack ?? null,
       });
+      recordPrinterFailure("PRINTER_SAVE_ERROR", cause, {
+        requestedType: nextType,
+        normalizedTcpHost: normalizeTcpHost(printerTcpHost) || null,
+      });
       setPrinterMessage(message);
       if (!silent) {
         toastError("Printer setup failed", message);
@@ -2487,7 +2561,8 @@ function AppShell(): JSX.Element {
   };
 
   const handlePrinterSave = async (): Promise<void> => {
-    await savePrinterPreference(printerType, false);
+    const autoType = resolveBuiltInPrinterType(printerCapabilities);
+    await savePrinterPreference(autoType, false);
   };
 
   const persistValidatedPrinterPreference = async (
@@ -2496,9 +2571,10 @@ function AppShell(): JSX.Element {
     printerType: PrinterType;
     config: Record<string, unknown> | null;
   }> => {
-    const resolved = resolvePrinterConfig(printerType);
+    const autoType = resolveBuiltInPrinterType(printerCapabilities);
+    const resolved = resolvePrinterConfig(autoType);
     logPrinterDebug("PRINTER_TEST_REQUEST", {
-      printerType,
+      printerType: autoType,
       resolvedConfig: resolved.config ?? null,
       hasIminSdk: printerCapabilities?.hasIminSdk ?? false,
       moduleAvailable: printerCapabilities?.moduleAvailable ?? false,
@@ -2506,28 +2582,19 @@ function AppShell(): JSX.Element {
     const { validationError } = resolved;
     if (validationError) {
       logPrinterDebug("PRINTER_TEST_VALIDATION_ERROR", {
-        printerType,
+        printerType: autoType,
         validationError,
       });
       throw new Error(validationError);
     }
 
-    if (printerType === "BLUETOOTH") {
-      const granted = await requestBluetoothPermissions();
-      if (!granted) {
-        throw new Error(
-          "Bluetooth permission is required for ESC/POS Bluetooth printing.",
-        );
-      }
-    }
-
     await printerService.setPreference({
-      printerType,
+      printerType: autoType,
       config: resolved.config,
     });
 
     return {
-      printerType,
+      printerType: autoType,
       config: resolved.config,
     };
   };
@@ -2636,6 +2703,9 @@ function AppShell(): JSX.Element {
         message,
         stack: stack ?? null,
       });
+      recordPrinterFailure("PRINTER_LAYOUT_TEST_ERROR", cause, {
+        layoutTest: true,
+      });
       setPrinterMessage(message);
       toastError("Layout test failed", message);
       throw cause;
@@ -2668,6 +2738,9 @@ function AppShell(): JSX.Element {
         message,
         stack: stack ?? null,
         hasIminSdk: printerCapabilities?.hasIminSdk ?? false,
+      });
+      recordPrinterFailure("PRINTER_TEST_ERROR", cause, {
+        layoutTest: false,
       });
       setPrinterMessage(message);
       toastError("Test print failed", message);
@@ -2728,6 +2801,10 @@ function AppShell(): JSX.Element {
     } catch (cause) {
       const message =
         cause instanceof Error ? cause.message : "Print dispatch failed.";
+      recordPrinterFailure("PRINTER_RECEIPT_PRINT_ERROR", cause, {
+        saleId: payload.saleId,
+        receiptNumber,
+      });
       return {
         printed: false,
         receiptNumber,
@@ -2825,6 +2902,10 @@ function AppShell(): JSX.Element {
     } catch (cause) {
       const message =
         cause instanceof Error ? cause.message : "Print dispatch failed.";
+      recordPrinterFailure("PRINTER_REPRINT_ERROR", cause, {
+        saleId,
+        receiptNumber: row.receipt_number,
+      });
       return {
         printed: false,
         receiptNumber: row.receipt_number,
@@ -2878,8 +2959,9 @@ function AppShell(): JSX.Element {
           preferredBranchId={selectedBranchId}
           preferredLocationId={selectedLocationId}
           defaultLpgFlowForNewItem={posDefaultLpgFlow}
+          inventoryProjectionVersion={inventoryProjectionVersion}
           cashierName={currentCashierName}
-          onDataChanged={refreshPendingCount}
+          onDataChanged={handleLocalDataChanged}
           onPrintQueuedSaleReceipt={handlePrintQueuedSaleReceipt}
           onGoToShift={() => {
             setActivePrimaryTab("HOME");
@@ -2895,7 +2977,8 @@ function AppShell(): JSX.Element {
           key={`transfers-${masterDataVersion}`}
           db={db}
           theme={activeTheme}
-          onDataChanged={refreshPendingCount}
+          inventoryProjectionVersion={inventoryProjectionVersion}
+          onDataChanged={handleLocalDataChanged}
           syncBusy={syncBusy}
         />
       );
@@ -2917,7 +3000,7 @@ function AppShell(): JSX.Element {
           db={db}
           theme={activeTheme}
           preferredBranchId={selectedBranchId}
-          onDataChanged={refreshPendingCount}
+          onDataChanged={handleLocalDataChanged}
           onPrintSaleReceipt={handlePrintSaleReceipt}
           syncBusy={syncBusy}
         />
@@ -2929,13 +3012,20 @@ function AppShell(): JSX.Element {
           key={`expense-${masterDataVersion}`}
           db={db}
           theme={activeTheme}
-          onDataChanged={refreshPendingCount}
+          onDataChanged={handleLocalDataChanged}
           syncBusy={syncBusy}
         />
       );
     }
     if (currentReadyView === "ITEMS") {
-      return <ItemsViewScreen db={db} theme={activeTheme} />;
+      return (
+        <ItemsViewScreen
+          db={db}
+          theme={activeTheme}
+          inventoryProjectionVersion={inventoryProjectionVersion}
+          syncBusy={syncBusy}
+        />
+      );
     }
 
     if (currentReadyView === "CUSTOMERS") {
@@ -2945,7 +3035,7 @@ function AppShell(): JSX.Element {
           db={db}
           theme={activeTheme}
           preferredBranchId={selectedBranchId}
-          onDataChanged={refreshPendingCount}
+          onDataChanged={handleLocalDataChanged}
           syncBusy={syncBusy}
         />
       );
@@ -2959,7 +3049,7 @@ function AppShell(): JSX.Element {
           theme={activeTheme}
           preferredBranchId={selectedBranchId}
           preferredLocationId={selectedLocationId}
-          onDataChanged={refreshPendingCount}
+          onDataChanged={handleLocalDataChanged}
           syncBusy={syncBusy}
         />
       );
@@ -2990,6 +3080,8 @@ function AppShell(): JSX.Element {
         printerCapabilities={printerCapabilities}
         printerBusy={printerBusy}
         printerMessage={printerMessage}
+        printerDebugDetails={printerDebugDetails}
+        onClearPrinterDebug={() => setPrinterDebugDetails(null)}
         onChangeBluetoothMac={setPrinterBluetoothMac}
         onChangeTcpHost={setPrinterTcpHost}
         onChangeTcpPort={setPrinterTcpPort}
@@ -3114,9 +3206,18 @@ function AppShell(): JSX.Element {
               borderColor: theme.cardBorder,
               paddingTop: headerTopPadding,
             },
+            compactLayout
+              ? {
+                  paddingHorizontal: 12,
+                  paddingBottom: 8,
+                  gap: 8,
+                }
+              : null,
           ]}
         >
-          <View style={styles.topHeaderLeft}>
+          <View
+            style={[styles.topHeaderLeft, compactLayout ? { gap: 8 } : null]}
+          >
             <Pressable
               onPress={() => {
                 setNotificationMenuOpen(false);
@@ -3128,6 +3229,7 @@ function AppShell(): JSX.Element {
                   borderColor: theme.cardBorder,
                   backgroundColor: theme.pillBg,
                 },
+                compactLayout ? { width: 28, height: 28 } : null,
               ]}
             >
               <Text style={[styles.iconButtonText, { color: theme.pillText }]}>
@@ -3141,27 +3243,49 @@ function AppShell(): JSX.Element {
                   backgroundColor: theme.pillBg,
                   borderColor: theme.cardBorder,
                 },
+                compactLayout
+                  ? {
+                      width: 30,
+                      height: 30,
+                      borderRadius: 8,
+                    }
+                  : null,
               ]}
             >
               <Image
                 source={APP_LOGO}
-                style={styles.brandLogo}
+                style={[
+                  styles.brandLogo,
+                  compactLayout ? { width: 20, height: 20 } : null,
+                ]}
                 resizeMode="contain"
               />
             </View>
             <View style={styles.brandTextWrap}>
-              <Text style={[styles.topHeaderTitle, { color: theme.heading }]}>
+              <Text
+                style={[
+                  styles.topHeaderTitle,
+                  { color: theme.heading },
+                  compactLayout ? { fontSize: 13, lineHeight: 16 } : null,
+                ]}
+              >
                 VPOS
               </Text>
               <Text
-                style={[styles.topHeaderSubtitle, { color: theme.subtext }]}
+                style={[
+                  styles.topHeaderSubtitle,
+                  { color: theme.subtext },
+                  compactLayout ? { fontSize: 10, lineHeight: 12 } : null,
+                ]}
                 numberOfLines={1}
               >
                 {headerSubtitle}
               </Text>
             </View>
           </View>
-          <View style={styles.topHeaderRight}>
+          <View
+            style={[styles.topHeaderRight, compactLayout ? { gap: 4 } : null]}
+          >
             <View
               style={[
                 styles.statusDotWrap,
@@ -3169,6 +3293,7 @@ function AppShell(): JSX.Element {
                   borderColor: theme.cardBorder,
                   backgroundColor: theme.pillBg,
                 },
+                compactLayout ? { width: 28, height: 28 } : null,
               ]}
             >
               <View
@@ -3189,6 +3314,7 @@ function AppShell(): JSX.Element {
                   borderColor: theme.cardBorder,
                   backgroundColor: theme.pillBg,
                 },
+                compactLayout ? { width: 28, height: 28 } : null,
               ]}
             >
               <Text style={[styles.iconButtonText, { color: theme.pillText }]}>
@@ -3211,6 +3337,12 @@ function AppShell(): JSX.Element {
         ref={contentScrollRef}
         contentContainerStyle={[
           styles.scrollContent,
+          compactLayout
+            ? {
+                paddingHorizontal: 14,
+                gap: 10,
+              }
+            : null,
           {
             paddingTop: showTopHeader
               ? contentTopPadding
@@ -3550,13 +3682,14 @@ function AppShell(): JSX.Element {
               </Text>
             ) : null}
 
-            <View style={styles.row}>
+            <View style={[styles.row, compactLayout ? { flexDirection: "column" } : null]}>
               <Pressable
                 disabled={branchSetupBusy}
                 onPress={() => void handleBranchRefresh()}
                 style={[
                   styles.secondaryButton,
                   {
+                    flex: compactLayout ? 1 : undefined,
                     backgroundColor: branchSetupBusy
                       ? theme.primaryMuted
                       : theme.pillBg,
@@ -3594,7 +3727,12 @@ function AppShell(): JSX.Element {
                   },
                 ]}
               >
-                <Text style={styles.buttonText}>
+                <Text
+                  style={styles.buttonText}
+                  numberOfLines={1}
+                  minimumFontScale={0.82}
+                  adjustsFontSizeToFit
+                >
                   {branchSetupBusy
                     ? "Downloading..."
                     : selectedBranchName && selectedLocationName
@@ -3619,10 +3757,24 @@ function AppShell(): JSX.Element {
             >
               <View style={styles.moduleHeaderRow}>
                 <View style={{ flex: 1 }}>
-                  <Text style={[styles.moduleTitle, { color: theme.heading }]}>
+                  <Text
+                    style={[
+                      styles.moduleTitle,
+                      { color: theme.heading },
+                      compactLayout ? { fontSize: 15 } : null,
+                    ]}
+                    numberOfLines={1}
+                  >
                     {READY_VIEW_META[currentReadyView].label}
                   </Text>
-                  <Text style={[styles.moduleHint, { color: theme.subtext }]}>
+                  <Text
+                    style={[
+                      styles.moduleHint,
+                      { color: theme.subtext },
+                      compactLayout ? { fontSize: 11 } : null,
+                    ]}
+                    numberOfLines={1}
+                  >
                     {READY_VIEW_META[currentReadyView].hint}
                   </Text>
                 </View>
@@ -3635,6 +3787,7 @@ function AppShell(): JSX.Element {
                         borderColor: theme.cardBorder,
                         backgroundColor: theme.pillBg,
                       },
+                      compactLayout ? { width: 30, height: 30 } : null,
                       isTutorialTargetActive("module-help")
                         ? styles.tutorialTargetFocus
                         : null,
@@ -3677,12 +3830,25 @@ function AppShell(): JSX.Element {
                 backgroundColor: theme.card,
                 borderColor: theme.cardBorder,
               },
+              compactLayout ? { right: 8, width: 286, paddingHorizontal: 8 } : null,
             ]}
           >
-            <Text style={[styles.notificationTitle, { color: theme.heading }]}>
+            <Text
+              style={[
+                styles.notificationTitle,
+                { color: theme.heading },
+                compactLayout ? { fontSize: 13 } : null,
+              ]}
+            >
               Notifications
             </Text>
-            <Text style={[styles.notificationSub, { color: theme.subtext }]}>
+            <Text
+              style={[
+                styles.notificationSub,
+                { color: theme.subtext },
+                compactLayout ? { fontSize: 10 } : null,
+              ]}
+            >
               Sync and branch-data actions for this device.
             </Text>
 
@@ -3860,8 +4026,16 @@ function AppShell(): JSX.Element {
               {
                 backgroundColor: theme.card,
                 borderColor: theme.cardBorder,
-                paddingTop: headerTopPadding + 58,
+                paddingTop: headerTopPadding + (compactLayout ? 50 : 58),
               },
+              compactLayout
+                ? {
+                    width: 272,
+                    paddingHorizontal: 10,
+                    paddingBottom: 12,
+                    gap: 6,
+                  }
+                : null,
               {
                 opacity: sideMenuAnim.interpolate({
                   inputRange: [0, 0.35, 1],
@@ -3884,10 +4058,23 @@ function AppShell(): JSX.Element {
               },
             ]}
           >
-            <Text style={[styles.sideMenuTitle, { color: theme.heading }]}>
+            <Text
+              style={[
+                styles.sideMenuTitle,
+                { color: theme.heading },
+                compactLayout ? { fontSize: 15 } : null,
+              ]}
+            >
               Other Menu
             </Text>
-            <Text style={[styles.sideMenuSub, { color: theme.subtext }]}>
+            <Text
+              style={[
+                styles.sideMenuSub,
+                { color: theme.subtext },
+                compactLayout ? { fontSize: 10 } : null,
+              ]}
+              numberOfLines={2}
+            >
               Expense, Items, Customers, Settings and others.
             </Text>
 
@@ -3933,7 +4120,9 @@ function AppShell(): JSX.Element {
                         style={[
                           styles.sideMenuItemTitle,
                           { color: active ? "#FFFFFF" : theme.heading },
+                          compactLayout ? { fontSize: 12 } : null,
                         ]}
+                        numberOfLines={1}
                       >
                         {READY_VIEW_META[module].label}
                       </Text>
@@ -3941,7 +4130,9 @@ function AppShell(): JSX.Element {
                         style={[
                           styles.sideMenuItemSub,
                           { color: active ? "#FFFFFF" : theme.subtext },
+                          compactLayout ? { fontSize: 10 } : null,
                         ]}
+                        numberOfLines={1}
                       >
                         {READY_VIEW_META[module].hint}
                       </Text>
@@ -4101,6 +4292,16 @@ function AppShell(): JSX.Element {
           style={[
             styles.bottomNav,
             { backgroundColor: theme.card, borderColor: theme.cardBorder },
+            compactLayout
+              ? {
+                  left: 8,
+                  right: 8,
+                  bottom: 8,
+                  paddingHorizontal: 4,
+                  paddingVertical: 4,
+                  gap: 4,
+                }
+              : null,
           ]}
         >
           {PRIMARY_TABS.map((tab) => {
@@ -4118,13 +4319,18 @@ function AppShell(): JSX.Element {
                   {
                     backgroundColor: selected ? theme.primary : "transparent",
                   },
+                  compactLayout ? { minHeight: 46, borderRadius: 10 } : null,
                 ]}
               >
                 <Text
                   style={[
                     styles.bottomNavLabel,
                     { color: selected ? "#FFFFFF" : theme.pillText },
+                    compactLayout ? { fontSize: 10 } : null,
                   ]}
+                  numberOfLines={1}
+                  minimumFontScale={0.85}
+                  adjustsFontSizeToFit
                 >
                   {READY_VIEW_META[tab].label}
                 </Text>
@@ -4132,7 +4338,11 @@ function AppShell(): JSX.Element {
                   style={[
                     styles.bottomNavHint,
                     { color: selected ? "#FFFFFF" : theme.subtext },
+                    compactLayout ? { fontSize: 9 } : null,
                   ]}
+                  numberOfLines={1}
+                  minimumFontScale={0.85}
+                  adjustsFontSizeToFit
                 >
                   {READY_VIEW_META[tab].hint}
                 </Text>

@@ -1,0 +1,28 @@
+{
+  "name": "@vpos/mobile-nfc-admin",
+  "version": "0.1.0",
+  "private": true,
+  "main": "index.ts",
+  "scripts": {
+    "start": "expo start",
+    "android": "expo run:android",
+    "ios": "expo run:ios",
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "@babel/runtime": "^7.28.6",
+    "expo": "^53.0.0",
+    "expo-dev-client": "^5.0.20",
+    "expo-sqlite": "~15.1.4",
+    "react": "18.3.1",
+    "react-native": "0.76.7",
+    "react-native-reanimated": "3.16.7",
+    "react-native-toast-message": "^2.3.3"
+  },
+  "devDependencies": {
+    "@types/react": "^18.3.19",
+    "@types/react-native": "^0.73.0",
+    "babel-preset-expo": "^55.0.10"
+  }
+}

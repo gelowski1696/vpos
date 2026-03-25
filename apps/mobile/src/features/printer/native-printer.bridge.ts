@@ -5,8 +5,21 @@ type NativePrinterCapabilities = {
   platform: string;
   isAndroid: boolean;
   hasIminSdk: boolean;
+  hasIminSdkLibrary: boolean;
+  hasIminDeviceHint: boolean;
+  hasSunmiSdk: boolean;
+  hasUrovoSdk: boolean;
+  hasPaxSdk: boolean;
+  hasWiseasySdk: boolean;
+  hasNewlandSdk: boolean;
+  hasAndroidPrintService: boolean;
   hasBluetooth: boolean;
   supportsTcpEscPos: boolean;
+  detectedPrinterSdk: string;
+  recommendedPrinterType: PrinterType;
+  deviceModel: string;
+  deviceManufacturer: string;
+  deviceBrand: string;
 };
 
 type NativePrinterBridgeModule = {
@@ -86,8 +99,21 @@ export async function getNativePrinterCapabilities(): Promise<NativePrinterCapab
     platform: platformOs,
     isAndroid: platformOs === 'android',
     hasIminSdk: false,
+    hasIminSdkLibrary: false,
+    hasIminDeviceHint: false,
+    hasSunmiSdk: false,
+    hasUrovoSdk: false,
+    hasPaxSdk: false,
+    hasWiseasySdk: false,
+    hasNewlandSdk: false,
+    hasAndroidPrintService: false,
     hasBluetooth: false,
-    supportsTcpEscPos: false
+    supportsTcpEscPos: false,
+    detectedPrinterSdk: 'UNKNOWN',
+    recommendedPrinterType: 'GENERIC_BUILTIN',
+    deviceModel: 'Unknown',
+    deviceManufacturer: 'Unknown',
+    deviceBrand: 'Unknown'
   };
 
   const module = getNativeModule();

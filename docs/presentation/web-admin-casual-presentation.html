@@ -1,0 +1,311 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>VPOS Web Presentation (Casual Audience)</title>
+    <style>
+      :root {
+        --bg: #f4f6fb;
+        --card: #ffffff;
+        --gold: #b58a2f;
+        --line: rgba(181, 138, 47, 0.35);
+        --text: #1f2937;
+        --muted: #4b5563;
+      }
+      * { box-sizing: border-box; }
+      @page {
+        size: A4 landscape;
+        margin: 8mm;
+      }
+      body {
+        margin: 0;
+        font-family: "Segoe UI", Arial, sans-serif;
+        background: var(--bg);
+        color: var(--text);
+      }
+      .deck {
+        width: 100%;
+        max-width: 1300px;
+        margin: 0 auto;
+        padding: 10px;
+      }
+      .slide {
+        min-height: auto;
+        border: 1px solid var(--line);
+        border-radius: 14px;
+        background: var(--card);
+        padding: 16px;
+        margin-bottom: 10px;
+        page-break-after: always;
+      }
+      .slide:last-child { page-break-after: auto; }
+      .head {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 14px;
+        margin-bottom: 10px;
+      }
+      .tag {
+        color: var(--gold);
+        letter-spacing: 0.14em;
+        text-transform: uppercase;
+        font-size: 11px;
+        font-weight: 700;
+      }
+      h1, h2, h3, p, ul { margin: 0; }
+      h1 { font-size: 34px; line-height: 1.1; }
+      h2 { font-size: 26px; line-height: 1.2; }
+      h3 { font-size: 18px; line-height: 1.25; }
+      p {
+        color: var(--muted);
+        font-size: 14px;
+        line-height: 1.45;
+      }
+      .grid {
+        display: grid;
+        grid-template-columns: 1.1fr 1fr;
+        gap: 12px;
+        align-items: start;
+      }
+      .shot {
+        border: 1px solid var(--line);
+        border-radius: 10px;
+        padding: 6px;
+        background: #fafafa;
+      }
+      .shot img {
+        width: 100%;
+        display: block;
+        border-radius: 8px;
+      }
+      .list {
+        margin-top: 8px;
+        padding-left: 18px;
+      }
+      .list li {
+        color: var(--muted);
+        margin-bottom: 6px;
+        line-height: 1.4;
+        font-size: 14px;
+      }
+      .pill-row {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+        margin-top: 8px;
+      }
+      .pill {
+        border: 1px solid var(--line);
+        border-radius: 999px;
+        padding: 5px 10px;
+        color: var(--gold);
+        font-size: 11px;
+        font-weight: 700;
+        background: #fff9ee;
+      }
+      .footer {
+        margin-top: 10px;
+        font-size: 11px;
+        color: var(--gold);
+      }
+      @media print {
+        body { background: #fff; }
+        .deck { width: auto; padding: 0; }
+        .slide {
+          border-radius: 0;
+          margin-bottom: 0;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <main class="deck">
+      <section class="slide">
+        <div class="head">
+          <h1>VPOS Web System</h1>
+          <span class="tag">VMJAMTECH LPG Operations</span>
+        </div>
+        <p>
+          A simple, practical platform for LPG store owners, branch admins, and cashiers to manage sales,
+          inventory, and daily operations in one place.
+        </p>
+        <div class="pill-row">
+          <span class="pill">Easy to use</span>
+          <span class="pill">Real-time visibility</span>
+          <span class="pill">Branch-ready</span>
+          <span class="pill">Audit-friendly</span>
+        </div>
+        <div class="shot" style="margin-top:16px;">
+          <img src="./live/web-admin/01-dashboard.png" alt="VPOS Dashboard" />
+        </div>
+        <div class="footer">Presentation version for non-technical audiences</div>
+      </section>
+
+      <section class="slide">
+        <div class="head">
+          <h2>1) Daily Owner Dashboard</h2>
+          <span class="tag">Quick status check</span>
+        </div>
+        <div class="grid">
+          <div class="shot">
+            <img src="./live/web-admin/01-dashboard.png" alt="Dashboard Screen" />
+          </div>
+          <div>
+            <h3>What users can do here</h3>
+            <ul class="list">
+              <li>See daily sales, trends, and important alerts in one view.</li>
+              <li>Check if branches are healthy without opening many pages.</li>
+              <li>Spot issues early (stock risk, sync issues, pending reviews).</li>
+            </ul>
+            <h3 style="margin-top:14px;">Business value</h3>
+            <ul class="list">
+              <li>Faster decisions at the start of the day.</li>
+              <li>Less manual checking and fewer blind spots.</li>
+            </ul>
+          </div>
+        </div>
+      </section>
+
+      <section class="slide">
+        <div class="head">
+          <h2>2) Sales Monitoring</h2>
+          <span class="tag">Track every transaction</span>
+        </div>
+        <div class="grid">
+          <div>
+            <div class="shot">
+              <img src="./live/web-admin/03-sales-list.png" alt="Sales List Screen" />
+            </div>
+            <p style="margin-top:10px;">Sales List: browse and filter transactions by branch/date.</p>
+          </div>
+          <div>
+            <div class="shot">
+              <img src="./live/web-admin/function-sales-detail-modal.png" alt="Sales Detail Modal" />
+            </div>
+            <p style="margin-top:10px;">Sale Details: view line items, payment, and settlement breakdown.</p>
+          </div>
+        </div>
+      </section>
+
+      <section class="slide">
+        <div class="head">
+          <h2>3) Customer Tracking</h2>
+          <span class="tag">Balances and payment history</span>
+        </div>
+        <div class="grid">
+          <div>
+            <div class="shot">
+              <img src="./live/web-admin/05-customers.png" alt="Customers Screen" />
+            </div>
+            <p style="margin-top:10px;">Customer list with outstanding balances for quick follow-up.</p>
+          </div>
+          <div>
+            <div class="shot">
+              <img src="./live/web-admin/function-customer-transactions-modal.png" alt="Customer Transactions Modal" />
+            </div>
+            <p style="margin-top:10px;">Transaction timeline makes collection tracking easier.</p>
+          </div>
+        </div>
+      </section>
+
+      <section class="slide">
+        <div class="head">
+          <h2>4) Product and Pricing Control</h2>
+          <span class="tag">Consistency across branches</span>
+        </div>
+        <div class="grid">
+          <div>
+            <div class="shot">
+              <img src="./live/web-admin/06-products.png" alt="Products Screen" />
+            </div>
+            <p style="margin-top:10px;">Manage products, LPG items, and stock-related setup.</p>
+          </div>
+          <div>
+            <div class="shot">
+              <img src="./live/web-admin/11-price-lists.png" alt="Price Lists Screen" />
+            </div>
+            <p style="margin-top:10px;">Set branch/customer pricing rules in a structured way.</p>
+          </div>
+        </div>
+      </section>
+
+      <section class="slide">
+        <div class="head">
+          <h2>5) Inventory and Transfer Operations</h2>
+          <span class="tag">Know where stock moves</span>
+        </div>
+        <div class="grid">
+          <div>
+            <div class="shot">
+              <img src="./live/web-admin/10-opening-stock.png" alt="Opening Stock Screen" />
+            </div>
+            <p style="margin-top:10px;">Set opening stock cleanly at the start of operations.</p>
+          </div>
+          <div>
+            <div class="shot">
+              <img src="./live/web-admin/13-transfer-list.png" alt="Transfer List Screen" />
+            </div>
+            <p style="margin-top:10px;">Track stock movements between stores and warehouse.</p>
+          </div>
+        </div>
+      </section>
+
+      <section class="slide">
+        <div class="head">
+          <h2>6) Reports for Business Decisions</h2>
+          <span class="tag">Understand performance</span>
+        </div>
+        <div class="shot">
+          <img src="./live/web-admin/02-reports.png" alt="Reports Screen" />
+        </div>
+        <ul class="list">
+          <li>View branch performance by date range.</li>
+          <li>Analyze sales, inventory, cash, and customer behavior.</li>
+          <li>Export data for meetings, audits, and planning.</li>
+        </ul>
+      </section>
+
+      <section class="slide">
+        <div class="head">
+          <h2>7) Security and Controls</h2>
+          <span class="tag">Transparent operations</span>
+        </div>
+        <div class="grid">
+          <div>
+            <div class="shot">
+              <img src="./live/web-admin/22-sync-reviews.png" alt="Sync Reviews Screen" />
+            </div>
+            <p style="margin-top:10px;">Sync Reviews: resolve exceptions safely.</p>
+          </div>
+          <div>
+            <div class="shot">
+              <img src="./live/web-admin/23-audit-logs.png" alt="Audit Logs Screen" />
+            </div>
+            <p style="margin-top:10px;">Audit Logs: clear trace of who did what and when.</p>
+          </div>
+        </div>
+      </section>
+
+      <section class="slide">
+        <div class="head">
+          <h2>8) Why teams like it</h2>
+          <span class="tag">Simple + practical</span>
+        </div>
+        <ul class="list">
+          <li><b>Non-technical friendly:</b> clean pages and straightforward workflows.</li>
+          <li><b>Role-based access:</b> right data for owner, admin, and cashier roles.</li>
+          <li><b>Ready for growth:</b> supports multi-branch and warehouse operations.</li>
+          <li><b>Operational confidence:</b> sync monitoring and audit trail built in.</li>
+        </ul>
+        <div class="pill-row" style="margin-top:18px;">
+          <span class="pill">For Store Owners</span>
+          <span class="pill">For Branch Admins</span>
+          <span class="pill">For Daily Operations</span>
+        </div>
+        <div class="footer">End of presentation • VMJAMTECH VPOS</div>
+      </section>
+    </main>
+  </body>
+</html>

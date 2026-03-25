@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
+  FlatList,
   Modal,
   Pressable,
   ScrollView,
@@ -1004,33 +1005,62 @@ export function SalesScreen({
         ) : null}
       </Modal>
 
-      <Modal
-        visible={Boolean(selectedSale)}
-        transparent
-        animationType="slide"
-        onRequestClose={closeSaleDetails}
-      >
-        {selectedSale ? (
-          <Pressable style={styles.modalOverlay} onPress={closeSaleDetails}>
-            <Pressable
-              style={[styles.modalCard, { backgroundColor: theme.card, borderColor: theme.cardBorder }]}
-              onPress={(event) => event.stopPropagation()}
-            >
-              <View style={styles.detailHead}>
-                <View>
-                  <Text style={[styles.blockTitle, { color: theme.heading }]}>Sale Details</Text>
-                  <Text style={[styles.itemMeta, { color: theme.subtext }]}>Sale ID {selectedSale.row.id}</Text>
-                </View>
-                <View style={styles.detailActions}>
-                  <SyncStatusBadge status={selectedSale.row.sync_status} />
-                </View>
-              </View>
-
-              <ScrollView
-                style={styles.detailScroll}
-                contentContainerStyle={styles.modalBody}
-                showsVerticalScrollIndicator
+      {selectedSale ? (
+        <View style={[styles.detailScreenOverlay, { backgroundColor: theme.card, borderColor: theme.cardBorder }]}>
+          <View style={styles.detailHead}>
+            <View>
+              <Text style={[styles.blockTitle, { color: theme.heading }]}>Sale Details</Text>
+              <Text style={[styles.itemMeta, { color: theme.subtext }]}>Sale ID {selectedSale.row.id}</Text>
+            </View>
+            <View style={styles.detailActions}>
+              <SyncStatusBadge status={selectedSale.row.sync_status} />
+              <Pressable
+                style={[styles.closeBtn, { borderColor: theme.cardBorder, backgroundColor: theme.inputBg }]}
+                onPress={closeSaleDetails}
               >
+                <Text style={[styles.closeText, { color: theme.heading }]}>Back</Text>
+              </Pressable>
+            </View>
+          </View>
+
+          <FlatList
+            style={styles.detailScroll}
+            contentContainerStyle={[styles.modalBody, styles.detailScrollContent]}
+            data={selectedSale.payload.lines ?? []}
+            keyExtractor={(_item, index) => `${selectedSale.row.id}-line-${index}`}
+            showsVerticalScrollIndicator
+            nestedScrollEnabled
+            keyboardShouldPersistTaps="handled"
+            renderItem={({ item: line }) => {
+              const productId = line.productId ?? line.product_id ?? '-';
+              const qty = toAmount(line.quantity ?? line.qty);
+              const unitPrice = toAmount(line.unitPrice ?? line.unit_price);
+              const lineTotal = qty * unitPrice;
+              const productLabel = productMap.get(productId)?.label ?? productId;
+              const rawFlow = String(line.cylinderFlow ?? line.cylinder_flow ?? '').trim().toUpperCase();
+              const flowLabel =
+                rawFlow === 'REFILL_EXCHANGE'
+                  ? 'Refill'
+                  : rawFlow === 'NON_REFILL'
+                    ? 'Non-Refill'
+                    : null;
+              return (
+                <View style={[styles.itemCard, { borderColor: theme.cardBorder, backgroundColor: theme.inputBg }]}>
+                  <View style={{ flex: 1 }}>
+                    <Text style={[styles.tableCellName, { color: theme.heading }]}>{productLabel}</Text>
+                    <Text style={[styles.itemMeta, { color: theme.subtext }]}>
+                      Qty {qty} x {fmtMoney(unitPrice)}
+                    </Text>
+                    {flowLabel ? (
+                      <Text style={[styles.itemMeta, { color: theme.subtext }]}>Flow: {flowLabel}</Text>
+                    ) : null}
+                  </View>
+                  <Text style={[styles.tableCell, { color: theme.heading }]}>{fmtMoney(lineTotal)}</Text>
+                </View>
+              );
+            }}
+            ListHeaderComponent={(
+              <>
                 <View style={[styles.detailHero, { borderColor: theme.cardBorder, backgroundColor: theme.inputBg }]}>
                   <Text style={[styles.heroTitle, { color: theme.heading }]}>
                     {selectedSale.row.id}
@@ -1112,43 +1142,12 @@ export function SalesScreen({
                 </View>
 
                 <Text style={[styles.sectionTitle, { color: theme.heading }]}>Items</Text>
-                {(selectedSale.payload.lines ?? []).length === 0 ? (
-                  <Text style={[styles.itemMeta, { color: theme.subtext }]}>No item lines.</Text>
-                ) : (
-                  (selectedSale.payload.lines ?? []).map((line, index) => {
-                    const productId = line.productId ?? line.product_id ?? '-';
-                    const qty = toAmount(line.quantity ?? line.qty);
-                    const unitPrice = toAmount(line.unitPrice ?? line.unit_price);
-                    const lineTotal = qty * unitPrice;
-                    const productLabel = productMap.get(productId)?.label ?? productId;
-                    const rawFlow = String(line.cylinderFlow ?? line.cylinder_flow ?? '').trim().toUpperCase();
-                    const flowLabel =
-                      rawFlow === 'REFILL_EXCHANGE'
-                        ? 'Refill'
-                        : rawFlow === 'NON_REFILL'
-                          ? 'Non-Refill'
-                          : null;
-                    return (
-                      <View
-                        key={`${selectedSale.row.id}-line-${index}`}
-                        style={[styles.itemCard, { borderColor: theme.cardBorder, backgroundColor: theme.inputBg }]}
-                      >
-                        <View style={{ flex: 1 }}>
-                          <Text style={[styles.tableCellName, { color: theme.heading }]}>{productLabel}</Text>
-                          <Text style={[styles.itemMeta, { color: theme.subtext }]}>
-                            Qty {qty} x {fmtMoney(unitPrice)}
-                          </Text>
-                          {flowLabel ? (
-                            <Text style={[styles.itemMeta, { color: theme.subtext }]}>Flow: {flowLabel}</Text>
-                          ) : null}
-                        </View>
-                        <Text style={[styles.tableCell, { color: theme.heading }]}>{fmtMoney(lineTotal)}</Text>
-                      </View>
-                    );
-                  })
-                )}
-              </ScrollView>
-
+              </>
+            )}
+            ListEmptyComponent={
+              <Text style={[styles.itemMeta, { color: theme.subtext }]}>No item lines.</Text>
+            }
+            ListFooterComponent={(
               <View style={[styles.detailFooter, { borderTopColor: theme.cardBorder, backgroundColor: theme.card }]}>
                 <View style={styles.detailFooterRow}>
                   <Pressable
@@ -1227,10 +1226,10 @@ export function SalesScreen({
                   </Pressable>
                 </View>
               </View>
-            </Pressable>
-          </Pressable>
-        ) : null}
-      </Modal>
+            )}
+          />
+        </View>
+      ) : null}
     </View>
   );
 }
@@ -1347,6 +1346,8 @@ const styles = StyleSheet.create({
     fontWeight: '700'
   },
   block: {
+    flex: 1,
+    minHeight: 0,
     borderWidth: 1,
     borderRadius: 12,
     paddingHorizontal: 10,
@@ -1354,7 +1355,8 @@ const styles = StyleSheet.create({
     gap: 8
   },
   salesListScroller: {
-    maxHeight: 460
+    flex: 1,
+    minHeight: 0
   },
   salesListContent: {
     gap: 8,
@@ -1476,23 +1478,41 @@ const styles = StyleSheet.create({
   modalOverlay: {
     flex: 1,
     backgroundColor: 'rgba(2, 8, 23, 0.55)',
-    justifyContent: 'flex-end'
+    justifyContent: 'flex-end',
+    paddingTop: 12
   },
   modalCard: {
     height: '90%',
+    maxHeight: '94%',
     borderTopLeftRadius: 18,
     borderTopRightRadius: 18,
     borderWidth: 1,
     paddingHorizontal: 12,
     paddingTop: 12,
+    paddingBottom: 14,
+    overflow: 'hidden'
+  },
+  detailScreenOverlay: {
+    ...StyleSheet.absoluteFillObject,
+    zIndex: 40,
+    elevation: 40,
+    borderWidth: 1,
+    borderRadius: 16,
+    paddingHorizontal: 12,
+    paddingTop: 12,
     paddingBottom: 14
   },
   detailScroll: {
-    flex: 1
+    flex: 1,
+    minHeight: 0
+  },
+  detailScrollContent: {
+    paddingBottom: 20
   },
   detailFooter: {
     borderTopWidth: 1,
     paddingTop: 10,
+    marginTop: 10,
     gap: 8
   },
   detailFooterRow: {

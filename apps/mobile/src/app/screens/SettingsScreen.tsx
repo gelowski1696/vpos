@@ -7,13 +7,6 @@ import type { ReceiptLayoutSettings } from '../receipt-layout-settings';
 import { PinCodeInput } from '../components/PinCodeInput';
 import { useTutorialTarget } from '../tutorial/tutorial-provider';
 
-const PRINTER_OPTIONS: Array<{ type: PrinterType; label: string }> = [
-  { type: 'IMIN', label: 'iMin Built-in' },
-  { type: 'GENERIC_BUILTIN', label: 'TCP ESC/POS' },
-  { type: 'BLUETOOTH', label: 'Bluetooth ESC/POS' },
-  { type: 'NONE', label: 'No Printer' }
-];
-
 type Props = {
   theme: AppTheme;
   themeMode: 'LIGHT' | 'DARK';
@@ -36,6 +29,8 @@ type Props = {
   printerCapabilities: MobilePrinterRuntimeCapabilities | null;
   printerBusy: boolean;
   printerMessage: string | null;
+  printerDebugDetails: string | null;
+  onClearPrinterDebug: () => void;
   onChangeBluetoothMac: (value: string) => void;
   onChangeTcpHost: (value: string) => void;
   onChangeTcpPort: (value: string) => void;
@@ -570,75 +565,46 @@ export function SettingsScreen(props: Props): JSX.Element {
         Native Bridge: {props.printerCapabilities?.moduleAvailable ? 'Available' : 'Unavailable'}
       </Text>
       <Text style={[styles.sub, { color: props.theme.subtext }]}>
+        Device:{' '}
+        {props.printerCapabilities
+          ? `${props.printerCapabilities.deviceManufacturer} ${props.printerCapabilities.deviceModel}`
+          : 'Unknown'}
+      </Text>
+      <Text style={[styles.sub, { color: props.theme.subtext }]}>
         iMin SDK: {props.printerCapabilities?.hasIminSdk ? 'Detected' : 'Not detected'}
       </Text>
+      <Text style={[styles.sub, { color: props.theme.subtext }]}>
+        iMin Library: {props.printerCapabilities?.hasIminSdkLibrary ? 'Yes' : 'No'} | Device Hint:{' '}
+        {props.printerCapabilities?.hasIminDeviceHint ? 'Yes' : 'No'}
+      </Text>
+      <Text style={[styles.sub, { color: props.theme.subtext }]}>
+        SDK Hint: {props.printerCapabilities?.detectedPrinterSdk ?? 'UNKNOWN'}
+      </Text>
+      <Text style={[styles.sub, { color: props.theme.subtext }]}>
+        Suggested Mode: {props.printerCapabilities?.recommendedPrinterType ?? 'NONE'}
+      </Text>
+      <Text style={[styles.helper, { color: props.theme.subtext }]}>
+        Built-in printer only mode is enabled. TCP and Bluetooth printer profiles are hidden.
+      </Text>
 
-      <View style={styles.chipWrap}>
-        {PRINTER_OPTIONS.map((option) => {
-          const selected = props.printerType === option.type;
-          return (
-            <Pressable
-              key={option.type}
-              disabled={props.printerBusy}
-              onPress={() => void props.onSelectPrinterType(option.type)}
-              style={[
-                styles.chip,
-                {
-                  backgroundColor: selected ? props.theme.pillActive : props.theme.pillBg,
-                  opacity: props.printerBusy ? 0.7 : 1
-                }
-              ]}
-            >
-              <Text style={[styles.chipText, { color: selected ? '#FFFFFF' : props.theme.pillText }]}>{option.label}</Text>
-            </Pressable>
-          );
-        })}
-      </View>
-
-      {props.printerType === 'BLUETOOTH' && (
-        <View style={styles.stack}>
-          <TextInput
-            value={props.printerBluetoothMac}
-            onChangeText={props.onChangeBluetoothMac}
-            autoCapitalize="characters"
-            editable={!props.printerBusy}
-            placeholder="Bluetooth MAC (AA:BB:CC:DD:EE:FF)"
-            placeholderTextColor={props.theme.inputPlaceholder}
-            style={[styles.input, { backgroundColor: props.theme.inputBg, color: props.theme.inputText }]}
-          />
-          <Text style={[styles.helper, { color: props.theme.subtext }]}>Format example: `00:11:22:33:44:55`.</Text>
-        </View>
-      )}
-
-      {props.printerType === 'GENERIC_BUILTIN' && (
-        <View style={styles.stack}>
-          <TextInput
-            value={props.printerTcpHost}
-            onChangeText={props.onChangeTcpHost}
-            autoCapitalize="none"
-            editable={!props.printerBusy}
-            placeholder="TCP Host (e.g. 192.168.1.50 or 192.168.1.50:9100)"
-            placeholderTextColor={props.theme.inputPlaceholder}
-            style={[styles.input, { backgroundColor: props.theme.inputBg, color: props.theme.inputText }]}
-          />
-          <TextInput
-            value={props.printerTcpPort}
-            onChangeText={props.onChangeTcpPort}
-            keyboardType="number-pad"
-            editable={!props.printerBusy}
-            placeholder="TCP Port (default 9100)"
-            placeholderTextColor={props.theme.inputPlaceholder}
-            style={[styles.input, { backgroundColor: props.theme.inputBg, color: props.theme.inputText }]}
-          />
-          <Text style={[styles.helper, { color: props.theme.subtext }]}>
-            Use TCP when printer is on the same network. If host already includes `:port`, port field is ignored.
-          </Text>
-        </View>
-      )}
+      <Pressable
+        disabled={props.printerBusy}
+        onPress={() =>
+          void props.onSelectPrinterType(
+            props.printerCapabilities?.recommendedPrinterType === 'IMIN' ? 'IMIN' : 'GENERIC_BUILTIN'
+          )
+        }
+        style={[styles.secondaryBtn, { borderColor: props.theme.cardBorder, backgroundColor: props.theme.pillBg }]}
+      >
+        <Text style={[styles.secondaryText, { color: props.theme.pillText }]}>
+          {props.printerBusy ? 'Detecting...' : 'Auto Detect Built-in Profile'}
+        </Text>
+      </Pressable>
 
       {props.printerType === 'IMIN' && !props.printerCapabilities?.hasIminSdk ? (
         <Text style={[styles.helper, { color: props.theme.subtext }]}>
-          iMin SDK is not detected in this build. Use Bluetooth/TCP ESC-POS or rebuild Dev Client with iMin SDK.
+          iMin SDK is not detected in this build. Device SDK hint is {props.printerCapabilities?.detectedPrinterSdk ?? 'UNKNOWN'}.
+          Built-in print for this vendor is not integrated yet in native bridge.
         </Text>
       ) : null}
 
@@ -665,6 +631,29 @@ export function SettingsScreen(props: Props): JSX.Element {
       </Pressable>
 
       {props.printerMessage ? <Text style={[styles.helper, { color: props.theme.subtext }]}>{props.printerMessage}</Text> : null}
+      {props.printerDebugDetails ? (
+        <View style={[styles.group, { borderColor: props.theme.cardBorder, backgroundColor: props.theme.inputBg }]}>
+          <Text style={[styles.groupTitle, { color: props.theme.heading }]}>Printer Debug Details</Text>
+          <Text style={[styles.helper, { color: props.theme.subtext }]}>
+            Captured from the latest printer failure. Share this block for troubleshooting.
+          </Text>
+          <ScrollView
+            style={[styles.debugScroll, { borderColor: props.theme.cardBorder, backgroundColor: props.theme.card }]}
+            contentContainerStyle={styles.debugScrollContent}
+            nestedScrollEnabled
+          >
+            <Text selectable style={[styles.debugText, { color: props.theme.heading }]}>
+              {props.printerDebugDetails}
+            </Text>
+          </ScrollView>
+          <Pressable
+            onPress={props.onClearPrinterDebug}
+            style={[styles.secondaryBtn, { borderColor: props.theme.cardBorder, backgroundColor: props.theme.pillBg }]}
+          >
+            <Text style={[styles.secondaryText, { color: props.theme.pillText }]}>Clear Debug Details</Text>
+          </Pressable>
+        </View>
+      ) : null}
 
       <Modal visible={layoutModalOpen} transparent animationType="slide" onRequestClose={closeLayoutModal}>
         <View style={styles.modalOverlay}>
@@ -1123,11 +1112,12 @@ const styles = StyleSheet.create({
   },
   modalOverlay: {
     flex: 1,
-    justifyContent: 'flex-end'
+    justifyContent: 'flex-end',
+    paddingTop: 12
   },
   modalBackdrop: {
     ...StyleSheet.absoluteFillObject,
-    backgroundColor: 'rgba(8, 15, 27, 0.62)'
+    backgroundColor: 'rgba(2, 8, 23, 0.55)'
   },
   modalCard: {
     maxHeight: '90%',
@@ -1155,6 +1145,7 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderRadius: 10,
     minHeight: 34,
+    minWidth: 72,
     paddingHorizontal: 12,
     alignItems: 'center',
     justifyContent: 'center'
@@ -1240,12 +1231,14 @@ const styles = StyleSheet.create({
     gap: 8
   },
   pinModalCard: {
+    maxHeight: '90%',
+    minHeight: '72%',
     borderWidth: 1,
-    borderRadius: 16,
-    marginHorizontal: 14,
-    marginBottom: 24,
+    borderTopLeftRadius: 18,
+    borderTopRightRadius: 18,
     paddingHorizontal: 12,
-    paddingVertical: 12,
+    paddingTop: 12,
+    paddingBottom: 14,
     gap: 10
   },
   pinFieldLabel: {
@@ -1276,6 +1269,20 @@ const styles = StyleSheet.create({
   logoPlacementWrap: {
     flexDirection: 'row',
     gap: 8
+  },
+  debugScroll: {
+    maxHeight: 220,
+    borderWidth: 1,
+    borderRadius: 10
+  },
+  debugScrollContent: {
+    paddingHorizontal: 10,
+    paddingVertical: 10
+  },
+  debugText: {
+    fontSize: 11,
+    lineHeight: 16,
+    fontFamily: 'monospace'
   }
 });
 

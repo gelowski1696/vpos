@@ -21,10 +21,6 @@
       },
       "permissions": [
         "CAMERA",
-        "BLUETOOTH",
-        "BLUETOOTH_ADMIN",
-        "BLUETOOTH_CONNECT",
-        "BLUETOOTH_SCAN",
         "INTERNET"
       ]
     },
