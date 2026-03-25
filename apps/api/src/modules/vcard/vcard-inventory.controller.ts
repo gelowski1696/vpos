@@ -1,6 +1,7 @@
 import {
   Body,
   Controller,
+  ForbiddenException,
   Get,
   Param,
   Patch,
@@ -25,12 +26,12 @@ import {
 } from './vcard.service';
 
 type RequestWithTenant = Request & {
-  user?: { sub?: string; company_id?: string };
+  user?: { sub?: string; company_id?: string; roles?: string[] };
   companyId?: string;
 };
 
 @Controller('vcard/inventory/cards')
-@Roles('platform_owner')
+@Roles('admin', 'owner', 'platform_owner')
 export class VcardInventoryController {
   constructor(
     private readonly vcardService: VcardService,
@@ -72,6 +73,7 @@ export class VcardInventoryController {
     @Req() req: RequestWithTenant,
     @Body() body: Record<string, unknown>
   ): Promise<VcardInventoryRecord> {
+    this.assertPlatformOwner(req);
     const targetCompanyId = this.resolveTargetCompanyId(req, body.companyId);
     await this.tenantRoutingPolicy.assertRoutable(targetCompanyId);
     await this.entitlementsService.enforceMasterDataWrite(targetCompanyId);
@@ -120,6 +122,7 @@ export class VcardInventoryController {
     @Param('id') id: string,
     @Body() body: Record<string, unknown>
   ): Promise<VcardInventoryRecord> {
+    this.assertPlatformOwner(req);
     const targetCompanyId = this.resolveTargetCompanyId(req, body.companyId);
     await this.tenantRoutingPolicy.assertRoutable(targetCompanyId);
     await this.entitlementsService.enforceMasterDataWrite(targetCompanyId);
@@ -166,6 +169,7 @@ export class VcardInventoryController {
     @Param('id') id: string,
     @Body() body: Record<string, unknown>
   ): Promise<VcardInventoryRecord> {
+    this.assertPlatformOwner(req);
     const targetCompanyId = this.resolveTargetCompanyId(req, body.companyId);
     await this.tenantRoutingPolicy.assertRoutable(targetCompanyId);
     await this.entitlementsService.enforceMasterDataWrite(targetCompanyId);
@@ -198,6 +202,7 @@ export class VcardInventoryController {
     @Param('id') id: string,
     @Body() body: Record<string, unknown>
   ): Promise<VcardInventoryRecord> {
+    this.assertPlatformOwner(req);
     const targetCompanyId = this.resolveTargetCompanyId(req, body.companyId);
     await this.tenantRoutingPolicy.assertRoutable(targetCompanyId);
     await this.entitlementsService.enforceMasterDataWrite(targetCompanyId);
@@ -235,11 +240,24 @@ export class VcardInventoryController {
           : '';
     const actorCompanyId = req.user?.company_id ?? req.companyId;
     if (requested) {
+      if (actorCompanyId?.trim() && requested !== actorCompanyId.trim() && !this.isPlatformOwner(req)) {
+        throw new ForbiddenException('Cross-tenant V-CARD inventory access requires platform_owner role');
+      }
       return requested;
     }
     if (actorCompanyId?.trim()) {
       return actorCompanyId.trim();
     }
     throw new UnauthorizedException('companyId is required');
+  }
+
+  private isPlatformOwner(req: RequestWithTenant): boolean {
+    return (req.user?.roles ?? []).some((role) => role.toLowerCase() === 'platform_owner');
+  }
+
+  private assertPlatformOwner(req: RequestWithTenant): void {
+    if (!this.isPlatformOwner(req)) {
+      throw new ForbiddenException('Only platform_owner can modify V-CARD inventory cards');
+    }
   }
 }

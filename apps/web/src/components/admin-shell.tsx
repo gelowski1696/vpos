@@ -76,6 +76,7 @@ type NavIconName =
   | 'dashboard'
   | 'sales'
   | 'transfer'
+  | 'card'
   | 'branch'
   | 'location'
   | 'users'
@@ -287,6 +288,7 @@ const ROUTE_SPECIFIC_WALKTHROUGHS: Record<string, AdminTourStep[]> = {
   '/locations': buildEntityRouteSteps('/locations', 'locations', 'Locations'),
   '/users': buildEntityRouteSteps('/users', 'users', 'Users'),
   '/customers': buildEntityRouteSteps('/customers', 'customers', 'Customers'),
+  '/customer-cards': buildEntityRouteSteps('/customer-cards', 'customer-cards', 'Customer Cards'),
   '/product-categories': buildEntityRouteSteps('/product-categories', 'product-categories', 'Product Categories'),
   '/product-brands': buildEntityRouteSteps('/product-brands', 'product-brands', 'Product Brands'),
   '/cylinder-types': buildEntityRouteSteps('/cylinder-types', 'cylinder-types', 'Cylinder Types'),
@@ -309,7 +311,8 @@ const NAV_SECTIONS: Array<{ title: string; items: NavItem[] }> = [
     items: [
       { href: '/sales-list' as Route, label: 'Sales List', icon: 'sales' },
       { href: '/customer-payments' as Route, label: 'Customer Payments', icon: 'customerPayment' },
-      { href: '/customers', label: 'Customers', icon: 'customer' }
+      { href: '/customers', label: 'Customers', icon: 'customer' },
+      { href: '/customer-cards' as Route, label: 'Customer Cards', icon: 'card' }
     ]
   },
   {
@@ -400,6 +403,13 @@ function NavIcon({ name, className }: { name: NavIconName; className?: string })
       return (
         <svg className={className} fill="none" viewBox="0 0 24 24">
           <path d="M4 7h12m0 0-3-3m3 3-3 3M20 17H8m0 0 3-3m-3 3 3 3" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth="1.8" />
+        </svg>
+      );
+    case 'card':
+      return (
+        <svg className={className} fill="none" viewBox="0 0 24 24">
+          <rect x="3" y="5" width="18" height="14" rx="2.5" stroke="currentColor" strokeWidth="1.8" />
+          <path d="M3 10h18M7.5 14h4M7.5 17h6.5" stroke="currentColor" strokeLinecap="round" strokeWidth="1.8" />
         </svg>
       );
     case 'branch':

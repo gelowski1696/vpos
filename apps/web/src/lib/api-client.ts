@@ -12,7 +12,7 @@ type AccessTokenPayload = {
 };
 
 export type RequestOptions = {
-  method?: 'GET' | 'POST' | 'PUT' | 'DELETE';
+  method?: 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE';
   body?: Record<string, unknown>;
   auth?: boolean;
   clientId?: string;

@@ -81,7 +81,7 @@ type ApiCard = {
 
 type CardStatusFilter = 'ALL' | 'ACTIVE' | 'INACTIVE' | 'REVOKED';
 type AuditEventFilter = 'ALL' | 'BIND' | 'REASSIGN' | 'DEACTIVATE' | 'REACTIVATE' | 'REVOKE';
-type AdminTab = 'SYNC' | 'SCOPE' | 'NFC' | 'ENROLL' | 'CARDS' | 'CUSTOMERS' | 'AUDIT' | 'POINTS';
+type AdminTab = 'SYNC' | 'SCOPE' | 'CARDS' | 'AUDIT';
 
 type TopologyLocation = {
   id: string;
@@ -113,14 +113,6 @@ type VcardTopologyResponse = {
   tenants: TopologyTenant[];
 };
 
-type ApiCustomer = {
-  id: string;
-  code: string;
-  name: string;
-  is_active: boolean;
-  outstandingBalance?: number;
-};
-
 type VcardInventoryCard = {
   id: string;
   card_uid: string;
@@ -132,31 +124,10 @@ type VcardInventoryCard = {
   location_id: string | null;
 };
 
-type VcardCustomerCard = {
-  id: string;
-  customer: {
-    id: string;
-    code: string;
-    name: string;
-    points_balance: number;
-  };
-  card: VcardInventoryCard;
-  status: 'ACTIVE' | 'INACTIVE' | 'REVOKED';
-  assigned_at: string;
-  unassigned_at: string | null;
-  revoked_at: string | null;
-  updated_at: string;
-};
-
 type PickerKind =
   | 'TENANT'
   | 'BRANCH'
-  | 'LOCATION'
-  | 'CUSTOMER'
-  | 'INVENTORY_CARD'
-  | 'REASSIGN_CUSTOMER';
-
-type CustomerLifecycleAction = 'REASSIGN' | 'UNASSIGN' | 'REVOKE' | 'REACTIVATE';
+  | 'LOCATION';
 
 type ApiAuditEvent = {
   id: string;
@@ -170,16 +141,6 @@ type ApiAuditEvent = {
   } | null;
   payload: Record<string, unknown>;
   created_at: string;
-};
-
-type VcardPointsPolicy = {
-  company_id: string;
-  earn_peso_per_point: number;
-  redeem_peso_per_point: number;
-  min_spend_for_earn: number;
-  max_redeem_points_per_txn: number | null;
-  points_expiry_days: number | null;
-  updated_at: string;
 };
 
 type SessionClaims = {
@@ -438,70 +399,6 @@ function mapApiAuditEvent(input: unknown): ApiAuditEvent | null {
   };
 }
 
-function mapVcardPointsPolicy(input: unknown): VcardPointsPolicy | null {
-  if (!input || typeof input !== 'object') {
-    return null;
-  }
-  const row = input as Record<string, unknown>;
-  const companyId = typeof row.company_id === 'string' ? row.company_id.trim() : '';
-  const earnPesoPerPoint = Number(row.earn_peso_per_point);
-  const redeemPesoPerPoint = Number(row.redeem_peso_per_point);
-  const minSpendForEarn = Number(row.min_spend_for_earn);
-  const maxRedeemRaw = row.max_redeem_points_per_txn;
-  const expiryRaw = row.points_expiry_days;
-  const updatedAt = typeof row.updated_at === 'string' ? row.updated_at : '';
-  if (
-    !companyId ||
-    !Number.isFinite(earnPesoPerPoint) ||
-    !Number.isFinite(redeemPesoPerPoint) ||
-    !Number.isFinite(minSpendForEarn)
-  ) {
-    return null;
-  }
-  const maxRedeemPointsPerTxn =
-    maxRedeemRaw === null || maxRedeemRaw === undefined ? null : Number(maxRedeemRaw);
-  const pointsExpiryDays =
-    expiryRaw === null || expiryRaw === undefined ? null : Number(expiryRaw);
-  return {
-    company_id: companyId,
-    earn_peso_per_point: earnPesoPerPoint,
-    redeem_peso_per_point: redeemPesoPerPoint,
-    min_spend_for_earn: minSpendForEarn,
-    max_redeem_points_per_txn:
-      maxRedeemPointsPerTxn !== null && Number.isFinite(maxRedeemPointsPerTxn)
-        ? maxRedeemPointsPerTxn
-        : null,
-    points_expiry_days:
-      pointsExpiryDays !== null && Number.isFinite(pointsExpiryDays) ? pointsExpiryDays : null,
-    updated_at: updatedAt
-  };
-}
-
-function mapApiCustomer(input: unknown): ApiCustomer | null {
-  if (!input || typeof input !== 'object') {
-    return null;
-  }
-  const row = input as Record<string, unknown>;
-  const id = typeof row.id === 'string' ? row.id.trim() : '';
-  const code = typeof row.code === 'string' ? row.code.trim() : '';
-  const name = typeof row.name === 'string' ? row.name.trim() : '';
-  if (!id || !name) {
-    return null;
-  }
-  return {
-    id,
-    code: code || id,
-    name,
-    is_active: row.isActive !== false && row.is_active !== false,
-    outstandingBalance:
-      typeof row.outstandingBalance === 'number'
-        ? row.outstandingBalance
-        : typeof row.outstanding_balance === 'number'
-          ? row.outstanding_balance
-          : undefined
-  };
-}
-
 function mapVcardInventoryCard(input: unknown): VcardInventoryCard | null {
   if (!input || typeof input !== 'object') {
     return null;
@@ -530,48 +427,6 @@ function mapVcardInventoryCard(input: unknown): VcardInventoryCard | null {
     status,
     branch_id: typeof row.branch_id === 'string' ? row.branch_id : null,
     location_id: typeof row.location_id === 'string' ? row.location_id : null
-  };
-}
-
-function mapVcardCustomerCard(input: unknown): VcardCustomerCard | null {
-  if (!input || typeof input !== 'object') {
-    return null;
-  }
-  const row = input as Record<string, unknown>;
-  const id = typeof row.id === 'string' ? row.id.trim() : '';
-  const statusRaw = typeof row.status === 'string' ? row.status.trim().toUpperCase() : '';
-  const status =
-    statusRaw === 'ACTIVE' || statusRaw === 'INACTIVE' || statusRaw === 'REVOKED'
-      ? statusRaw
-      : 'INACTIVE';
-  const customerRaw =
-    row.customer && typeof row.customer === 'object' ? (row.customer as Record<string, unknown>) : null;
-  const cardRaw = row.card;
-  const card = mapVcardInventoryCard(cardRaw);
-  if (!id || !customerRaw || !card) {
-    return null;
-  }
-  const customerId = typeof customerRaw.id === 'string' ? customerRaw.id.trim() : '';
-  const customerCode = typeof customerRaw.code === 'string' ? customerRaw.code.trim() : '';
-  const customerName = typeof customerRaw.name === 'string' ? customerRaw.name.trim() : '';
-  if (!customerId || !customerName) {
-    return null;
-  }
-  return {
-    id,
-    customer: {
-      id: customerId,
-      code: customerCode || customerId,
-      name: customerName,
-      points_balance:
-        typeof customerRaw.points_balance === 'number' ? customerRaw.points_balance : 0
-    },
-    card,
-    status,
-    assigned_at: typeof row.assigned_at === 'string' ? row.assigned_at : '',
-    unassigned_at: typeof row.unassigned_at === 'string' ? row.unassigned_at : null,
-    revoked_at: typeof row.revoked_at === 'string' ? row.revoked_at : null,
-    updated_at: typeof row.updated_at === 'string' ? row.updated_at : ''
   };
 }
 
@@ -637,44 +492,14 @@ export default function App(): JSX.Element {
   const [auditCsvError, setAuditCsvError] = useState<string | null>(null);
   const [auditCsvInfo, setAuditCsvInfo] = useState<string | null>(null);
   const [auditCsvPreview, setAuditCsvPreview] = useState('');
-  const [pointsPolicy, setPointsPolicy] = useState<VcardPointsPolicy | null>(null);
-  const [pointsPolicyBusy, setPointsPolicyBusy] = useState(false);
-  const [pointsPolicyError, setPointsPolicyError] = useState<string | null>(null);
-  const [pointsPolicyInfo, setPointsPolicyInfo] = useState<string | null>(null);
-  const [policyEarnPesoPerPoint, setPolicyEarnPesoPerPoint] = useState('100');
-  const [policyRedeemPesoPerPoint, setPolicyRedeemPesoPerPoint] = useState('1');
-  const [policyMinSpendForEarn, setPolicyMinSpendForEarn] = useState('0');
-  const [policyMaxRedeemPoints, setPolicyMaxRedeemPoints] = useState('');
-  const [policyPointsExpiryDays, setPolicyPointsExpiryDays] = useState('');
-  const [pointsCustomerId, setPointsCustomerId] = useState('');
-  const [pointsCardInventoryId, setPointsCardInventoryId] = useState('');
-  const [pointsAmount, setPointsAmount] = useState('');
-  const [pointsValue, setPointsValue] = useState('');
-  const [pointsRemarks, setPointsRemarks] = useState('');
-  const [pointsActionBusy, setPointsActionBusy] = useState(false);
-  const [pointsActionError, setPointsActionError] = useState<string | null>(null);
-  const [pointsActionInfo, setPointsActionInfo] = useState<string | null>(null);
-  const [customers, setCustomers] = useState<ApiCustomer[]>([]);
-  const [customersBusy, setCustomersBusy] = useState(false);
-  const [customersError, setCustomersError] = useState<string | null>(null);
-  const [selectedCustomerId, setSelectedCustomerId] = useState<string | null>(null);
   const [inventoryCards, setInventoryCards] = useState<VcardInventoryCard[]>([]);
   const [inventoryBusy, setInventoryBusy] = useState(false);
   const [inventoryError, setInventoryError] = useState<string | null>(null);
   const [selectedInventoryCardId, setSelectedInventoryCardId] = useState<string | null>(null);
-  const [customerCards, setCustomerCards] = useState<VcardCustomerCard[]>([]);
-  const [customerCardsBusy, setCustomerCardsBusy] = useState(false);
-  const [customerCardsError, setCustomerCardsError] = useState<string | null>(null);
-  const [selectedCustomerCardId, setSelectedCustomerCardId] = useState<string | null>(null);
-  const [customerActionBusy, setCustomerActionBusy] = useState(false);
-  const [customerActionModalOpen, setCustomerActionModalOpen] = useState(false);
-  const [customerConfirmAction, setCustomerConfirmAction] = useState<CustomerLifecycleAction | null>(null);
-  const [pendingReassignCardId, setPendingReassignCardId] = useState<string | null>(null);
   const [createCardBusy, setCreateCardBusy] = useState(false);
   const [cardNumberDraft, setCardNumberDraft] = useState('');
   const [serialNumberDraft, setSerialNumberDraft] = useState('');
   const [cardUrlDraft, setCardUrlDraft] = useState('');
-  const [assignBusy, setAssignBusy] = useState(false);
   const [pickerOpen, setPickerOpen] = useState<PickerKind | null>(null);
   const [pickerQuery, setPickerQuery] = useState('');
   const [dbReady, setDbReady] = useState(false);
@@ -683,7 +508,7 @@ export default function App(): JSX.Element {
   const [syncBusy, setSyncBusy] = useState(false);
   const [syncError, setSyncError] = useState<string | null>(null);
   const [syncSuccess, setSyncSuccess] = useState<string | null>(null);
-  const [activeAdminTab, setActiveAdminTab] = useState<AdminTab>('SCOPE');
+  const [activeAdminTab, setActiveAdminTab] = useState<AdminTab>('CARDS');
 
   const deviceLabel = useMemo(() => {
     if (!capabilities) {
@@ -692,11 +517,6 @@ export default function App(): JSX.Element {
     return `${capabilities.deviceManufacturer} ${capabilities.deviceModel}`;
   }, [capabilities]);
 
-  const selectedUser = useMemo(
-    () => users.find((user) => user.id === selectedUserId) ?? null,
-    [users, selectedUserId]
-  );
-
   const hasNfcAdminAccess = useMemo(() => {
     if (!sessionClaims) {
       return false;
@@ -704,33 +524,20 @@ export default function App(): JSX.Element {
     return sessionClaims.roles.some((role) => adminRoles.has(role));
   }, [adminRoles, sessionClaims]);
 
+  const selectedUser = useMemo(
+    () => users.find((user) => user.id === selectedUserId) ?? null,
+    [users, selectedUserId]
+  );
+
   const adminTabs = useMemo(
     (): Array<{ id: AdminTab; label: string }> => [
       { id: 'SYNC', label: 'Sync' },
       { id: 'SCOPE', label: 'Scope' },
-      { id: 'NFC', label: 'NFC' },
-      { id: 'ENROLL', label: 'Enroll' },
       { id: 'CARDS', label: 'Cards' },
-      { id: 'CUSTOMERS', label: 'Customers' },
-      { id: 'AUDIT', label: 'Audit' },
-      { id: 'POINTS', label: 'Points' }
+      { id: 'AUDIT', label: 'Audit' }
     ],
     []
   );
-
-  const filteredUsers = useMemo(() => {
-    const query = userQuery.trim().toLowerCase();
-    const activeUsers = users.filter((user) => user.is_active !== false);
-    if (!query) {
-      return activeUsers;
-    }
-    return activeUsers.filter((user) => {
-      const byName = user.full_name.toLowerCase().includes(query);
-      const byEmail = user.email.toLowerCase().includes(query);
-      const byRole = user.roles.join(', ').toLowerCase().includes(query);
-      return byName || byEmail || byRole;
-    });
-  }, [users, userQuery]);
 
   const selectedTenant = useMemo(
     () => topology?.tenants.find((tenant) => tenant.company_id === selectedTenantId) ?? null,
@@ -760,28 +567,10 @@ export default function App(): JSX.Element {
     [locationOptions, selectedLocationId]
   );
 
-  const selectedCustomer = useMemo(
-    () => customers.find((customer) => customer.id === selectedCustomerId) ?? null,
-    [customers, selectedCustomerId]
-  );
-
   const selectedInventoryCard = useMemo(
     () => inventoryCards.find((card) => card.id === selectedInventoryCardId) ?? null,
     [inventoryCards, selectedInventoryCardId]
   );
-
-  const selectedCustomerCard = useMemo(
-    () => customerCards.find((row) => row.id === selectedCustomerCardId) ?? null,
-    [customerCards, selectedCustomerCardId]
-  );
-  const customerConfirmTargetCard = useMemo(() => {
-    const targetId =
-      customerConfirmAction === 'REASSIGN' ? pendingReassignCardId : selectedCustomerCardId;
-    if (!targetId) {
-      return null;
-    }
-    return customerCards.find((row) => row.id === targetId) ?? null;
-  }, [customerCards, customerConfirmAction, pendingReassignCardId, selectedCustomerCardId]);
 
   const activeCompanyId = selectedTenantId?.trim() ?? '';
   const isConnected = Boolean(accessToken && hasNfcAdminAccess);
@@ -813,7 +602,7 @@ export default function App(): JSX.Element {
       return filterRows(
         (topology?.tenants ?? []).map((row) => ({
           id: row.company_id,
-          title: `${row.company_code} • ${row.company_name}`,
+          title: `${row.company_code} - ${row.company_name}`,
           subtitle: row.company_id
         }))
       );
@@ -822,7 +611,7 @@ export default function App(): JSX.Element {
       return filterRows(
         branchOptions.map((row) => ({
           id: row.id,
-          title: `${row.code} • ${row.name}`,
+          title: `${row.code} - ${row.name}`,
           subtitle: row.id
         }))
       );
@@ -831,28 +620,13 @@ export default function App(): JSX.Element {
       return filterRows(
         locationOptions.map((row) => ({
           id: row.id,
-          title: `${row.code} • ${row.name}`,
+          title: `${row.code} - ${row.name}`,
           subtitle: row.type
         }))
       );
     }
-    if (pickerOpen === 'CUSTOMER' || pickerOpen === 'REASSIGN_CUSTOMER') {
-      return filterRows(
-        customers.map((row) => ({
-          id: row.id,
-          title: `${row.code} • ${row.name}`,
-          subtitle: row.outstandingBalance !== undefined ? `Balance: PHP ${row.outstandingBalance.toFixed(2)}` : undefined
-        }))
-      );
-    }
-    return filterRows(
-      inventoryCards.map((row) => ({
-        id: row.id,
-        title: `${row.card_number} • ${row.card_uid}`,
-        subtitle: `${row.status}${row.serial_number ? ` • ${row.serial_number}` : ''}`
-      }))
-    );
-  }, [pickerOpen, pickerQuery, topology, branchOptions, locationOptions, customers, inventoryCards]);
+    return [];
+  }, [pickerOpen, pickerQuery, topology, branchOptions, locationOptions]);
 
   const filteredCards = useMemo(() => {
     const search = cardSearch.trim().toLowerCase();
@@ -896,50 +670,7 @@ export default function App(): JSX.Element {
     });
   }, [auditEvents, auditFilter, auditSearch]);
 
-  const pointsWarnings = useMemo(() => {
-    const warnings: string[] = [];
-    const minSpend = Number(policyMinSpendForEarn);
-    const earnAmount = Number(pointsAmount);
-    if (
-      Number.isFinite(minSpend) &&
-      minSpend > 0 &&
-      Number.isFinite(earnAmount) &&
-      earnAmount > 0 &&
-      earnAmount < minSpend
-    ) {
-      warnings.push(`Earn amount is below min spend (${minSpend.toFixed(2)} PHP).`);
-    }
 
-    const maxRedeem = Number(policyMaxRedeemPoints);
-    const redeemPoints = Number(pointsValue);
-    if (
-      Number.isFinite(maxRedeem) &&
-      maxRedeem > 0 &&
-      Number.isFinite(redeemPoints) &&
-      redeemPoints > maxRedeem
-    ) {
-      warnings.push(`Redeem points exceed max per txn (${Math.trunc(maxRedeem)}).`);
-    }
-
-    const redeemRatio = Number(policyRedeemPesoPerPoint);
-    if (
-      Number.isFinite(redeemRatio) &&
-      redeemRatio > 0 &&
-      Number.isFinite(redeemPoints) &&
-      redeemPoints > 0 &&
-      Number.isFinite(earnAmount) &&
-      earnAmount > 0
-    ) {
-      const maxRedeemAmount = redeemPoints * redeemRatio;
-      if (earnAmount > maxRedeemAmount) {
-        warnings.push(
-          `Amount exceeds redeem ratio cap (${redeemRatio.toFixed(2)} PHP/point for ${redeemPoints} points).`
-        );
-      }
-    }
-
-    return warnings;
-  }, [policyMaxRedeemPoints, policyMinSpendForEarn, policyRedeemPesoPerPoint, pointsAmount, pointsValue]);
 
   const outboxSummary = useMemo(() => {
     return outboxItems.reduce(
@@ -1370,76 +1101,28 @@ export default function App(): JSX.Element {
     }
     setScopeBusy(true);
     setScopeError(null);
-    setCustomersError(null);
     setInventoryError(null);
-    setCustomerCardsError(null);
     try {
-      const [customersResponse, inventoryResponse, customerCardsResponse] = await Promise.all([
-        fetch(
-          `${apiBaseUrl}/master-data/customers?companyId=${encodeURIComponent(activeCompanyId)}&include_balance=1`,
-          { method: 'GET', headers: baseHeaders(true) }
-        ),
-        fetch(
-          `${apiBaseUrl}/vcard/inventory/cards?companyId=${encodeURIComponent(activeCompanyId)}&limit=200`,
-          { method: 'GET', headers: baseHeaders(true) }
-        ),
-        fetch(
-          `${apiBaseUrl}/vcard/cards?companyId=${encodeURIComponent(activeCompanyId)}&limit=200`,
-          { method: 'GET', headers: baseHeaders(true) }
-        )
-      ]);
-
-      const [customersPayload, inventoryPayload, customerCardsPayload] = await Promise.all([
-        parseJsonResponse(customersResponse),
-        parseJsonResponse(inventoryResponse),
-        parseJsonResponse(customerCardsResponse)
-      ]);
-
-      if (!customersResponse.ok) {
-        throw new Error(extractErrorMessage(customersPayload, `Load customers failed (${customersResponse.status})`));
-      }
+      const inventoryResponse = await fetch(
+        `${apiBaseUrl}/vcard/inventory/cards?companyId=${encodeURIComponent(activeCompanyId)}&limit=200`,
+        { method: 'GET', headers: baseHeaders(true) }
+      );
+      const inventoryPayload = await parseJsonResponse(inventoryResponse);
       if (!inventoryResponse.ok) {
         throw new Error(extractErrorMessage(inventoryPayload, `Load inventory cards failed (${inventoryResponse.status})`));
       }
-      if (!customerCardsResponse.ok) {
-        throw new Error(extractErrorMessage(customerCardsPayload, `Load customer cards failed (${customerCardsResponse.status})`));
-      }
-
-      const mappedCustomers = Array.isArray(customersPayload)
-        ? customersPayload.map((row) => mapApiCustomer(row)).filter((row): row is ApiCustomer => Boolean(row))
-        : [];
       const mappedInventoryCards = Array.isArray(inventoryPayload)
         ? inventoryPayload
             .map((row) => mapVcardInventoryCard(row))
             .filter((row): row is VcardInventoryCard => Boolean(row))
         : [];
-      const mappedCustomerCards = Array.isArray(customerCardsPayload)
-        ? customerCardsPayload
-            .map((row) => mapVcardCustomerCard(row))
-            .filter((row): row is VcardCustomerCard => Boolean(row))
-        : [];
-
-      setCustomers(mappedCustomers);
       setInventoryCards(mappedInventoryCards);
-      setCustomerCards(mappedCustomerCards);
-
-      setSelectedCustomerId((current) =>
-        current && mappedCustomers.some((row) => row.id === current) ? current : mappedCustomers[0]?.id ?? null
-      );
       const defaultInventoryCard =
         mappedInventoryCards.find((row) => row.status === 'UNASSIGNED') ?? mappedInventoryCards[0] ?? null;
       setSelectedInventoryCardId((current) =>
         current && mappedInventoryCards.some((row) => row.id === current) ? current : defaultInventoryCard?.id ?? null
       );
-      setSelectedCustomerCardId((current) =>
-        current && mappedCustomerCards.some((row) => row.id === current) ? current : mappedCustomerCards[0]?.id ?? null
-      );
-      if (customerActionModalOpen && !mappedCustomerCards.some((row) => row.id === selectedCustomerCardId)) {
-        setCustomerActionModalOpen(false);
-        setCustomerConfirmAction(null);
-        setPendingReassignCardId(null);
-      }
-      toastSuccess('Scope loaded', `${mappedCustomers.length} customers, ${mappedInventoryCards.length} cards.`);
+      toastSuccess('Scope loaded', `${mappedInventoryCards.length} inventory cards.`);
     } catch (cause) {
       const message = cause instanceof Error ? cause.message : 'Failed to load tenant scope data.';
       setScopeError(message);
@@ -1508,163 +1191,6 @@ export default function App(): JSX.Element {
     }
   };
 
-  const handleAssignCardToCustomer = (): void => {
-    if (!selectedCustomer || !selectedInventoryCard) {
-      toastError('Assign card', 'Select customer and card first.');
-      return;
-    }
-    Alert.alert(
-      'Assign Card',
-      `Assign card ${selectedInventoryCard.card_number} to ${selectedCustomer.name}?`,
-      [
-        { text: 'Cancel', style: 'cancel' },
-        {
-          text: 'Assign',
-          style: 'default',
-          onPress: () => {
-            void (async () => {
-              setAssignBusy(true);
-              setCustomerCardsError(null);
-              try {
-                const response = await fetch(`${apiBaseUrl}/vcard/cards/assign`, {
-                  method: 'POST',
-                  headers: baseHeaders(true),
-                  body: JSON.stringify({
-                    companyId: activeCompanyId,
-                    customer_id: selectedCustomer.id,
-                    card_inventory_id: selectedInventoryCard.id
-                  })
-                });
-                const payload = await parseJsonResponse(response);
-                if (!response.ok) {
-                  throw new Error(extractErrorMessage(payload, `Assign failed (${response.status})`));
-                }
-                toastSuccess('Assigned', `${selectedInventoryCard.card_number} -> ${selectedCustomer.name}`);
-                await handleLoadScopeData();
-              } catch (cause) {
-                const message = cause instanceof Error ? cause.message : 'Failed to assign card.';
-                setCustomerCardsError(message);
-                toastError('Assign failed', message);
-              } finally {
-                setAssignBusy(false);
-              }
-            })();
-          }
-        }
-      ]
-    );
-  };
-
-  const openCustomerCardActions = (customerCardId: string): void => {
-    setSelectedCustomerCardId(customerCardId);
-    setPendingReassignCardId(null);
-    setCustomerConfirmAction(null);
-    setCustomerActionModalOpen(true);
-  };
-
-  const handleRequestCustomerReassign = (): void => {
-    if (!selectedCustomerCard) {
-      toastError('Reassign card', 'Select a customer card first.');
-      return;
-    }
-    if (selectedCustomerCard.status === 'REVOKED') {
-      toastError('Reassign card', 'Revoked cards cannot be reassigned.');
-      return;
-    }
-    setPendingReassignCardId(selectedCustomerCard.id);
-    setCustomerActionModalOpen(false);
-    setPickerQuery('');
-    setPickerOpen('REASSIGN_CUSTOMER');
-  };
-
-  const executeCustomerCardLifecycle = async (action: CustomerLifecycleAction): Promise<void> => {
-    if (!isConnected) {
-      toastError('Card action', 'Connect first.');
-      return;
-    }
-    if (!activeCompanyId) {
-      toastError('Card action', 'Select a tenant first.');
-      return;
-    }
-
-    const targetCardId =
-      action === 'REASSIGN' ? pendingReassignCardId ?? selectedCustomerCardId : selectedCustomerCardId;
-    if (!targetCardId) {
-      toastError('Card action', 'Select a customer card first.');
-      return;
-    }
-    const targetCard = customerCards.find((row) => row.id === targetCardId) ?? null;
-    if (!targetCard) {
-      toastError('Card action', 'Selected customer card is no longer available.');
-      return;
-    }
-
-    let endpoint = '';
-    let body: Record<string, unknown> = { companyId: activeCompanyId };
-    let successTitle = 'Card updated';
-    let successBody = `${targetCard.card.card_number} updated successfully.`;
-    let errorTitle = 'Card action failed';
-
-    if (action === 'REASSIGN') {
-      if (!selectedCustomerId) {
-        toastError('Reassign card', 'Select target customer first.');
-        return;
-      }
-      if (targetCard.customer.id === selectedCustomerId) {
-        toastInfo('Reassign card', 'Selected customer already owns this card.');
-        return;
-      }
-      endpoint = `/vcard/cards/${encodeURIComponent(targetCard.id)}/reassign`;
-      body = { ...body, customer_id: selectedCustomerId };
-      successTitle = 'Card reassigned';
-      successBody = `${targetCard.card.card_number} was reassigned.`;
-      errorTitle = 'Reassign failed';
-    } else if (action === 'UNASSIGN') {
-      endpoint = `/vcard/cards/${encodeURIComponent(targetCard.id)}/unassign`;
-      successTitle = 'Card unassigned';
-      successBody = `${targetCard.card.card_number} is now unassigned.`;
-      errorTitle = 'Unassign failed';
-    } else if (action === 'REVOKE') {
-      endpoint = `/vcard/cards/${encodeURIComponent(targetCard.id)}/status`;
-      body = { ...body, status: 'REVOKED' };
-      successTitle = 'Card revoked';
-      successBody = `${targetCard.card.card_number} is revoked.`;
-      errorTitle = 'Revoke failed';
-    } else {
-      endpoint = `/vcard/cards/${encodeURIComponent(targetCard.id)}/status`;
-      body = { ...body, status: 'ACTIVE' };
-      successTitle = 'Card reactivated';
-      successBody = `${targetCard.card.card_number} is active again.`;
-      errorTitle = 'Reactivate failed';
-    }
-
-    setCustomerActionBusy(true);
-    setCustomerCardsError(null);
-    try {
-      const response = await fetch(`${apiBaseUrl}${endpoint}`, {
-        method: 'PATCH',
-        headers: baseHeaders(true),
-        body: JSON.stringify(body)
-      });
-      const payload = await parseJsonResponse(response);
-      if (!response.ok) {
-        throw new Error(extractErrorMessage(payload, `${errorTitle} (${response.status})`));
-      }
-
-      toastSuccess(successTitle, successBody);
-      setCustomerConfirmAction(null);
-      setCustomerActionModalOpen(false);
-      setPendingReassignCardId(null);
-      await handleLoadScopeData();
-    } catch (cause) {
-      const message = cause instanceof Error ? cause.message : 'Card action failed.';
-      setCustomerCardsError(message);
-      toastError(errorTitle, message);
-    } finally {
-      setCustomerActionBusy(false);
-    }
-  };
-
   const handleSelectPickerOption = (id: string): void => {
     if (!pickerOpen) {
       return;
@@ -1676,204 +1202,9 @@ export default function App(): JSX.Element {
       setSelectedLocationId(null);
     } else if (pickerOpen === 'LOCATION') {
       setSelectedLocationId(id);
-    } else if (pickerOpen === 'CUSTOMER') {
-      setSelectedCustomerId(id);
-    } else if (pickerOpen === 'REASSIGN_CUSTOMER') {
-      setSelectedCustomerId(id);
-      if (!pendingReassignCardId) {
-        toastError('Reassign card', 'No selected customer card to reassign.');
-      } else {
-        setCustomerConfirmAction('REASSIGN');
-      }
-    } else if (pickerOpen === 'INVENTORY_CARD') {
-      setSelectedInventoryCardId(id);
     }
     setPickerOpen(null);
     setPickerQuery('');
-  };
-
-  const hydratePointsPolicyForm = (policy: VcardPointsPolicy): void => {
-    setPolicyEarnPesoPerPoint(String(policy.earn_peso_per_point));
-    setPolicyRedeemPesoPerPoint(String(policy.redeem_peso_per_point));
-    setPolicyMinSpendForEarn(String(policy.min_spend_for_earn));
-    setPolicyMaxRedeemPoints(
-      policy.max_redeem_points_per_txn === null ? '' : String(policy.max_redeem_points_per_txn)
-    );
-    setPolicyPointsExpiryDays(
-      policy.points_expiry_days === null ? '' : String(policy.points_expiry_days)
-    );
-  };
-
-  const handleLoadPointsPolicy = async (): Promise<void> => {
-    if (!accessToken) {
-      setPointsPolicyError('Connect first to load points policy.');
-      return;
-    }
-    if (!activeCompanyId) {
-      setPointsPolicyError('Select a tenant first.');
-      return;
-    }
-    if (!ensureAdminAccess()) {
-      return;
-    }
-    setPointsPolicyBusy(true);
-    setPointsPolicyError(null);
-    setPointsPolicyInfo(null);
-    try {
-      const response = await fetch(
-        `${apiBaseUrl}/vcard/points/policy?companyId=${encodeURIComponent(activeCompanyId)}`,
-        {
-        method: 'GET',
-        headers: baseHeaders(true)
-        }
-      );
-      const payload = await parseJsonResponse(response);
-      if (!response.ok) {
-        throw new Error(extractErrorMessage(payload, `Load policy failed (${response.status})`));
-      }
-      const parsed = mapVcardPointsPolicy(payload);
-      if (!parsed) {
-        throw new Error('Unexpected points policy response format.');
-      }
-      setPointsPolicy(parsed);
-      hydratePointsPolicyForm(parsed);
-    } catch (cause) {
-      const message = cause instanceof Error ? cause.message : 'Failed to load points policy.';
-      setPointsPolicyError(message);
-    } finally {
-      setPointsPolicyBusy(false);
-    }
-  };
-
-  const handleSavePointsPolicy = async (): Promise<void> => {
-    if (!accessToken) {
-      setPointsPolicyError('Connect first to update points policy.');
-      return;
-    }
-    if (!ensureAdminAccess()) {
-      return;
-    }
-    if (!activeCompanyId) {
-      setPointsPolicyError('Select a tenant first.');
-      return;
-    }
-    setPointsPolicyBusy(true);
-    setPointsPolicyError(null);
-    setPointsPolicyInfo(null);
-    try {
-      const body: Record<string, unknown> = {
-        earn_peso_per_point: Number(policyEarnPesoPerPoint || 0),
-        redeem_peso_per_point: Number(policyRedeemPesoPerPoint || 0),
-        min_spend_for_earn: Number(policyMinSpendForEarn || 0),
-        max_redeem_points_per_txn: policyMaxRedeemPoints.trim()
-          ? Number(policyMaxRedeemPoints)
-          : null,
-        points_expiry_days: policyPointsExpiryDays.trim() ? Number(policyPointsExpiryDays) : null
-      };
-      const response = await fetch(
-        `${apiBaseUrl}/vcard/points/policy?companyId=${encodeURIComponent(activeCompanyId)}`,
-        {
-        method: 'PUT',
-        headers: baseHeaders(true),
-        body: JSON.stringify(body)
-        }
-      );
-      const payload = await parseJsonResponse(response);
-      if (!response.ok) {
-        throw new Error(extractErrorMessage(payload, `Update policy failed (${response.status})`));
-      }
-      const parsed = mapVcardPointsPolicy(payload);
-      if (!parsed) {
-        throw new Error('Unexpected policy update response format.');
-      }
-      setPointsPolicy(parsed);
-      hydratePointsPolicyForm(parsed);
-      setPointsPolicyInfo('Points policy saved.');
-    } catch (cause) {
-      const message = cause instanceof Error ? cause.message : 'Failed to save points policy.';
-      setPointsPolicyError(message);
-    } finally {
-      setPointsPolicyBusy(false);
-    }
-  };
-
-  const handleSubmitPointsAction = async (action: 'earn' | 'redeem' | 'adjust'): Promise<void> => {
-    if (!accessToken) {
-      setPointsActionError('Connect first to submit points action.');
-      return;
-    }
-    if (!ensureAdminAccess()) {
-      return;
-    }
-    if (!activeCompanyId) {
-      setPointsActionError('Select a tenant first.');
-      return;
-    }
-    const customerId = pointsCustomerId.trim();
-    if (!customerId) {
-      setPointsActionError('Customer ID is required.');
-      return;
-    }
-
-    setPointsActionBusy(true);
-    setPointsActionError(null);
-    setPointsActionInfo(null);
-    try {
-      const pointsNumeric = Number(pointsValue || 0);
-      const amountNumeric = Number(pointsAmount || 0);
-      const body: Record<string, unknown> = {
-        companyId: activeCompanyId,
-        customer_id: customerId,
-        ...(pointsCardInventoryId.trim() ? { card_inventory_id: pointsCardInventoryId.trim() } : {}),
-        ...(pointsRemarks.trim() ? { remarks: pointsRemarks.trim() } : {})
-      };
-      let path = '/vcard/points/earn';
-      if (action === 'earn') {
-        if (!Number.isFinite(amountNumeric) && !Number.isFinite(pointsNumeric)) {
-          throw new Error('Provide amount or points for earn action.');
-        }
-        if (Number.isFinite(amountNumeric) && amountNumeric > 0) {
-          body.amount = amountNumeric;
-        }
-        if (Number.isFinite(pointsNumeric) && pointsNumeric > 0) {
-          body.points = pointsNumeric;
-        }
-      } else if (action === 'redeem') {
-        if (!Number.isFinite(pointsNumeric) || pointsNumeric <= 0) {
-          throw new Error('Redeem points must be greater than 0.');
-        }
-        path = '/vcard/points/redeem';
-        body.points = pointsNumeric;
-        if (Number.isFinite(amountNumeric) && amountNumeric > 0) {
-          body.amount = amountNumeric;
-        }
-      } else {
-        if (!Number.isFinite(pointsNumeric) || pointsNumeric === 0) {
-          throw new Error('Adjust delta points must be non-zero.');
-        }
-        path = '/vcard/points/adjust';
-        body.delta_points = Math.trunc(pointsNumeric);
-      }
-
-      const response = await fetch(`${apiBaseUrl}${path}`, {
-        method: 'POST',
-        headers: baseHeaders(true),
-        body: JSON.stringify(body)
-      });
-      const payload = await parseJsonResponse(response);
-      if (!response.ok) {
-        throw new Error(extractErrorMessage(payload, `Points ${action} failed (${response.status})`));
-      }
-      const row = payload as Record<string, unknown>;
-      const txnType = typeof row.txn_type === 'string' ? row.txn_type : action.toUpperCase();
-      const pointsApplied = Number(row.points ?? 0);
-      setPointsActionInfo(`${txnType}: ${Number.isFinite(pointsApplied) ? pointsApplied : '-'} points recorded.`);
-    } catch (cause) {
-      const message = cause instanceof Error ? cause.message : 'Failed to submit points action.';
-      setPointsActionError(message);
-    } finally {
-      setPointsActionBusy(false);
-    }
   };
 
   useEffect(() => {
@@ -1914,16 +1245,6 @@ export default function App(): JSX.Element {
     }, 150);
     return () => clearTimeout(timer);
   }, [accessToken, auditFilter, hasNfcAdminAccess, selectedCardId, activeCompanyId]);
-
-  useEffect(() => {
-    if (!accessToken || !hasNfcAdminAccess || !activeCompanyId) {
-      return;
-    }
-    const timer = setTimeout(() => {
-      void handleLoadPointsPolicy();
-    }, 220);
-    return () => clearTimeout(timer);
-  }, [accessToken, hasNfcAdminAccess, activeCompanyId]);
 
   const ensureAdminAccess = (message?: string): boolean => {
     if (hasNfcAdminAccess) {
@@ -2736,9 +2057,7 @@ export default function App(): JSX.Element {
             </Text>
           </Pressable>
 
-          <Text style={styles.metaText}>
-            Customers: {customers.length} | Inventory Cards: {inventoryCards.length} | Assigned Cards: {customerCards.length}
-          </Text>
+          <Text style={styles.metaText}>Inventory Cards: {inventoryCards.length}</Text>
 
           {scopeError ? (
             <View style={styles.errorBox}>
@@ -2747,23 +2066,15 @@ export default function App(): JSX.Element {
           ) : null}
         </View>
 
-        <View style={[styles.card, activeAdminTab !== 'NFC' ? styles.hiddenSection : null]}>
-          <Text style={styles.subtitle}>3) Tap Card (NFC Reader)</Text>
+        <View style={[styles.card, activeAdminTab !== 'CARDS' ? styles.hiddenSection : null]}>
+          <Text style={styles.subtitle}>Inventory Card List</Text>
           <View style={styles.row}>
             <Text style={styles.label}>Device</Text>
             <Text style={styles.value}>{deviceLabel}</Text>
           </View>
           <View style={styles.row}>
-            <Text style={styles.label}>NFC Hardware</Text>
-            <Text style={styles.value}>{capabilities?.hasNfcHardware ? 'Detected' : 'Not detected'}</Text>
-          </View>
-          <View style={styles.row}>
             <Text style={styles.label}>NFC Enabled</Text>
             <Text style={styles.value}>{capabilities?.isNfcEnabled ? 'Yes' : 'No'}</Text>
-          </View>
-          <View style={styles.row}>
-            <Text style={styles.label}>Scan State</Text>
-            <Text style={styles.value}>{scanning ? 'Scanning' : 'Stopped'}</Text>
           </View>
           <View style={styles.actions}>
             <Pressable
@@ -2784,12 +2095,8 @@ export default function App(): JSX.Element {
           <View style={styles.previewBox}>
             <Text style={styles.label}>Last UID (HEX)</Text>
             <Text style={styles.previewValue}>{lastTag?.uidHex || '-'}</Text>
-            <Text style={styles.label}>Timestamp</Text>
-            <Text style={styles.previewMeta}>{lastTag?.timestampIso || '-'}</Text>
-            <Text style={styles.label}>Tech List</Text>
-            <Text style={styles.previewMeta}>
-              {lastTag?.techList?.length ? lastTag.techList.join(', ') : '-'}
-            </Text>
+            <Text style={styles.label}>Scan State</Text>
+            <Text style={styles.previewMeta}>{scanning ? 'Scanning' : 'Stopped'}</Text>
           </View>
           {nfcError ? (
             <View style={styles.errorBox}>
@@ -2801,12 +2108,7 @@ export default function App(): JSX.Element {
               <Text style={styles.infoText}>{nfcScanNotice}</Text>
             </View>
           ) : null}
-        </View>
 
-        <View style={[styles.card, activeAdminTab !== 'ENROLL' ? styles.hiddenSection : null]}>
-          <Text style={styles.subtitle}>Create Inventory Card</Text>
-          <Text style={styles.metaText}>Tenant: {selectedTenant?.company_name ?? '-'}</Text>
-          <Text style={styles.metaText}>Card UID (from NFC): {lastTag?.uidHex ?? '-'}</Text>
           <TextInput
             style={styles.input}
             value={cardNumberDraft}
@@ -2829,23 +2131,14 @@ export default function App(): JSX.Element {
             placeholder="Card URL (optional)"
             placeholderTextColor="#9CA3AF"
           />
-          <Pressable
-            style={[styles.primaryBtn, (!canCreateInventoryCard || createCardBusy) ? styles.primaryBtnDisabled : null]}
-            onPress={() => void handleCreateInventoryCard()}
-            disabled={!canCreateInventoryCard || createCardBusy}
-          >
-            <Text style={styles.primaryBtnText}>{createCardBusy ? 'Creating...' : 'Create Inventory Card'}</Text>
-          </Pressable>
-          {inventoryError ? (
-            <View style={styles.errorBox}>
-              <Text style={styles.errorText}>{inventoryError}</Text>
-            </View>
-          ) : null}
-        </View>
-
-        <View style={[styles.card, activeAdminTab !== 'CARDS' ? styles.hiddenSection : null]}>
-          <Text style={styles.subtitle}>Inventory Card List</Text>
           <View style={styles.actions}>
+            <Pressable
+              style={[styles.primaryBtn, (!canCreateInventoryCard || createCardBusy) ? styles.primaryBtnDisabled : null]}
+              onPress={() => void handleCreateInventoryCard()}
+              disabled={!canCreateInventoryCard || createCardBusy}
+            >
+              <Text style={styles.primaryBtnText}>{createCardBusy ? 'Creating...' : 'Create Card'}</Text>
+            </Pressable>
             <Pressable
               style={[styles.secondaryBtn, (inventoryBusy || !isConnected) ? styles.secondaryBtnDisabled : null]}
               onPress={() => void handleLoadScopeData()}
@@ -2900,93 +2193,6 @@ export default function App(): JSX.Element {
           {inventoryError ? (
             <View style={styles.errorBox}>
               <Text style={styles.errorText}>{inventoryError}</Text>
-            </View>
-          ) : null}
-        </View>
-
-        <View style={[styles.card, activeAdminTab !== 'CUSTOMERS' ? styles.hiddenSection : null]}>
-          <Text style={styles.subtitle}>Customer Assignment Flow</Text>
-          <Pressable style={styles.selectBtn} onPress={() => setPickerOpen('CUSTOMER')}>
-            <Text style={styles.selectBtnLabel}>Customer</Text>
-            <Text style={styles.selectBtnValue}>
-              {selectedCustomer ? `${selectedCustomer.code} • ${selectedCustomer.name}` : 'Select Customer'}
-            </Text>
-          </Pressable>
-          <Pressable style={styles.selectBtn} onPress={() => setPickerOpen('INVENTORY_CARD')}>
-            <Text style={styles.selectBtnLabel}>Card</Text>
-            <Text style={styles.selectBtnValue}>
-              {selectedInventoryCard
-                ? `${selectedInventoryCard.card_number} • ${selectedInventoryCard.card_uid}`
-                : 'Select Inventory Card'}
-            </Text>
-          </Pressable>
-
-          <View style={styles.actions}>
-            <Pressable
-              style={[styles.primaryBtn, (assignBusy || !selectedCustomer || !selectedInventoryCard) ? styles.primaryBtnDisabled : null]}
-              onPress={handleAssignCardToCustomer}
-              disabled={assignBusy || !selectedCustomer || !selectedInventoryCard}
-            >
-              <Text style={styles.primaryBtnText}>{assignBusy ? 'Assigning...' : 'Assign Card to Customer'}</Text>
-            </Pressable>
-          </View>
-
-          <View style={styles.auditList}>
-            {customerCardsBusy ? (
-              <View style={styles.loadingRow}>
-                <ActivityIndicator color="#2563EB" size="small" />
-                <Text style={styles.metaText}>Loading customer assignments...</Text>
-              </View>
-            ) : customerCards.length === 0 ? (
-              <Text style={styles.metaText}>No customer card assignments yet.</Text>
-            ) : (
-              customerCards.map((row) => (
-                <Pressable
-                  key={row.id}
-                  style={[styles.auditRow, selectedCustomerCardId === row.id ? styles.cardRowSelected : null]}
-                  onPress={() => setSelectedCustomerCardId(row.id)}
-                >
-                  <Text style={styles.auditRowTitle}>{row.customer.name}</Text>
-                  <Text style={styles.cardRowMeta}>Card: {row.card.card_number}</Text>
-                  <Text style={styles.cardRowMeta}>UID: {row.card.card_uid}</Text>
-                  <Text style={styles.cardRowMeta}>Points: {row.customer.points_balance}</Text>
-                  <Text style={styles.cardRowMeta}>Status: {row.status}</Text>
-                  <Pressable
-                    style={styles.inlineActionBtn}
-                    onPress={() => openCustomerCardActions(row.id)}
-                  >
-                    <Text style={styles.inlineActionText}>Manage Lifecycle</Text>
-                  </Pressable>
-                </Pressable>
-              ))
-            )}
-          </View>
-          <View style={styles.detailBox}>
-            <Text style={styles.subtitle}>Selected Customer Card</Text>
-            {selectedCustomerCard ? (
-              <>
-                <Text style={styles.metaText}>Customer: {selectedCustomerCard.customer.name}</Text>
-                <Text style={styles.metaText}>Card: {selectedCustomerCard.card.card_number}</Text>
-                <Text style={styles.metaText}>UID: {selectedCustomerCard.card.card_uid}</Text>
-                <Text style={styles.metaText}>Status: {selectedCustomerCard.status}</Text>
-                <Text style={styles.metaText}>Assigned: {selectedCustomerCard.assigned_at || '-'}</Text>
-                <Text style={styles.metaText}>Unassigned: {selectedCustomerCard.unassigned_at || '-'}</Text>
-                <Text style={styles.metaText}>Revoked: {selectedCustomerCard.revoked_at || '-'}</Text>
-                <Pressable
-                  style={[styles.primaryBtn, customerActionBusy ? styles.primaryBtnDisabled : null]}
-                  onPress={() => openCustomerCardActions(selectedCustomerCard.id)}
-                  disabled={customerActionBusy}
-                >
-                  <Text style={styles.primaryBtnText}>Open Lifecycle Actions</Text>
-                </Pressable>
-              </>
-            ) : (
-              <Text style={styles.metaText}>Select one assignment row above.</Text>
-            )}
-          </View>
-          {customerCardsError ? (
-            <View style={styles.errorBox}>
-              <Text style={styles.errorText}>{customerCardsError}</Text>
             </View>
           ) : null}
         </View>
@@ -3079,330 +2285,15 @@ export default function App(): JSX.Element {
           ) : null}
         </View>
 
-        <View style={[styles.card, activeAdminTab !== 'POINTS' ? styles.hiddenSection : null]}>
-          <Text style={styles.subtitle}>7) V-CARD Points Policy + Actions</Text>
-          <View style={styles.actions}>
-            <Pressable
-              style={[styles.secondaryBtn, (pointsPolicyBusy || !accessToken) ? styles.secondaryBtnDisabled : null]}
-              onPress={() => void handleLoadPointsPolicy()}
-              disabled={pointsPolicyBusy || !accessToken}
-            >
-              <Text style={styles.secondaryBtnText}>Refresh Policy</Text>
-            </Pressable>
-            <Pressable
-              style={[styles.primaryBtn, (pointsPolicyBusy || !accessToken) ? styles.primaryBtnDisabled : null]}
-              onPress={() => void handleSavePointsPolicy()}
-              disabled={pointsPolicyBusy || !accessToken}
-            >
-              <Text style={styles.primaryBtnText}>{pointsPolicyBusy ? 'Saving...' : 'Save Policy'}</Text>
-            </Pressable>
-          </View>
-          <Text style={styles.metaText}>Tenant: {pointsPolicy?.company_id ?? sessionClaims?.companyId ?? '-'}</Text>
-          <Text style={styles.metaText}>Last update: {pointsPolicy?.updated_at ?? '-'}</Text>
-          <TextInput
-            style={styles.input}
-            value={policyEarnPesoPerPoint}
-            onChangeText={setPolicyEarnPesoPerPoint}
-            keyboardType="numeric"
-            placeholder="Earn Ratio: PHP per 1 point"
-            placeholderTextColor="#9CA3AF"
-          />
-          <TextInput
-            style={styles.input}
-            value={policyRedeemPesoPerPoint}
-            onChangeText={setPolicyRedeemPesoPerPoint}
-            keyboardType="numeric"
-            placeholder="Redeem Ratio: PHP value per 1 point"
-            placeholderTextColor="#9CA3AF"
-          />
-          <TextInput
-            style={styles.input}
-            value={policyMinSpendForEarn}
-            onChangeText={setPolicyMinSpendForEarn}
-            keyboardType="numeric"
-            placeholder="Min Spend For Earn (PHP)"
-            placeholderTextColor="#9CA3AF"
-          />
-          <TextInput
-            style={styles.input}
-            value={policyMaxRedeemPoints}
-            onChangeText={setPolicyMaxRedeemPoints}
-            keyboardType="numeric"
-            placeholder="Max Redeem Points Per Txn (blank = no limit)"
-            placeholderTextColor="#9CA3AF"
-          />
-          <TextInput
-            style={styles.input}
-            value={policyPointsExpiryDays}
-            onChangeText={setPolicyPointsExpiryDays}
-            keyboardType="numeric"
-            placeholder="Points Expiry Days (blank = no expiry)"
-            placeholderTextColor="#9CA3AF"
-          />
-
-          <View style={styles.detailBox}>
-            <Text style={styles.subtitle}>Points Action Tester</Text>
-            <TextInput
-              style={styles.input}
-              value={pointsCustomerId}
-              onChangeText={setPointsCustomerId}
-              autoCapitalize="none"
-              placeholder="Customer ID (required)"
-              placeholderTextColor="#9CA3AF"
-            />
-            <TextInput
-              style={styles.input}
-              value={pointsCardInventoryId}
-              onChangeText={setPointsCardInventoryId}
-              autoCapitalize="none"
-              placeholder="Card Inventory ID (optional)"
-              placeholderTextColor="#9CA3AF"
-            />
-            <TextInput
-              style={styles.input}
-              value={pointsAmount}
-              onChangeText={setPointsAmount}
-              keyboardType="numeric"
-              placeholder="Amount (PHP, optional for earn/redeem)"
-              placeholderTextColor="#9CA3AF"
-            />
-            <TextInput
-              style={styles.input}
-              value={pointsValue}
-              onChangeText={setPointsValue}
-              keyboardType="numeric"
-              placeholder="Points (earn/redeem) or Delta Points (adjust)"
-              placeholderTextColor="#9CA3AF"
-            />
-            <TextInput
-              style={styles.input}
-              value={pointsRemarks}
-              onChangeText={setPointsRemarks}
-              placeholder="Remarks (optional)"
-              placeholderTextColor="#9CA3AF"
-            />
-
-            {pointsWarnings.length > 0 ? (
-              <View style={styles.infoBox}>
-                {pointsWarnings.map((warning, index) => (
-                  <Text key={`${warning}-${index}`} style={styles.infoText}>
-                    {warning}
-                  </Text>
-                ))}
-              </View>
-            ) : null}
-
-            <View style={styles.actions}>
-              <Pressable
-                style={[styles.secondaryBtn, (pointsActionBusy || !accessToken) ? styles.secondaryBtnDisabled : null]}
-                onPress={() => void handleSubmitPointsAction('earn')}
-                disabled={pointsActionBusy || !accessToken}
-              >
-                <Text style={styles.secondaryBtnText}>Earn</Text>
-              </Pressable>
-              <Pressable
-                style={[styles.secondaryBtn, (pointsActionBusy || !accessToken) ? styles.secondaryBtnDisabled : null]}
-                onPress={() => void handleSubmitPointsAction('redeem')}
-                disabled={pointsActionBusy || !accessToken}
-              >
-                <Text style={styles.secondaryBtnText}>Redeem</Text>
-              </Pressable>
-              <Pressable
-                style={[styles.secondaryBtn, (pointsActionBusy || !accessToken) ? styles.secondaryBtnDisabled : null]}
-                onPress={() => void handleSubmitPointsAction('adjust')}
-                disabled={pointsActionBusy || !accessToken}
-              >
-                <Text style={styles.secondaryBtnText}>Adjust</Text>
-              </Pressable>
-            </View>
-
-            {pointsActionError ? (
-              <View style={styles.errorBox}>
-                <Text style={styles.errorText}>{pointsActionError}</Text>
-              </View>
-            ) : null}
-            {pointsActionInfo ? (
-              <View style={styles.successBox}>
-                <Text style={styles.successTitle}>Points Action</Text>
-                <Text style={styles.successText}>{pointsActionInfo}</Text>
-              </View>
-            ) : null}
-          </View>
-
-          {pointsPolicyError ? (
-            <View style={styles.errorBox}>
-              <Text style={styles.errorText}>{pointsPolicyError}</Text>
-            </View>
-          ) : null}
-          {pointsPolicyInfo ? (
-            <View style={styles.successBox}>
-              <Text style={styles.successTitle}>Policy</Text>
-              <Text style={styles.successText}>{pointsPolicyInfo}</Text>
-            </View>
-          ) : null}
-        </View>
         </>
         ) : null}
       </ScrollView>
-
-      <Modal
-        visible={customerActionModalOpen && Boolean(selectedCustomerCard)}
-        transparent
-        animationType="fade"
-        onRequestClose={() => {
-          if (customerActionBusy) {
-            return;
-          }
-          setCustomerActionModalOpen(false);
-        }}
-      >
-        <View style={styles.modalOverlay}>
-          <View style={styles.modalCard}>
-            <Text style={styles.modalTitle}>Customer Card Actions</Text>
-            {selectedCustomerCard ? (
-              <>
-                <Text style={styles.metaText}>
-                  {selectedCustomerCard.customer.code} - {selectedCustomerCard.customer.name}
-                </Text>
-                <Text style={styles.metaText}>
-                  Card: {selectedCustomerCard.card.card_number} ({selectedCustomerCard.card.card_uid})
-                </Text>
-                <Text style={styles.metaText}>Current Status: {selectedCustomerCard.status}</Text>
-
-                <Pressable
-                  style={[styles.secondaryBtn, customerActionBusy ? styles.secondaryBtnDisabled : null]}
-                  onPress={handleRequestCustomerReassign}
-                  disabled={customerActionBusy}
-                >
-                  <Text style={styles.secondaryBtnText}>Reassign</Text>
-                </Pressable>
-
-                <View style={styles.actions}>
-                  <Pressable
-                    style={[styles.primaryBtn, customerActionBusy ? styles.primaryBtnDisabled : null]}
-                    onPress={() => setCustomerConfirmAction('UNASSIGN')}
-                    disabled={customerActionBusy}
-                  >
-                    <Text style={styles.primaryBtnText}>Unassign</Text>
-                  </Pressable>
-                  <Pressable
-                    style={[
-                      selectedCustomerCard.status === 'REVOKED' ? styles.primaryBtn : styles.dangerBtn,
-                      customerActionBusy ? styles.primaryBtnDisabled : null
-                    ]}
-                    onPress={() =>
-                      setCustomerConfirmAction(
-                        selectedCustomerCard.status === 'REVOKED' ? 'REACTIVATE' : 'REVOKE'
-                      )
-                    }
-                    disabled={customerActionBusy}
-                  >
-                    <Text style={styles.primaryBtnText}>
-                      {selectedCustomerCard.status === 'REVOKED' ? 'Reactivate' : 'Revoke'}
-                    </Text>
-                  </Pressable>
-                </View>
-              </>
-            ) : null}
-
-            <Pressable
-              style={[styles.secondaryBtn, customerActionBusy ? styles.secondaryBtnDisabled : null]}
-              onPress={() => setCustomerActionModalOpen(false)}
-              disabled={customerActionBusy}
-            >
-              <Text style={styles.secondaryBtnText}>Close</Text>
-            </Pressable>
-          </View>
-        </View>
-      </Modal>
-
-      <Modal
-        visible={customerConfirmAction !== null && Boolean(customerConfirmTargetCard)}
-        transparent
-        animationType="fade"
-        onRequestClose={() => {
-          if (customerActionBusy) {
-            return;
-          }
-          setCustomerConfirmAction(null);
-          setPendingReassignCardId(null);
-        }}
-      >
-        <View style={styles.modalOverlay}>
-          <View style={styles.modalCard}>
-            {customerConfirmTargetCard && customerConfirmAction ? (
-              <>
-                <Text style={styles.modalTitle}>
-                  {customerConfirmAction === 'REASSIGN'
-                    ? 'Confirm Reassign'
-                    : customerConfirmAction === 'UNASSIGN'
-                      ? 'Confirm Unassign'
-                      : customerConfirmAction === 'REVOKE'
-                        ? 'Confirm Revoke'
-                        : 'Confirm Reactivate'}
-                </Text>
-                <Text style={styles.metaText}>
-                  Card: {customerConfirmTargetCard.card.card_number} ({customerConfirmTargetCard.card.card_uid})
-                </Text>
-                <Text style={styles.metaText}>
-                  Current customer: {customerConfirmTargetCard.customer.name}
-                </Text>
-                {customerConfirmAction === 'REASSIGN' ? (
-                  <Text style={styles.metaText}>
-                    New customer: {selectedCustomer ? selectedCustomer.name : 'Select customer first'}
-                  </Text>
-                ) : null}
-                <Text style={styles.modalNote}>
-                  {customerConfirmAction === 'REASSIGN'
-                    ? 'This will move the card binding to the selected customer.'
-                    : customerConfirmAction === 'UNASSIGN'
-                      ? 'This will keep the card in inventory as unassigned.'
-                      : customerConfirmAction === 'REVOKE'
-                        ? 'This will mark the card as revoked and prevent normal use.'
-                        : 'This will reactivate this customer-card binding.'}
-                </Text>
-
-                <View style={styles.actions}>
-                  <Pressable
-                    style={[styles.secondaryBtn, customerActionBusy ? styles.secondaryBtnDisabled : null]}
-                    onPress={() => {
-                      setCustomerConfirmAction(null);
-                      setPendingReassignCardId(null);
-                    }}
-                    disabled={customerActionBusy}
-                  >
-                    <Text style={styles.secondaryBtnText}>Cancel</Text>
-                  </Pressable>
-                  <Pressable
-                    style={[
-                      customerConfirmAction === 'REVOKE' ? styles.dangerBtn : styles.primaryBtn,
-                      customerActionBusy ? styles.primaryBtnDisabled : null
-                    ]}
-                    onPress={() => {
-                      if (!customerConfirmAction) {
-                        return;
-                      }
-                      void executeCustomerCardLifecycle(customerConfirmAction);
-                    }}
-                    disabled={customerActionBusy}
-                  >
-                    <Text style={styles.primaryBtnText}>{customerActionBusy ? 'Processing...' : 'Confirm'}</Text>
-                  </Pressable>
-                </View>
-              </>
-            ) : null}
-          </View>
-        </View>
-      </Modal>
 
       <Modal
         visible={pickerOpen !== null}
         transparent
         animationType="fade"
         onRequestClose={() => {
-          if (pickerOpen === 'REASSIGN_CUSTOMER') {
-            setPendingReassignCardId(null);
-          }
           setPickerOpen(null);
           setPickerQuery('');
         }}
@@ -3416,9 +2307,7 @@ export default function App(): JSX.Element {
                   ? 'Select Branch'
                   : pickerOpen === 'LOCATION'
                     ? 'Select Location'
-                    : pickerOpen === 'CUSTOMER' || pickerOpen === 'REASSIGN_CUSTOMER'
-                      ? 'Select Customer'
-                      : 'Select Card'}
+                    : 'Select'}
             </Text>
             <TextInput
               style={styles.input}
@@ -3443,9 +2332,6 @@ export default function App(): JSX.Element {
             <Pressable
               style={styles.secondaryBtn}
               onPress={() => {
-                if (pickerOpen === 'REASSIGN_CUSTOMER') {
-                  setPendingReassignCardId(null);
-                }
                 setPickerOpen(null);
                 setPickerQuery('');
               }}
@@ -3966,4 +2852,9 @@ const styles = StyleSheet.create({
     fontSize: 12
   }
 });
+
+
+
+
+
 
