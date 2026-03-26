@@ -7,6 +7,7 @@ import { VcardCardsController } from './vcard-cards.controller';
 import { VcardController } from './vcard.controller';
 import { VcardInventoryController } from './vcard-inventory.controller';
 import { VcardPointsController } from './vcard-points.controller';
+import { VcardRewardsController } from './vcard-rewards.controller';
 import { VcardService } from './vcard.service';
 
 @Module({
@@ -16,6 +17,7 @@ import { VcardService } from './vcard.service';
     VcardInventoryController,
     VcardCardsController,
     VcardPointsController,
+    VcardRewardsController,
     VcardAuditController
   ],
   providers: [VcardService],

@@ -6,6 +6,7 @@ import { toastError, toastInfo, toastSuccess } from '../../../lib/web-toast';
 
 type Branch = { id: string; code: string; name: string; isActive: boolean };
 type Customer = { id: string; code: string; name: string };
+type ProductOption = { id: string; code?: string | null; name: string; sku?: string | null };
 type InventoryCard = {
   id: string;
   card_uid: string;
@@ -40,8 +41,81 @@ type PointsLedger = {
   remarks: string | null;
   created_at: string;
 };
-type CustomerCardsTab = 'customer-cards' | 'points-policy' | 'points-actions';
+type RewardType =
+  | 'DISCOUNT_FIXED'
+  | 'DISCOUNT_PERCENT'
+  | 'FREE_PRODUCT'
+  | 'FREE_DELIVERY'
+  | 'FREE_SERVICE'
+  | 'FREE_REFILL'
+  | 'VOUCHER';
+type RewardStatus = 'DRAFT' | 'ACTIVE' | 'INACTIVE' | 'ARCHIVED';
+type RewardRecord = {
+  id: string;
+  code: string;
+  name: string;
+  description: string | null;
+  reward_type: RewardType;
+  status: RewardStatus;
+  points_cost: number;
+  product_id: string | null;
+  free_qty: number | null;
+  discount_value: number | null;
+  min_spend: number | null;
+  max_discount_amount: number | null;
+  stackable: boolean;
+  per_customer_limit: number | null;
+  daily_limit: number | null;
+  valid_from: string | null;
+  valid_to: string | null;
+  updated_at: string;
+  scopes: Array<{ id: string; branch_id: string | null; location_id: string | null }>;
+};
+type RewardRedemptionStatus = 'RESERVED' | 'APPLIED' | 'CANCELLED' | 'VOIDED' | 'EXPIRED';
+type RewardRedemptionRecord = {
+  id: string;
+  customer_id: string;
+  card_inventory_id: string | null;
+  reward_id: string;
+  sale_id: string | null;
+  status: RewardRedemptionStatus;
+  points_spent: number;
+  value_applied: number | null;
+  remarks: string | null;
+  metadata: Record<string, unknown>;
+  redeemed_at: string;
+  applied_at: string | null;
+  cancelled_at: string | null;
+  voided_at: string | null;
+  expires_at: string | null;
+  reward: RewardRecord;
+};
+type CustomerCardsTab =
+  | 'customer-cards'
+  | 'points-policy'
+  | 'points-actions'
+  | 'rewards-catalog'
+  | 'redemption-history';
 type AssignmentFilter = 'ALL' | 'ASSIGNED' | 'UNASSIGNED';
+type RewardFormState = {
+  id: string | null;
+  code: string;
+  name: string;
+  description: string;
+  rewardType: RewardType;
+  status: RewardStatus;
+  pointsCost: string;
+  productId: string;
+  discountValue: string;
+  freeQty: string;
+  minSpend: string;
+  maxDiscountAmount: string;
+  stackable: boolean;
+  perCustomerLimit: string;
+  dailyLimit: string;
+  validFrom: string;
+  validTo: string;
+};
 
 function hashText(value: string): number {
   let hash = 0;
@@ -85,6 +159,28 @@ function parseOpt(v: string): number | null {
   return Number.isFinite(n) ? n : null;
 }
 
+function emptyRewardForm(): RewardFormState {
+  return {
+    id: null,
+    code: '',
+    name: '',
+    description: '',
+    rewardType: 'DISCOUNT_FIXED',
+    status: 'ACTIVE',
+    pointsCost: '',
+    productId: '',
+    discountValue: '',
+    freeQty: '',
+    minSpend: '',
+    maxDiscountAmount: '',
+    stackable: false,
+    perCustomerLimit: '',
+    dailyLimit: '',
+    validFrom: '',
+    validTo: ''
+  };
+}
+
 export default function CustomerCardsPage(): JSX.Element {
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
@@ -92,6 +188,7 @@ export default function CustomerCardsPage(): JSX.Element {
 
   const [branches, setBranches] = useState<Branch[]>([]);
   const [customers, setCustomers] = useState<Customer[]>([]);
+  const [products, setProducts] = useState<ProductOption[]>([]);
   const [branchId, setBranchId] = useState('');
   const [customerId, setCustomerId] = useState('');
 
@@ -114,6 +211,14 @@ export default function CustomerCardsPage(): JSX.Element {
   const [pointsValue, setPointsValue] = useState('');
   const [pointsRemarks, setPointsRemarks] = useState('');
   const [ledger, setLedger] = useState<PointsLedger[]>([]);
+  const [rewards, setRewards] = useState<RewardRecord[]>([]);
+  const [rewardsBusy, setRewardsBusy] = useState(false);
+  const [rewardSearch, setRewardSearch] = useState('');
+  const [rewardHistory, setRewardHistory] = useState<RewardRedemptionRecord[]>([]);
+  const [rewardHistoryBusy, setRewardHistoryBusy] = useState(false);
+  const [rewardHistoryStatus, setRewardHistoryStatus] = useState<'ALL' | RewardRedemptionStatus>('ALL');
+  const [rewardModalOpen, setRewardModalOpen] = useState(false);
+  const [rewardForm, setRewardForm] = useState<RewardFormState>(emptyRewardForm);
   const [activeTab, setActiveTab] = useState<CustomerCardsTab>('customer-cards');
   const [cardSearch, setCardSearch] = useState('');
   const [assignmentFilter, setAssignmentFilter] = useState<AssignmentFilter>('ALL');
@@ -188,6 +293,19 @@ export default function CustomerCardsPage(): JSX.Element {
     () => (activeActionCard ? assignedByInventoryId.get(activeActionCard.id) ?? null : null),
     [activeActionCard, assignedByInventoryId]
   );
+  const filteredRewards = useMemo(() => {
+    const query = rewardSearch.trim().toLowerCase();
+    return rewards.filter((reward) => {
+      if (!query) {
+        return true;
+      }
+      return (
+        reward.name.toLowerCase().includes(query) ||
+        reward.code.toLowerCase().includes(query) ||
+        (reward.description ?? '').toLowerCase().includes(query)
+      );
+    });
+  }, [rewardSearch, rewards]);
 
   function getErrorMessage(cause: unknown, fallback: string): string {
     if (cause instanceof Error && cause.message.trim()) {
@@ -197,13 +315,15 @@ export default function CustomerCardsPage(): JSX.Element {
   }
 
   async function loadBase(): Promise<void> {
-    const [b, c] = await Promise.all([
+    const [b, c, p] = await Promise.all([
       apiRequest<Branch[]>('/master-data/branches'),
-      apiRequest<Customer[]>('/master-data/customers')
+      apiRequest<Customer[]>('/master-data/customers'),
+      apiRequest<ProductOption[]>('/master-data/products')
     ]);
     const active = (b ?? []).filter((x) => x.isActive);
     setBranches(active);
     setCustomers(c ?? []);
+    setProducts(p ?? []);
     setBranchId((current) => (current && active.some((x) => x.id === current) ? current : active[0]?.id ?? ''));
     setCustomerId((current) => (current && (c ?? []).some((x) => x.id === current) ? current : c?.[0]?.id ?? ''));
     setReassignCustomerId((current) => (current && (c ?? []).some((x) => x.id === current) ? current : c?.[0]?.id ?? ''));
@@ -236,6 +356,28 @@ export default function CustomerCardsPage(): JSX.Element {
     setMinSpend(String(p.min_spend_for_earn));
     setMaxRedeem(p.max_redeem_points_per_txn == null ? '' : String(p.max_redeem_points_per_txn));
     setExpiryDays(p.points_expiry_days == null ? '' : String(p.points_expiry_days));
+  }
+
+  async function loadRewards(): Promise<void> {
+    if (!branchId) {
+      setRewards([]);
+      return;
+    }
+    const rows = await apiRequest<RewardRecord[]>(
+      `/vcard/rewards?branch_id=${encodeURIComponent(branchId)}&limit=200`
+    );
+    setRewards(rows ?? []);
+  }
+
+  async function loadRewardHistory(): Promise<void> {
+    if (!branchId) {
+      setRewardHistory([]);
+      return;
+    }
+    const rows = await apiRequest<RewardRedemptionRecord[]>(
+      '/vcard/rewards/redemptions?limit=300'
+    );
+    setRewardHistory(rows ?? []);
   }
 
   async function loadLedger(targetCustomerId?: string): Promise<void> {
@@ -271,6 +413,26 @@ export default function CustomerCardsPage(): JSX.Element {
   }, [branchId]);
 
   useEffect(() => {
+    if (!branchId) return;
+    void loadRewards().catch((cause) => {
+      const message = getErrorMessage(cause, 'Failed to load rewards.');
+      setError(message);
+      toastError('Load rewards failed', { description: message });
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [branchId]);
+
+  useEffect(() => {
+    if (!branchId) return;
+    void loadRewardHistory().catch((cause) => {
+      const message = getErrorMessage(cause, 'Failed to load redemption history.');
+      setError(message);
+      toastError('Load redemption history failed', { description: message });
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [branchId]);
+
+  useEffect(() => {
     if (!pointsCustomerId) return;
     void loadLedger(pointsCustomerId).catch((cause) => {
       const message = getErrorMessage(cause, 'Failed to load points ledger.');
@@ -283,7 +445,13 @@ export default function CustomerCardsPage(): JSX.Element {
   async function refresh(): Promise<void> {
     setBusy(true);
     try {
-      await Promise.all([loadCards(), loadPolicy(), loadLedger(pointsCustomerId)]);
+      await Promise.all([
+        loadCards(),
+        loadPolicy(),
+        loadLedger(pointsCustomerId),
+        loadRewards(),
+        loadRewardHistory()
+      ]);
       toastSuccess('Data refreshed');
     } catch (cause) {
       const message = cause instanceof Error ? cause.message : 'Failed to refresh.';
@@ -488,6 +656,117 @@ export default function CustomerCardsPage(): JSX.Element {
     }
   }
 
+  function openCreateReward(): void {
+    setRewardForm(emptyRewardForm());
+    setRewardModalOpen(true);
+  }
+
+  function openEditReward(reward: RewardRecord): void {
+    setRewardForm({
+      id: reward.id,
+      code: reward.code,
+      name: reward.name,
+      description: reward.description ?? '',
+      rewardType: reward.reward_type,
+      status: reward.status,
+      pointsCost: String(reward.points_cost),
+      productId: reward.product_id ?? '',
+      discountValue: reward.discount_value == null ? '' : String(reward.discount_value),
+      freeQty: reward.free_qty == null ? '' : String(reward.free_qty),
+      minSpend: reward.min_spend == null ? '' : String(reward.min_spend),
+      maxDiscountAmount: reward.max_discount_amount == null ? '' : String(reward.max_discount_amount),
+      stackable: reward.stackable,
+      perCustomerLimit: reward.per_customer_limit == null ? '' : String(reward.per_customer_limit),
+      dailyLimit: reward.daily_limit == null ? '' : String(reward.daily_limit),
+      validFrom: reward.valid_from ? reward.valid_from.slice(0, 16) : '',
+      validTo: reward.valid_to ? reward.valid_to.slice(0, 16) : ''
+    });
+    setRewardModalOpen(true);
+  }
+
+  async function saveReward(): Promise<void> {
+    if (!branchId) {
+      toastInfo('Select branch first.');
+      return;
+    }
+    if (!rewardForm.code.trim() || !rewardForm.name.trim() || !rewardForm.pointsCost.trim()) {
+      toastInfo('Code, name, and points cost are required.');
+      return;
+    }
+    setRewardsBusy(true);
+    try {
+      const payload = {
+        code: rewardForm.code.trim().toUpperCase(),
+        name: rewardForm.name.trim(),
+        description: rewardForm.description.trim() || null,
+        reward_type: rewardForm.rewardType,
+        status: rewardForm.status,
+        points_cost: parseNum(rewardForm.pointsCost, 0),
+        product_id: rewardForm.productId.trim() || null,
+        discount_value: parseOpt(rewardForm.discountValue),
+        free_qty: parseOpt(rewardForm.freeQty),
+        min_spend: parseOpt(rewardForm.minSpend),
+        max_discount_amount: parseOpt(rewardForm.maxDiscountAmount),
+        stackable: rewardForm.stackable,
+        per_customer_limit: parseOpt(rewardForm.perCustomerLimit),
+        daily_limit: parseOpt(rewardForm.dailyLimit),
+        valid_from: rewardForm.validFrom.trim() || null,
+        valid_to: rewardForm.validTo.trim() || null,
+        scopes: [{ branch_id: branchId }]
+      };
+      if (rewardForm.id) {
+        await apiRequest(`/vcard/rewards/${encodeURIComponent(rewardForm.id)}`, {
+          method: 'PATCH',
+          body: payload
+        });
+        toastSuccess('Reward updated');
+      } else {
+        await apiRequest('/vcard/rewards', {
+          method: 'POST',
+          body: payload
+        });
+        toastSuccess('Reward created');
+      }
+      setRewardModalOpen(false);
+      setRewardForm(emptyRewardForm());
+      await Promise.all([loadRewards(), loadRewardHistory()]);
+    } catch (cause) {
+      toastError('Reward save failed', { description: getErrorMessage(cause, 'Failed to save reward.') });
+    } finally {
+      setRewardsBusy(false);
+    }
+  }
+
+  async function updateRewardRedemptionStatus(
+    redemption: RewardRedemptionRecord,
+    action: 'cancel' | 'void'
+  ): Promise<void> {
+    const label = action === 'cancel' ? 'cancel' : 'void';
+    if (!window.confirm(`Are you sure you want to ${label} this redemption?`)) {
+      return;
+    }
+    setRewardHistoryBusy(true);
+    try {
+      await apiRequest(`/vcard/rewards/redemptions/${encodeURIComponent(redemption.id)}/${label}`, {
+        method: 'PATCH',
+        body: {
+          remarks:
+            action === 'cancel'
+              ? 'Cancelled from rewards history'
+              : 'Voided from rewards history'
+        }
+      });
+      toastSuccess(`Redemption ${action}ed`);
+      await Promise.all([loadRewardHistory(), loadLedger(pointsCustomerId), loadCards()]);
+    } catch (cause) {
+      toastError(`Unable to ${label} redemption`, {
+        description: getErrorMessage(cause, `Failed to ${label} redemption.`)
+      });
+    } finally {
+      setRewardHistoryBusy(false);
+    }
+  }
+
   if (loading) return <p className="text-sm text-slate-500 dark:text-slate-400">Loading customer cards...</p>;
 
   return (
@@ -503,6 +782,8 @@ export default function CustomerCardsPage(): JSX.Element {
         <div className="flex flex-wrap gap-2">
           {([
             { key: 'customer-cards', label: 'Customer Cards' },
+            { key: 'rewards-catalog', label: 'Rewards Catalog' },
+            { key: 'redemption-history', label: 'Redemption History' },
             { key: 'points-policy', label: 'Points Policy' },
             { key: 'points-actions', label: 'Points Actions' }
           ] as const).map((tab) => (
@@ -694,6 +975,238 @@ export default function CustomerCardsPage(): JSX.Element {
         </div>
       ) : null}
 
+      {activeTab === 'rewards-catalog' ? (
+        <div className="rounded-2xl border border-slate-200 bg-white p-4 dark:border-slate-800 dark:bg-slate-900">
+          <div className="flex flex-wrap items-start justify-between gap-3">
+            <div>
+              <h2 className="text-sm font-semibold text-slate-800 dark:text-slate-100">Rewards Catalog</h2>
+              <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">
+                Build branch reward offers that POS can redeem during checkout.
+              </p>
+            </div>
+            <button
+              type="button"
+              className="rounded-lg bg-brandPrimary px-4 py-2 text-sm font-semibold text-white disabled:opacity-60"
+              onClick={openCreateReward}
+              disabled={rewardsBusy || !branchId}
+            >
+              Add Reward
+            </button>
+          </div>
+
+          <div className="mt-4 grid gap-2 md:grid-cols-[1fr_auto]">
+            <input
+              className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-800"
+              value={rewardSearch}
+              onChange={(e) => setRewardSearch(e.target.value)}
+              placeholder="Search reward by name, code, or description"
+            />
+            <div className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-600 dark:border-slate-700 dark:bg-slate-800/60 dark:text-slate-300">
+              Branch scope: {selectedBranch ? `${selectedBranch.name} (${selectedBranch.code})` : '-'}
+            </div>
+          </div>
+
+          <div className="mt-4 grid gap-3 lg:grid-cols-2 xl:grid-cols-3">
+            {filteredRewards.length === 0 ? (
+              <div className="rounded-xl border border-dashed border-slate-300 bg-slate-50 p-5 text-sm text-slate-500 dark:border-slate-700 dark:bg-slate-800/50 dark:text-slate-300">
+                No rewards found for this branch yet.
+              </div>
+            ) : (
+              filteredRewards.map((reward) => (
+                <button
+                  key={reward.id}
+                  type="button"
+                  className="rounded-2xl border border-slate-200 bg-white p-4 text-left shadow-sm transition hover:-translate-y-0.5 hover:border-brandPrimary/40 dark:border-slate-700 dark:bg-slate-950"
+                  onClick={() => openEditReward(reward)}
+                >
+                  <div className="flex items-start justify-between gap-3">
+                    <div>
+                      <p className="text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">{reward.code}</p>
+                      <h3 className="mt-1 text-base font-semibold text-slate-900 dark:text-slate-100">{reward.name}</h3>
+                    </div>
+                    <span className={`rounded-full px-2 py-1 text-[10px] font-semibold ${
+                      reward.status === 'ACTIVE'
+                        ? 'bg-emerald-100 text-emerald-700 dark:bg-emerald-950/40 dark:text-emerald-200'
+                        : reward.status === 'DRAFT'
+                          ? 'bg-amber-100 text-amber-700 dark:bg-amber-950/40 dark:text-amber-200'
+                          : 'bg-slate-100 text-slate-700 dark:bg-slate-800 dark:text-slate-200'
+                    }`}>
+                      {reward.status}
+                    </span>
+                  </div>
+                  <p className="mt-3 text-sm text-slate-600 dark:text-slate-300">
+                    {reward.description?.trim() || 'No description yet.'}
+                  </p>
+                  <div className="mt-4 grid grid-cols-2 gap-2 text-xs text-slate-600 dark:text-slate-300">
+                    <div className="rounded-xl bg-slate-50 px-3 py-2 dark:bg-slate-800/70">
+                      <div className="uppercase tracking-wide text-slate-400">Type</div>
+                      <div className="mt-1 font-semibold">{reward.reward_type.replace(/_/g, ' ')}</div>
+                    </div>
+                    <div className="rounded-xl bg-slate-50 px-3 py-2 dark:bg-slate-800/70">
+                      <div className="uppercase tracking-wide text-slate-400">Points</div>
+                      <div className="mt-1 font-semibold">{reward.points_cost}</div>
+                    </div>
+                    <div className="rounded-xl bg-slate-50 px-3 py-2 dark:bg-slate-800/70">
+                      <div className="uppercase tracking-wide text-slate-400">Discount</div>
+                      <div className="mt-1 font-semibold">{reward.discount_value == null ? '-' : `PHP ${reward.discount_value.toFixed(2)}`}</div>
+                    </div>
+                    <div className="rounded-xl bg-slate-50 px-3 py-2 dark:bg-slate-800/70">
+                      <div className="uppercase tracking-wide text-slate-400">Minimum Spend</div>
+                      <div className="mt-1 font-semibold">{reward.min_spend == null ? '-' : `PHP ${reward.min_spend.toFixed(2)}`}</div>
+                    </div>
+                  </div>
+                  <div className="mt-3 text-xs text-slate-500 dark:text-slate-400">
+                    Updated {fmtDate(reward.updated_at)}
+                  </div>
+                </button>
+              ))
+            )}
+          </div>
+        </div>
+      ) : null}
+
+      {activeTab === 'redemption-history' ? (
+        <div className="rounded-2xl border border-slate-200 bg-white p-4 dark:border-slate-800 dark:bg-slate-900">
+          <div className="flex flex-col gap-3 md:flex-row md:items-end md:justify-between">
+            <div>
+              <h2 className="text-sm font-semibold text-slate-800 dark:text-slate-100">Redemption History</h2>
+              <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">
+                Branch-scoped reward reservations and applications. Staff can cancel reserved rewards or void applied ones.
+              </p>
+            </div>
+            <div className="flex flex-wrap items-center gap-2">
+              <select
+                className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-800"
+                value={rewardHistoryStatus}
+                onChange={(e) => setRewardHistoryStatus(e.target.value as 'ALL' | RewardRedemptionStatus)}
+              >
+                {(['ALL', 'RESERVED', 'APPLIED', 'CANCELLED', 'VOIDED', 'EXPIRED'] as const).map((value) => (
+                  <option key={value} value={value}>
+                    {value === 'ALL' ? 'All Statuses' : value}
+                  </option>
+                ))}
+              </select>
+              <button
+                type="button"
+                className="rounded-lg border border-slate-300 px-3 py-2 text-sm font-semibold dark:border-slate-600 disabled:opacity-60"
+                disabled={rewardHistoryBusy}
+                onClick={() => void (async () => {
+                  setRewardHistoryBusy(true);
+                  try {
+                    await loadRewardHistory();
+                    toastSuccess('Redemption history refreshed');
+                  } catch (cause) {
+                    toastError('Refresh failed', { description: getErrorMessage(cause, 'Failed to refresh reward history.') });
+                  } finally {
+                    setRewardHistoryBusy(false);
+                  }
+                })()}
+              >
+                {rewardHistoryBusy ? 'Refreshing...' : 'Refresh History'}
+              </button>
+            </div>
+          </div>
+          <div className="mt-4 space-y-3">
+            {rewardHistory
+              .filter((row) => {
+                const branchMeta = typeof row.metadata.branch_id === 'string' ? row.metadata.branch_id : null;
+                const inBranch =
+                  branchMeta === branchId ||
+                  row.reward.scopes.some((scope) => scope.branch_id === branchId);
+                if (!inBranch) {
+                  return false;
+                }
+                if (rewardHistoryStatus !== 'ALL' && row.status !== rewardHistoryStatus) {
+                  return false;
+                }
+                return true;
+              })
+              .map((row) => {
+                const customerLabel = customerNameById.get(row.customer_id) ?? row.customer_id;
+                const canCancel = row.status === 'RESERVED';
+                const canVoid = row.status === 'RESERVED' || row.status === 'APPLIED';
+                return (
+                  <div
+                    key={row.id}
+                    className="rounded-2xl border border-slate-200 bg-slate-50 p-4 dark:border-slate-700 dark:bg-slate-950"
+                  >
+                    <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+                      <div className="space-y-2">
+                        <div className="flex flex-wrap items-center gap-2">
+                          <span className="rounded-full bg-slate-900 px-2 py-1 text-[10px] font-semibold text-white dark:bg-slate-100 dark:text-slate-900">
+                            {row.reward.code}
+                          </span>
+                          <span className={`rounded-full px-2 py-1 text-[10px] font-semibold ${
+                            row.status === 'APPLIED'
+                              ? 'bg-emerald-100 text-emerald-700 dark:bg-emerald-950/40 dark:text-emerald-200'
+                              : row.status === 'RESERVED'
+                                ? 'bg-amber-100 text-amber-700 dark:bg-amber-950/40 dark:text-amber-200'
+                                : 'bg-slate-200 text-slate-700 dark:bg-slate-800 dark:text-slate-200'
+                          }`}>
+                            {row.status}
+                          </span>
+                        </div>
+                        <div>
+                          <h3 className="text-base font-semibold text-slate-900 dark:text-slate-100">
+                            {row.reward.name}
+                          </h3>
+                          <p className="text-sm text-slate-600 dark:text-slate-300">
+                            Customer: {customerLabel}
+                          </p>
+                        </div>
+                        <div className="grid gap-2 text-xs text-slate-500 dark:text-slate-400 md:grid-cols-2 xl:grid-cols-4">
+                          <div>Redeemed: {fmtDate(row.redeemed_at)}</div>
+                          <div>Points: {row.points_spent}</div>
+                          <div>Applied Value: {row.value_applied == null ? '-' : `PHP ${row.value_applied.toFixed(2)}`}</div>
+                          <div>Sale ID: {row.sale_id ?? '-'}</div>
+                        </div>
+                        <div className="text-xs text-slate-500 dark:text-slate-400">
+                          Remarks: {row.remarks?.trim() || 'No remarks'}
+                        </div>
+                      </div>
+                      <div className="flex flex-wrap gap-2">
+                        <button
+                          type="button"
+                          className="rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-sm font-semibold text-amber-900 disabled:opacity-60 dark:border-amber-700 dark:bg-amber-950/40 dark:text-amber-100"
+                          disabled={!canCancel || rewardHistoryBusy}
+                          onClick={() => void updateRewardRedemptionStatus(row, 'cancel')}
+                        >
+                          Cancel
+                        </button>
+                        <button
+                          type="button"
+                          className="rounded-lg border border-rose-300 bg-rose-50 px-3 py-2 text-sm font-semibold text-rose-900 disabled:opacity-60 dark:border-rose-700 dark:bg-rose-950/40 dark:text-rose-100"
+                          disabled={!canVoid || rewardHistoryBusy}
+                          onClick={() => void updateRewardRedemptionStatus(row, 'void')}
+                        >
+                          Void
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                );
+              })}
+            {rewardHistory.filter((row) => {
+              const branchMeta = typeof row.metadata.branch_id === 'string' ? row.metadata.branch_id : null;
+              const inBranch =
+                branchMeta === branchId ||
+                row.reward.scopes.some((scope) => scope.branch_id === branchId);
+              if (!inBranch) {
+                return false;
+              }
+              if (rewardHistoryStatus !== 'ALL' && row.status !== rewardHistoryStatus) {
+                return false;
+              }
+              return true;
+            }).length === 0 ? (
+              <div className="rounded-xl border border-dashed border-slate-300 bg-slate-50 p-5 text-sm text-slate-500 dark:border-slate-700 dark:bg-slate-800/50 dark:text-slate-300">
+                No reward redemptions found for this branch and filter.
+              </div>
+            ) : null}
+          </div>
+        </div>
+      ) : null}
+
       {assignConfirm ? (
         <div
           className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/55 p-4"
@@ -808,6 +1321,146 @@ export default function CustomerCardsPage(): JSX.Element {
                 disabled={busy || !assignTargetCustomerId || Boolean(activeActionBinding)}
               >
                 {busy ? 'Assigning...' : activeActionBinding ? 'Already Assigned' : 'Confirm Assign'}
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
+
+      {rewardModalOpen ? (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/55 p-4"
+          onClick={() => {
+            if (!rewardsBusy) {
+              setRewardModalOpen(false);
+            }
+          }}
+        >
+          <div
+            className="w-full max-w-4xl rounded-2xl border border-slate-200 bg-white p-5 shadow-2xl dark:border-slate-700 dark:bg-slate-900"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <div className="flex items-start justify-between gap-3">
+              <div>
+                <h3 className="text-base font-semibold text-slate-900 dark:text-slate-100">
+                  {rewardForm.id ? 'Edit Reward' : 'Create Reward'}
+                </h3>
+                <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">
+                  This reward will be scoped to the currently selected branch.
+                </p>
+              </div>
+              <button
+                type="button"
+                className="rounded-lg border border-slate-300 px-3 py-2 text-sm font-semibold text-slate-700 dark:border-slate-600 dark:text-slate-200"
+                onClick={() => setRewardModalOpen(false)}
+                disabled={rewardsBusy}
+              >
+                Close
+              </button>
+            </div>
+
+            <div className="mt-4 grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+              <label className="flex flex-col gap-1 text-xs font-medium text-slate-600 dark:text-slate-300">
+                <span>Reward Code</span>
+                <input className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-800" value={rewardForm.code} onChange={(e) => setRewardForm((prev) => ({ ...prev, code: e.target.value }))} placeholder="WELCOME50" />
+              </label>
+              <label className="flex flex-col gap-1 text-xs font-medium text-slate-600 dark:text-slate-300">
+                <span>Reward Name</span>
+                <input className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-800" value={rewardForm.name} onChange={(e) => setRewardForm((prev) => ({ ...prev, name: e.target.value }))} placeholder="PHP 50 LPG Discount" />
+              </label>
+              <label className="flex flex-col gap-1 text-xs font-medium text-slate-600 dark:text-slate-300">
+                <span>Reward Type</span>
+                <select className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-800" value={rewardForm.rewardType} onChange={(e) => setRewardForm((prev) => ({ ...prev, rewardType: e.target.value as RewardType }))}>
+                  {(['DISCOUNT_FIXED','DISCOUNT_PERCENT','FREE_PRODUCT','FREE_DELIVERY','FREE_SERVICE','FREE_REFILL','VOUCHER'] as const).map((value) => (
+                    <option key={value} value={value}>{value.replace(/_/g, ' ')}</option>
+                  ))}
+                </select>
+              </label>
+              <label className="flex flex-col gap-1 text-xs font-medium text-slate-600 dark:text-slate-300">
+                <span>Status</span>
+                <select className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-800" value={rewardForm.status} onChange={(e) => setRewardForm((prev) => ({ ...prev, status: e.target.value as RewardStatus }))}>
+                  {(['DRAFT','ACTIVE','INACTIVE','ARCHIVED'] as const).map((value) => (
+                    <option key={value} value={value}>{value}</option>
+                  ))}
+                </select>
+              </label>
+              <label className="md:col-span-2 xl:col-span-4 flex flex-col gap-1 text-xs font-medium text-slate-600 dark:text-slate-300">
+                <span>Description</span>
+                <input className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-800" value={rewardForm.description} onChange={(e) => setRewardForm((prev) => ({ ...prev, description: e.target.value }))} placeholder="Short non-technical description shown to staff and customers." />
+              </label>
+              <label className="flex flex-col gap-1 text-xs font-medium text-slate-600 dark:text-slate-300">
+                <span>Points Cost</span>
+                <input className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-800" value={rewardForm.pointsCost} onChange={(e) => setRewardForm((prev) => ({ ...prev, pointsCost: e.target.value }))} placeholder="100" />
+              </label>
+              <label className="flex flex-col gap-1 text-xs font-medium text-slate-600 dark:text-slate-300">
+                <span>Product Target</span>
+                <select
+                  className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-800"
+                  value={rewardForm.productId}
+                  onChange={(e) => setRewardForm((prev) => ({ ...prev, productId: e.target.value }))}
+                >
+                  <option value="">No product target</option>
+                  {products.map((product) => (
+                    <option key={product.id} value={product.id}>
+                      {product.name}{product.code ? ` (${product.code})` : product.sku ? ` (${product.sku})` : ''}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label className="flex flex-col gap-1 text-xs font-medium text-slate-600 dark:text-slate-300">
+                <span>Discount Value</span>
+                <input className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-800" value={rewardForm.discountValue} onChange={(e) => setRewardForm((prev) => ({ ...prev, discountValue: e.target.value }))} placeholder="50 or 10 for percent" />
+              </label>
+              <label className="flex flex-col gap-1 text-xs font-medium text-slate-600 dark:text-slate-300">
+                <span>Free Qty</span>
+                <input className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-800" value={rewardForm.freeQty} onChange={(e) => setRewardForm((prev) => ({ ...prev, freeQty: e.target.value }))} placeholder="1" />
+              </label>
+              <label className="flex flex-col gap-1 text-xs font-medium text-slate-600 dark:text-slate-300">
+                <span>Minimum Spend</span>
+                <input className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-800" value={rewardForm.minSpend} onChange={(e) => setRewardForm((prev) => ({ ...prev, minSpend: e.target.value }))} placeholder="500" />
+              </label>
+              <label className="flex flex-col gap-1 text-xs font-medium text-slate-600 dark:text-slate-300">
+                <span>Max Discount Amount</span>
+                <input className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-800" value={rewardForm.maxDiscountAmount} onChange={(e) => setRewardForm((prev) => ({ ...prev, maxDiscountAmount: e.target.value }))} placeholder="100" />
+              </label>
+              <label className="flex flex-col gap-1 text-xs font-medium text-slate-600 dark:text-slate-300">
+                <span>Per Customer Limit</span>
+                <input className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-800" value={rewardForm.perCustomerLimit} onChange={(e) => setRewardForm((prev) => ({ ...prev, perCustomerLimit: e.target.value }))} placeholder="1" />
+              </label>
+              <label className="flex flex-col gap-1 text-xs font-medium text-slate-600 dark:text-slate-300">
+                <span>Daily Limit</span>
+                <input className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-800" value={rewardForm.dailyLimit} onChange={(e) => setRewardForm((prev) => ({ ...prev, dailyLimit: e.target.value }))} placeholder="20" />
+              </label>
+              <label className="flex flex-col gap-1 text-xs font-medium text-slate-600 dark:text-slate-300">
+                <span>Valid From</span>
+                <input type="datetime-local" className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-800" value={rewardForm.validFrom} onChange={(e) => setRewardForm((prev) => ({ ...prev, validFrom: e.target.value }))} />
+              </label>
+              <label className="flex flex-col gap-1 text-xs font-medium text-slate-600 dark:text-slate-300">
+                <span>Valid To</span>
+                <input type="datetime-local" className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-800" value={rewardForm.validTo} onChange={(e) => setRewardForm((prev) => ({ ...prev, validTo: e.target.value }))} />
+              </label>
+              <label className="mt-5 flex items-center gap-2 text-sm font-medium text-slate-700 dark:text-slate-200">
+                <input type="checkbox" checked={rewardForm.stackable} onChange={(e) => setRewardForm((prev) => ({ ...prev, stackable: e.target.checked }))} />
+                Allow stacking with other promos
+              </label>
+            </div>
+
+            <div className="mt-5 flex justify-end gap-2">
+              <button
+                type="button"
+                className="rounded-lg border border-slate-300 px-4 py-2 text-sm font-semibold text-slate-700 dark:border-slate-600 dark:text-slate-200"
+                onClick={() => setRewardModalOpen(false)}
+                disabled={rewardsBusy}
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                className="rounded-lg bg-brandPrimary px-4 py-2 text-sm font-semibold text-white disabled:opacity-60"
+                onClick={() => void saveReward()}
+                disabled={rewardsBusy}
+              >
+                {rewardsBusy ? 'Saving...' : rewardForm.id ? 'Save Changes' : 'Create Reward'}
               </button>
             </div>
           </div>

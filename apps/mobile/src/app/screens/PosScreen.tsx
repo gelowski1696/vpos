@@ -6,6 +6,9 @@ import { toastError, toastInfo, toastSuccess } from '../goey-toast';
 import type { AppTheme } from '../theme';
 import { useTutorialTarget } from '../tutorial/tutorial-provider';
 import { SwipeToDeleteRow } from '../components/SwipeToDeleteRow';
+import { LocalSessionService } from '../../features/auth/local-session.service';
+import { HttpAuthTransport } from '../../features/auth/http-auth.transport';
+import { normalizeApiBaseUrl } from '../api-base-url';
 import {
   loadPendingInventoryDeltaByProductForLocation,
   mergeInventoryWithDeltas,
@@ -37,6 +40,34 @@ type CustomerProfile = {
   id: string;
   tier: string | null;
   contractPrice: number | null;
+  pointsBalance: number;
+};
+
+type PosRewardType =
+  | 'DISCOUNT_FIXED'
+  | 'DISCOUNT_PERCENT'
+  | 'FREE_DELIVERY'
+  | 'FREE_PRODUCT'
+  | 'FREE_REFILL';
+type PosRewardRecord = {
+  id: string;
+  code: string;
+  name: string;
+  description: string | null;
+  reward_type: PosRewardType;
+  points_cost: number;
+  product_id: string | null;
+  free_qty: number | null;
+  discount_value: number | null;
+  min_spend: number | null;
+  status: 'ACTIVE' | 'DRAFT' | 'INACTIVE' | 'ARCHIVED';
+};
+
+type PosRewardRedemptionRecord = {
+  id: string;
+  reward_id: string;
+  status: 'RESERVED' | 'APPLIED' | 'CANCELLED' | 'VOIDED' | 'EXPIRED';
+  points_spent: number;
 };
 
 type LocalPriceRule = {
@@ -76,6 +107,13 @@ type InventoryBalanceSnapshot = {
   qtyFull: number;
   qtyEmpty: number;
 };
+
+const env = (
+  globalThis as { process?: { env?: Record<string, string | undefined> } }
+).process?.env;
+const POS_API_BASE_URL = normalizeApiBaseUrl(
+  env?.EXPO_PUBLIC_API_BASE_URL ?? 'https://vmjamtech.com/api'
+);
 
 export type PosQueuedSaleReceiptPayload = {
   saleId: string;
@@ -177,8 +215,57 @@ function parseCustomerProfile(payload: Record<string, unknown>): CustomerProfile
   return {
     id,
     tier: asString(payload.tier),
-    contractPrice: asNumber(payload.contractPrice ?? payload.contract_price)
+    contractPrice: asNumber(payload.contractPrice ?? payload.contract_price),
+    pointsBalance: Math.max(0, asNumber(payload.pointsBalance ?? payload.points_balance) ?? 0)
   };
+}
+
+function isSupportedPosRewardType(value: string | null | undefined): value is PosRewardType {
+  return (
+    value === 'DISCOUNT_FIXED' ||
+    value === 'DISCOUNT_PERCENT' ||
+    value === 'FREE_DELIVERY' ||
+    value === 'FREE_PRODUCT' ||
+    value === 'FREE_REFILL'
+  );
+}
+
+function resolveRewardCartDiscount(reward: PosRewardRecord, cart: CartLine[]): number {
+  if (reward.reward_type === 'FREE_PRODUCT') {
+    const targetLine = cart.find(
+      (line) => line.id === reward.product_id && !line.isLpg
+    );
+    if (!targetLine) {
+      return 0;
+    }
+    const freeQty = Math.max(1, reward.free_qty ?? 1);
+    return round2(Math.min(targetLine.quantity, freeQty) * targetLine.unitPrice);
+  }
+
+  if (reward.reward_type === 'FREE_REFILL') {
+    const refillLines = cart.filter(
+      (line) =>
+        line.isLpg &&
+        line.cylinderFlow === 'REFILL_EXCHANGE' &&
+        (!reward.product_id || line.id === reward.product_id)
+    );
+    if (!refillLines.length) {
+      return 0;
+    }
+    let remainingFreeQty = Math.max(1, reward.free_qty ?? 1);
+    let total = 0;
+    for (const line of refillLines) {
+      if (remainingFreeQty <= 0) {
+        break;
+      }
+      const appliedQty = Math.min(line.quantity, remainingFreeQty);
+      total += appliedQty * line.unitPrice;
+      remainingFreeQty -= appliedQty;
+    }
+    return round2(total);
+  }
+
+  return 0;
 }
 
 function parsePriceLists(rows: Array<{ payload: string }>): LocalPriceList[] {
@@ -516,6 +603,9 @@ export function PosScreen({
   const [paidAmount, setPaidAmount] = useState('0');
   const [showPaymentStep, setShowPaymentStep] = useState(false);
   const [paymentNotes, setPaymentNotes] = useState('');
+  const [availableRewards, setAvailableRewards] = useState<PosRewardRecord[]>([]);
+  const [rewardsLoading, setRewardsLoading] = useState(false);
+  const [selectedRewardId, setSelectedRewardId] = useState('');
   const [saving, setSaving] = useState(false);
   const [selectedCustomerOutstanding, setSelectedCustomerOutstanding] = useState(0);
   const prevSyncBusyRef = useRef(syncBusy);
@@ -563,6 +653,7 @@ export function PosScreen({
   const selectedDriver = useMemo(() => personnels.find((option) => option.id === driverId), [personnels, driverId]);
   const selectedHelper = useMemo(() => personnels.find((option) => option.id === helperId), [personnels, helperId]);
   const personnelLabel = orderType === 'DELIVERY' ? 'Driver' : 'Personnel';
+  const currentPointsBalance = customerProfile?.pointsBalance ?? 0;
   const isCustomerReady = customerId.trim().length > 0;
   const isPersonnelReady = driverId.trim().length > 0;
   const hasCart = cart.length > 0;
@@ -608,6 +699,60 @@ export function PosScreen({
     }
     return parsedPaidAmount >= 0 && parsedPaidAmount < round2(total);
   }, [showPaymentStep, canProceedToPayment, paymentMode, parsedPaidAmount, total]);
+  const selectedReward = useMemo(
+    () => availableRewards.find((reward) => reward.id === selectedRewardId) ?? null,
+    [availableRewards, selectedRewardId]
+  );
+  const rewardBaseAmount = useMemo(
+    () => round2(Math.max(0, subtotal - discountValue) + deliveryFeeValue),
+    [subtotal, discountValue, deliveryFeeValue]
+  );
+  const rewardItemDiscountValue = useMemo(() => {
+    if (!selectedReward) {
+      return 0;
+    }
+    if (selectedReward.reward_type === 'DISCOUNT_FIXED') {
+      return round2(Math.min(selectedReward.discount_value ?? 0, Math.max(0, subtotal - discountValue)));
+    }
+    if (selectedReward.reward_type === 'DISCOUNT_PERCENT') {
+      const percent = Math.max(0, selectedReward.discount_value ?? 0);
+      return round2(Math.max(0, subtotal - discountValue) * (percent / 100));
+    }
+    if (selectedReward.reward_type === 'FREE_PRODUCT' || selectedReward.reward_type === 'FREE_REFILL') {
+      return resolveRewardCartDiscount(selectedReward, cart);
+    }
+    return 0;
+  }, [cart, discountValue, selectedReward, subtotal]);
+  const rewardDeliveryDiscountValue = useMemo(() => {
+    if (!selectedReward || selectedReward.reward_type !== 'FREE_DELIVERY') {
+      return 0;
+    }
+    return deliveryFeeValue;
+  }, [deliveryFeeValue, selectedReward]);
+  const totalRewardValue = useMemo(
+    () => round2(rewardItemDiscountValue + rewardDeliveryDiscountValue),
+    [rewardDeliveryDiscountValue, rewardItemDiscountValue]
+  );
+  const rewardEligibleOptions = useMemo(() => {
+    return availableRewards.filter((reward) => {
+      if (reward.status !== 'ACTIVE') {
+        return false;
+      }
+      if (customerProfile && reward.points_cost > customerProfile.pointsBalance) {
+        return false;
+      }
+      if (reward.min_spend !== null && rewardBaseAmount < reward.min_spend) {
+        return false;
+      }
+      if (
+        (reward.reward_type === 'FREE_PRODUCT' || reward.reward_type === 'FREE_REFILL') &&
+        resolveRewardCartDiscount(reward, cart) <= 0
+      ) {
+        return false;
+      }
+      return true;
+    });
+  }, [availableRewards, cart, customerProfile, rewardBaseAmount]);
 
   const itemCategoryOptions = useMemo<string[]>(() => {
     const set = new Set<string>();
@@ -703,6 +848,128 @@ export function PosScreen({
     [personnels, helperId, driverId]
   );
 
+  const vcardApiRequest = async <T,>(path: string, init?: RequestInit): Promise<T> => {
+    const session = new LocalSessionService(db);
+    await session.initializeFromStorage();
+    const transport = new HttpAuthTransport({ baseUrl: POS_API_BASE_URL });
+    const send = async (token?: string): Promise<Response> => {
+      const clientId = await session.getClientId();
+      const headers = new Headers(init?.headers ?? {});
+      headers.set('content-type', 'application/json');
+      if (token) {
+        headers.set('authorization', `Bearer ${token}`);
+      }
+      if (clientId?.trim()) {
+        headers.set('x-client-id', clientId.trim());
+      }
+      return fetch(`${POS_API_BASE_URL}${path}`, {
+        ...init,
+        headers
+      });
+    };
+
+    let token = await session.getAccessToken();
+    let response = await send(token);
+    if (response.status === 401) {
+      const refreshed = await session.refreshSession(transport);
+      if (refreshed) {
+        token = await session.getAccessToken();
+        response = await send(token);
+      }
+    }
+    if (!response.ok) {
+      let message = `Request failed (${response.status})`;
+      try {
+        const payload = (await response.json()) as { message?: string | string[]; error?: string };
+        if (Array.isArray(payload.message)) {
+          message = payload.message.join(', ');
+        } else if (typeof payload.message === 'string') {
+          message = payload.message;
+        } else if (typeof payload.error === 'string') {
+          message = payload.error;
+        }
+      } catch {
+        // ignore parse failure
+      }
+      throw new Error(message);
+    }
+    if (response.status === 204) {
+      return undefined as T;
+    }
+    return (await response.json()) as T;
+  };
+
+  const loadRewardsForCheckout = async (): Promise<void> => {
+    if (!showPaymentStep || !customerId.trim() || !branchId.trim()) {
+      setAvailableRewards([]);
+      return;
+    }
+    setRewardsLoading(true);
+    try {
+      const rewards = await vcardApiRequest<Array<Record<string, unknown>>>(
+        `/vcard/rewards?status=ACTIVE&branch_id=${encodeURIComponent(branchId.trim())}&location_id=${encodeURIComponent(locationId.trim())}&limit=100`
+      );
+      const normalized: PosRewardRecord[] = [];
+      for (const row of rewards ?? []) {
+        const rewardType = asString(row.reward_type ?? row.rewardType)?.toUpperCase();
+        if (!isSupportedPosRewardType(rewardType)) {
+          continue;
+        }
+        const id = asString(row.id);
+        const code = asString(row.code);
+        const name = asString(row.name);
+        if (!id || !code || !name) {
+          continue;
+        }
+        normalized.push({
+          id,
+          code,
+          name,
+          description: asString(row.description) ?? null,
+          reward_type: rewardType,
+          points_cost: Math.max(0, asNumber(row.points_cost ?? row.pointsCost) ?? 0),
+          product_id: asString(row.product_id ?? row.productId),
+          free_qty: asNumber(row.free_qty ?? row.freeQty),
+          discount_value: asNumber(row.discount_value ?? row.discountValue),
+          min_spend: asNumber(row.min_spend ?? row.minSpend),
+          status: (asString(row.status)?.toUpperCase() as PosRewardRecord['status']) ?? 'ACTIVE'
+        });
+      }
+      setAvailableRewards(normalized);
+    } catch (cause) {
+      setAvailableRewards([]);
+      toastInfo('Rewards unavailable', cause instanceof Error ? cause.message : 'Could not load rewards.');
+    } finally {
+      setRewardsLoading(false);
+    }
+  };
+
+  const handleSelectReward = (reward: PosRewardRecord): void => {
+    setSelectedRewardId(reward.id);
+    if (reward.reward_type === 'DISCOUNT_FIXED' && Number(discount || '0') <= 0 && reward.discount_value !== null) {
+      setDiscount(reward.discount_value.toFixed(2));
+      return;
+    }
+    if (reward.reward_type === 'DISCOUNT_PERCENT' && Number(discount || '0') <= 0 && reward.discount_value !== null) {
+      const suggested = round2(rewardBaseAmount * (reward.discount_value / 100));
+      setDiscount(suggested.toFixed(2));
+      return;
+    }
+    if (reward.reward_type === 'FREE_DELIVERY' && orderType === 'DELIVERY' && Number(deliveryFee || '0') > 0) {
+      setDeliveryFee('0.00');
+      return;
+    }
+    if (
+      (reward.reward_type === 'FREE_PRODUCT' || reward.reward_type === 'FREE_REFILL') &&
+      Number(discount || '0') <= 0
+    ) {
+      const suggested = resolveRewardCartDiscount(reward, cart);
+      if (suggested > 0) {
+        setDiscount(suggested.toFixed(2));
+      }
+    }
+  };
+
   useEffect(() => {
     if (cart.length === 0) {
       setPaidAmount('0');
@@ -720,6 +987,15 @@ export function PosScreen({
       setDeliveryFee('0.00');
     }
   }, [orderType]);
+
+  useEffect(() => {
+    if (!showPaymentStep) {
+      setAvailableRewards([]);
+      setSelectedRewardId('');
+      return;
+    }
+    void loadRewardsForCheckout();
+  }, [showPaymentStep, customerId, branchId, locationId]);
 
   useEffect(() => {
     void refreshMasterData();
@@ -783,6 +1059,19 @@ export function PosScreen({
       mounted = false;
     };
   }, [customerId, db]);
+
+  useEffect(() => {
+    setSelectedRewardId('');
+  }, [customerId]);
+
+  useEffect(() => {
+    if (!selectedRewardId) {
+      return;
+    }
+    if (!rewardEligibleOptions.some((reward) => reward.id === selectedRewardId)) {
+      setSelectedRewardId('');
+    }
+  }, [rewardEligibleOptions, selectedRewardId]);
 
   useEffect(() => {
     if (!scopedLocations.length) {
@@ -1432,7 +1721,27 @@ export function PosScreen({
     }
 
     setSaving(true);
+    let reservedReward: PosRewardRedemptionRecord | null = null;
     try {
+      if (selectedReward) {
+        reservedReward = await vcardApiRequest<PosRewardRedemptionRecord>(
+          `/vcard/rewards/${encodeURIComponent(selectedReward.id)}/reserve`,
+          {
+            method: 'POST',
+            body: JSON.stringify({
+              customer_id: customerId.trim(),
+              branch_id: branchId.trim(),
+              location_id: locationId.trim(),
+              amount: rewardBaseAmount,
+              remarks: `Reserved from mobile POS (${orderType})`,
+              metadata: {
+                origin: 'MOBILE_POS',
+                order_type: orderType
+              }
+            })
+          }
+        );
+      }
       const creditDue = round2(total - appliedPaidAmount);
       const lpgFlowModes = [
         ...new Set(
@@ -1478,6 +1787,24 @@ export function PosScreen({
         })),
         payments: [{ method: paymentMethod, amount: appliedPaidAmount }]
       });
+
+      if (reservedReward) {
+        await vcardApiRequest<PosRewardRedemptionRecord>(
+          `/vcard/rewards/redemptions/${encodeURIComponent(reservedReward.id)}/apply`,
+          {
+            method: 'PATCH',
+            body: JSON.stringify({
+              sale_id: saleId,
+              amount: rewardBaseAmount,
+              remarks: `Applied from mobile POS sale ${saleId}`,
+              metadata: {
+                origin: 'MOBILE_POS',
+                sale_id: saleId
+              }
+            })
+          }
+        );
+      }
 
       if (orderType === 'DELIVERY') {
         await service.createOfflineDeliveryOrder({
@@ -1551,6 +1878,8 @@ export function PosScreen({
       setPaymentMode('FULL');
       setPaidAmount('0');
       setPaymentNotes('');
+      setSelectedRewardId('');
+      setAvailableRewards([]);
       setShowPaymentStep(false);
       setCustomerId('');
       setCustomerSearch('');
@@ -1561,6 +1890,22 @@ export function PosScreen({
       await refreshCatalog();
       await onDataChanged?.();
     } catch (cause) {
+      if (reservedReward?.id) {
+        try {
+          await vcardApiRequest<PosRewardRedemptionRecord>(
+            `/vcard/rewards/redemptions/${encodeURIComponent(reservedReward.id)}/cancel`,
+            {
+              method: 'PATCH',
+              body: JSON.stringify({
+                remarks: 'Cancelled because POS checkout did not complete',
+                metadata: { origin: 'MOBILE_POS' }
+              })
+            }
+          );
+        } catch {
+          // Leave best-effort rollback only; original error remains primary.
+        }
+      }
       toastError('POS checkout failed', cause instanceof Error ? cause.message : 'Unable to queue sale.');
     } finally {
       setSaving(false);
@@ -1574,6 +1919,7 @@ export function PosScreen({
     const parts = [
       `Total: PHP ${total.toFixed(2)}`,
       ...(orderType === 'DELIVERY' ? [`Delivery Fee: PHP ${deliveryFeeValue.toFixed(2)}`] : []),
+      ...(selectedReward ? [`Reward: ${selectedReward.name} (${selectedReward.points_cost} pts)`] : []),
       `Paid: PHP ${appliedPaidAmount.toFixed(2)}`,
       creditBalance > 0
         ? `Balance Due: PHP ${creditBalance.toFixed(2)}`
@@ -2115,6 +2461,59 @@ export function PosScreen({
                 <Text style={[styles.summaryText, { color: theme.subtext }]}>Helper: {selectedHelper?.label ?? '-'}</Text>
               </View>
 
+              <View style={[styles.summary, { borderColor: theme.cardBorder }]}>
+                <Text style={[styles.fieldLabel, { color: theme.subtext }]}>Reward Redemption</Text>
+                <Text style={[styles.summaryText, { color: theme.subtext }]}>
+                  Available points: {currentPointsBalance}
+                </Text>
+                <Text style={[styles.summaryText, { color: theme.subtext }]}>
+                  Pick one reward to reserve/apply during checkout. Discount fields can still be adjusted before saving.
+                </Text>
+                {rewardsLoading ? (
+                  <Text style={[styles.summaryText, { color: theme.subtext }]}>Loading rewards...</Text>
+                ) : rewardEligibleOptions.length === 0 ? (
+                  <Text style={[styles.summaryText, { color: theme.subtext }]}>No active checkout rewards available for this customer/branch.</Text>
+                ) : (
+                  <View style={[styles.row, { flexWrap: 'wrap', gap: 6 }]}>
+                    {rewardEligibleOptions.map((reward) => {
+                      const active = reward.id === selectedRewardId;
+                      return (
+                        <Pressable
+                          key={reward.id}
+                          style={[
+                            styles.methodPill,
+                            { flexBasis: '48%', backgroundColor: active ? theme.primary : theme.pillBg }
+                          ]}
+                          onPress={() => handleSelectReward(reward)}
+                          disabled={saving}
+                        >
+                          <Text style={{ color: active ? '#FFFFFF' : theme.pillText, fontWeight: '700', fontSize: 11 }}>
+                            {reward.name}
+                          </Text>
+                          <Text style={{ color: active ? '#FFFFFF' : theme.pillText, fontSize: 10 }}>
+                            {reward.points_cost} pts
+                            {reward.reward_type === 'FREE_PRODUCT' || reward.reward_type === 'FREE_REFILL'
+                              ? ` | Save PHP ${resolveRewardCartDiscount(reward, cart).toFixed(2)}`
+                              : reward.discount_value !== null
+                                ? ` | ${reward.reward_type === 'DISCOUNT_PERCENT' ? `${reward.discount_value}%` : `PHP ${reward.discount_value.toFixed(2)}`}`
+                                : ''}
+                          </Text>
+                        </Pressable>
+                      );
+                    })}
+                    {selectedReward ? (
+                      <Pressable
+                        style={[styles.methodPill, { flexBasis: '48%', backgroundColor: theme.pillBg }]}
+                        onPress={() => setSelectedRewardId('')}
+                        disabled={saving}
+                      >
+                        <Text style={{ color: theme.pillText, fontWeight: '700', fontSize: 11 }}>Clear Reward</Text>
+                      </Pressable>
+                    ) : null}
+                  </View>
+                )}
+              </View>
+
               <Text style={[styles.fieldLabel, { color: theme.subtext }]}>Payment Type</Text>
               <View style={[styles.row, isCompactLayout ? { gap: 6 } : null]}>
                 {(['FULL', 'PARTIAL'] as const).map((mode) => {
@@ -2251,6 +2650,11 @@ export function PosScreen({
                 <Text style={[styles.summaryText, { color: theme.subtext }]}>Discount: PHP {discountValue.toFixed(2)}</Text>
                 {orderType === 'DELIVERY' ? (
                   <Text style={[styles.summaryText, { color: theme.subtext }]}>Delivery Fee: PHP {deliveryFeeValue.toFixed(2)}</Text>
+                ) : null}
+                {selectedReward ? (
+                  <Text style={[styles.summaryText, { color: theme.subtext }]}>
+                    Reward: {selectedReward.name} ({selectedReward.points_cost} pts)
+                  </Text>
                 ) : null}
                 <Text style={[styles.summaryText, { color: theme.subtext }]}>Applied Payment: PHP {appliedPaidAmount.toFixed(2)}</Text>
                 <Text style={[styles.summaryText, { color: theme.subtext }]}>Credit Due: PHP {creditBalance.toFixed(2)}</Text>

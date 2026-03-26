@@ -201,72 +201,100 @@ enum CustomerPointsTxnType {
 
 enum CustomerPointsSourceType {
   SALE
+  REWARD
   MANUAL
   SYSTEM
 }
 
-model Company {
-  id            String                   @id @default(uuid())
-  code          String                   @unique
-  externalClientId String?               @unique
-  name          String
-  currencyCode  String                   @default("PHP")
-  timezone      String                   @default("Asia/Manila")
-  subscriptionStatus EntitlementStatus   @default(ACTIVE)
-  entitlementUpdatedAt DateTime?
-  datastoreMode TenancyDatastoreMode     @default(SHARED_DB)
-  datastoreRef  String?
-  datastoreMigrationState TenancyMigrationState @default(NONE)
-  createdAt     DateTime                 @default(now())
-  updatedAt     DateTime                 @updatedAt
+enum RewardType {
+  DISCOUNT_FIXED
+  DISCOUNT_PERCENT
+  FREE_PRODUCT
+  FREE_DELIVERY
+  FREE_SERVICE
+  FREE_REFILL
+  VOUCHER
+}
 
-  branding          BrandingConfig?
-  entitlement       CompanyEntitlement?
-  entitlementEvents CompanyEntitlementEvent[]
-  branches          Branch[]
-  locations         Location[]
-  users             User[]
-  personnelRoles    PersonnelRole[]
-  personnels        Personnel[]
-  roles             Role[]
-  priceRules        PriceRule[]
-  customers         Customer[]
-  suppliers         Supplier[]
-  products          Product[]
-  productCategories ProductCategory[]
-  productBrands     ProductBrand[]
-  cylinderTypes     CylinderType[]
-  priceLists        PriceList[]
-  expenseCategories ExpenseCategory[]
-  inventoryBalances InventoryBalance[]
-  inventoryLedgers  InventoryLedger[]
-  stockTransfers    StockTransfer[]
-  costingConfig     CostingConfig?
-  vcardPointsPolicy VcardPointsPolicy?
-  cylinders         Cylinder[]
-  cylinderEvents    CylinderEvent[]
-  cylinderBalances  CylinderBalance[]
-  shifts            Shift[]
-  sales             Sale[]
-  deliveryOrders    DeliveryOrder[]
-  pettyCashEntries  PettyCashEntry[]
-  customerPayments  CustomerPayment[]
-  depositLedger     DepositLiabilityLedger[]
-  syncCursors       SyncCursor[]
-  syncReviews       SyncReview[]
-  idempotencyKeys   IdempotencyKey[]
-  auditLogs         AuditLog[]
-  eventSales        EventSales[]
-  eventStock        EventStockMovement[]
-  eventDelivery     EventDeliveryPerformance[]
-  eventBehavior     EventUserBehavior[]
-  tenantDatastores  TenantDatastoreRegistry[]
-  mobileEnrollmentTokens MobileEnrollmentToken[]
-  nfcCards          NfcCard[]
-  nfcCardEvents     NfcCardEvent[]
-  cardInventory     CardInventory[]
-  customerCards     CustomerCard[]
-  customerPointsLedger CustomerPointsLedger[]
+enum RewardStatus {
+  DRAFT
+  ACTIVE
+  INACTIVE
+  ARCHIVED
+}
+
+enum RewardRedemptionStatus {
+  RESERVED
+  APPLIED
+  CANCELLED
+  VOIDED
+  EXPIRED
+}
+
+model Company {
+  id                      String                @id @default(uuid())
+  code                    String                @unique
+  externalClientId        String?               @unique
+  name                    String
+  currencyCode            String                @default("PHP")
+  timezone                String                @default("Asia/Manila")
+  subscriptionStatus      EntitlementStatus     @default(ACTIVE)
+  entitlementUpdatedAt    DateTime?
+  datastoreMode           TenancyDatastoreMode  @default(SHARED_DB)
+  datastoreRef            String?
+  datastoreMigrationState TenancyMigrationState @default(NONE)
+  createdAt               DateTime              @default(now())
+  updatedAt               DateTime              @updatedAt
+
+  branding                  BrandingConfig?
+  entitlement               CompanyEntitlement?
+  entitlementEvents         CompanyEntitlementEvent[]
+  branches                  Branch[]
+  locations                 Location[]
+  users                     User[]
+  personnelRoles            PersonnelRole[]
+  personnels                Personnel[]
+  roles                     Role[]
+  priceRules                PriceRule[]
+  customers                 Customer[]
+  suppliers                 Supplier[]
+  products                  Product[]
+  productCategories         ProductCategory[]
+  productBrands             ProductBrand[]
+  cylinderTypes             CylinderType[]
+  priceLists                PriceList[]
+  expenseCategories         ExpenseCategory[]
+  inventoryBalances         InventoryBalance[]
+  inventoryLedgers          InventoryLedger[]
+  stockTransfers            StockTransfer[]
+  costingConfig             CostingConfig?
+  vcardPointsPolicy         VcardPointsPolicy?
+  cylinders                 Cylinder[]
+  cylinderEvents            CylinderEvent[]
+  cylinderBalances          CylinderBalance[]
+  shifts                    Shift[]
+  sales                     Sale[]
+  deliveryOrders            DeliveryOrder[]
+  pettyCashEntries          PettyCashEntry[]
+  customerPayments          CustomerPayment[]
+  depositLedger             DepositLiabilityLedger[]
+  syncCursors               SyncCursor[]
+  syncReviews               SyncReview[]
+  idempotencyKeys           IdempotencyKey[]
+  auditLogs                 AuditLog[]
+  eventSales                EventSales[]
+  eventStock                EventStockMovement[]
+  eventDelivery             EventDeliveryPerformance[]
+  eventBehavior             EventUserBehavior[]
+  tenantDatastores          TenantDatastoreRegistry[]
+  mobileEnrollmentTokens    MobileEnrollmentToken[]
+  nfcCards                  NfcCard[]
+  nfcCardEvents             NfcCardEvent[]
+  cardInventory             CardInventory[]
+  customerCards             CustomerCard[]
+  customerPointsLedger      CustomerPointsLedger[]
+  redeemableRewards         RedeemableReward[]
+  customerRewardRedemptions CustomerRewardRedemption[]
 }
 
 model TenantDatastoreRegistry {
@@ -288,36 +316,36 @@ model TenantDatastoreRegistry {
 }
 
 model CompanyEntitlement {
-  id            String                    @id @default(uuid())
-  companyId     String                    @unique
+  id               String                   @id @default(uuid())
+  companyId        String                   @unique
   externalClientId String
-  status        EntitlementStatus         @default(ACTIVE)
-  maxBranches   Int                       @default(1)
-  branchMode    EntitlementBranchMode     @default(SINGLE)
-  inventoryMode EntitlementInventoryMode  @default(STORE_ONLY)
-  allowDelivery Boolean                   @default(false)
-  allowTransfers Boolean                  @default(false)
-  allowMobile   Boolean                   @default(true)
-  graceUntil    DateTime?
-  lastSyncedAt  DateTime                  @default(now())
-  createdAt     DateTime                  @default(now())
-  updatedAt     DateTime                  @updatedAt
+  status           EntitlementStatus        @default(ACTIVE)
+  maxBranches      Int                      @default(1)
+  branchMode       EntitlementBranchMode    @default(SINGLE)
+  inventoryMode    EntitlementInventoryMode @default(STORE_ONLY)
+  allowDelivery    Boolean                  @default(false)
+  allowTransfers   Boolean                  @default(false)
+  allowMobile      Boolean                  @default(true)
+  graceUntil       DateTime?
+  lastSyncedAt     DateTime                 @default(now())
+  createdAt        DateTime                 @default(now())
+  updatedAt        DateTime                 @updatedAt
 
-  company Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  company Company                   @relation(fields: [companyId], references: [id], onDelete: Cascade)
   events  CompanyEntitlementEvent[]
 
   @@index([externalClientId, status])
 }
 
 model CompanyEntitlementEvent {
-  id             String    @id @default(uuid())
-  companyId      String
-  entitlementId  String?
+  id              String   @id @default(uuid())
+  companyId       String
+  entitlementId   String?
   externalEventId String?  @unique
-  eventType      String
-  source         String    @default("WEBHOOK")
-  payload        Json
-  createdAt      DateTime  @default(now())
+  eventType       String
+  source          String   @default("WEBHOOK")
+  payload         Json
+  createdAt       DateTime @default(now())
 
   company     Company             @relation(fields: [companyId], references: [id], onDelete: Cascade)
   entitlement CompanyEntitlement? @relation(fields: [entitlementId], references: [id], onDelete: SetNull)
@@ -345,55 +373,107 @@ model BrandingConfig {
 }
 
 model VcardPointsPolicy {
-  id                   String   @id @default(uuid())
-  companyId            String   @unique
-  earnPesoPerPoint     Decimal  @default(100) @db.Decimal(12, 2)
-  redeemPesoPerPoint   Decimal  @default(1) @db.Decimal(12, 2)
-  minSpendForEarn      Decimal  @default(0) @db.Decimal(12, 2)
+  id                    String   @id @default(uuid())
+  companyId             String   @unique
+  earnPesoPerPoint      Decimal  @default(100) @db.Decimal(12, 2)
+  redeemPesoPerPoint    Decimal  @default(1) @db.Decimal(12, 2)
+  minSpendForEarn       Decimal  @default(0) @db.Decimal(12, 2)
   maxRedeemPointsPerTxn Int?
-  pointsExpiryDays     Int?
-  createdAt            DateTime @default(now())
-  updatedAt            DateTime @updatedAt
+  pointsExpiryDays      Int?
+  createdAt             DateTime @default(now())
+  updatedAt             DateTime @updatedAt
 
   company Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
 }
 
-model Branch {
-  id         String   @id @default(uuid())
-  companyId  String
-  code       String
-  name       String
-  isActive   Boolean  @default(true)
-  createdAt  DateTime @default(now())
-  updatedAt  DateTime @updatedAt
+model RedeemableReward {
+  id                String       @id @default(uuid())
+  companyId         String
+  code              String
+  name              String
+  description       String?      @db.Text
+  rewardType        RewardType
+  status            RewardStatus @default(DRAFT)
+  pointsCost        Int
+  productId         String?
+  freeQty           Decimal?     @db.Decimal(12, 2)
+  discountValue     Decimal?     @db.Decimal(12, 2)
+  minSpend          Decimal?     @db.Decimal(12, 2)
+  maxDiscountAmount Decimal?     @db.Decimal(12, 2)
+  stackable         Boolean      @default(false)
+  perCustomerLimit  Int?
+  dailyLimit        Int?
+  validFrom         DateTime?
+  validTo           DateTime?
+  metadata          Json?
+  createdByUserId   String?
+  createdAt         DateTime     @default(now())
+  updatedAt         DateTime     @updatedAt
 
-  company        Company          @relation(fields: [companyId], references: [id], onDelete: Cascade)
-  locations      Location[]
-  priceLists     PriceList[]
-  shifts         Shift[]
-  sales          Sale[]
-  pettyCash      PettyCashEntry[]
-  receipts       Receipt[]
-  deliveryOrders DeliveryOrder[]
-  customerPayments CustomerPayment[]
+  company     Company                    @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  product     Product?                   @relation(fields: [productId], references: [id], onDelete: SetNull)
+  createdBy   User?                      @relation("RedeemableRewardCreatedBy", fields: [createdByUserId], references: [id], onDelete: SetNull)
+  scopes      RedeemableRewardScope[]
+  redemptions CustomerRewardRedemption[]
+
+  @@unique([companyId, code])
+  @@index([companyId, status, updatedAt])
+  @@index([companyId, rewardType, status, updatedAt])
+}
+
+model RedeemableRewardScope {
+  id         String   @id @default(uuid())
+  rewardId   String
+  branchId   String?
+  locationId String?
+  createdAt  DateTime @default(now())
+
+  reward   RedeemableReward @relation(fields: [rewardId], references: [id], onDelete: Cascade)
+  branch   Branch?          @relation(fields: [branchId], references: [id], onDelete: Cascade)
+  location Location?        @relation(fields: [locationId], references: [id], onDelete: Cascade)
+
+  @@unique([rewardId, branchId, locationId])
+  @@index([rewardId, createdAt])
+  @@index([branchId, locationId])
+}
+
+model Branch {
+  id        String   @id @default(uuid())
+  companyId String
+  code      String
+  name      String
+  isActive  Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  company                Company                 @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  locations              Location[]
+  priceLists             PriceList[]
+  shifts                 Shift[]
+  sales                  Sale[]
+  pettyCash              PettyCashEntry[]
+  receipts               Receipt[]
+  deliveryOrders         DeliveryOrder[]
+  customerPayments       CustomerPayment[]
   mobileEnrollmentTokens MobileEnrollmentToken[]
-  personnels      Personnel[]
-  cardInventory   CardInventory[]
+  personnels             Personnel[]
+  cardInventory          CardInventory[]
+  rewardScopes           RedeemableRewardScope[]
 
   @@unique([companyId, code])
   @@index([companyId, updatedAt])
 }
 
 model PersonnelRole {
-  id         String   @id @default(uuid())
-  companyId  String
-  code       String
-  name       String
-  isActive   Boolean  @default(true)
-  createdAt  DateTime @default(now())
-  updatedAt  DateTime @updatedAt
+  id        String   @id @default(uuid())
+  companyId String
+  code      String
+  name      String
+  isActive  Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
-  company    Company      @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  company    Company     @relation(fields: [companyId], references: [id], onDelete: Cascade)
   personnels Personnel[]
 
   @@unique([companyId, code])
@@ -423,31 +503,32 @@ model Personnel {
 }
 
 model Location {
-  id          String       @id @default(uuid())
-  companyId   String
-  branchId    String?
-  code        String
-  name        String
-  type        LocationType
-  isActive    Boolean      @default(true)
-  createdAt   DateTime     @default(now())
-  updatedAt   DateTime     @updatedAt
+  id        String       @id @default(uuid())
+  companyId String
+  branchId  String?
+  code      String
+  name      String
+  type      LocationType
+  isActive  Boolean      @default(true)
+  createdAt DateTime     @default(now())
+  updatedAt DateTime     @updatedAt
 
-  company            Company            @relation(fields: [companyId], references: [id], onDelete: Cascade)
-  branch             Branch?            @relation(fields: [branchId], references: [id], onDelete: SetNull)
-  inventoryBalances  InventoryBalance[]
-  inventoryLedgers   InventoryLedger[]
-  sourceTransfers    StockTransfer[]    @relation("TransferSource")
-  destinationTransfers StockTransfer[]  @relation("TransferDestination")
-  cylinders          Cylinder[]
-  cylinderEventsFrom CylinderEvent[]    @relation("CylinderEventFrom")
-  cylinderEventsTo   CylinderEvent[]    @relation("CylinderEventTo")
-  cylinderBalances   CylinderBalance[]
-  sales              Sale[]
-  syncCursors        SyncCursor[]
-  suppliers          Supplier[]
+  company                Company                 @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  branch                 Branch?                 @relation(fields: [branchId], references: [id], onDelete: SetNull)
+  inventoryBalances      InventoryBalance[]
+  inventoryLedgers       InventoryLedger[]
+  sourceTransfers        StockTransfer[]         @relation("TransferSource")
+  destinationTransfers   StockTransfer[]         @relation("TransferDestination")
+  cylinders              Cylinder[]
+  cylinderEventsFrom     CylinderEvent[]         @relation("CylinderEventFrom")
+  cylinderEventsTo       CylinderEvent[]         @relation("CylinderEventTo")
+  cylinderBalances       CylinderBalance[]
+  sales                  Sale[]
+  syncCursors            SyncCursor[]
+  suppliers              Supplier[]
   mobileEnrollmentTokens MobileEnrollmentToken[]
-  cardInventory      CardInventory[]
+  cardInventory          CardInventory[]
+  rewardScopes           RedeemableRewardScope[]
 
   @@unique([companyId, code])
   @@index([companyId, updatedAt])
@@ -464,46 +545,48 @@ model User {
   createdAt    DateTime @default(now())
   updatedAt    DateTime @updatedAt
 
-  company             Company                @relation(fields: [companyId], references: [id], onDelete: Cascade)
-  userRoles           UserRole[]
-  supervisorPin       SupervisorPin?
-  refreshTokens       RefreshToken[]
-  deviceSessions      DeviceSession[]
-  shifts              Shift[]
-  sales               Sale[]
-  deliveryAssignments DeliveryAssignment[]
-  pettyCashEntries    PettyCashEntry[]
-  auditLogs           AuditLog[]
-  discountOverrides   DiscountOverrideLog[]
-  requestedTransfers  StockTransfer[]
-  postedCustomerPayments CustomerPayment[]
-  mobileEnrollmentTokens MobileEnrollmentToken[] @relation("MobileEnrollmentUser")
-  createdMobileEnrollmentTokens MobileEnrollmentToken[] @relation("MobileEnrollmentCreator")
-  ownedNfcCards       NfcCard[]                 @relation("NfcCardOwner")
-  nfcCardEvents       NfcCardEvent[]            @relation("NfcCardEventActor")
-  assignedCustomerCards CustomerCard[]          @relation("CustomerCardAssignedBy")
-  createdCustomerPointsEntries CustomerPointsLedger[] @relation("CustomerPointsCreatedBy")
+  company                       Company                    @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  userRoles                     UserRole[]
+  supervisorPin                 SupervisorPin?
+  refreshTokens                 RefreshToken[]
+  deviceSessions                DeviceSession[]
+  shifts                        Shift[]
+  sales                         Sale[]
+  deliveryAssignments           DeliveryAssignment[]
+  pettyCashEntries              PettyCashEntry[]
+  auditLogs                     AuditLog[]
+  discountOverrides             DiscountOverrideLog[]
+  requestedTransfers            StockTransfer[]
+  postedCustomerPayments        CustomerPayment[]
+  mobileEnrollmentTokens        MobileEnrollmentToken[]    @relation("MobileEnrollmentUser")
+  createdMobileEnrollmentTokens MobileEnrollmentToken[]    @relation("MobileEnrollmentCreator")
+  ownedNfcCards                 NfcCard[]                  @relation("NfcCardOwner")
+  nfcCardEvents                 NfcCardEvent[]             @relation("NfcCardEventActor")
+  assignedCustomerCards         CustomerCard[]             @relation("CustomerCardAssignedBy")
+  createdCustomerPointsEntries  CustomerPointsLedger[]     @relation("CustomerPointsCreatedBy")
+  createdRedeemableRewards      RedeemableReward[]         @relation("RedeemableRewardCreatedBy")
+  createdRewardRedemptions      CustomerRewardRedemption[] @relation("CustomerRewardRedemptionCreatedBy")
 
   @@unique([companyId, email])
   @@index([companyId, updatedAt])
 }
 
 model MobileEnrollmentToken {
-  id              String   @id @default(uuid())
-  companyId       String
-  userId          String
-  branchId        String
-  locationId      String
-  createdByUserId String?
-  tokenHash       String   @unique
-  expiresAt       DateTime
-  usedAt          DateTime?
-  revokedAt       DateTime?
-  claimedDeviceId String?
-  claimedIp       String?
+  id               String    @id @default(uuid())
+  companyId        String
+  userId           String
+  branchId         String
+  locationId       String
+  createdByUserId  String?
+  tokenHash        String    @unique
+  expiresAt        DateTime
+  usedAt           DateTime?
+  revokedAt        DateTime?
+  claimedDeviceId  String?
+  claimedIp        String?
   claimedUserAgent String?
-  createdAt       DateTime @default(now())
-  updatedAt       DateTime @updatedAt
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
 
   company   Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
   user      User     @relation("MobileEnrollmentUser", fields: [userId], references: [id], onDelete: Cascade)
@@ -527,8 +610,8 @@ model NfcCard {
   createdAt  DateTime         @default(now())
   updatedAt  DateTime         @updatedAt
 
-  company Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
-  owner   User    @relation("NfcCardOwner", fields: [ownerId], references: [id], onDelete: Restrict)
+  company Company        @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  owner   User           @relation("NfcCardOwner", fields: [ownerId], references: [id], onDelete: Restrict)
   events  NfcCardEvent[]
 
   @@unique([companyId, uid])
@@ -545,9 +628,9 @@ model NfcCardEvent {
   payload     Json?
   createdAt   DateTime         @default(now())
 
-  company Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
-  card    NfcCard  @relation(fields: [cardId], references: [id], onDelete: Cascade)
-  actor   User?    @relation("NfcCardEventActor", fields: [actorUserId], references: [id], onDelete: SetNull)
+  company Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  card    NfcCard @relation(fields: [cardId], references: [id], onDelete: Cascade)
+  actor   User?   @relation("NfcCardEventActor", fields: [actorUserId], references: [id], onDelete: SetNull)
 
   @@index([companyId, createdAt])
   @@index([cardId, createdAt])
@@ -571,11 +654,12 @@ model CardInventory {
   createdAt    DateTime            @default(now())
   updatedAt    DateTime            @updatedAt
 
-  company       Company        @relation(fields: [companyId], references: [id], onDelete: Cascade)
-  branch        Branch?        @relation(fields: [branchId], references: [id], onDelete: SetNull)
-  location      Location?      @relation(fields: [locationId], references: [id], onDelete: SetNull)
-  customerCards CustomerCard[]
-  pointsLedger  CustomerPointsLedger[]
+  company           Company                    @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  branch            Branch?                    @relation(fields: [branchId], references: [id], onDelete: SetNull)
+  location          Location?                  @relation(fields: [locationId], references: [id], onDelete: SetNull)
+  customerCards     CustomerCard[]
+  pointsLedger      CustomerPointsLedger[]
+  rewardRedemptions CustomerRewardRedemption[]
 
   @@unique([companyId, cardUid])
   @@unique([companyId, cardNumber])
@@ -629,15 +713,48 @@ model CustomerPointsLedger {
   @@index([cardInventoryId, createdAt])
 }
 
-model Role {
-  id         String   @id @default(uuid())
-  companyId  String
-  name       String
-  createdAt  DateTime @default(now())
+model CustomerRewardRedemption {
+  id               String                 @id @default(uuid())
+  companyId        String
+  customerId       String
+  cardInventoryId  String?
+  rewardId         String
+  saleId           String?
+  status           RewardRedemptionStatus @default(RESERVED)
+  pointsSpent      Int
+  valueApplied     Decimal?               @db.Decimal(12, 2)
+  remarks          String?
+  metadata         Json?
+  redeemedByUserId String?
+  redeemedAt       DateTime               @default(now())
+  appliedAt        DateTime?
+  cancelledAt      DateTime?
+  voidedAt         DateTime?
+  expiresAt        DateTime?
+  createdAt        DateTime               @default(now())
+  updatedAt        DateTime               @updatedAt
 
-  company      Company         @relation(fields: [companyId], references: [id], onDelete: Cascade)
-  userRoles    UserRole[]
-  permissions  RolePermission[]
+  company       Company          @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  customer      Customer         @relation(fields: [customerId], references: [id], onDelete: Cascade)
+  cardInventory CardInventory?   @relation(fields: [cardInventoryId], references: [id], onDelete: SetNull)
+  reward        RedeemableReward @relation(fields: [rewardId], references: [id], onDelete: Cascade)
+  redeemedBy    User?            @relation("CustomerRewardRedemptionCreatedBy", fields: [redeemedByUserId], references: [id], onDelete: SetNull)
+
+  @@index([companyId, customerId, redeemedAt])
+  @@index([companyId, rewardId, redeemedAt])
+  @@index([companyId, status, redeemedAt])
+  @@index([cardInventoryId, redeemedAt])
+}
+
+model Role {
+  id        String   @id @default(uuid())
+  companyId String
+  name      String
+  createdAt DateTime @default(now())
+
+  company     Company          @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  userRoles   UserRole[]
+  permissions RolePermission[]
 
   @@unique([companyId, name])
 }
@@ -664,7 +781,7 @@ model UserRole {
 }
 
 model RolePermission {
-  id           String   @id @default(uuid())
+  id           String @id @default(uuid())
   roleId       String
   permissionId String
 
@@ -675,36 +792,36 @@ model RolePermission {
 }
 
 model SupervisorPin {
-  id         String   @id @default(uuid())
-  userId     String   @unique
-  pinHash    String
-  updatedAt  DateTime @updatedAt
+  id        String   @id @default(uuid())
+  userId    String   @unique
+  pinHash   String
+  updatedAt DateTime @updatedAt
 
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 }
 
 model RefreshToken {
-  id          String   @id @default(uuid())
-  userId      String
-  jti         String   @unique
-  tokenHash   String
-  expiresAt   DateTime
-  revokedAt   DateTime?
-  replacedBy  String?
-  createdAt   DateTime @default(now())
+  id         String    @id @default(uuid())
+  userId     String
+  jti        String    @unique
+  tokenHash  String
+  expiresAt  DateTime
+  revokedAt  DateTime?
+  replacedBy String?
+  createdAt  DateTime  @default(now())
 
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 }
 
 model DeviceSession {
-  id              String   @id @default(uuid())
-  userId          String
-  deviceId        String
-  platform        String
-  lastSyncToken   String?
-  lastSeenAt      DateTime @default(now())
-  createdAt       DateTime @default(now())
-  updatedAt       DateTime @updatedAt
+  id            String   @id @default(uuid())
+  userId        String
+  deviceId      String
+  platform      String
+  lastSyncToken String?
+  lastSeenAt    DateTime @default(now())
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
 
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 
@@ -712,24 +829,25 @@ model DeviceSession {
 }
 
 model Customer {
-  id                String       @id @default(uuid())
-  companyId         String
-  code              String
-  name              String
-  type              CustomerType
-  tier              String?
-  contractPrice     Decimal?     @db.Decimal(12, 2)
-  depositBalance    Decimal      @default(0) @db.Decimal(12, 2)
-  pointsBalance     Int          @default(0)
-  isActive          Boolean      @default(true)
-  createdAt         DateTime     @default(now())
-  updatedAt         DateTime     @updatedAt
+  id             String       @id @default(uuid())
+  companyId      String
+  code           String
+  name           String
+  type           CustomerType
+  tier           String?
+  contractPrice  Decimal?     @db.Decimal(12, 2)
+  depositBalance Decimal      @default(0) @db.Decimal(12, 2)
+  pointsBalance  Int          @default(0)
+  isActive       Boolean      @default(true)
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
 
-  company Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
-  sales   Sale[]
-  customerPayments CustomerPayment[]
-  customerCards CustomerCard[]
-  pointsLedger  CustomerPointsLedger[]
+  company           Company                    @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  sales             Sale[]
+  customerPayments  CustomerPayment[]
+  customerCards     CustomerCard[]
+  pointsLedger      CustomerPointsLedger[]
+  rewardRedemptions CustomerRewardRedemption[]
 
   @@unique([companyId, code])
   @@index([companyId, updatedAt])
@@ -749,7 +867,7 @@ model Supplier {
   createdAt     DateTime @default(now())
   updatedAt     DateTime @updatedAt
 
-  company  Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  company  Company   @relation(fields: [companyId], references: [id], onDelete: Cascade)
   location Location? @relation(fields: [locationId], references: [id], onDelete: SetNull)
 
   @@unique([companyId, code])
@@ -758,41 +876,42 @@ model Supplier {
 }
 
 model Product {
-  id                String    @id @default(uuid())
-  companyId         String
-  sku               String
-  name              String
-  category          String?
-  brand             String?
-  isLpg             Boolean   @default(false)
-  cylinderTypeId    String?
-  standardCost      Decimal?  @db.Decimal(14, 4)
-  lowStockAlertQty  Decimal?  @db.Decimal(14, 4)
-  unit              String
-  isActive          Boolean   @default(true)
-  createdAt         DateTime  @default(now())
-  updatedAt         DateTime  @updatedAt
+  id               String   @id @default(uuid())
+  companyId        String
+  sku              String
+  name             String
+  category         String?
+  brand            String?
+  isLpg            Boolean  @default(false)
+  cylinderTypeId   String?
+  standardCost     Decimal? @db.Decimal(14, 4)
+  lowStockAlertQty Decimal? @db.Decimal(14, 4)
+  unit             String
+  isActive         Boolean  @default(true)
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
 
-  company           Company            @relation(fields: [companyId], references: [id], onDelete: Cascade)
-  cylinderType      CylinderType?      @relation(fields: [cylinderTypeId], references: [id], onDelete: SetNull)
+  company           Company             @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  cylinderType      CylinderType?       @relation(fields: [cylinderTypeId], references: [id], onDelete: SetNull)
   priceRules        PriceRule[]
   inventoryBalances InventoryBalance[]
   inventoryLedgers  InventoryLedger[]
   transferLines     StockTransferLine[]
   saleLines         SaleLine[]
+  redeemableRewards RedeemableReward[]
 
   @@unique([companyId, sku])
   @@index([companyId, updatedAt])
 }
 
 model ProductCategory {
-  id         String   @id @default(uuid())
-  companyId  String
-  code       String
-  name       String
-  isActive   Boolean  @default(true)
-  createdAt  DateTime @default(now())
-  updatedAt  DateTime @updatedAt
+  id        String   @id @default(uuid())
+  companyId String
+  code      String
+  name      String
+  isActive  Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
   company Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
 
@@ -801,13 +920,13 @@ model ProductCategory {
 }
 
 model ProductBrand {
-  id         String   @id @default(uuid())
-  companyId  String
-  code       String
-  name       String
-  isActive   Boolean  @default(true)
-  createdAt  DateTime @default(now())
-  updatedAt  DateTime @updatedAt
+  id        String   @id @default(uuid())
+  companyId String
+  code      String
+  name      String
+  isActive  Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
   company Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
 
@@ -826,7 +945,7 @@ model CylinderType {
   createdAt     DateTime @default(now())
   updatedAt     DateTime @updatedAt
 
-  company         Company      @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  company         Company           @relation(fields: [companyId], references: [id], onDelete: Cascade)
   products        Product[]
   cylinders       Cylinder[]
   cylinderBalance CylinderBalance[]
@@ -835,39 +954,39 @@ model CylinderType {
 }
 
 model PriceList {
-  id            String    @id @default(uuid())
-  companyId     String
-  code          String
-  branchId      String?
-  name          String
-  scope         PriceScope
-  customerTier  String?
-  customerId    String?
-  startsAt      DateTime
-  endsAt        DateTime?
-  isActive      Boolean   @default(true)
-  createdAt     DateTime  @default(now())
-  updatedAt     DateTime  @updatedAt
+  id           String     @id @default(uuid())
+  companyId    String
+  code         String
+  branchId     String?
+  name         String
+  scope        PriceScope
+  customerTier String?
+  customerId   String?
+  startsAt     DateTime
+  endsAt       DateTime?
+  isActive     Boolean    @default(true)
+  createdAt    DateTime   @default(now())
+  updatedAt    DateTime   @updatedAt
 
-  company   Company    @relation(fields: [companyId], references: [id], onDelete: Cascade)
-  branch    Branch?    @relation(fields: [branchId], references: [id], onDelete: SetNull)
-  rules     PriceRule[]
+  company Company     @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  branch  Branch?     @relation(fields: [branchId], references: [id], onDelete: SetNull)
+  rules   PriceRule[]
 
   @@unique([companyId, code])
   @@index([companyId, startsAt, endsAt])
 }
 
 model PriceRule {
-  id                String    @id @default(uuid())
-  companyId         String
-  priceListId       String
-  productId         String
-  flowMode          PriceFlowMode @default(ANY)
-  unitPrice         Decimal   @db.Decimal(12, 2)
-  discountCapPct    Decimal   @default(0) @db.Decimal(5, 2)
-  priority          Int
-  createdAt         DateTime  @default(now())
-  updatedAt         DateTime  @updatedAt
+  id             String        @id @default(uuid())
+  companyId      String
+  priceListId    String
+  productId      String
+  flowMode       PriceFlowMode @default(ANY)
+  unitPrice      Decimal       @db.Decimal(12, 2)
+  discountCapPct Decimal       @default(0) @db.Decimal(5, 2)
+  priority       Int
+  createdAt      DateTime      @default(now())
+  updatedAt      DateTime      @updatedAt
 
   company   Company   @relation(fields: [companyId], references: [id], onDelete: Cascade)
   priceList PriceList @relation(fields: [priceListId], references: [id], onDelete: Cascade)
@@ -877,26 +996,26 @@ model PriceRule {
 }
 
 model ExpenseCategory {
-  id         String   @id @default(uuid())
-  companyId  String
-  code       String
-  name       String
-  isActive   Boolean  @default(true)
+  id        String  @id @default(uuid())
+  companyId String
+  code      String
+  name      String
+  isActive  Boolean @default(true)
 
-  company Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  company          Company          @relation(fields: [companyId], references: [id], onDelete: Cascade)
   pettyCashEntries PettyCashEntry[]
 
   @@unique([companyId, code])
 }
 
 model InventoryBalance {
-  id          String   @id @default(uuid())
-  companyId   String
-  locationId  String
-  productId   String
-  qtyOnHand   Decimal  @default(0) @db.Decimal(14, 4)
-  avgCost     Decimal  @default(0) @db.Decimal(14, 4)
-  updatedAt   DateTime @updatedAt
+  id         String   @id @default(uuid())
+  companyId  String
+  locationId String
+  productId  String
+  qtyOnHand  Decimal  @default(0) @db.Decimal(14, 4)
+  avgCost    Decimal  @default(0) @db.Decimal(14, 4)
+  updatedAt  DateTime @updatedAt
 
   company  Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
   location Location @relation(fields: [locationId], references: [id], onDelete: Cascade)
@@ -907,18 +1026,18 @@ model InventoryBalance {
 }
 
 model InventoryLedger {
-  id                String                @id @default(uuid())
-  companyId         String
-  locationId        String
-  productId         String
-  movementType      InventoryMovementType
-  referenceType     String
-  referenceId       String
-  qtyDelta          Decimal               @db.Decimal(14, 4)
-  unitCost          Decimal               @db.Decimal(14, 4)
-  avgCostAfter      Decimal               @db.Decimal(14, 4)
-  qtyAfter          Decimal               @db.Decimal(14, 4)
-  createdAt         DateTime              @default(now())
+  id            String                @id @default(uuid())
+  companyId     String
+  locationId    String
+  productId     String
+  movementType  InventoryMovementType
+  referenceType String
+  referenceId   String
+  qtyDelta      Decimal               @db.Decimal(14, 4)
+  unitCost      Decimal               @db.Decimal(14, 4)
+  avgCostAfter  Decimal               @db.Decimal(14, 4)
+  qtyAfter      Decimal               @db.Decimal(14, 4)
+  createdAt     DateTime              @default(now())
 
   company  Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
   location Location @relation(fields: [locationId], references: [id], onDelete: Cascade)
@@ -929,57 +1048,57 @@ model InventoryLedger {
 }
 
 model StockTransfer {
-  id                    String   @id @default(uuid())
-  companyId             String
-  sourceLocationId      String
-  destinationLocationId String
-  shiftId               String?
-  transferMode          TransferMode @default(GENERAL)
-  supplierId            String?
-  supplierName          String?
-  sourceLocationLabel   String?
+  id                       String       @id @default(uuid())
+  companyId                String
+  sourceLocationId         String
+  destinationLocationId    String
+  shiftId                  String?
+  transferMode             TransferMode @default(GENERAL)
+  supplierId               String?
+  supplierName             String?
+  sourceLocationLabel      String?
   destinationLocationLabel String?
-  status                String
-  requestedByUserId     String
-  postedAt              DateTime?
-  createdAt             DateTime @default(now())
-  updatedAt             DateTime @updatedAt
+  status                   String
+  requestedByUserId        String
+  postedAt                 DateTime?
+  createdAt                DateTime     @default(now())
+  updatedAt                DateTime     @updatedAt
 
-  company              Company     @relation(fields: [companyId], references: [id], onDelete: Cascade)
-  sourceLocation       Location    @relation("TransferSource", fields: [sourceLocationId], references: [id], onDelete: Restrict)
-  destinationLocation  Location    @relation("TransferDestination", fields: [destinationLocationId], references: [id], onDelete: Restrict)
-  shift                Shift?      @relation(fields: [shiftId], references: [id], onDelete: SetNull)
-  requestedBy          User        @relation(fields: [requestedByUserId], references: [id], onDelete: Restrict)
-  lines                StockTransferLine[]
+  company             Company             @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  sourceLocation      Location            @relation("TransferSource", fields: [sourceLocationId], references: [id], onDelete: Restrict)
+  destinationLocation Location            @relation("TransferDestination", fields: [destinationLocationId], references: [id], onDelete: Restrict)
+  shift               Shift?              @relation(fields: [shiftId], references: [id], onDelete: SetNull)
+  requestedBy         User                @relation(fields: [requestedByUserId], references: [id], onDelete: Restrict)
+  lines               StockTransferLine[]
 
   @@index([shiftId])
   @@index([companyId, transferMode, createdAt])
 }
 
 model StockTransferLine {
-  id          String   @id @default(uuid())
-  transferId  String
-  productId   String
-  qtyFull     Decimal  @default(0) @db.Decimal(14, 4)
-  qtyEmpty    Decimal  @default(0) @db.Decimal(14, 4)
+  id         String  @id @default(uuid())
+  transferId String
+  productId  String
+  qtyFull    Decimal @default(0) @db.Decimal(14, 4)
+  qtyEmpty   Decimal @default(0) @db.Decimal(14, 4)
 
   transfer StockTransfer @relation(fields: [transferId], references: [id], onDelete: Cascade)
   product  Product       @relation(fields: [productId], references: [id], onDelete: Restrict)
 }
 
 model CostingConfig {
-  id          String   @id @default(uuid())
-  companyId   String   @unique
-  method      CostingMethod @default(WAC)
-  allowManualOverride Boolean @default(false)
-  negativeStockPolicy NegativeStockPolicy @default(BLOCK_POSTING)
-  includeFreight Boolean @default(false)
-  includeHandling Boolean @default(false)
-  includeOtherLandedCost Boolean @default(false)
-  allocationBasis CostAllocationBasis @default(PER_QUANTITY)
-  roundingScale Int @default(4)
-  locked      Boolean  @default(false)
-  updatedAt   DateTime @updatedAt
+  id                     String              @id @default(uuid())
+  companyId              String              @unique
+  method                 CostingMethod       @default(WAC)
+  allowManualOverride    Boolean             @default(false)
+  negativeStockPolicy    NegativeStockPolicy @default(BLOCK_POSTING)
+  includeFreight         Boolean             @default(false)
+  includeHandling        Boolean             @default(false)
+  includeOtherLandedCost Boolean             @default(false)
+  allocationBasis        CostAllocationBasis @default(PER_QUANTITY)
+  roundingScale          Int                 @default(4)
+  locked                 Boolean             @default(false)
+  updatedAt              DateTime            @updatedAt
 
   company Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
 }
@@ -995,9 +1114,9 @@ model Cylinder {
   createdAt         DateTime          @default(now())
   updatedAt         DateTime          @updatedAt
 
-  company         Company       @relation(fields: [companyId], references: [id], onDelete: Cascade)
-  cylinderType    CylinderType  @relation(fields: [cylinderTypeId], references: [id], onDelete: Restrict)
-  currentLocation Location      @relation(fields: [currentLocationId], references: [id], onDelete: Restrict)
+  company         Company         @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  cylinderType    CylinderType    @relation(fields: [cylinderTypeId], references: [id], onDelete: Restrict)
+  currentLocation Location        @relation(fields: [currentLocationId], references: [id], onDelete: Restrict)
   events          CylinderEvent[]
 
   @@index([companyId, updatedAt])
@@ -1005,69 +1124,69 @@ model Cylinder {
 }
 
 model CylinderEvent {
-  id               String           @id @default(uuid())
-  companyId        String
-  cylinderId       String
-  eventType        CylinderEventType
-  fromLocationId   String?
-  toLocationId     String?
-  actorUserId      String?
-  notes            String?
-  createdAt        DateTime         @default(now())
+  id             String            @id @default(uuid())
+  companyId      String
+  cylinderId     String
+  eventType      CylinderEventType
+  fromLocationId String?
+  toLocationId   String?
+  actorUserId    String?
+  notes          String?
+  createdAt      DateTime          @default(now())
 
-  company       Company   @relation(fields: [companyId], references: [id], onDelete: Cascade)
-  cylinder      Cylinder  @relation(fields: [cylinderId], references: [id], onDelete: Cascade)
-  fromLocation  Location? @relation("CylinderEventFrom", fields: [fromLocationId], references: [id], onDelete: SetNull)
-  toLocation    Location? @relation("CylinderEventTo", fields: [toLocationId], references: [id], onDelete: SetNull)
+  company      Company   @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  cylinder     Cylinder  @relation(fields: [cylinderId], references: [id], onDelete: Cascade)
+  fromLocation Location? @relation("CylinderEventFrom", fields: [fromLocationId], references: [id], onDelete: SetNull)
+  toLocation   Location? @relation("CylinderEventTo", fields: [toLocationId], references: [id], onDelete: SetNull)
 
   @@index([companyId, createdAt])
 }
 
 model CylinderBalance {
-  id            String   @id @default(uuid())
-  companyId     String
-  locationId    String
+  id             String   @id @default(uuid())
+  companyId      String
+  locationId     String
   cylinderTypeId String
-  qtyFull       Int      @default(0)
-  qtyEmpty      Int      @default(0)
-  updatedAt     DateTime @updatedAt
+  qtyFull        Int      @default(0)
+  qtyEmpty       Int      @default(0)
+  updatedAt      DateTime @updatedAt
 
-  company      Company     @relation(fields: [companyId], references: [id], onDelete: Cascade)
-  location     Location    @relation(fields: [locationId], references: [id], onDelete: Cascade)
+  company      Company      @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  location     Location     @relation(fields: [locationId], references: [id], onDelete: Cascade)
   cylinderType CylinderType @relation(fields: [cylinderTypeId], references: [id], onDelete: Cascade)
 
   @@unique([locationId, cylinderTypeId])
 }
 
 model Shift {
-  id              String      @id @default(uuid())
-  companyId       String
-  branchId        String
-  userId          String
-  openedAt        DateTime
-  closedAt        DateTime?
-  openingCash     Decimal     @db.Decimal(12, 2)
-  closingCash     Decimal?    @db.Decimal(12, 2)
-  status          ShiftStatus @default(OPEN)
-  createdAt       DateTime    @default(now())
+  id          String      @id @default(uuid())
+  companyId   String
+  branchId    String
+  userId      String
+  openedAt    DateTime
+  closedAt    DateTime?
+  openingCash Decimal     @db.Decimal(12, 2)
+  closingCash Decimal?    @db.Decimal(12, 2)
+  status      ShiftStatus @default(OPEN)
+  createdAt   DateTime    @default(now())
 
-  company         Company         @relation(fields: [companyId], references: [id], onDelete: Cascade)
-  branch          Branch          @relation(fields: [branchId], references: [id], onDelete: Restrict)
-  user            User            @relation(fields: [userId], references: [id], onDelete: Restrict)
-  cashEntries     ShiftCashEntry[]
-  zRead           ZRead?
-  sales           Sale[]
-  pettyCash       PettyCashEntry[]
-  transfers       StockTransfer[]
+  company     Company          @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  branch      Branch           @relation(fields: [branchId], references: [id], onDelete: Restrict)
+  user        User             @relation(fields: [userId], references: [id], onDelete: Restrict)
+  cashEntries ShiftCashEntry[]
+  zRead       ZRead?
+  sales       Sale[]
+  pettyCash   PettyCashEntry[]
+  transfers   StockTransfer[]
 }
 
 model ShiftCashEntry {
-  id         String   @id @default(uuid())
-  shiftId    String
-  direction  String
-  amount     Decimal  @db.Decimal(12, 2)
-  notes      String?
-  createdAt  DateTime @default(now())
+  id        String   @id @default(uuid())
+  shiftId   String
+  direction String
+  amount    Decimal  @db.Decimal(12, 2)
+  notes     String?
+  createdAt DateTime @default(now())
 
   shift Shift @relation(fields: [shiftId], references: [id], onDelete: Cascade)
 }
@@ -1098,12 +1217,12 @@ model Sale {
   postedAt       DateTime?
   createdAt      DateTime  @default(now())
 
-  company          Company                  @relation(fields: [companyId], references: [id], onDelete: Cascade)
-  branch           Branch                   @relation(fields: [branchId], references: [id], onDelete: Restrict)
-  location         Location                 @relation(fields: [locationId], references: [id], onDelete: Restrict)
-  shift            Shift?                   @relation(fields: [shiftId], references: [id], onDelete: SetNull)
-  user             User                     @relation(fields: [userId], references: [id], onDelete: Restrict)
-  customer         Customer?                @relation(fields: [customerId], references: [id], onDelete: SetNull)
+  company          Company               @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  branch           Branch                @relation(fields: [branchId], references: [id], onDelete: Restrict)
+  location         Location              @relation(fields: [locationId], references: [id], onDelete: Restrict)
+  shift            Shift?                @relation(fields: [shiftId], references: [id], onDelete: SetNull)
+  user             User                  @relation(fields: [userId], references: [id], onDelete: Restrict)
+  customer         Customer?             @relation(fields: [customerId], references: [id], onDelete: SetNull)
   lines            SaleLine[]
   payments         Payment[]
   customerPayments CustomerPayment[]
@@ -1113,20 +1232,20 @@ model Sale {
 }
 
 model SaleLine {
-  id              String   @id @default(uuid())
-  saleId          String
-  productId       String
-  quantity        Decimal  @db.Decimal(14, 4)
-  unitPrice       Decimal  @db.Decimal(12, 2)
-  estimatedCost   Decimal? @db.Decimal(12, 2)
-  lineTotal       Decimal  @db.Decimal(14, 2)
+  id            String   @id @default(uuid())
+  saleId        String
+  productId     String
+  quantity      Decimal  @db.Decimal(14, 4)
+  unitPrice     Decimal  @db.Decimal(12, 2)
+  estimatedCost Decimal? @db.Decimal(12, 2)
+  lineTotal     Decimal  @db.Decimal(14, 2)
 
   sale    Sale    @relation(fields: [saleId], references: [id], onDelete: Cascade)
   product Product @relation(fields: [productId], references: [id], onDelete: Restrict)
 }
 
 model Payment {
-  id         String        @id @default(uuid())
+  id          String        @id @default(uuid())
   saleId      String
   method      PaymentMethod
   amount      Decimal       @db.Decimal(14, 2)
@@ -1175,11 +1294,11 @@ model DiscountOverrideLog {
 
 model Receipt {
   id            String   @id @default(uuid())
-  saleId         String   @unique
-  branchId       String
-  receiptNumber  String
-  isReprint      Boolean  @default(false)
-  printedAt      DateTime @default(now())
+  saleId        String   @unique
+  branchId      String
+  receiptNumber String
+  isReprint     Boolean  @default(false)
+  printedAt     DateTime @default(now())
 
   sale   Sale   @relation(fields: [saleId], references: [id], onDelete: Cascade)
   branch Branch @relation(fields: [branchId], references: [id], onDelete: Restrict)
@@ -1188,14 +1307,14 @@ model Receipt {
 }
 
 model DeliveryOrder {
-  id               String         @id @default(uuid())
-  companyId        String
-  branchId         String
-  saleId           String?        @unique
-  status           DeliveryStatus @default(CREATED)
-  scheduledAt      DateTime?
-  completedAt      DateTime?
-  createdAt        DateTime       @default(now())
+  id          String         @id @default(uuid())
+  companyId   String
+  branchId    String
+  saleId      String?        @unique
+  status      DeliveryStatus @default(CREATED)
+  scheduledAt DateTime?
+  completedAt DateTime?
+  createdAt   DateTime       @default(now())
 
   company     Company               @relation(fields: [companyId], references: [id], onDelete: Cascade)
   branch      Branch                @relation(fields: [branchId], references: [id], onDelete: Restrict)
@@ -1245,24 +1364,24 @@ model PettyCashEntry {
 }
 
 model DepositLiabilityLedger {
-  id          String   @id @default(uuid())
-  companyId   String
-  customerId  String?
-  saleId      String?
-  direction   String
-  amount      Decimal  @db.Decimal(12, 2)
-  createdAt   DateTime @default(now())
+  id         String   @id @default(uuid())
+  companyId  String
+  customerId String?
+  saleId     String?
+  direction  String
+  amount     Decimal  @db.Decimal(12, 2)
+  createdAt  DateTime @default(now())
 
   company Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
 }
 
 model SyncCursor {
-  id             String   @id @default(uuid())
-  companyId      String
-  locationId     String?
-  deviceId       String
-  token          String
-  lastPulledAt   DateTime @default(now())
+  id           String   @id @default(uuid())
+  companyId    String
+  locationId   String?
+  deviceId     String
+  token        String
+  lastPulledAt DateTime @default(now())
 
   company  Company   @relation(fields: [companyId], references: [id], onDelete: Cascade)
   location Location? @relation(fields: [locationId], references: [id], onDelete: SetNull)
@@ -1271,15 +1390,15 @@ model SyncCursor {
 }
 
 model SyncReview {
-  id          String           @id @default(uuid())
-  companyId   String
-  outboxId    String
-  entity      String
-  reason      String
-  payload     Json
-  status      SyncReviewStatus @default(OPEN)
-  createdAt   DateTime         @default(now())
-  resolvedAt  DateTime?
+  id         String           @id @default(uuid())
+  companyId  String
+  outboxId   String
+  entity     String
+  reason     String
+  payload    Json
+  status     SyncReviewStatus @default(OPEN)
+  createdAt  DateTime         @default(now())
+  resolvedAt DateTime?
 
   company Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
 
@@ -1300,15 +1419,15 @@ model IdempotencyKey {
 }
 
 model AuditLog {
-  id          String         @id @default(uuid())
-  companyId   String
-  userId      String?
-  action      String
-  level       AuditActionLevel @default(INFO)
-  entity      String
-  entityId    String?
-  metadata    Json?
-  createdAt   DateTime       @default(now())
+  id        String           @id @default(uuid())
+  companyId String
+  userId    String?
+  action    String
+  level     AuditActionLevel @default(INFO)
+  entity    String
+  entityId  String?
+  metadata  Json?
+  createdAt DateTime         @default(now())
 
   company Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
   user    User?   @relation(fields: [userId], references: [id], onDelete: SetNull)
@@ -1317,13 +1436,13 @@ model AuditLog {
 }
 
 model EventSales {
-  id          String   @id @default(uuid())
-  companyId   String
-  branchId    String?
-  saleId      String
-  happenedAt  DateTime
-  payload     Json
-  createdAt   DateTime @default(now())
+  id         String   @id @default(uuid())
+  companyId  String
+  branchId   String?
+  saleId     String
+  happenedAt DateTime
+  payload    Json
+  createdAt  DateTime @default(now())
 
   company Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
 
@@ -1331,13 +1450,13 @@ model EventSales {
 }
 
 model EventStockMovement {
-  id          String   @id @default(uuid())
-  companyId   String
-  locationId  String?
-  ledgerId    String
-  happenedAt  DateTime
-  payload     Json
-  createdAt   DateTime @default(now())
+  id         String   @id @default(uuid())
+  companyId  String
+  locationId String?
+  ledgerId   String
+  happenedAt DateTime
+  payload    Json
+  createdAt  DateTime @default(now())
 
   company Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
 
@@ -1358,12 +1477,12 @@ model EventDeliveryPerformance {
 }
 
 model EventUserBehavior {
-  id          String   @id @default(uuid())
-  companyId   String
-  userId      String?
-  happenedAt  DateTime
-  payload     Json
-  createdAt   DateTime @default(now())
+  id         String   @id @default(uuid())
+  companyId  String
+  userId     String?
+  happenedAt DateTime
+  payload    Json
+  createdAt  DateTime @default(now())
 
   company Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
 

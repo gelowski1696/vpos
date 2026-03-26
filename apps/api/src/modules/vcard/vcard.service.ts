@@ -18,6 +18,9 @@ import {
   CardTagType,
   CustomerCardStatus,
   Prisma,
+  RewardRedemptionStatus,
+  RewardStatus,
+  RewardType,
   TenancyDatastoreMode,
   type EntitlementStatus,
   type LocationType
@@ -211,7 +214,7 @@ export type VcardPointsLedgerRecord = {
   customer_id: string;
   card_inventory_id: string | null;
   txn_type: 'EARN' | 'REDEEM' | 'ADJUST_UP' | 'ADJUST_DOWN' | 'EXPIRE';
-  source_type: 'SALE' | 'MANUAL' | 'SYSTEM';
+  source_type: 'SALE' | 'REWARD' | 'MANUAL' | 'SYSTEM';
   source_id: string | null;
   points: number;
   remarks: string | null;
@@ -242,6 +245,156 @@ export type UpdateVcardPointsPolicyInput = {
   minSpendForEarn?: number;
   maxRedeemPointsPerTxn?: number | null;
   pointsExpiryDays?: number | null;
+};
+
+export type VcardRewardRecord = {
+  id: string;
+  company_id: string;
+  code: string;
+  name: string;
+  description: string | null;
+  reward_type: 'DISCOUNT_FIXED' | 'DISCOUNT_PERCENT' | 'FREE_PRODUCT' | 'FREE_DELIVERY' | 'FREE_SERVICE' | 'FREE_REFILL' | 'VOUCHER';
+  status: 'DRAFT' | 'ACTIVE' | 'INACTIVE' | 'ARCHIVED';
+  points_cost: number;
+  product_id: string | null;
+  free_qty: number | null;
+  discount_value: number | null;
+  min_spend: number | null;
+  max_discount_amount: number | null;
+  stackable: boolean;
+  per_customer_limit: number | null;
+  daily_limit: number | null;
+  valid_from: string | null;
+  valid_to: string | null;
+  metadata: Record<string, unknown>;
+  created_by_user_id: string | null;
+  created_at: string;
+  updated_at: string;
+  scopes: Array<{
+    id: string;
+    branch_id: string | null;
+    location_id: string | null;
+    created_at: string;
+  }>;
+};
+
+export type VcardRewardsListQuery = {
+  status?: 'DRAFT' | 'ACTIVE' | 'INACTIVE' | 'ARCHIVED';
+  rewardType?: 'DISCOUNT_FIXED' | 'DISCOUNT_PERCENT' | 'FREE_PRODUCT' | 'FREE_DELIVERY' | 'FREE_SERVICE' | 'FREE_REFILL' | 'VOUCHER';
+  branchId?: string;
+  locationId?: string;
+  search?: string;
+  limit?: number;
+};
+
+export type RewardScopeInput = {
+  branchId?: string | null;
+  locationId?: string | null;
+};
+
+export type CreateRewardInput = {
+  code: string;
+  name: string;
+  description?: string | null;
+  rewardType: 'DISCOUNT_FIXED' | 'DISCOUNT_PERCENT' | 'FREE_PRODUCT' | 'FREE_DELIVERY' | 'FREE_SERVICE' | 'FREE_REFILL' | 'VOUCHER';
+  status?: 'DRAFT' | 'ACTIVE' | 'INACTIVE' | 'ARCHIVED';
+  pointsCost: number;
+  productId?: string | null;
+  freeQty?: number | null;
+  discountValue?: number | null;
+  minSpend?: number | null;
+  maxDiscountAmount?: number | null;
+  stackable?: boolean;
+  perCustomerLimit?: number | null;
+  dailyLimit?: number | null;
+  validFrom?: string | null;
+  validTo?: string | null;
+  metadata?: Record<string, unknown>;
+  scopes?: RewardScopeInput[];
+  actorUserId?: string | null;
+};
+
+export type UpdateRewardInput = {
+  code?: string;
+  name?: string;
+  description?: string | null;
+  rewardType?: 'DISCOUNT_FIXED' | 'DISCOUNT_PERCENT' | 'FREE_PRODUCT' | 'FREE_DELIVERY' | 'FREE_SERVICE' | 'FREE_REFILL' | 'VOUCHER';
+  status?: 'DRAFT' | 'ACTIVE' | 'INACTIVE' | 'ARCHIVED';
+  pointsCost?: number;
+  productId?: string | null;
+  freeQty?: number | null;
+  discountValue?: number | null;
+  minSpend?: number | null;
+  maxDiscountAmount?: number | null;
+  stackable?: boolean;
+  perCustomerLimit?: number | null;
+  dailyLimit?: number | null;
+  validFrom?: string | null;
+  validTo?: string | null;
+  metadata?: Record<string, unknown>;
+  scopes?: RewardScopeInput[];
+  actorUserId?: string | null;
+};
+
+export type VcardRewardRedemptionRecord = {
+  id: string;
+  company_id: string;
+  customer_id: string;
+  card_inventory_id: string | null;
+  reward_id: string;
+  sale_id: string | null;
+  status: 'RESERVED' | 'APPLIED' | 'CANCELLED' | 'VOIDED' | 'EXPIRED';
+  points_spent: number;
+  value_applied: number | null;
+  remarks: string | null;
+  metadata: Record<string, unknown>;
+  redeemed_by_user_id: string | null;
+  redeemed_at: string;
+  applied_at: string | null;
+  cancelled_at: string | null;
+  voided_at: string | null;
+  expires_at: string | null;
+  created_at: string;
+  updated_at: string;
+  reward: VcardRewardRecord;
+};
+
+export type VcardRewardRedemptionsListQuery = {
+  customerId?: string;
+  cardInventoryId?: string;
+  rewardId?: string;
+  status?: 'RESERVED' | 'APPLIED' | 'CANCELLED' | 'VOIDED' | 'EXPIRED';
+  limit?: number;
+};
+
+export type RedeemRewardInput = {
+  rewardId: string;
+  customerId: string;
+  cardInventoryId?: string | null;
+  branchId?: string | null;
+  locationId?: string | null;
+  saleId?: string | null;
+  amount?: number | null;
+  remarks?: string | null;
+  metadata?: Record<string, unknown>;
+  idempotencyKey?: string | null;
+  actorUserId?: string | null;
+};
+
+export type ReserveRewardInput = RedeemRewardInput;
+
+export type ApplyRewardRedemptionInput = {
+  saleId?: string | null;
+  amount?: number | null;
+  remarks?: string | null;
+  metadata?: Record<string, unknown>;
+  actorUserId?: string | null;
+};
+
+export type CancelRewardRedemptionInput = {
+  remarks?: string | null;
+  metadata?: Record<string, unknown>;
+  actorUserId?: string | null;
 };
 
 export type VcardAuditRecord = {
@@ -941,6 +1094,539 @@ export class VcardService {
     return this.mapPointsPolicy(row);
   }
 
+  async listRewards(
+    companyId: string,
+    query: VcardRewardsListQuery = {}
+  ): Promise<VcardRewardRecord[]> {
+    const binding = await this.getTenantBinding(companyId);
+    const search = query.search?.trim();
+    const rows = await binding.client.redeemableReward.findMany({
+      where: {
+        companyId,
+        ...(query.status ? { status: query.status } : {}),
+        ...(query.rewardType ? { rewardType: query.rewardType } : {}),
+        ...(search
+          ? {
+              OR: [
+                { code: { contains: search, mode: 'insensitive' } },
+                { name: { contains: search, mode: 'insensitive' } },
+                { description: { contains: search, mode: 'insensitive' } }
+              ]
+            }
+          : {}),
+        ...(query.locationId?.trim()
+          ? {
+              scopes: {
+                some: {
+                  locationId: query.locationId.trim()
+                }
+              }
+            }
+          : query.branchId?.trim()
+            ? {
+                scopes: {
+                  some: {
+                    OR: [
+                      { branchId: query.branchId.trim() },
+                      { location: { branchId: query.branchId.trim() } }
+                    ]
+                  }
+                }
+              }
+            : {})
+      },
+      include: {
+        scopes: {
+          orderBy: [{ createdAt: 'asc' }]
+        }
+      },
+      orderBy: [{ updatedAt: 'desc' }],
+      take: this.normalizeLimit(query.limit)
+    });
+    return rows.map((row) => this.mapReward(row));
+  }
+
+  async createReward(companyId: string, input: CreateRewardInput): Promise<VcardRewardRecord> {
+    const payload = this.normalizeRewardMutationInput(input, false);
+    const binding = await this.getTenantBinding(companyId);
+    try {
+      return await binding.client.$transaction(async (tx) => {
+        const effectiveActorUserId = await this.resolveActorUserIdForCompany(
+          tx,
+          companyId,
+          this.normalizeOptional(input.actorUserId)
+        );
+        this.assertRewardDefinitionComplete(payload);
+        await this.assertRewardProduct(tx, companyId, payload.productId);
+        const scopes = await this.validateRewardScopes(tx, companyId, payload.scopes);
+        const created = await tx.redeemableReward.create({
+          data: {
+            companyId,
+            code: payload.code!,
+            name: payload.name!,
+            description: payload.description,
+            rewardType: payload.rewardType!,
+            status: payload.status,
+            pointsCost: payload.pointsCost!,
+            productId: payload.productId,
+            freeQty: payload.freeQty,
+            discountValue: payload.discountValue,
+            minSpend: payload.minSpend,
+            maxDiscountAmount: payload.maxDiscountAmount,
+            stackable: payload.stackable,
+            perCustomerLimit: payload.perCustomerLimit,
+            dailyLimit: payload.dailyLimit,
+            validFrom: payload.validFrom,
+            validTo: payload.validTo,
+            metadata: (payload.metadata ?? {}) as Prisma.InputJsonValue,
+            createdByUserId: effectiveActorUserId,
+            scopes: scopes.length
+              ? {
+                  create: scopes.map((scope) => ({
+                    branchId: scope.branchId,
+                    locationId: scope.locationId
+                  }))
+                }
+              : undefined
+          },
+          include: {
+            scopes: {
+              orderBy: [{ createdAt: 'asc' }]
+            }
+          }
+        });
+        return this.mapReward(created);
+      });
+    } catch (error) {
+      this.handlePrismaError(error, 'VCARD_REWARD_DUPLICATE', 'Reward code already exists for tenant');
+      throw error;
+    }
+  }
+
+  async updateReward(
+    companyId: string,
+    rewardId: string,
+    input: UpdateRewardInput
+  ): Promise<VcardRewardRecord> {
+    const normalizedRewardId = this.normalizeRequired(rewardId, 'reward_id');
+    const payload = this.normalizeRewardMutationInput(input, true);
+    const binding = await this.getTenantBinding(companyId);
+    try {
+      return await binding.client.$transaction(async (tx) => {
+        const existing = await tx.redeemableReward.findFirst({
+          where: { id: normalizedRewardId, companyId },
+          include: { scopes: true }
+        });
+        if (!existing) {
+          throw new NotFoundException({
+            code: 'VCARD_REWARD_NOT_FOUND',
+            message: 'Reward not found for tenant'
+          });
+        }
+        const merged = {
+          code: payload.code ?? existing.code,
+          name: payload.name ?? existing.name,
+          description: payload.description ?? existing.description,
+          rewardType: payload.rewardType ?? existing.rewardType,
+          status: payload.status ?? existing.status,
+          pointsCost: payload.pointsCost ?? existing.pointsCost,
+          productId: payload.productId !== undefined ? payload.productId : existing.productId,
+          freeQty: payload.freeQty !== undefined ? payload.freeQty : existing.freeQty,
+          discountValue:
+            payload.discountValue !== undefined ? payload.discountValue : existing.discountValue,
+          minSpend: payload.minSpend !== undefined ? payload.minSpend : existing.minSpend,
+          maxDiscountAmount:
+            payload.maxDiscountAmount !== undefined
+              ? payload.maxDiscountAmount
+              : existing.maxDiscountAmount,
+          stackable: payload.stackable ?? existing.stackable,
+          perCustomerLimit:
+            payload.perCustomerLimit !== undefined ? payload.perCustomerLimit : existing.perCustomerLimit,
+          dailyLimit: payload.dailyLimit !== undefined ? payload.dailyLimit : existing.dailyLimit,
+          validFrom: payload.validFrom !== undefined ? payload.validFrom : existing.validFrom,
+          validTo: payload.validTo !== undefined ? payload.validTo : existing.validTo,
+          metadata: payload.metadata ?? this.normalizeMetadata(existing.metadata),
+          scopes: payload.scopes ?? []
+        };
+        this.assertRewardDefinitionComplete(merged);
+        await this.assertRewardProduct(tx, companyId, merged.productId);
+        const scopes = payload.scopes
+          ? await this.validateRewardScopes(tx, companyId, payload.scopes)
+          : null;
+        const updated = await tx.redeemableReward.update({
+          where: { id: existing.id },
+          data: {
+            ...(payload.code !== undefined ? { code: payload.code } : {}),
+            ...(payload.name !== undefined ? { name: payload.name } : {}),
+            ...(payload.description !== undefined ? { description: payload.description } : {}),
+            ...(payload.rewardType !== undefined ? { rewardType: payload.rewardType } : {}),
+            ...(payload.status !== undefined ? { status: payload.status } : {}),
+            ...(payload.pointsCost !== undefined ? { pointsCost: payload.pointsCost } : {}),
+            ...(payload.productId !== undefined
+              ? {
+                  product: payload.productId
+                    ? { connect: { id: payload.productId } }
+                    : { disconnect: true }
+                }
+              : {}),
+            ...(payload.freeQty !== undefined ? { freeQty: payload.freeQty } : {}),
+            ...(payload.discountValue !== undefined ? { discountValue: payload.discountValue } : {}),
+            ...(payload.minSpend !== undefined ? { minSpend: payload.minSpend } : {}),
+            ...(payload.maxDiscountAmount !== undefined ? { maxDiscountAmount: payload.maxDiscountAmount } : {}),
+            ...(payload.stackable !== undefined ? { stackable: payload.stackable } : {}),
+            ...(payload.perCustomerLimit !== undefined ? { perCustomerLimit: payload.perCustomerLimit } : {}),
+            ...(payload.dailyLimit !== undefined ? { dailyLimit: payload.dailyLimit } : {}),
+            ...(payload.validFrom !== undefined ? { validFrom: payload.validFrom } : {}),
+            ...(payload.validTo !== undefined ? { validTo: payload.validTo } : {}),
+            ...(payload.metadata !== undefined
+              ? { metadata: payload.metadata as Prisma.InputJsonValue }
+              : {}),
+            ...(scopes
+              ? {
+                  scopes: {
+                    deleteMany: {},
+                    create: scopes.map((scope) => ({
+                      branchId: scope.branchId,
+                      locationId: scope.locationId
+                    }))
+                  }
+                }
+              : {})
+          },
+          include: {
+            scopes: {
+              orderBy: [{ createdAt: 'asc' }]
+            }
+          }
+        });
+        return this.mapReward(updated);
+      });
+    } catch (error) {
+      this.handlePrismaError(error, 'VCARD_REWARD_DUPLICATE', 'Reward code already exists for tenant');
+      throw error;
+    }
+  }
+
+  async listRewardRedemptions(
+    companyId: string,
+    query: VcardRewardRedemptionsListQuery = {}
+  ): Promise<VcardRewardRedemptionRecord[]> {
+    const binding = await this.getTenantBinding(companyId);
+    const rows = await binding.client.customerRewardRedemption.findMany({
+      where: {
+        companyId,
+        ...(query.customerId?.trim() ? { customerId: query.customerId.trim() } : {}),
+        ...(query.cardInventoryId?.trim() ? { cardInventoryId: query.cardInventoryId.trim() } : {}),
+        ...(query.rewardId?.trim() ? { rewardId: query.rewardId.trim() } : {}),
+        ...(query.status ? { status: query.status } : {})
+      },
+      include: {
+        reward: {
+          include: {
+            scopes: {
+              orderBy: [{ createdAt: 'asc' }]
+            }
+          }
+        }
+      },
+      orderBy: [{ redeemedAt: 'desc' }],
+      take: this.normalizeLimit(query.limit)
+    });
+    return rows.map((row) => this.mapRewardRedemption(row));
+  }
+
+  async reserveReward(
+    companyId: string,
+    input: ReserveRewardInput
+  ): Promise<VcardRewardRedemptionRecord> {
+    const rewardId = this.normalizeRequired(input.rewardId, 'reward_id');
+    const customerId = this.normalizeRequired(input.customerId, 'customer_id');
+    const actorUserId = this.normalizeOptional(input.actorUserId);
+    const cardInventoryId = this.normalizeOptional(input.cardInventoryId);
+    const branchId = this.normalizeOptional(input.branchId);
+    const locationId = this.normalizeOptional(input.locationId);
+    const saleId = this.normalizeOptional(input.saleId);
+    const remarks = this.normalizeOptional(input.remarks);
+    const amount = input.amount == null ? null : this.normalizeMoneyInput(input.amount, 'amount', false);
+    const metadata = this.normalizeMetadata(input.metadata);
+    const hashPayload = JSON.stringify({
+      op: 'REWARD_RESERVE',
+      companyId,
+      rewardId,
+      customerId,
+      cardInventoryId,
+      branchId,
+      locationId,
+      saleId,
+      amount,
+      remarks,
+      metadata
+    });
+
+    return this.applyIdempotentOperation(
+      companyId,
+      input.idempotencyKey,
+      hashPayload,
+      async (tx) => {
+        const effectiveActorUserId = await this.resolveActorUserIdForCompany(tx, companyId, actorUserId);
+        const customer = await tx.customer.findFirst({
+          where: { id: customerId, companyId, isActive: true },
+          select: { id: true, pointsBalance: true }
+        });
+        if (!customer) {
+          throw new BadRequestException({
+            code: 'VCARD_CUSTOMER_NOT_FOUND',
+            message: 'Customer not found or inactive'
+          });
+        }
+
+        const reward = await tx.redeemableReward.findFirst({
+          where: { id: rewardId, companyId },
+          include: { scopes: true }
+        });
+        if (!reward) {
+          throw new NotFoundException({
+            code: 'VCARD_REWARD_NOT_FOUND',
+            message: 'Reward not found for tenant'
+          });
+        }
+        this.assertRewardRedeemableNow(reward);
+
+        let redemptionScopeContext: { branchId: string | null; locationId: string | null } | null = null;
+        if (cardInventoryId) {
+          await this.assertCardAssignedToCustomer(tx, companyId, customer.id, cardInventoryId);
+          const card = await tx.cardInventory.findFirst({
+            where: { id: cardInventoryId, companyId },
+            select: { branchId: true, locationId: true }
+          });
+          if (!card) {
+            throw new BadRequestException({
+              code: 'VCARD_CARD_NOT_FOUND',
+              message: 'Card is not found for tenant'
+            });
+          }
+          redemptionScopeContext = { branchId: card.branchId, locationId: card.locationId };
+        } else if (branchId || locationId) {
+          redemptionScopeContext = await this.validateBranchAndLocation(tx, companyId, {
+            branchId,
+            locationId
+          });
+        }
+
+        this.assertRewardScopeSatisfied(reward.scopes, redemptionScopeContext);
+
+        if (reward.minSpend !== null) {
+          if (amount === null) {
+            throw new BadRequestException({
+              code: 'VCARD_REWARD_AMOUNT_REQUIRED',
+              message: 'amount is required for this reward'
+            });
+          }
+          if (amount < Number(reward.minSpend)) {
+            throw new BadRequestException({
+              code: 'VCARD_REWARD_MIN_SPEND_NOT_MET',
+              message: `Amount must be at least ${Number(reward.minSpend).toFixed(2)} PHP`
+            });
+          }
+        }
+
+        if (customer.pointsBalance < reward.pointsCost) {
+          throw new BadRequestException({
+            code: 'VCARD_POINTS_INSUFFICIENT',
+            message: 'Insufficient points balance'
+          });
+        }
+
+        if (reward.perCustomerLimit !== null) {
+          const customerRedeemCount = await tx.customerRewardRedemption.count({
+            where: {
+              companyId,
+              customerId: customer.id,
+              rewardId: reward.id,
+              status: { in: [RewardRedemptionStatus.RESERVED, RewardRedemptionStatus.APPLIED] }
+            }
+          });
+          if (customerRedeemCount >= reward.perCustomerLimit) {
+            throw new BadRequestException({
+              code: 'VCARD_REWARD_CUSTOMER_LIMIT_REACHED',
+              message: 'Customer has reached the redemption limit for this reward'
+            });
+          }
+        }
+
+        if (reward.dailyLimit !== null) {
+          const startOfDay = new Date();
+          startOfDay.setUTCHours(0, 0, 0, 0);
+          const endOfDay = new Date(startOfDay);
+          endOfDay.setUTCDate(endOfDay.getUTCDate() + 1);
+          const dailyCount = await tx.customerRewardRedemption.count({
+            where: {
+              companyId,
+              rewardId: reward.id,
+              status: { in: [RewardRedemptionStatus.RESERVED, RewardRedemptionStatus.APPLIED] },
+              redeemedAt: {
+                gte: startOfDay,
+                lt: endOfDay
+              }
+            }
+          });
+          if (dailyCount >= reward.dailyLimit) {
+            throw new BadRequestException({
+              code: 'VCARD_REWARD_DAILY_LIMIT_REACHED',
+              message: 'Reward daily redemption limit has been reached'
+            });
+          }
+        }
+
+        await tx.customer.update({
+          where: { id: customer.id },
+          data: { pointsBalance: customer.pointsBalance - reward.pointsCost }
+        });
+
+        const now = new Date();
+        const redemption = await tx.customerRewardRedemption.create({
+          data: {
+            companyId,
+            customerId: customer.id,
+            cardInventoryId,
+            rewardId: reward.id,
+            saleId,
+            status: RewardRedemptionStatus.RESERVED,
+            pointsSpent: reward.pointsCost,
+            valueApplied: this.resolveRewardAppliedValue(reward, amount),
+            remarks,
+            metadata: {
+              ...metadata,
+              branch_id: redemptionScopeContext?.branchId ?? null,
+              location_id: redemptionScopeContext?.locationId ?? null
+            } as Prisma.InputJsonValue,
+            redeemedByUserId: effectiveActorUserId,
+            redeemedAt: now,
+            expiresAt: reward.validTo
+          },
+          include: {
+            reward: {
+              include: {
+                scopes: {
+                  orderBy: [{ createdAt: 'asc' }]
+                }
+              }
+            }
+          }
+        });
+
+        await tx.customerPointsLedger.create({
+          data: {
+            companyId,
+            customerId: customer.id,
+            cardInventoryId,
+            txnType: 'REDEEM',
+            sourceType: 'REWARD',
+            sourceId: redemption.id,
+            points: -reward.pointsCost,
+            remarks: remarks ?? `Reward reserved: ${reward.name}`,
+            metadata: {
+              ...metadata,
+              reward_id: reward.id,
+              redemption_id: redemption.id,
+              phase: 'RESERVE'
+            } as Prisma.InputJsonValue,
+            createdByUserId: effectiveActorUserId
+          }
+        });
+        return this.mapRewardRedemption(redemption);
+      }
+    );
+  }
+
+  async applyRewardRedemption(
+    companyId: string,
+    redemptionId: string,
+    input: ApplyRewardRedemptionInput = {}
+  ): Promise<VcardRewardRedemptionRecord> {
+    const normalizedRedemptionId = this.normalizeRequired(redemptionId, 'redemption_id');
+    const remarks = this.normalizeOptional(input.remarks);
+    const amount = input.amount == null ? null : this.normalizeMoneyInput(input.amount, 'amount', false);
+    const saleId = this.normalizeOptional(input.saleId);
+    const metadata = this.normalizeMetadata(input.metadata);
+    const binding = await this.getTenantBinding(companyId);
+    const row = await binding.client.$transaction(async (tx) => {
+      const redemption = await tx.customerRewardRedemption.findFirst({
+        where: { id: normalizedRedemptionId, companyId },
+        include: {
+          reward: {
+            include: { scopes: { orderBy: [{ createdAt: 'asc' }] } }
+          }
+        }
+      });
+      if (!redemption) {
+        throw new NotFoundException({
+          code: 'VCARD_REWARD_REDEMPTION_NOT_FOUND',
+          message: 'Reward redemption not found for tenant'
+        });
+      }
+      if (redemption.status !== RewardRedemptionStatus.RESERVED) {
+        throw new BadRequestException({
+          code: 'VCARD_REWARD_REDEMPTION_STATUS_INVALID',
+          message: 'Only reserved rewards can be applied'
+        });
+      }
+      const updated = await tx.customerRewardRedemption.update({
+        where: { id: redemption.id },
+        data: {
+          status: RewardRedemptionStatus.APPLIED,
+          saleId: saleId ?? redemption.saleId,
+          valueApplied:
+            amount !== null ? this.resolveRewardAppliedValue(redemption.reward, amount) : redemption.valueApplied,
+          remarks: remarks ?? redemption.remarks,
+          metadata: {
+            ...this.normalizeMetadata(redemption.metadata),
+            ...metadata,
+            phase: 'APPLY'
+          } as Prisma.InputJsonValue,
+          appliedAt: new Date()
+        },
+        include: {
+          reward: {
+            include: { scopes: { orderBy: [{ createdAt: 'asc' }] } }
+          }
+        }
+      });
+      return this.mapRewardRedemption(updated);
+    });
+    return row;
+  }
+
+  async cancelRewardRedemption(
+    companyId: string,
+    redemptionId: string,
+    input: CancelRewardRedemptionInput = {}
+  ): Promise<VcardRewardRedemptionRecord> {
+    return this.rollbackRewardRedemption(companyId, redemptionId, input, RewardRedemptionStatus.CANCELLED);
+  }
+
+  async voidRewardRedemption(
+    companyId: string,
+    redemptionId: string,
+    input: CancelRewardRedemptionInput = {}
+  ): Promise<VcardRewardRedemptionRecord> {
+    return this.rollbackRewardRedemption(companyId, redemptionId, input, RewardRedemptionStatus.VOIDED);
+  }
+
+  async redeemReward(
+    companyId: string,
+    input: RedeemRewardInput
+  ): Promise<VcardRewardRedemptionRecord> {
+    const reserved = await this.reserveReward(companyId, input);
+    return this.applyRewardRedemption(companyId, reserved.id, {
+      saleId: input.saleId,
+      amount: input.amount,
+      remarks: input.remarks,
+      metadata: input.metadata,
+      actorUserId: input.actorUserId
+    });
+  }
+
   async listAudit(companyId: string, query: VcardAuditListQuery = {}): Promise<VcardAuditRecord[]> {
     const binding = await this.getTenantBinding(companyId);
     const action = query.action?.trim();
@@ -1005,7 +1691,7 @@ export class VcardService {
       policy
     });
 
-    return this.applyPointsTransaction(
+    return this.applyIdempotentOperation(
       companyId,
       input.idempotencyKey,
       hashPayload,
@@ -1099,7 +1785,7 @@ export class VcardService {
       policy
     });
 
-    return this.applyPointsTransaction(
+    return this.applyIdempotentOperation(
       companyId,
       input.idempotencyKey,
       hashPayload,
@@ -1171,7 +1857,7 @@ export class VcardService {
       deltaPoints
     });
 
-    return this.applyPointsTransaction(
+    return this.applyIdempotentOperation(
       companyId,
       input.idempotencyKey,
       hashPayload,
@@ -1219,14 +1905,14 @@ export class VcardService {
     );
   }
 
-  private async applyPointsTransaction(
+  private async applyIdempotentOperation<T extends Record<string, unknown>>(
     companyId: string,
     idempotencyKey: string | null | undefined,
     payloadHashSeed: string,
     operation: (
       tx: Prisma.TransactionClient
-    ) => Promise<VcardPointsLedgerRecord>
-  ): Promise<VcardPointsLedgerRecord> {
+    ) => Promise<T>
+  ): Promise<T> {
     const binding = await this.getTenantBinding(companyId);
     const normalizedKey = this.normalizeOptional(idempotencyKey);
     const requestHash = createHash('sha256').update(payloadHashSeed).digest('hex');
@@ -1248,7 +1934,7 @@ export class VcardService {
             });
           }
           if (existing.response && typeof existing.response === 'object' && !Array.isArray(existing.response)) {
-            return existing.response as unknown as VcardPointsLedgerRecord;
+            return existing.response as unknown as T;
           }
         }
       }
@@ -1554,7 +2240,7 @@ export class VcardService {
     customerId: string;
     cardInventoryId: string | null;
     txnType: 'EARN' | 'REDEEM' | 'ADJUST_UP' | 'ADJUST_DOWN' | 'EXPIRE';
-    sourceType: 'SALE' | 'MANUAL' | 'SYSTEM';
+    sourceType: 'SALE' | 'REWARD' | 'MANUAL' | 'SYSTEM';
     sourceId: string | null;
     points: number;
     remarks: string | null;
@@ -1575,6 +2261,143 @@ export class VcardService {
       metadata: this.normalizeMetadata(row.metadata),
       created_by_user_id: row.createdByUserId,
       created_at: row.createdAt.toISOString()
+    };
+  }
+
+  private mapReward(row: {
+    id: string;
+    companyId: string;
+    code: string;
+    name: string;
+    description: string | null;
+    rewardType: RewardType;
+    status: RewardStatus;
+    pointsCost: number;
+    productId: string | null;
+    freeQty: Prisma.Decimal | null;
+    discountValue: Prisma.Decimal | null;
+    minSpend: Prisma.Decimal | null;
+    maxDiscountAmount: Prisma.Decimal | null;
+    stackable: boolean;
+    perCustomerLimit: number | null;
+    dailyLimit: number | null;
+    validFrom: Date | null;
+    validTo: Date | null;
+    metadata: Prisma.JsonValue | null;
+    createdByUserId: string | null;
+    createdAt: Date;
+    updatedAt: Date;
+    scopes: Array<{
+      id: string;
+      branchId: string | null;
+      locationId: string | null;
+      createdAt: Date;
+    }>;
+  }): VcardRewardRecord {
+    return {
+      id: row.id,
+      company_id: row.companyId,
+      code: row.code,
+      name: row.name,
+      description: row.description,
+      reward_type: row.rewardType,
+      status: row.status,
+      points_cost: row.pointsCost,
+      product_id: row.productId,
+      free_qty: row.freeQty === null ? null : Number(row.freeQty),
+      discount_value: row.discountValue === null ? null : Number(row.discountValue),
+      min_spend: row.minSpend === null ? null : Number(row.minSpend),
+      max_discount_amount: row.maxDiscountAmount === null ? null : Number(row.maxDiscountAmount),
+      stackable: row.stackable,
+      per_customer_limit: row.perCustomerLimit,
+      daily_limit: row.dailyLimit,
+      valid_from: row.validFrom ? row.validFrom.toISOString() : null,
+      valid_to: row.validTo ? row.validTo.toISOString() : null,
+      metadata: this.normalizeMetadata(row.metadata),
+      created_by_user_id: row.createdByUserId,
+      created_at: row.createdAt.toISOString(),
+      updated_at: row.updatedAt.toISOString(),
+      scopes: row.scopes.map((scope) => ({
+        id: scope.id,
+        branch_id: scope.branchId,
+        location_id: scope.locationId,
+        created_at: scope.createdAt.toISOString()
+      }))
+    };
+  }
+
+  private mapRewardRedemption(row: {
+    id: string;
+    companyId: string;
+    customerId: string;
+    cardInventoryId: string | null;
+    rewardId: string;
+    saleId: string | null;
+    status: RewardRedemptionStatus;
+    pointsSpent: number;
+    valueApplied: Prisma.Decimal | null;
+    remarks: string | null;
+    metadata: Prisma.JsonValue | null;
+    redeemedByUserId: string | null;
+    redeemedAt: Date;
+    appliedAt: Date | null;
+    cancelledAt: Date | null;
+    voidedAt: Date | null;
+    expiresAt: Date | null;
+    createdAt: Date;
+    updatedAt: Date;
+    reward: {
+      id: string;
+      companyId: string;
+      code: string;
+      name: string;
+      description: string | null;
+      rewardType: RewardType;
+      status: RewardStatus;
+      pointsCost: number;
+      productId: string | null;
+      freeQty: Prisma.Decimal | null;
+      discountValue: Prisma.Decimal | null;
+      minSpend: Prisma.Decimal | null;
+      maxDiscountAmount: Prisma.Decimal | null;
+      stackable: boolean;
+      perCustomerLimit: number | null;
+      dailyLimit: number | null;
+      validFrom: Date | null;
+      validTo: Date | null;
+      metadata: Prisma.JsonValue | null;
+      createdByUserId: string | null;
+      createdAt: Date;
+      updatedAt: Date;
+      scopes: Array<{
+        id: string;
+        branchId: string | null;
+        locationId: string | null;
+        createdAt: Date;
+      }>;
+    };
+  }): VcardRewardRedemptionRecord {
+    return {
+      id: row.id,
+      company_id: row.companyId,
+      customer_id: row.customerId,
+      card_inventory_id: row.cardInventoryId,
+      reward_id: row.rewardId,
+      sale_id: row.saleId,
+      status: row.status,
+      points_spent: row.pointsSpent,
+      value_applied: row.valueApplied === null ? null : Number(row.valueApplied),
+      remarks: row.remarks,
+      metadata: this.normalizeMetadata(row.metadata),
+      redeemed_by_user_id: row.redeemedByUserId,
+      redeemed_at: row.redeemedAt.toISOString(),
+      applied_at: row.appliedAt ? row.appliedAt.toISOString() : null,
+      cancelled_at: row.cancelledAt ? row.cancelledAt.toISOString() : null,
+      voided_at: row.voidedAt ? row.voidedAt.toISOString() : null,
+      expires_at: row.expiresAt ? row.expiresAt.toISOString() : null,
+      created_at: row.createdAt.toISOString(),
+      updated_at: row.updatedAt.toISOString(),
+      reward: this.mapReward(row.reward)
     };
   }
 
@@ -1719,6 +2542,500 @@ export class VcardService {
       select: { id: true }
     });
     return actor?.id ?? null;
+  }
+
+  private normalizeRewardMutationInput(
+    input: CreateRewardInput | UpdateRewardInput,
+    partial: boolean
+  ): {
+    code?: string;
+    name?: string;
+    description?: string | null;
+    rewardType?: RewardType;
+    status?: RewardStatus;
+    pointsCost?: number;
+    productId?: string | null;
+    freeQty?: Prisma.Decimal | null;
+    discountValue?: Prisma.Decimal | null;
+    minSpend?: Prisma.Decimal | null;
+    maxDiscountAmount?: Prisma.Decimal | null;
+    stackable?: boolean;
+    perCustomerLimit?: number | null;
+    dailyLimit?: number | null;
+    validFrom?: Date | null;
+    validTo?: Date | null;
+    metadata?: Record<string, unknown>;
+    scopes?: RewardScopeInput[];
+  } {
+    const normalized: {
+      code?: string;
+      name?: string;
+      description?: string | null;
+      rewardType?: RewardType;
+      status?: RewardStatus;
+      pointsCost?: number;
+      productId?: string | null;
+      freeQty?: Prisma.Decimal | null;
+      discountValue?: Prisma.Decimal | null;
+      minSpend?: Prisma.Decimal | null;
+      maxDiscountAmount?: Prisma.Decimal | null;
+      stackable?: boolean;
+      perCustomerLimit?: number | null;
+      dailyLimit?: number | null;
+      validFrom?: Date | null;
+      validTo?: Date | null;
+      metadata?: Record<string, unknown>;
+      scopes?: RewardScopeInput[];
+    } = {};
+
+    if ('code' in input) {
+      normalized.code = this.normalizeRequired(String(input.code ?? ''), 'code').toUpperCase();
+    } else if (!partial) {
+      throw new BadRequestException({ code: 'VCARD_REWARD_CODE_REQUIRED', message: 'code is required' });
+    }
+
+    if ('name' in input) {
+      normalized.name = this.normalizeRequired(String(input.name ?? ''), 'name');
+    } else if (!partial) {
+      throw new BadRequestException({ code: 'VCARD_REWARD_NAME_REQUIRED', message: 'name is required' });
+    }
+
+    if ('description' in input) {
+      normalized.description = this.normalizeOptional(input.description);
+    }
+
+    if ('rewardType' in input) {
+      normalized.rewardType = this.normalizeRewardType(input.rewardType);
+    } else if (!partial) {
+      throw new BadRequestException({
+        code: 'VCARD_REWARD_TYPE_REQUIRED',
+        message: 'reward_type is required'
+      });
+    }
+
+    if ('status' in input) {
+      normalized.status = this.normalizeRewardStatus(input.status);
+    } else if (!partial) {
+      normalized.status = RewardStatus.DRAFT;
+    }
+
+    if ('pointsCost' in input) {
+      normalized.pointsCost = this.normalizePositiveInt(input.pointsCost, 'points_cost');
+    } else if (!partial) {
+      throw new BadRequestException({
+        code: 'VCARD_REWARD_POINTS_REQUIRED',
+        message: 'points_cost is required'
+      });
+    }
+
+    if ('productId' in input) {
+      normalized.productId = this.normalizeOptional(input.productId);
+    }
+    if ('freeQty' in input) {
+      normalized.freeQty = input.freeQty == null ? null : this.toDecimal(input.freeQty, 'free_qty', false);
+    }
+    if ('discountValue' in input) {
+      normalized.discountValue =
+        input.discountValue == null ? null : this.toDecimal(input.discountValue, 'discount_value', false);
+    }
+    if ('minSpend' in input) {
+      normalized.minSpend = input.minSpend == null ? null : this.toDecimal(input.minSpend, 'min_spend', false);
+    }
+    if ('maxDiscountAmount' in input) {
+      normalized.maxDiscountAmount =
+        input.maxDiscountAmount == null
+          ? null
+          : this.toDecimal(input.maxDiscountAmount, 'max_discount_amount', false);
+    }
+    if ('stackable' in input) {
+      normalized.stackable = Boolean(input.stackable);
+    } else if (!partial) {
+      normalized.stackable = false;
+    }
+    if ('perCustomerLimit' in input) {
+      normalized.perCustomerLimit =
+        input.perCustomerLimit == null ? null : this.normalizePositiveInt(input.perCustomerLimit, 'per_customer_limit');
+    }
+    if ('dailyLimit' in input) {
+      normalized.dailyLimit = input.dailyLimit == null ? null : this.normalizePositiveInt(input.dailyLimit, 'daily_limit');
+    }
+    if ('validFrom' in input) {
+      normalized.validFrom = input.validFrom == null ? null : this.toDate(String(input.validFrom));
+    }
+    if ('validTo' in input) {
+      normalized.validTo = input.validTo == null ? null : this.toDate(String(input.validTo));
+    }
+    if (normalized.validFrom && normalized.validTo && normalized.validTo < normalized.validFrom) {
+      throw new BadRequestException({
+        code: 'VCARD_REWARD_DATE_RANGE_INVALID',
+        message: 'valid_to must be after valid_from'
+      });
+    }
+    if ('metadata' in input) {
+      normalized.metadata = this.normalizeMetadata(input.metadata);
+    } else if (!partial) {
+      normalized.metadata = {};
+    }
+    if ('scopes' in input) {
+      normalized.scopes = Array.isArray(input.scopes) ? input.scopes : [];
+    }
+
+    const rewardType = normalized.rewardType;
+    if (rewardType === RewardType.FREE_PRODUCT && normalized.productId === undefined && !partial) {
+      throw new BadRequestException({
+        code: 'VCARD_REWARD_PRODUCT_REQUIRED',
+        message: 'product_id is required for FREE_PRODUCT rewards'
+      });
+    }
+    if (
+      (rewardType === RewardType.DISCOUNT_FIXED || rewardType === RewardType.DISCOUNT_PERCENT) &&
+      normalized.discountValue === undefined &&
+      !partial
+    ) {
+      throw new BadRequestException({
+        code: 'VCARD_REWARD_DISCOUNT_REQUIRED',
+        message: 'discount_value is required for discount rewards'
+      });
+    }
+    if (
+      (rewardType === RewardType.FREE_PRODUCT || rewardType === RewardType.FREE_REFILL) &&
+      normalized.freeQty === undefined &&
+      !partial
+    ) {
+      normalized.freeQty = new Prisma.Decimal(1);
+    }
+
+    return normalized;
+  }
+
+  private assertRewardDefinitionComplete(input: {
+    rewardType?: RewardType;
+    productId?: string | null;
+    freeQty?: Prisma.Decimal | null;
+    discountValue?: Prisma.Decimal | null;
+  }): void {
+    if (!input.rewardType) {
+      return;
+    }
+    if (input.rewardType === RewardType.FREE_PRODUCT && !input.productId) {
+      throw new BadRequestException({
+        code: 'VCARD_REWARD_PRODUCT_REQUIRED',
+        message: 'product_id is required for FREE_PRODUCT rewards'
+      });
+    }
+    if (
+      (input.rewardType === RewardType.DISCOUNT_FIXED ||
+        input.rewardType === RewardType.DISCOUNT_PERCENT) &&
+      input.discountValue == null
+    ) {
+      throw new BadRequestException({
+        code: 'VCARD_REWARD_DISCOUNT_REQUIRED',
+        message: 'discount_value is required for discount rewards'
+      });
+    }
+    if (
+      (input.rewardType === RewardType.FREE_PRODUCT || input.rewardType === RewardType.FREE_REFILL) &&
+      input.freeQty == null
+    ) {
+      throw new BadRequestException({
+        code: 'VCARD_REWARD_QUANTITY_REQUIRED',
+        message: 'free_qty is required for free-item rewards'
+      });
+    }
+  }
+
+  private normalizeRewardType(value: unknown): RewardType {
+    const raw = this.normalizeRequired(String(value ?? ''), 'reward_type').toUpperCase();
+    if (
+      raw === RewardType.DISCOUNT_FIXED ||
+      raw === RewardType.DISCOUNT_PERCENT ||
+      raw === RewardType.FREE_PRODUCT ||
+      raw === RewardType.FREE_DELIVERY ||
+      raw === RewardType.FREE_SERVICE ||
+      raw === RewardType.FREE_REFILL ||
+      raw === RewardType.VOUCHER
+    ) {
+      return raw;
+    }
+    throw new BadRequestException({
+      code: 'VCARD_REWARD_TYPE_INVALID',
+      message: `Unsupported reward_type: ${raw}`
+    });
+  }
+
+  private normalizeRewardStatus(value: unknown): RewardStatus {
+    const raw = this.normalizeRequired(String(value ?? ''), 'status').toUpperCase();
+    if (
+      raw === RewardStatus.DRAFT ||
+      raw === RewardStatus.ACTIVE ||
+      raw === RewardStatus.INACTIVE ||
+      raw === RewardStatus.ARCHIVED
+    ) {
+      return raw;
+    }
+    throw new BadRequestException({
+      code: 'VCARD_REWARD_STATUS_INVALID',
+      message: `Unsupported reward status: ${raw}`
+    });
+  }
+
+  private normalizePositiveInt(value: unknown, field: string): number {
+    const numeric = Math.trunc(Number(value));
+    if (!Number.isFinite(numeric) || numeric <= 0) {
+      throw new BadRequestException({
+        code: 'VCARD_REWARD_INTEGER_INVALID',
+        message: `${field} must be a positive integer`
+      });
+    }
+    return numeric;
+  }
+
+  private normalizeMoneyInput(value: unknown, field: string, allowZero: boolean): number {
+    const numeric = Number(value);
+    if (!Number.isFinite(numeric) || (!allowZero && numeric <= 0) || (allowZero && numeric < 0)) {
+      throw new BadRequestException({
+        code: 'VCARD_REWARD_AMOUNT_INVALID',
+        message: `${field} must be ${allowZero ? '0 or greater' : 'greater than 0'}`
+      });
+    }
+    return Number(numeric.toFixed(2));
+  }
+
+  private toDecimal(value: unknown, field: string, allowZero: boolean): Prisma.Decimal {
+    return new Prisma.Decimal(this.normalizeMoneyInput(value, field, allowZero).toFixed(2));
+  }
+
+  private async assertRewardProduct(
+    tx: Prisma.TransactionClient,
+    companyId: string,
+    productId: string | null | undefined
+  ): Promise<void> {
+    if (!productId) {
+      return;
+    }
+    const product = await tx.product.findFirst({
+      where: { id: productId, companyId },
+      select: { id: true }
+    });
+    if (!product) {
+      throw new BadRequestException({
+        code: 'VCARD_REWARD_PRODUCT_NOT_FOUND',
+        message: 'product_id is not valid for tenant'
+      });
+    }
+  }
+
+  private async validateRewardScopes(
+    tx: Prisma.TransactionClient,
+    companyId: string,
+    scopes: RewardScopeInput[] | undefined
+  ): Promise<Array<{ branchId: string | null; locationId: string | null }>> {
+    if (!scopes || scopes.length === 0) {
+      return [];
+    }
+    const normalized: Array<{ branchId: string | null; locationId: string | null }> = [];
+    const seen = new Set<string>();
+    for (const scope of scopes) {
+      const next = await this.validateBranchAndLocation(tx, companyId, {
+        branchId: scope.branchId,
+        locationId: scope.locationId
+      });
+      const dedupeKey = `${next.branchId ?? ''}:${next.locationId ?? ''}`;
+      if (seen.has(dedupeKey)) {
+        continue;
+      }
+      seen.add(dedupeKey);
+      normalized.push(next);
+    }
+    return normalized;
+  }
+
+  private assertRewardRedeemableNow(reward: {
+    status: RewardStatus;
+    validFrom: Date | null;
+    validTo: Date | null;
+  }): void {
+    if (reward.status !== RewardStatus.ACTIVE) {
+      throw new BadRequestException({
+        code: 'VCARD_REWARD_INACTIVE',
+        message: 'Reward is not active'
+      });
+    }
+    const now = new Date();
+    if (reward.validFrom && reward.validFrom > now) {
+      throw new BadRequestException({
+        code: 'VCARD_REWARD_NOT_YET_VALID',
+        message: 'Reward is not yet valid'
+      });
+    }
+    if (reward.validTo && reward.validTo < now) {
+      throw new BadRequestException({
+        code: 'VCARD_REWARD_EXPIRED',
+        message: 'Reward has expired'
+      });
+    }
+  }
+
+  private assertRewardScopeSatisfied(
+    scopes: Array<{ branchId: string | null; locationId: string | null }>,
+    context: { branchId: string | null; locationId: string | null } | null
+  ): void {
+    if (scopes.length === 0) {
+      return;
+    }
+    if (!context) {
+      throw new BadRequestException({
+        code: 'VCARD_REWARD_SCOPE_CONTEXT_REQUIRED',
+        message: 'Card context is required to redeem this scoped reward'
+      });
+    }
+    const matches = scopes.some((scope) => {
+      if (scope.locationId) {
+        return scope.locationId === context.locationId;
+      }
+      if (scope.branchId) {
+        return scope.branchId === context.branchId;
+      }
+      return true;
+    });
+    if (!matches) {
+      throw new BadRequestException({
+        code: 'VCARD_REWARD_SCOPE_MISMATCH',
+        message: 'Reward is not available for this branch or location'
+      });
+    }
+  }
+
+  private resolveRewardAppliedValue(
+    reward: {
+      rewardType: RewardType;
+      discountValue: Prisma.Decimal | null;
+      maxDiscountAmount: Prisma.Decimal | null;
+    },
+    amount: number | null
+  ): Prisma.Decimal | null {
+    if (reward.rewardType === RewardType.DISCOUNT_FIXED && reward.discountValue !== null) {
+      const base = Number(reward.discountValue);
+      if (reward.maxDiscountAmount !== null) {
+        return new Prisma.Decimal(Math.min(base, Number(reward.maxDiscountAmount)).toFixed(2));
+      }
+      return new Prisma.Decimal(base.toFixed(2));
+    }
+    if (reward.rewardType === RewardType.DISCOUNT_PERCENT && reward.discountValue !== null && amount !== null) {
+      const percent = Number(reward.discountValue) / 100;
+      const computed = amount * percent;
+      const capped =
+        reward.maxDiscountAmount !== null
+          ? Math.min(computed, Number(reward.maxDiscountAmount))
+          : computed;
+      return new Prisma.Decimal(capped.toFixed(2));
+    }
+    return null;
+  }
+
+  private async rollbackRewardRedemption(
+    companyId: string,
+    redemptionId: string,
+    input: CancelRewardRedemptionInput,
+    nextStatus: 'CANCELLED' | 'VOIDED'
+  ): Promise<VcardRewardRedemptionRecord> {
+    const normalizedRedemptionId = this.normalizeRequired(redemptionId, 'redemption_id');
+    const remarks = this.normalizeOptional(input.remarks);
+    const metadata = this.normalizeMetadata(input.metadata);
+    const actorUserId = this.normalizeOptional(input.actorUserId);
+    const binding = await this.getTenantBinding(companyId);
+    return binding.client.$transaction(async (tx) => {
+      const effectiveActorUserId = await this.resolveActorUserIdForCompany(tx, companyId, actorUserId);
+      const redemption = await tx.customerRewardRedemption.findFirst({
+        where: { id: normalizedRedemptionId, companyId },
+        include: {
+          reward: {
+            include: { scopes: { orderBy: [{ createdAt: 'asc' }] } }
+          }
+        }
+      });
+      if (!redemption) {
+        throw new NotFoundException({
+          code: 'VCARD_REWARD_REDEMPTION_NOT_FOUND',
+          message: 'Reward redemption not found for tenant'
+        });
+      }
+      const allowedStatus =
+        nextStatus === RewardRedemptionStatus.CANCELLED
+          ? redemption.status === RewardRedemptionStatus.RESERVED
+          : redemption.status === RewardRedemptionStatus.APPLIED ||
+            redemption.status === RewardRedemptionStatus.RESERVED;
+      if (!allowedStatus) {
+        throw new BadRequestException({
+          code: 'VCARD_REWARD_REDEMPTION_STATUS_INVALID',
+          message:
+            nextStatus === RewardRedemptionStatus.CANCELLED
+              ? 'Only reserved rewards can be cancelled'
+              : 'Only reserved or applied rewards can be voided'
+        });
+      }
+
+      const customer = await tx.customer.findFirst({
+        where: { id: redemption.customerId, companyId, isActive: true },
+        select: { id: true, pointsBalance: true }
+      });
+      if (!customer) {
+        throw new BadRequestException({
+          code: 'VCARD_CUSTOMER_NOT_FOUND',
+          message: 'Customer not found or inactive'
+        });
+      }
+
+      await tx.customer.update({
+        where: { id: customer.id },
+        data: { pointsBalance: customer.pointsBalance + redemption.pointsSpent }
+      });
+
+      await tx.customerPointsLedger.create({
+        data: {
+          companyId,
+          customerId: redemption.customerId,
+          cardInventoryId: redemption.cardInventoryId,
+          txnType: 'ADJUST_UP',
+          sourceType: 'REWARD',
+          sourceId: redemption.id,
+          points: redemption.pointsSpent,
+          remarks:
+            remarks ??
+            `${nextStatus === RewardRedemptionStatus.CANCELLED ? 'Reward cancelled' : 'Reward voided'}: ${redemption.reward.name}`,
+          metadata: {
+            ...this.normalizeMetadata(redemption.metadata),
+            ...metadata,
+            reward_id: redemption.rewardId,
+            redemption_id: redemption.id,
+            phase: nextStatus === RewardRedemptionStatus.CANCELLED ? 'CANCEL' : 'VOID'
+          } as Prisma.InputJsonValue,
+          createdByUserId: effectiveActorUserId
+        }
+      });
+
+      const now = new Date();
+      const updated = await tx.customerRewardRedemption.update({
+        where: { id: redemption.id },
+        data: {
+          status: nextStatus,
+          remarks: remarks ?? redemption.remarks,
+          metadata: {
+            ...this.normalizeMetadata(redemption.metadata),
+            ...metadata,
+            phase: nextStatus === RewardRedemptionStatus.CANCELLED ? 'CANCEL' : 'VOID'
+          } as Prisma.InputJsonValue,
+          cancelledAt: nextStatus === RewardRedemptionStatus.CANCELLED ? now : redemption.cancelledAt,
+          voidedAt: nextStatus === RewardRedemptionStatus.VOIDED ? now : redemption.voidedAt
+        },
+        include: {
+          reward: {
+            include: { scopes: { orderBy: [{ createdAt: 'asc' }] } }
+          }
+        }
+      });
+      return this.mapRewardRedemption(updated);
+    });
   }
 
   private normalizePointsPolicyInput(
