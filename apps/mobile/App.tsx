@@ -140,6 +140,12 @@ type VcardVerifyTapResponse = {
   card_number: string | null;
   card_uid: string;
 };
+type ReceiptCardVerificationResult = {
+  allowed: boolean;
+  message?: string;
+  cardInventoryId?: string | null;
+  cardNumber?: string | null;
+};
 type ReceiptNfcTapModalState = {
   visible: boolean;
   title: string;
@@ -2860,7 +2866,7 @@ function AppShell(): JSX.Element {
   const verifyCustomerCardBeforeReceipt = useCallback(
     async (
       payload: PosQueuedSaleReceiptPayload,
-    ): Promise<{ allowed: boolean; message?: string }> => {
+    ): Promise<ReceiptCardVerificationResult> => {
       if (!payload.customerId?.trim()) {
         return { allowed: true };
       }
@@ -2928,7 +2934,11 @@ function AppShell(): JSX.Element {
             ? `Card ${verification.card_number}`
             : verification.message,
         );
-        return { allowed: true };
+        return {
+          allowed: true,
+          cardInventoryId: verification.card_inventory_id,
+          cardNumber: verification.card_number,
+        };
       } catch (cause) {
         const message =
           cause instanceof Error
@@ -2947,6 +2957,97 @@ function AppShell(): JSX.Element {
       receiptNfcPromptMode,
       waitForReceiptNfcTap,
     ],
+  );
+
+  const applyLocalCustomerPointsProjection = useCallback(
+    async (customerId: string, nextPointsBalance: number): Promise<void> => {
+      if (!db || !customerId.trim()) {
+        return;
+      }
+
+      const rows = await db.getAllAsync<{
+        entity: string;
+        record_id: string;
+        payload: string;
+      }>(
+        `
+        SELECT entity, record_id, payload
+        FROM master_data_local
+        WHERE entity IN (?, ?) AND record_id = ?
+        `,
+        "customer",
+        "customers",
+        customerId.trim(),
+      );
+
+      for (const row of rows) {
+        let payload: Record<string, unknown> = {};
+        try {
+          payload = row.payload ? (JSON.parse(row.payload) as Record<string, unknown>) : {};
+        } catch {
+          payload = {};
+        }
+        payload.pointsBalance = Math.max(0, Math.floor(nextPointsBalance));
+        payload.points_balance = Math.max(0, Math.floor(nextPointsBalance));
+
+        await db.runAsync(
+          `
+          UPDATE master_data_local
+          SET payload = ?, updated_at = ?
+          WHERE entity = ? AND record_id = ?
+          `,
+          JSON.stringify(payload),
+          new Date().toISOString(),
+          row.entity,
+          row.record_id,
+        );
+      }
+    },
+    [db],
+  );
+
+  const awardPointsForVerifiedSale = useCallback(
+    async (
+      payload: PosQueuedSaleReceiptPayload,
+      verification: ReceiptCardVerificationResult,
+    ): Promise<void> => {
+      if (!payload.customerId?.trim()) {
+        return;
+      }
+      if (!verification.cardInventoryId?.trim()) {
+        return;
+      }
+      if (!Number.isFinite(Number(payload.total)) || Number(payload.total) <= 0) {
+        return;
+      }
+
+      const result = await performAuthorizedApiRequest<{
+        customer_id: string;
+        points: number;
+        customer: { points_balance: number };
+      }>("/vcard/points/earn", {
+        method: "POST",
+        body: JSON.stringify({
+          customer_id: payload.customerId.trim(),
+          card_inventory_id: verification.cardInventoryId,
+          amount: Number(payload.total),
+          source_id: payload.saleId,
+          remarks: `Auto earn from POS sale ${payload.saleId}`,
+          idempotency_key: `sale-earn:${payload.saleId}`,
+        }),
+      });
+
+      await applyLocalCustomerPointsProjection(
+        payload.customerId.trim(),
+        result.customer?.points_balance ?? 0,
+      );
+
+      toastSuccess(
+        "Points earned",
+        `${result.points} point${result.points === 1 ? "" : "s"} added${verification.cardNumber ? ` on ${verification.cardNumber}` : ""}.`,
+      );
+    },
+    [applyLocalCustomerPointsProjection, performAuthorizedApiRequest],
   );
 
   const buildLayoutTestReceiptDocument = (
@@ -3127,6 +3228,17 @@ function AppShell(): JSX.Element {
           receiptNumber,
           message: verification.message ?? "Customer card verification did not complete.",
         };
+      }
+      if (verification.cardInventoryId) {
+        try {
+          await awardPointsForVerifiedSale(payload, verification);
+        } catch (cause) {
+          const message =
+            cause instanceof Error
+              ? cause.message
+              : "Points could not be awarded for this sale.";
+          toastError("Points not awarded", message);
+        }
       }
       await printerService.printReceiptDocument(receiptDocument);
       return { printed: true, receiptNumber };

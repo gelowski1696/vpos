@@ -4,6 +4,7 @@ import type { PrinterType } from '@vpos/printing-core';
 import type { AppTheme } from '../theme';
 import type { MobilePrinterRuntimeCapabilities } from '../../features/printer/mobile-printer.service';
 import type { ReceiptLayoutSettings } from '../receipt-layout-settings';
+import type { ReceiptNfcPromptMode } from '../startup-state';
 import { PinCodeInput } from '../components/PinCodeInput';
 import { useTutorialTarget } from '../tutorial/tutorial-provider';
 
@@ -13,6 +14,8 @@ type Props = {
   onChangeThemeMode: (mode: 'LIGHT' | 'DARK') => void;
   posDefaultLpgFlow: 'NONE' | 'REFILL_EXCHANGE' | 'NON_REFILL';
   onChangePosDefaultLpgFlow: (flow: 'NONE' | 'REFILL_EXCHANGE' | 'NON_REFILL') => Promise<void> | void;
+  receiptNfcPromptMode: ReceiptNfcPromptMode;
+  onChangeReceiptNfcPromptMode: (mode: ReceiptNfcPromptMode) => Promise<void> | void;
   pinConfigured: boolean;
   onChangePin: (input: { currentPin: string; nextPin: string }) => Promise<void>;
   selectedBranchName: string | null;
@@ -80,6 +83,11 @@ const POS_FLOW_OPTIONS: Array<{ value: 'NONE' | 'REFILL_EXCHANGE' | 'NON_REFILL'
   { value: 'NONE', label: 'Require per item' },
   { value: 'REFILL_EXCHANGE', label: 'Refill Exchange' },
   { value: 'NON_REFILL', label: 'Non-Refill' }
+];
+const RECEIPT_NFC_PROMPT_OPTIONS: Array<{ value: ReceiptNfcPromptMode; label: string }> = [
+  { value: 'OFF', label: 'Off' },
+  { value: 'ASK_BEFORE_PRINT', label: 'Ask Before Print' },
+  { value: 'REQUIRED_FOR_REWARD', label: 'Require For Reward' }
 ];
 
 type ImagePickerRuntimeModule = {
@@ -466,6 +474,30 @@ export function SettingsScreen(props: Props): JSX.Element {
               <Pressable
                 key={option.value}
                 onPress={() => void props.onChangePosDefaultLpgFlow(option.value)}
+                style={[
+                  styles.chip,
+                  {
+                    backgroundColor: selected ? props.theme.pillActive : props.theme.pillBg
+                  }
+                ]}
+              >
+                <Text style={[styles.chipText, { color: selected ? '#FFFFFF' : props.theme.pillText }]}>
+                  {option.label}
+                </Text>
+              </Pressable>
+            );
+          })}
+        </View>
+        <Text style={[styles.helper, { color: props.theme.subtext, marginTop: 10 }]}>
+          Loyalty NFC prompt before printing receipt.
+        </Text>
+        <View style={styles.chipWrap}>
+          {RECEIPT_NFC_PROMPT_OPTIONS.map((option) => {
+            const selected = props.receiptNfcPromptMode === option.value;
+            return (
+              <Pressable
+                key={option.value}
+                onPress={() => void props.onChangeReceiptNfcPromptMode(option.value)}
                 style={[
                   styles.chip,
                   {

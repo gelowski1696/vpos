@@ -21,6 +21,8 @@ import {
   VcardService,
   type AssignCustomerCardInput,
   type ReassignCustomerCardInput,
+  type VerifyTappedCustomerCardInput,
+  type VerifyTappedCustomerCardResult,
   type VcardCustomerCardRecord,
   type VcardCustomerCardsListQuery
 } from './vcard.service';
@@ -31,7 +33,7 @@ type RequestWithTenant = Request & {
 };
 
 @Controller('vcard/cards')
-@Roles('admin', 'owner', 'platform_owner')
+@Roles('admin', 'owner', 'platform_owner', 'cashier')
 export class VcardCardsController {
   constructor(
     private readonly vcardService: VcardService,
@@ -66,6 +68,7 @@ export class VcardCardsController {
     @Req() req: RequestWithTenant,
     @Body() body: Record<string, unknown>
   ): Promise<VcardCustomerCardRecord> {
+    this.assertCustomerCardWrite(req);
     const targetCompanyId = this.resolveTargetCompanyId(req, body.companyId);
     await this.tenantRoutingPolicy.assertRoutable(targetCompanyId);
     await this.entitlementsService.enforceMasterDataWrite(targetCompanyId);
@@ -101,6 +104,7 @@ export class VcardCardsController {
     @Param('id') id: string,
     @Body() body: Record<string, unknown>
   ): Promise<VcardCustomerCardRecord> {
+    this.assertCustomerCardWrite(req);
     const targetCompanyId = this.resolveTargetCompanyId(req, body.companyId);
     await this.tenantRoutingPolicy.assertRoutable(targetCompanyId);
     await this.entitlementsService.enforceMasterDataWrite(targetCompanyId);
@@ -135,6 +139,7 @@ export class VcardCardsController {
     @Param('id') id: string,
     @Body() body: Record<string, unknown>
   ): Promise<VcardCustomerCardRecord> {
+    this.assertCustomerCardWrite(req);
     const targetCompanyId = this.resolveTargetCompanyId(req, body.companyId);
     await this.tenantRoutingPolicy.assertRoutable(targetCompanyId);
     await this.entitlementsService.enforceMasterDataWrite(targetCompanyId);
@@ -159,6 +164,7 @@ export class VcardCardsController {
     @Param('id') id: string,
     @Body() body: Record<string, unknown>
   ): Promise<VcardCustomerCardRecord> {
+    this.assertCustomerCardWrite(req);
     const targetCompanyId = this.resolveTargetCompanyId(req, body.companyId);
     await this.tenantRoutingPolicy.assertRoutable(targetCompanyId);
     await this.entitlementsService.enforceMasterDataWrite(targetCompanyId);
@@ -189,6 +195,34 @@ export class VcardCardsController {
     return result;
   }
 
+  @Post('verify-tap')
+  async verifyTap(
+    @Req() req: RequestWithTenant,
+    @Body() body: Record<string, unknown>
+  ): Promise<VerifyTappedCustomerCardResult> {
+    const targetCompanyId = this.resolveTargetCompanyId(req, body.companyId);
+    await this.tenantRoutingPolicy.assertRoutable(targetCompanyId);
+    const input: VerifyTappedCustomerCardInput = {
+      customerId: String(body.customer_id ?? body.customerId ?? ''),
+      cardUid: String(body.card_uid ?? body.cardUid ?? body.uid ?? ''),
+      branchId:
+        body.branch_id !== undefined || body.branchId !== undefined
+          ? String(body.branch_id ?? body.branchId ?? '')
+          : undefined,
+      locationId:
+        body.location_id !== undefined || body.locationId !== undefined
+          ? String(body.location_id ?? body.locationId ?? '')
+          : undefined
+    };
+    if (!input.customerId.trim() || !input.cardUid.trim()) {
+      throw new BadRequestException({
+        code: 'VCARD_VERIFY_TAP_INPUT_REQUIRED',
+        message: 'customer_id and card_uid are required'
+      });
+    }
+    return this.vcardService.verifyTappedCustomerCard(targetCompanyId, input);
+  }
+
   private resolveTargetCompanyId(req: RequestWithTenant, requestedCompanyId: unknown): string {
     const actorCompanyId = req.user?.company_id ?? req.companyId;
     const requested =
@@ -214,5 +248,12 @@ export class VcardCardsController {
       throw new ForbiddenException('Cross-tenant V-CARD operation requires platform_owner role');
     }
     return requested;
+  }
+
+  private assertCustomerCardWrite(req: RequestWithTenant): void {
+    const roles = req.user?.roles?.map((role) => role.toLowerCase()) ?? [];
+    if (roles.includes('cashier') && !roles.includes('admin') && !roles.includes('owner') && !roles.includes('platform_owner')) {
+      throw new ForbiddenException('Customer card changes require admin, owner, or platform_owner role');
+    }
   }
 }

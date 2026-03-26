@@ -208,6 +208,32 @@ export type SetCustomerCardStatusInput = {
   actorUserId?: string | null;
 };
 
+export type VerifyTappedCustomerCardInput = {
+  customerId: string;
+  cardUid: string;
+  branchId?: string | null;
+  locationId?: string | null;
+};
+
+export type VerifyTappedCustomerCardResult = {
+  matched: boolean;
+  reason:
+    | 'MATCHED'
+    | 'CARD_NOT_REGISTERED'
+    | 'CARD_OUT_OF_SCOPE'
+    | 'CARD_UNASSIGNED'
+    | 'CARD_INACTIVE'
+    | 'CARD_REVOKED'
+    | 'CARD_ASSIGNED_TO_OTHER_CUSTOMER';
+  message: string;
+  customer_card_id: string | null;
+  card_inventory_id: string | null;
+  customer_id: string | null;
+  customer_name: string | null;
+  card_number: string | null;
+  card_uid: string;
+};
+
 export type VcardPointsLedgerRecord = {
   id: string;
   company_id: string;
@@ -807,6 +833,154 @@ export class VcardService {
     });
 
     return this.mapCustomerCard(row);
+  }
+
+  async verifyTappedCustomerCard(
+    companyId: string,
+    input: VerifyTappedCustomerCardInput
+  ): Promise<VerifyTappedCustomerCardResult> {
+    const binding = await this.getTenantBinding(companyId);
+    const customerId = this.normalizeRequired(input.customerId, 'customer_id');
+    const cardUid = this.normalizeCardUid(input.cardUid);
+    const branchId = input.branchId === undefined ? undefined : this.normalizeOptional(input.branchId);
+    const locationId = input.locationId === undefined ? undefined : this.normalizeOptional(input.locationId);
+
+    return binding.client.$transaction(async (tx) => {
+      const customer = await tx.customer.findFirst({
+        where: { id: customerId, companyId, isActive: true },
+        select: { id: true, name: true }
+      });
+      if (!customer) {
+        throw new BadRequestException({
+          code: 'VCARD_CUSTOMER_NOT_FOUND',
+          message: 'Customer not found or inactive'
+        });
+      }
+
+      const card = await tx.cardInventory.findFirst({
+        where: { companyId, cardUid },
+        include: {
+          customerCards: {
+            include: {
+              customer: { select: { id: true, name: true } }
+            },
+            orderBy: [{ updatedAt: 'desc' }],
+            take: 1
+          }
+        }
+      });
+
+      if (!card) {
+        return {
+          matched: false,
+          reason: 'CARD_NOT_REGISTERED',
+          message: 'This card is not registered in V-CARD.',
+          customer_card_id: null,
+          card_inventory_id: null,
+          customer_id: null,
+          customer_name: null,
+          card_number: null,
+          card_uid: cardUid
+        };
+      }
+
+      if (branchId && card.branchId && card.branchId !== branchId) {
+        return {
+          matched: false,
+          reason: 'CARD_OUT_OF_SCOPE',
+          message: 'This card belongs to a different branch.',
+          customer_card_id: null,
+          card_inventory_id: card.id,
+          customer_id: null,
+          customer_name: null,
+          card_number: card.cardNumber,
+          card_uid: card.cardUid
+        };
+      }
+
+      if (locationId && card.locationId && card.locationId !== locationId) {
+        return {
+          matched: false,
+          reason: 'CARD_OUT_OF_SCOPE',
+          message: 'This card belongs to a different location.',
+          customer_card_id: null,
+          card_inventory_id: card.id,
+          customer_id: null,
+          customer_name: null,
+          card_number: card.cardNumber,
+          card_uid: card.cardUid
+        };
+      }
+
+      const customerCard = card.customerCards[0] ?? null;
+      if (!customerCard) {
+        return {
+          matched: false,
+          reason: 'CARD_UNASSIGNED',
+          message: 'This card is not assigned to a customer yet.',
+          customer_card_id: null,
+          card_inventory_id: card.id,
+          customer_id: null,
+          customer_name: null,
+          card_number: card.cardNumber,
+          card_uid: card.cardUid
+        };
+      }
+
+      if (card.status === CardInventoryStatus.REVOKED || customerCard.status === CustomerCardStatus.REVOKED) {
+        return {
+          matched: false,
+          reason: 'CARD_REVOKED',
+          message: 'This card has been revoked.',
+          customer_card_id: customerCard.id,
+          card_inventory_id: card.id,
+          customer_id: customerCard.customer.id,
+          customer_name: customerCard.customer.name,
+          card_number: card.cardNumber,
+          card_uid: card.cardUid
+        };
+      }
+
+      if (card.status === CardInventoryStatus.INACTIVE || customerCard.status === CustomerCardStatus.INACTIVE) {
+        return {
+          matched: false,
+          reason: 'CARD_INACTIVE',
+          message: 'This card is inactive.',
+          customer_card_id: customerCard.id,
+          card_inventory_id: card.id,
+          customer_id: customerCard.customer.id,
+          customer_name: customerCard.customer.name,
+          card_number: card.cardNumber,
+          card_uid: card.cardUid
+        };
+      }
+
+      if (customerCard.customer.id !== customerId || customerCard.status !== CustomerCardStatus.ACTIVE) {
+        return {
+          matched: false,
+          reason: 'CARD_ASSIGNED_TO_OTHER_CUSTOMER',
+          message: 'This card is assigned to another customer.',
+          customer_card_id: customerCard.id,
+          card_inventory_id: card.id,
+          customer_id: customerCard.customer.id,
+          customer_name: customerCard.customer.name,
+          card_number: card.cardNumber,
+          card_uid: card.cardUid
+        };
+      }
+
+      return {
+        matched: true,
+        reason: 'MATCHED',
+        message: 'Customer card verified.',
+        customer_card_id: customerCard.id,
+        card_inventory_id: card.id,
+        customer_id: customer.id,
+        customer_name: customer.name,
+        card_number: card.cardNumber,
+        card_uid: card.cardUid
+      };
+    });
   }
 
   async reassignCustomerCard(

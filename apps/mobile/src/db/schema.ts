@@ -190,6 +190,7 @@ export const MOBILE_SQL_SCHEMA = {
       last_server_check_at TEXT,
       last_server_status TEXT NOT NULL DEFAULT 'UNKNOWN',
       pos_default_lpg_flow TEXT NOT NULL DEFAULT 'NONE',
+      receipt_nfc_prompt_mode TEXT NOT NULL DEFAULT 'OFF',
       last_login_email TEXT,
       tutorial_seen_at TEXT,
       tutorial_seen_keys_json TEXT,

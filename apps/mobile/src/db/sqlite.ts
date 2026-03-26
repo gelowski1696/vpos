@@ -59,6 +59,12 @@ export async function initDatabase(): Promise<void> {
   }
 
   try {
+    await db.execAsync("ALTER TABLE app_state ADD COLUMN receipt_nfc_prompt_mode TEXT NOT NULL DEFAULT 'OFF';");
+  } catch {
+    // Column already exists on upgraded databases.
+  }
+
+  try {
     await db.execAsync('ALTER TABLE app_state ADD COLUMN last_login_email TEXT;');
   } catch {
     // Column already exists on upgraded databases.
@@ -128,13 +134,14 @@ export async function initDatabase(): Promise<void> {
       last_server_check_at,
       last_server_status,
       pos_default_lpg_flow,
+      receipt_nfc_prompt_mode,
       last_login_email,
       tutorial_seen_at,
       tutorial_seen_keys_json,
       tutorial_progress_json,
       updated_at
     )
-    VALUES (1, NULL, NULL, NULL, NULL, NULL, NULL, NULL, 'UNKNOWN', 'NONE', NULL, NULL, NULL, '{}', ?)
+    VALUES (1, NULL, NULL, NULL, NULL, NULL, NULL, NULL, 'UNKNOWN', 'NONE', 'OFF', NULL, NULL, NULL, '{}', ?)
     `,
     now
   );

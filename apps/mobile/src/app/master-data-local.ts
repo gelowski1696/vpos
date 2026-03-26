@@ -13,6 +13,7 @@ export type MasterDataOption = {
   subtitle?: string;
   branchId?: string;
   balance?: number;
+  pointsBalance?: number;
   group?: string;
   type?: string;
   code?: string;
@@ -250,14 +251,17 @@ export async function loadCustomerOptions(db: SQLiteDatabase): Promise<MasterDat
     const name = asString(payload.name) ?? asString(payload.display_name);
     const tier = asString(payload.tier);
     const outstandingBalance = asNumber(payload.outstandingBalance ?? payload.outstanding_balance) ?? 0;
+    const pointsBalance = asNumber(payload.pointsBalance ?? payload.points_balance) ?? 0;
     const balanceText = `Bal: PHP ${outstandingBalance.toFixed(2)}`;
+    const pointsText = `Pts: ${Math.max(0, Math.floor(pointsBalance))}`;
     const built = buildOption({
       id,
       label: name ?? code ?? id,
       subtitle:
-        [code, tier, balanceText].filter((value): value is string => Boolean(value)).join(' - ') || undefined
+        [code, tier, balanceText, pointsText].filter((value): value is string => Boolean(value)).join(' - ') || undefined
     });
     built.balance = Number(Math.max(0, outstandingBalance).toFixed(2));
+    built.pointsBalance = Math.max(0, Math.floor(pointsBalance));
     options.push(built);
   }
   const deduped = dedupe(options);

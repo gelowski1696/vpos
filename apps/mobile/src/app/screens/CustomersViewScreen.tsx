@@ -66,10 +66,12 @@ export function CustomersViewScreen({
   const summary = useMemo(() => {
     const withBalance = rows.filter((row) => Number(row.balance ?? 0) > 0).length;
     const totalOutstanding = rows.reduce((sum, row) => sum + Number(row.balance ?? 0), 0);
+    const totalPoints = rows.reduce((sum, row) => sum + Number(row.pointsBalance ?? 0), 0);
     return {
       totalCustomers: rows.length,
       withBalance,
-      totalOutstanding: Number(totalOutstanding.toFixed(2))
+      totalOutstanding: Number(totalOutstanding.toFixed(2)),
+      totalPoints: Math.max(0, Math.floor(totalPoints))
     };
   }, [rows]);
 
@@ -125,7 +127,7 @@ export function CustomersViewScreen({
     <View style={[styles.card, { backgroundColor: theme.card, borderColor: theme.cardBorder }]}>
       <Text style={[styles.title, { color: theme.heading }]}>Customers</Text>
       <Text style={[styles.sub, { color: theme.subtext }]}>
-        View customer balances and tap a customer to see transaction history.
+        View balances, loyalty points, and tap a customer to see transaction history.
       </Text>
 
       <View style={styles.summaryRow}>
@@ -140,6 +142,10 @@ export function CustomersViewScreen({
         <View style={[styles.summaryCard, { borderColor: theme.cardBorder, backgroundColor: theme.inputBg }]}>
           <Text style={[styles.summaryLabel, { color: theme.subtext }]}>Outstanding</Text>
           <Text style={[styles.summaryValue, { color: theme.heading }]}>{fmtMoney(summary.totalOutstanding)}</Text>
+        </View>
+        <View style={[styles.summaryCard, { borderColor: theme.cardBorder, backgroundColor: theme.inputBg }]}>
+          <Text style={[styles.summaryLabel, { color: theme.subtext }]}>Points</Text>
+          <Text style={[styles.summaryValue, { color: theme.heading }]}>{summary.totalPoints}</Text>
         </View>
       </View>
 
@@ -187,6 +193,9 @@ export function CustomersViewScreen({
               <View style={{ flex: 1 }}>
                 <Text style={[styles.itemName, { color: theme.heading }]}>{row.label}</Text>
                 <Text style={[styles.itemMeta, { color: theme.subtext }]}>{row.subtitle ?? row.id}</Text>
+                <Text style={[styles.itemMeta, { color: theme.subtext }]}>
+                  Loyalty Points: {Math.max(0, Math.floor(Number(row.pointsBalance ?? 0)))}
+                </Text>
               </View>
               <View style={styles.itemActions}>
                 <Text style={[styles.balanceValue, { color: theme.heading }]}>
@@ -232,6 +241,12 @@ export function CustomersViewScreen({
                   <Text style={[styles.summaryLabel, { color: theme.subtext }]}>Balance</Text>
                   <Text style={[styles.summaryValue, { color: theme.heading }]}>
                     {fmtMoney(Number(selectedCustomer.balance ?? 0))}
+                  </Text>
+                </View>
+                <View style={[styles.summaryCard, { borderColor: theme.cardBorder, backgroundColor: theme.inputBg }]}>
+                  <Text style={[styles.summaryLabel, { color: theme.subtext }]}>Points</Text>
+                  <Text style={[styles.summaryValue, { color: theme.heading }]}>
+                    {Math.max(0, Math.floor(Number(selectedCustomer.pointsBalance ?? 0)))}
                   </Text>
                 </View>
               </View>
@@ -449,10 +464,12 @@ const styles = StyleSheet.create({
   },
   summaryRow: {
     flexDirection: 'row',
+    flexWrap: 'wrap',
     gap: 8
   },
   summaryCard: {
-    flex: 1,
+    flexGrow: 1,
+    flexBasis: '48%',
     borderWidth: 1,
     borderRadius: 12,
     minHeight: 58,

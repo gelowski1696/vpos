@@ -33,7 +33,7 @@ type RequestWithTenant = Request & {
 };
 
 @Controller('vcard')
-@Roles('admin', 'owner', 'platform_owner')
+@Roles('admin', 'owner', 'platform_owner', 'supervisor', 'cashier')
 export class VcardPointsController {
   constructor(
     private readonly vcardService: VcardService,
@@ -53,6 +53,7 @@ export class VcardPointsController {
   }
 
   @Put('points/policy')
+  @Roles('admin', 'owner', 'platform_owner')
   async updatePointsPolicy(
     @Req() req: RequestWithTenant,
     @Body() body: Record<string, unknown>
@@ -146,7 +147,7 @@ export class VcardPointsController {
   ): Promise<VcardPointsLedgerRecord> {
     const targetCompanyId = this.resolveTargetCompanyId(req, body.companyId);
     await this.tenantRoutingPolicy.assertRoutable(targetCompanyId);
-    await this.entitlementsService.enforceMasterDataWrite(targetCompanyId);
+    await this.entitlementsService.enforceTransactionalWrite(targetCompanyId);
     const input: EarnPointsInput = {
       customerId: String(body.customer_id ?? body.customerId ?? ''),
       cardInventoryId:
@@ -195,7 +196,7 @@ export class VcardPointsController {
   ): Promise<VcardPointsLedgerRecord> {
     const targetCompanyId = this.resolveTargetCompanyId(req, body.companyId);
     await this.tenantRoutingPolicy.assertRoutable(targetCompanyId);
-    await this.entitlementsService.enforceMasterDataWrite(targetCompanyId);
+    await this.entitlementsService.enforceTransactionalWrite(targetCompanyId);
     const input: RedeemPointsInput = {
       customerId: String(body.customer_id ?? body.customerId ?? ''),
       cardInventoryId:
@@ -238,6 +239,7 @@ export class VcardPointsController {
   }
 
   @Post('points/adjust')
+  @Roles('admin', 'owner', 'platform_owner')
   async adjustPoints(
     @Req() req: RequestWithTenant,
     @Body() body: Record<string, unknown>

@@ -1,6 +1,7 @@
 import type { SQLiteDatabase } from 'expo-sqlite';
 
 export type PosDefaultLpgFlow = 'NONE' | 'REFILL_EXCHANGE' | 'NON_REFILL';
+export type ReceiptNfcPromptMode = 'OFF' | 'ASK_BEFORE_PRINT' | 'REQUIRED_FOR_REWARD';
 
 export type StartupState = {
   selectedBranchId: string | null;
@@ -12,6 +13,7 @@ export type StartupState = {
   lastServerCheckAt: string | null;
   lastServerStatus: 'UNKNOWN' | 'ONLINE' | 'OFFLINE';
   posDefaultLpgFlow: PosDefaultLpgFlow;
+  receiptNfcPromptMode: ReceiptNfcPromptMode;
   lastLoginEmail: string | null;
   tutorialSeenAt: string | null;
   tutorialSeenKeys: string[];
@@ -28,6 +30,7 @@ const DEFAULT_STATE: StartupState = {
   lastServerCheckAt: null,
   lastServerStatus: 'UNKNOWN',
   posDefaultLpgFlow: 'NONE',
+  receiptNfcPromptMode: 'OFF',
   lastLoginEmail: null,
   tutorialSeenAt: null,
   tutorialSeenKeys: [],
@@ -45,6 +48,7 @@ export async function getStartupState(db: SQLiteDatabase): Promise<StartupState>
     last_server_check_at: string | null;
     last_server_status: string | null;
     pos_default_lpg_flow: string | null;
+    receipt_nfc_prompt_mode: string | null;
     last_login_email: string | null;
     tutorial_seen_at: string | null;
     tutorial_seen_keys_json: string | null;
@@ -60,8 +64,9 @@ export async function getStartupState(db: SQLiteDatabase): Promise<StartupState>
       last_master_data_fingerprint,
       last_server_check_at,
       last_server_status,
-      pos_default_lpg_flow
-      ,last_login_email,
+      pos_default_lpg_flow,
+      receipt_nfc_prompt_mode,
+      last_login_email,
       tutorial_seen_at,
       tutorial_seen_keys_json,
       tutorial_progress_json
@@ -79,6 +84,10 @@ export async function getStartupState(db: SQLiteDatabase): Promise<StartupState>
     row.pos_default_lpg_flow === 'REFILL_EXCHANGE' || row.pos_default_lpg_flow === 'NON_REFILL'
       ? row.pos_default_lpg_flow
       : 'NONE';
+  const receiptNfcPromptMode: ReceiptNfcPromptMode =
+    row.receipt_nfc_prompt_mode === 'ASK_BEFORE_PRINT' || row.receipt_nfc_prompt_mode === 'REQUIRED_FOR_REWARD'
+      ? row.receipt_nfc_prompt_mode
+      : 'OFF';
 
   let tutorialSeenKeys: string[] = [];
   if (typeof row.tutorial_seen_keys_json === 'string' && row.tutorial_seen_keys_json.trim()) {
@@ -126,6 +135,7 @@ export async function getStartupState(db: SQLiteDatabase): Promise<StartupState>
     lastServerCheckAt: row.last_server_check_at,
     lastServerStatus: status,
     posDefaultLpgFlow,
+    receiptNfcPromptMode,
     lastLoginEmail: row.last_login_email,
     tutorialSeenAt: row.tutorial_seen_at,
     tutorialSeenKeys,
@@ -148,6 +158,7 @@ export async function updateStartupState(
     lastServerCheckAt: patch.lastServerCheckAt ?? current.lastServerCheckAt,
     lastServerStatus: patch.lastServerStatus ?? current.lastServerStatus,
     posDefaultLpgFlow: patch.posDefaultLpgFlow ?? current.posDefaultLpgFlow,
+    receiptNfcPromptMode: patch.receiptNfcPromptMode ?? current.receiptNfcPromptMode,
     lastLoginEmail: patch.lastLoginEmail ?? current.lastLoginEmail,
     tutorialSeenAt: patch.tutorialSeenAt ?? current.tutorialSeenAt,
     tutorialSeenKeys: patch.tutorialSeenKeys ?? current.tutorialSeenKeys,
@@ -167,13 +178,14 @@ export async function updateStartupState(
       last_server_check_at,
       last_server_status,
       pos_default_lpg_flow,
+      receipt_nfc_prompt_mode,
       last_login_email,
       tutorial_seen_at,
       tutorial_seen_keys_json,
       tutorial_progress_json,
       updated_at
     )
-    VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     ON CONFLICT(id) DO UPDATE SET
       selected_branch_id = excluded.selected_branch_id,
       selected_branch_name = excluded.selected_branch_name,
@@ -184,6 +196,7 @@ export async function updateStartupState(
       last_server_check_at = excluded.last_server_check_at,
       last_server_status = excluded.last_server_status,
       pos_default_lpg_flow = excluded.pos_default_lpg_flow,
+      receipt_nfc_prompt_mode = excluded.receipt_nfc_prompt_mode,
       last_login_email = excluded.last_login_email,
       tutorial_seen_at = excluded.tutorial_seen_at,
       tutorial_seen_keys_json = excluded.tutorial_seen_keys_json,
@@ -199,6 +212,7 @@ export async function updateStartupState(
     next.lastServerCheckAt,
     next.lastServerStatus,
     next.posDefaultLpgFlow,
+    next.receiptNfcPromptMode,
     next.lastLoginEmail,
     next.tutorialSeenAt,
     JSON.stringify(next.tutorialSeenKeys),
