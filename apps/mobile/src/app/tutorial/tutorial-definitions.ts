@@ -277,6 +277,32 @@ export const TUTORIAL_DEFINITIONS: Record<TutorialScope, TutorialDefinition> = {
       },
     ],
   },
+  LENDING: {
+    title: 'Lending Guide',
+    steps: [
+      {
+        title: 'Review Open Lendings',
+        target: 'Lending > Lending list',
+        description: 'Use this module to review assets still out with customers and identify overdue returns.',
+        icon: '\u27F2',
+        screen: 'LENDING',
+      },
+      {
+        title: 'Open Lending Detail',
+        target: 'Lending > Lending detail',
+        description: 'Tap any lending record to review the lines, return history, and current open quantity.',
+        icon: '\uD83D\uDCC4',
+        screen: 'LENDING',
+      },
+      {
+        title: 'Record Return',
+        target: 'Lending > Record Return',
+        description: 'Use the return flow to put lent items back into stock and capture the item condition.',
+        icon: '\u21A9',
+        screen: 'LENDING',
+      },
+    ],
+  },
   EXPENSE: {
     title: 'Expense Guide',
     steps: [

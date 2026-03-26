@@ -1,10 +1,12 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   ActivityIndicator,
+  Alert,
   Animated,
   Easing,
   Image,
   Linking,
+  Modal,
   Platform,
   Pressable,
   SafeAreaView,
@@ -58,6 +60,7 @@ import { TransferListScreen } from "./src/app/screens/TransferListScreen";
 import { ExpenseScreen } from "./src/app/screens/ExpenseScreen";
 import { ItemsViewScreen } from "./src/app/screens/ItemsViewScreen";
 import { CustomersViewScreen } from "./src/app/screens/CustomersViewScreen";
+import { LendingScreen } from "./src/app/screens/LendingScreen";
 import { ShiftScreen } from "./src/app/screens/ShiftScreen";
 import { SettingsScreen } from "./src/app/screens/SettingsScreen";
 import { MasterDataSelect } from "./src/app/components/MasterDataSelect";
@@ -71,6 +74,7 @@ import {
 } from "./src/app/master-data-local";
 import {
   type PosDefaultLpgFlow,
+  type ReceiptNfcPromptMode,
   getStartupState,
   updateStartupState,
 } from "./src/app/startup-state";
@@ -87,6 +91,13 @@ import {
 import { TutorialProvider, useTutorialActions, useTutorialState, useTutorialTarget } from "./src/app/tutorial/tutorial-provider";
 import { TutorialOverlayHost } from "./src/app/tutorial/tutorial-overlay-host";
 import type { TutorialScope, TutorialScreenKey } from "./src/app/tutorial/tutorial-types";
+import {
+  getNativeNfcCapabilities,
+  startNativeNfcScan,
+  stopNativeNfcScan,
+  subscribeToNfcTagEvents,
+  type NfcTagEvent,
+} from "./src/features/nfc/native-nfc.bridge";
 
 const env = (
   globalThis as { process?: { env?: Record<string, string | undefined> } }
@@ -99,6 +110,7 @@ const APP_LOGO = require("./assests/vpos_logo.png");
 
 const PRIMARY_TABS = ["HOME", "POS", "SALES", "TRANSFER", "TRANSFER_LIST"] as const;
 const SIDE_MENU_MODULES = [
+  "LENDING",
   "EXPENSE",
   "ITEMS",
   "CUSTOMERS",
@@ -110,12 +122,38 @@ type SideModule = (typeof SIDE_MENU_MODULES)[number];
 type ReadyView = PrimaryTab | SideModule;
 type UiStage = AuthStage | "BRANCH_SETUP" | "SUBSCRIPTION_ENDED";
 type ThemeMode = "LIGHT" | "DARK";
+type VcardVerifyTapResponse = {
+  matched: boolean;
+  reason:
+    | "MATCHED"
+    | "CARD_NOT_REGISTERED"
+    | "CARD_OUT_OF_SCOPE"
+    | "CARD_UNASSIGNED"
+    | "CARD_INACTIVE"
+    | "CARD_REVOKED"
+    | "CARD_ASSIGNED_TO_OTHER_CUSTOMER";
+  message: string;
+  customer_card_id: string | null;
+  card_inventory_id: string | null;
+  customer_id: string | null;
+  customer_name: string | null;
+  card_number: string | null;
+  card_uid: string;
+};
+type ReceiptNfcTapModalState = {
+  visible: boolean;
+  title: string;
+  message: string;
+  detail: string | null;
+  allowCancel: boolean;
+};
 const READY_VIEW_META: Record<ReadyView, { label: string; hint: string }> = {
   HOME: { label: "Home", hint: "Overview" },
   POS: { label: "POS", hint: "Sales" },
   SALES: { label: "Sales", hint: "History" },
   TRANSFER: { label: "Transfer", hint: "Create" },
   TRANSFER_LIST: { label: "Transfers", hint: "History" },
+  LENDING: { label: "Lending", hint: "Returns" },
   EXPENSE: { label: "Expense", hint: "Petty Cash" },
   ITEMS: { label: "Items", hint: "Read Only" },
   CUSTOMERS: { label: "Customers", hint: "Credit" },
@@ -128,6 +166,7 @@ const READY_VIEW_ICONS: Record<ReadyView, string> = {
   SALES: "\u25A4",
   TRANSFER: "\u2194",
   TRANSFER_LIST: "\u2630",
+  LENDING: "\u27F2",
   EXPENSE: "\u20B1",
   ITEMS: "\u25A6",
   CUSTOMERS: "\u263A",
@@ -650,6 +689,7 @@ function buildPosReceiptDocument(
 function AppShell(): JSX.Element {
   const { width: windowWidth, height: windowHeight } = useWindowDimensions();
   const compactLayout = isCompactPhoneLayout(windowWidth, windowHeight);
+  const compactSideMenuWidth = Math.min(windowWidth - 18, 264);
   const scheme = useColorScheme();
   const [themeMode, setThemeMode] = useState<ThemeMode>(
     scheme === "light" ? "LIGHT" : "DARK",
@@ -744,6 +784,16 @@ function AppShell(): JSX.Element {
     useState<ReceiptLayoutSettings>(DEFAULT_RECEIPT_LAYOUT_SETTINGS);
   const [posDefaultLpgFlow, setPosDefaultLpgFlow] =
     useState<PosDefaultLpgFlow>("NONE");
+  const [receiptNfcPromptMode, setReceiptNfcPromptMode] =
+    useState<ReceiptNfcPromptMode>("OFF");
+  const [receiptNfcTapModal, setReceiptNfcTapModal] =
+    useState<ReceiptNfcTapModalState>({
+      visible: false,
+      title: "Tap Customer Card",
+      message: "Hold the customer NFC card near the device.",
+      detail: null,
+      allowCancel: true,
+    });
 
   const authFlowRef = useRef<MobileAuthFlow | null>(null);
   const printerServiceRef = useRef<MobilePrinterService | null>(null);
@@ -759,6 +809,14 @@ function AppShell(): JSX.Element {
   const startupProbeAbortRef = useRef<AbortController | null>(null);
   const enrollmentListenerRef = useRef<{ remove: () => void } | null>(null);
   const lastEnrollmentClaimTokenRef = useRef<string | null>(null);
+  const receiptNfcTapListenerRef = useRef<{ remove: () => void } | null>(null);
+  const receiptNfcTapTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(
+    null,
+  );
+  const receiptNfcTapResolveRef = useRef<((tag: NfcTagEvent) => void) | null>(
+    null,
+  );
+  const receiptNfcTapRejectRef = useRef<((error: Error) => void) | null>(null);
   const tutorialState = useTutorialState();
   const tutorialActions = useTutorialActions();
   const moduleHelpTarget = useTutorialTarget("module-help");
@@ -1082,6 +1140,7 @@ function AppShell(): JSX.Element {
     setMasterDataUpdateAvailable(false);
     setNotifiedFingerprint(null);
     setPosDefaultLpgFlow(startup.posDefaultLpgFlow);
+    setReceiptNfcPromptMode(startup.receiptNfcPromptMode);
     setTutorialSeenAt(startup.tutorialSeenAt);
     setTutorialSeenKeys(startup.tutorialSeenKeys);
     setTutorialProgressByScope(startup.tutorialProgressByScope ?? {});
@@ -1197,6 +1256,7 @@ function AppShell(): JSX.Element {
 
         setDb(localDb);
         setPosDefaultLpgFlow(startup.posDefaultLpgFlow);
+        setReceiptNfcPromptMode(startup.receiptNfcPromptMode);
         setTutorialSeenAt(startup.tutorialSeenAt);
         setTutorialSeenKeys(startup.tutorialSeenKeys);
         setTutorialProgressByScope(startup.tutorialProgressByScope ?? {});
@@ -2625,6 +2685,270 @@ function AppShell(): JSX.Element {
     });
   };
 
+  const handleChangeReceiptNfcPromptMode = async (
+    mode: ReceiptNfcPromptMode,
+  ): Promise<void> => {
+    setReceiptNfcPromptMode(mode);
+    if (!db) {
+      return;
+    }
+    await updateStartupState(db, {
+      receiptNfcPromptMode: mode,
+    });
+  };
+
+  const cleanupReceiptNfcTapFlow = useCallback(async (): Promise<void> => {
+    receiptNfcTapListenerRef.current?.remove();
+    receiptNfcTapListenerRef.current = null;
+    if (receiptNfcTapTimeoutRef.current) {
+      clearTimeout(receiptNfcTapTimeoutRef.current);
+      receiptNfcTapTimeoutRef.current = null;
+    }
+    receiptNfcTapResolveRef.current = null;
+    receiptNfcTapRejectRef.current = null;
+    try {
+      await stopNativeNfcScan();
+    } catch {
+      // Best effort cleanup only.
+    }
+  }, []);
+
+  useEffect(() => {
+    return () => {
+      void cleanupReceiptNfcTapFlow();
+    };
+  }, [cleanupReceiptNfcTapFlow]);
+
+  const performAuthorizedApiRequest = useCallback(
+    async <T,>(path: string, init?: RequestInit): Promise<T> => {
+      if (!db) {
+        throw new Error("Database is not ready.");
+      }
+
+      const session = new LocalSessionService(db);
+      await session.initializeFromStorage();
+      const authTransport = new HttpAuthTransport({ baseUrl: API_BASE_URL });
+      let accessToken = await session.getAccessToken();
+      if (!accessToken) {
+        const refreshed = await session.refreshSession(authTransport);
+        if (!refreshed) {
+          throw new Error("Session expired. Sign in again.");
+        }
+        accessToken = await session.getAccessToken();
+      }
+      if (!accessToken) {
+        throw new Error("Access token is unavailable.");
+      }
+
+      const clientId = await session.getClientId();
+      const headers = new Headers(init?.headers ?? {});
+      headers.set("Authorization", `Bearer ${accessToken}`);
+      if (init?.body && !headers.has("Content-Type")) {
+        headers.set("Content-Type", "application/json");
+      }
+      if (clientId && !headers.has("X-Client-Id")) {
+        headers.set("X-Client-Id", clientId);
+      }
+
+      const response = await fetch(`${API_BASE_URL}${path}`, {
+        ...init,
+        headers,
+      });
+
+      if (!response.ok) {
+        let detail = response.statusText;
+        try {
+          const body = (await response.json()) as
+            | { message?: string | string[]; error?: string }
+            | undefined;
+          if (Array.isArray(body?.message)) {
+            detail = body.message.join(", ");
+          } else if (typeof body?.message === "string" && body.message.trim()) {
+            detail = body.message.trim();
+          } else if (typeof body?.error === "string" && body.error.trim()) {
+            detail = body.error.trim();
+          }
+        } catch {
+          // Keep HTTP status text fallback.
+        }
+        throw new Error(detail || `Request failed (${response.status})`);
+      }
+
+      return (await response.json()) as T;
+    },
+    [db],
+  );
+
+  const confirmReceiptNfcPrompt = useCallback(async (): Promise<boolean> => {
+    return new Promise((resolve) => {
+      Alert.alert(
+        "Tap Customer Card?",
+        "Before printing the receipt, you can verify the customer NFC card. This is optional for this sale.",
+        [
+          {
+            text: "Skip",
+            style: "cancel",
+            onPress: () => resolve(false),
+          },
+          {
+            text: "Tap Card",
+            onPress: () => resolve(true),
+          },
+        ],
+      );
+    });
+  }, []);
+
+  const cancelReceiptNfcTapFlow = useCallback((): void => {
+    const reject = receiptNfcTapRejectRef.current;
+    void cleanupReceiptNfcTapFlow();
+    setReceiptNfcTapModal((current) => ({ ...current, visible: false }));
+    if (reject) {
+      reject(new Error("Customer card tap cancelled."));
+    }
+  }, [cleanupReceiptNfcTapFlow]);
+
+  const waitForReceiptNfcTap = useCallback(
+    async (payload: PosQueuedSaleReceiptPayload): Promise<NfcTagEvent> => {
+      await cleanupReceiptNfcTapFlow();
+      setReceiptNfcTapModal({
+        visible: true,
+        title: "Tap Customer Card",
+        message: "Hold the customer NFC/RFID card near the back of the device.",
+        detail: `Sale ${payload.saleId}${payload.customerName ? ` • ${payload.customerName}` : ""}`,
+        allowCancel: true,
+      });
+
+      return new Promise<NfcTagEvent>((resolve, reject) => {
+        receiptNfcTapResolveRef.current = resolve;
+        receiptNfcTapRejectRef.current = reject;
+        receiptNfcTapListenerRef.current = subscribeToNfcTagEvents((tag) => {
+          setReceiptNfcTapModal((current) => ({
+            ...current,
+            message: "Card detected. Verifying customer assignment...",
+            detail: `UID ${tag.uidHex}`,
+            allowCancel: false,
+          }));
+          const nextResolve = receiptNfcTapResolveRef.current;
+          void cleanupReceiptNfcTapFlow();
+          setReceiptNfcTapModal((current) => ({ ...current, visible: false }));
+          if (nextResolve) {
+            nextResolve(tag);
+          }
+        });
+        receiptNfcTapTimeoutRef.current = setTimeout(() => {
+          const timeoutReject = receiptNfcTapRejectRef.current;
+          void cleanupReceiptNfcTapFlow();
+          setReceiptNfcTapModal((current) => ({ ...current, visible: false }));
+          timeoutReject?.(new Error("Timed out waiting for customer card tap."));
+        }, 30000);
+        startNativeNfcScan().catch(async (cause) => {
+          const nextReject = receiptNfcTapRejectRef.current;
+          await cleanupReceiptNfcTapFlow();
+          setReceiptNfcTapModal((current) => ({ ...current, visible: false }));
+          nextReject?.(
+            cause instanceof Error
+              ? cause
+              : new Error("Unable to start NFC scan on this device."),
+          );
+        });
+      });
+    },
+    [cleanupReceiptNfcTapFlow],
+  );
+
+  const verifyCustomerCardBeforeReceipt = useCallback(
+    async (
+      payload: PosQueuedSaleReceiptPayload,
+    ): Promise<{ allowed: boolean; message?: string }> => {
+      if (!payload.customerId?.trim()) {
+        return { allowed: true };
+      }
+      if (receiptNfcPromptMode === "OFF") {
+        return { allowed: true };
+      }
+      if (
+        receiptNfcPromptMode === "REQUIRED_FOR_REWARD" &&
+        !payload.rewardRedemptionUsed
+      ) {
+        return { allowed: true };
+      }
+
+      if (receiptNfcPromptMode === "ASK_BEFORE_PRINT") {
+        const shouldTap = await confirmReceiptNfcPrompt();
+        if (!shouldTap) {
+          return { allowed: true };
+        }
+      }
+
+      const capabilities = await getNativeNfcCapabilities();
+      if (!capabilities.moduleAvailable || !capabilities.hasNfcHardware) {
+        return receiptNfcPromptMode === "REQUIRED_FOR_REWARD"
+          ? {
+              allowed: false,
+              message:
+                "This device does not have NFC enabled for reward verification.",
+            }
+          : { allowed: true };
+      }
+      if (!capabilities.isNfcEnabled) {
+        return receiptNfcPromptMode === "REQUIRED_FOR_REWARD"
+          ? {
+              allowed: false,
+              message: "Enable NFC on the device before printing this receipt.",
+            }
+          : { allowed: true };
+      }
+
+      try {
+        const tapped = await waitForReceiptNfcTap(payload);
+        const verification = await performAuthorizedApiRequest<VcardVerifyTapResponse>(
+          "/vcard/cards/verify-tap",
+          {
+            method: "POST",
+            body: JSON.stringify({
+              customer_id: payload.customerId,
+              card_uid: tapped.uidHex,
+              branch_id: payload.branchId,
+              location_id: payload.locationId,
+            }),
+          },
+        );
+        if (!verification.matched) {
+          return {
+            allowed: false,
+            message:
+              verification.message || "Customer card verification failed.",
+          };
+        }
+
+        toastSuccess(
+          "Customer card verified",
+          verification.card_number
+            ? `Card ${verification.card_number}`
+            : verification.message,
+        );
+        return { allowed: true };
+      } catch (cause) {
+        const message =
+          cause instanceof Error
+            ? cause.message
+            : "Customer card verification did not complete.";
+        if (receiptNfcPromptMode === "ASK_BEFORE_PRINT") {
+          toastInfo("Card verification skipped", message);
+          return { allowed: true };
+        }
+        return { allowed: false, message };
+      }
+    },
+    [
+      confirmReceiptNfcPrompt,
+      performAuthorizedApiRequest,
+      receiptNfcPromptMode,
+      waitForReceiptNfcTap,
+    ],
+  );
+
   const buildLayoutTestReceiptDocument = (
     nextLayout: ReceiptLayoutSettings,
   ): ReceiptDocument => {
@@ -2796,6 +3120,14 @@ function AppShell(): JSX.Element {
     }
 
     try {
+      const verification = await verifyCustomerCardBeforeReceipt(payload);
+      if (!verification.allowed) {
+        return {
+          printed: false,
+          receiptNumber,
+          message: verification.message ?? "Customer card verification did not complete.",
+        };
+      }
       await printerService.printReceiptDocument(receiptDocument);
       return { printed: true, receiptNumber };
     } catch (cause) {
@@ -3017,6 +3349,18 @@ function AppShell(): JSX.Element {
         />
       );
     }
+    if (currentReadyView === "LENDING") {
+      return (
+        <LendingScreen
+          key={`lending-${masterDataVersion}`}
+          db={db}
+          theme={activeTheme}
+          preferredBranchId={selectedBranchId}
+          onDataChanged={handleLocalDataChanged}
+          syncBusy={syncBusy}
+        />
+      );
+    }
     if (currentReadyView === "ITEMS") {
       return (
         <ItemsViewScreen
@@ -3062,6 +3406,8 @@ function AppShell(): JSX.Element {
         onChangeThemeMode={setThemeMode}
         posDefaultLpgFlow={posDefaultLpgFlow}
         onChangePosDefaultLpgFlow={handleChangePosDefaultLpgFlow}
+        receiptNfcPromptMode={receiptNfcPromptMode}
+        onChangeReceiptNfcPromptMode={handleChangeReceiptNfcPromptMode}
         pinConfigured={pinConfigured}
         onChangePin={handleChangePin}
         selectedBranchName={selectedBranchName}
@@ -4026,11 +4372,11 @@ function AppShell(): JSX.Element {
               {
                 backgroundColor: theme.card,
                 borderColor: theme.cardBorder,
-                paddingTop: headerTopPadding + (compactLayout ? 50 : 58),
+                paddingTop: headerTopPadding + (compactLayout ? 34 : 58),
               },
               compactLayout
                 ? {
-                    width: 272,
+                    width: compactSideMenuWidth,
                     paddingHorizontal: 10,
                     paddingBottom: 12,
                     gap: 6,
@@ -4058,209 +4404,275 @@ function AppShell(): JSX.Element {
               },
             ]}
           >
-            <Text
-              style={[
-                styles.sideMenuTitle,
-                { color: theme.heading },
-                compactLayout ? { fontSize: 15 } : null,
+            <ScrollView
+              style={styles.sideMenuScroll}
+              contentContainerStyle={[
+                styles.sideMenuScrollContent,
+                compactLayout ? styles.sideMenuScrollContentCompact : null,
               ]}
-            >
-              Other Menu
-            </Text>
-            <Text
-              style={[
-                styles.sideMenuSub,
-                { color: theme.subtext },
-                compactLayout ? { fontSize: 10 } : null,
-              ]}
-              numberOfLines={2}
-            >
-              Expense, Items, Customers, Settings and others.
-            </Text>
-
-            {SIDE_MENU_MODULES.map((module) => {
-              const active = activeSideModule === module;
-              return (
-                <Pressable
-                  key={module}
-                  style={[
-                    styles.sideMenuItem,
-                    {
-                      backgroundColor: active ? theme.primary : theme.inputBg,
-                      borderColor: theme.cardBorder,
-                    },
-                  ]}
-                  onPress={() => {
-                    setActiveSideModule(module);
-                    setHeaderMenuOpen(false);
-                  }}
-                >
-                  <View style={styles.sideMenuItemRow}>
-                    <View
-                      style={[
-                        styles.sideMenuIconBadge,
-                        {
-                          backgroundColor: active
-                            ? "rgba(255,255,255,0.2)"
-                            : theme.pillBg,
-                        },
-                      ]}
-                    >
-                      <Text
-                        style={[
-                          styles.sideMenuIconText,
-                          { color: active ? "#FFFFFF" : theme.pillText },
-                        ]}
-                      >
-                        {READY_VIEW_ICONS[module]}
-                      </Text>
-                    </View>
-                    <View style={{ flex: 1 }}>
-                      <Text
-                        style={[
-                          styles.sideMenuItemTitle,
-                          { color: active ? "#FFFFFF" : theme.heading },
-                          compactLayout ? { fontSize: 12 } : null,
-                        ]}
-                        numberOfLines={1}
-                      >
-                        {READY_VIEW_META[module].label}
-                      </Text>
-                      <Text
-                        style={[
-                          styles.sideMenuItemSub,
-                          { color: active ? "#FFFFFF" : theme.subtext },
-                          compactLayout ? { fontSize: 10 } : null,
-                        ]}
-                        numberOfLines={1}
-                      >
-                        {READY_VIEW_META[module].hint}
-                      </Text>
-                    </View>
-                  </View>
-                </Pressable>
-              );
-            })}
-
-            <Pressable
-              style={[
-                styles.sideMenuAction,
-                {
-                  borderColor: theme.cardBorder,
-                  backgroundColor: theme.pillBg,
-                },
-              ]}
-              onPress={() => {
-                setActiveSideModule(null);
-                setHeaderMenuOpen(false);
-              }}
-            >
-              <Text
-                style={[styles.sideMenuActionText, { color: theme.pillText }]}
-              >
-                Back To Main Tabs
-              </Text>
-            </Pressable>
-
-            <Pressable
-              style={[
-                styles.sideMenuAction,
-                {
-                  borderColor: theme.cardBorder,
-                  backgroundColor: syncBusy
-                    ? theme.primaryMuted
-                    : theme.primary,
-                },
-              ]}
-              onPress={() => void handleHeaderSyncNow()}
-              disabled={syncBusy}
-            >
-              <Text style={styles.sideMenuActionText}>
-                {syncBusy ? "Syncing..." : "Sync Now"}
-              </Text>
-            </Pressable>
-
-            <Pressable
-              style={[
-                styles.sideMenuAction,
-                {
-                  borderColor: theme.cardBorder,
-                  backgroundColor: branchDataBusy
-                    ? theme.primaryMuted
-                    : theme.pillBg,
-                },
-              ]}
-              onPress={() => {
-                setHeaderMenuOpen(false);
-                void handleRedownloadBranchData();
-              }}
-              disabled={branchDataBusy}
+              showsVerticalScrollIndicator={compactLayout}
+              keyboardShouldPersistTaps="handled"
             >
               <Text
                 style={[
-                  styles.sideMenuActionText,
-                  { color: branchDataBusy ? "#FFFFFF" : theme.pillText },
+                  styles.sideMenuTitle,
+                  { color: theme.heading },
+                  compactLayout ? { fontSize: 15 } : null,
                 ]}
               >
-                {branchDataBusy ? "Downloading..." : "Download Branch Data"}
+                Other Menu
               </Text>
-            </Pressable>
-
-            <Pressable
-              style={[
-                styles.sideMenuAction,
-                {
-                  borderColor: theme.cardBorder,
-                  backgroundColor: theme.pillBg,
-                },
-              ]}
-              onPress={() => {
-                setHeaderMenuOpen(false);
-                void handleSwitchCashier();
-              }}
-            >
               <Text
-                style={[styles.sideMenuActionText, { color: theme.pillText }]}
+                style={[
+                  styles.sideMenuSub,
+                  { color: theme.subtext },
+                  compactLayout ? { fontSize: 10 } : null,
+                ]}
+                numberOfLines={compactLayout ? 1 : 2}
               >
-                Switch Cashier
+                Expense, Items, Customers, Settings and others.
               </Text>
-            </Pressable>
 
-            <Pressable
-              style={[
-                styles.sideMenuAction,
-                {
-                  borderColor: theme.cardBorder,
-                  backgroundColor: theme.pillBg,
-                },
-              ]}
-              onPress={() => {
-                setHeaderMenuOpen(false);
-                void handleLogout();
-              }}
-            >
-              <Text
-                style={[styles.sideMenuActionText, { color: theme.pillText }]}
+              {SIDE_MENU_MODULES.map((module) => {
+                const active = activeSideModule === module;
+                return (
+                  <Pressable
+                    key={module}
+                    style={[
+                      styles.sideMenuItem,
+                      compactLayout ? styles.sideMenuItemCompact : null,
+                      {
+                        backgroundColor: active ? theme.primary : theme.inputBg,
+                        borderColor: theme.cardBorder,
+                      },
+                    ]}
+                    onPress={() => {
+                      setActiveSideModule(module);
+                      setHeaderMenuOpen(false);
+                    }}
+                  >
+                    <View style={styles.sideMenuItemRow}>
+                      <View
+                        style={[
+                          styles.sideMenuIconBadge,
+                          compactLayout ? styles.sideMenuIconBadgeCompact : null,
+                          {
+                            backgroundColor: active
+                              ? "rgba(255,255,255,0.2)"
+                              : theme.pillBg,
+                          },
+                        ]}
+                      >
+                        <Text
+                          style={[
+                            styles.sideMenuIconText,
+                            compactLayout ? { fontSize: 14 } : null,
+                            { color: active ? "#FFFFFF" : theme.pillText },
+                          ]}
+                        >
+                          {READY_VIEW_ICONS[module]}
+                        </Text>
+                      </View>
+                      <View style={{ flex: 1 }}>
+                        <Text
+                          style={[
+                            styles.sideMenuItemTitle,
+                            { color: active ? "#FFFFFF" : theme.heading },
+                            compactLayout ? { fontSize: 12 } : null,
+                          ]}
+                          numberOfLines={1}
+                        >
+                          {READY_VIEW_META[module].label}
+                        </Text>
+                        <Text
+                          style={[
+                            styles.sideMenuItemSub,
+                            { color: active ? "#FFFFFF" : theme.subtext },
+                            compactLayout ? { fontSize: 10 } : null,
+                          ]}
+                          numberOfLines={1}
+                        >
+                          {READY_VIEW_META[module].hint}
+                        </Text>
+                      </View>
+                    </View>
+                  </Pressable>
+                );
+              })}
+
+              <Pressable
+                style={[
+                  styles.sideMenuAction,
+                  compactLayout ? styles.sideMenuActionCompact : null,
+                  {
+                    borderColor: theme.cardBorder,
+                    backgroundColor: theme.pillBg,
+                  },
+                ]}
+                onPress={() => {
+                  setActiveSideModule(null);
+                  setHeaderMenuOpen(false);
+                }}
               >
-                Log Out (Lock)
-              </Text>
-            </Pressable>
+                <Text
+                  style={[
+                    styles.sideMenuActionText,
+                    compactLayout ? styles.sideMenuActionTextCompact : null,
+                    { color: theme.pillText },
+                  ]}
+                  numberOfLines={1}
+                  adjustsFontSizeToFit
+                  minimumFontScale={0.9}
+                >
+                  {compactLayout ? "Main Tabs" : "Back To Main Tabs"}
+                </Text>
+              </Pressable>
 
-            <Pressable
-              style={[
-                styles.sideMenuAction,
-                {
-                  borderColor: theme.cardBorder,
-                  backgroundColor: "#B91C1C",
-                },
-              ]}
-              onPress={() => {
-                setHeaderMenuOpen(false);
-                void handleFullSignOut();
-              }}
-            >
-              <Text style={styles.sideMenuActionText}>Full Sign Out</Text>
-            </Pressable>
+              <Pressable
+                style={[
+                  styles.sideMenuAction,
+                  compactLayout ? styles.sideMenuActionCompact : null,
+                  {
+                    borderColor: theme.cardBorder,
+                    backgroundColor: syncBusy
+                      ? theme.primaryMuted
+                      : theme.primary,
+                  },
+                ]}
+                onPress={() => void handleHeaderSyncNow()}
+                disabled={syncBusy}
+              >
+                <Text
+                  style={[
+                    styles.sideMenuActionText,
+                    compactLayout ? styles.sideMenuActionTextCompact : null,
+                  ]}
+                  numberOfLines={1}
+                  adjustsFontSizeToFit
+                  minimumFontScale={0.9}
+                >
+                  {syncBusy ? "Syncing..." : "Sync Now"}
+                </Text>
+              </Pressable>
+
+              <Pressable
+                style={[
+                  styles.sideMenuAction,
+                  compactLayout ? styles.sideMenuActionCompact : null,
+                  {
+                    borderColor: theme.cardBorder,
+                    backgroundColor: branchDataBusy
+                      ? theme.primaryMuted
+                      : theme.pillBg,
+                  },
+                ]}
+                onPress={() => {
+                  setHeaderMenuOpen(false);
+                  void handleRedownloadBranchData();
+                }}
+                disabled={branchDataBusy}
+              >
+                <Text
+                  style={[
+                    styles.sideMenuActionText,
+                    compactLayout ? styles.sideMenuActionTextCompact : null,
+                    { color: branchDataBusy ? "#FFFFFF" : theme.pillText },
+                  ]}
+                  numberOfLines={1}
+                  adjustsFontSizeToFit
+                  minimumFontScale={0.86}
+                >
+                  {branchDataBusy
+                    ? "Downloading..."
+                    : compactLayout
+                      ? "Download Data"
+                      : "Download Branch Data"}
+                </Text>
+              </Pressable>
+
+              <Pressable
+                style={[
+                  styles.sideMenuAction,
+                  compactLayout ? styles.sideMenuActionCompact : null,
+                  {
+                    borderColor: theme.cardBorder,
+                    backgroundColor: theme.pillBg,
+                  },
+                ]}
+                onPress={() => {
+                  setHeaderMenuOpen(false);
+                  void handleSwitchCashier();
+                }}
+              >
+                <Text
+                  style={[
+                    styles.sideMenuActionText,
+                    compactLayout ? styles.sideMenuActionTextCompact : null,
+                    { color: theme.pillText },
+                  ]}
+                  numberOfLines={1}
+                  adjustsFontSizeToFit
+                  minimumFontScale={0.9}
+                >
+                  Switch Cashier
+                </Text>
+              </Pressable>
+
+              <Pressable
+                style={[
+                  styles.sideMenuAction,
+                  compactLayout ? styles.sideMenuActionCompact : null,
+                  {
+                    borderColor: theme.cardBorder,
+                    backgroundColor: theme.pillBg,
+                  },
+                ]}
+                onPress={() => {
+                  setHeaderMenuOpen(false);
+                  void handleLogout();
+                }}
+              >
+                <Text
+                  style={[
+                    styles.sideMenuActionText,
+                    compactLayout ? styles.sideMenuActionTextCompact : null,
+                    { color: theme.pillText },
+                  ]}
+                  numberOfLines={1}
+                  adjustsFontSizeToFit
+                  minimumFontScale={0.9}
+                >
+                  {compactLayout ? "Log Out" : "Log Out (Lock)"}
+                </Text>
+              </Pressable>
+
+              <Pressable
+                style={[
+                  styles.sideMenuAction,
+                  compactLayout ? styles.sideMenuActionCompact : null,
+                  {
+                    borderColor: theme.cardBorder,
+                    backgroundColor: "#B91C1C",
+                  },
+                ]}
+                onPress={() => {
+                  setHeaderMenuOpen(false);
+                  void handleFullSignOut();
+                }}
+              >
+                <Text
+                  style={[
+                    styles.sideMenuActionText,
+                    compactLayout ? styles.sideMenuActionTextCompact : null,
+                  ]}
+                  numberOfLines={1}
+                  adjustsFontSizeToFit
+                  minimumFontScale={0.9}
+                >
+                  Full Sign Out
+                </Text>
+              </Pressable>
+            </ScrollView>
           </Animated.View>
         </Animated.View>
       ) : null}
@@ -4275,6 +4687,59 @@ function AppShell(): JSX.Element {
           setShowNoInternetPage(false);
         }}
       />
+      <Modal
+        visible={receiptNfcTapModal.visible}
+        transparent
+        animationType="fade"
+        onRequestClose={() => {
+          if (receiptNfcTapModal.allowCancel) {
+            cancelReceiptNfcTapFlow();
+          }
+        }}
+      >
+        <View style={styles.centerModalOverlay}>
+          <View
+            style={[
+              styles.centerModalCard,
+              { backgroundColor: theme.card, borderColor: theme.cardBorder },
+            ]}
+          >
+            <ActivityIndicator color={theme.primary} size="large" />
+            <Text style={[styles.centerModalTitle, { color: theme.heading }]}>
+              {receiptNfcTapModal.title}
+            </Text>
+            <Text style={[styles.centerModalMessage, { color: theme.subtext }]}>
+              {receiptNfcTapModal.message}
+            </Text>
+            {receiptNfcTapModal.detail ? (
+              <Text style={[styles.centerModalDetail, { color: theme.subtext }]}>
+                {receiptNfcTapModal.detail}
+              </Text>
+            ) : null}
+            {receiptNfcTapModal.allowCancel ? (
+              <Pressable
+                style={[
+                  styles.secondaryButton,
+                  {
+                    backgroundColor: theme.pillBg,
+                    marginTop: 6,
+                  },
+                ]}
+                onPress={cancelReceiptNfcTapFlow}
+              >
+                <Text
+                  style={[
+                    styles.secondaryButtonText,
+                    { color: theme.pillText },
+                  ]}
+                >
+                  Cancel
+                </Text>
+              </Pressable>
+            ) : null}
+          </View>
+        </View>
+      </Modal>
       <TutorialOverlayHost
         theme={theme}
         onCompleteScope={(scope) => {
@@ -4679,6 +5144,17 @@ const styles = StyleSheet.create({
     paddingBottom: 16,
     gap: 8,
   },
+  sideMenuScroll: {
+    flex: 1,
+  },
+  sideMenuScrollContent: {
+    gap: 8,
+    paddingBottom: 14,
+  },
+  sideMenuScrollContentCompact: {
+    gap: 6,
+    paddingBottom: 24,
+  },
   sideMenuTitle: {
     fontSize: 16,
     fontWeight: "800",
@@ -4693,6 +5169,10 @@ const styles = StyleSheet.create({
     paddingHorizontal: 10,
     paddingVertical: 9,
   },
+  sideMenuItemCompact: {
+    paddingHorizontal: 9,
+    paddingVertical: 8,
+  },
   sideMenuItemRow: {
     flexDirection: "row",
     alignItems: "center",
@@ -4704,6 +5184,11 @@ const styles = StyleSheet.create({
     borderRadius: 9,
     alignItems: "center",
     justifyContent: "center",
+  },
+  sideMenuIconBadgeCompact: {
+    width: 28,
+    height: 28,
+    borderRadius: 8,
   },
   sideMenuIconText: {
     fontSize: 16,
@@ -4724,10 +5209,17 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
   },
+  sideMenuActionCompact: {
+    minHeight: 34,
+    paddingHorizontal: 8,
+  },
   sideMenuActionText: {
     color: "#FFFFFF",
     fontSize: 12,
     fontWeight: "700",
+  },
+  sideMenuActionTextCompact: {
+    fontSize: 10.5,
   },
   tutorialTargetFocus: {
     borderWidth: 2,
@@ -4807,6 +5299,36 @@ const styles = StyleSheet.create({
   secondaryButtonText: {
     fontSize: 14,
     fontWeight: "700",
+  },
+  centerModalOverlay: {
+    flex: 1,
+    backgroundColor: "rgba(2, 8, 23, 0.58)",
+    alignItems: "center",
+    justifyContent: "center",
+    paddingHorizontal: 20,
+  },
+  centerModalCard: {
+    width: "100%",
+    maxWidth: 360,
+    borderWidth: 1,
+    borderRadius: 20,
+    paddingHorizontal: 18,
+    paddingVertical: 20,
+    alignItems: "center",
+    gap: 8,
+  },
+  centerModalTitle: {
+    fontSize: 18,
+    fontWeight: "800",
+    textAlign: "center",
+  },
+  centerModalMessage: {
+    fontSize: 14,
+    textAlign: "center",
+  },
+  centerModalDetail: {
+    fontSize: 12,
+    textAlign: "center",
   },
   buttonText: {
     color: "#FFFFFF",

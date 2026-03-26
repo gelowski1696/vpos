@@ -70,6 +70,26 @@ type PosRewardRedemptionRecord = {
   points_spent: number;
 };
 
+type LendingEligibleProductRecord = {
+  product_id: string;
+  sku: string;
+  name: string;
+  unit: string;
+  available_qty: number;
+  requires_deposit: boolean;
+  default_deposit_amount: number | null;
+  lending_unit_type: string | null;
+};
+
+type PostSaleLendingState = {
+  saleId: string;
+  customerId: string;
+  customerName: string | null;
+  branchName: string;
+  locationName: string;
+  products: LendingEligibleProductRecord[];
+};
+
 type LocalPriceRule = {
   productId: string;
   flowMode: 'ANY' | CylinderFlowSelection;
@@ -117,6 +137,7 @@ const POS_API_BASE_URL = normalizeApiBaseUrl(
 
 export type PosQueuedSaleReceiptPayload = {
   saleId: string;
+  customerId?: string | null;
   branchId: string;
   branchName: string;
   locationId: string;
@@ -136,6 +157,7 @@ export type PosQueuedSaleReceiptPayload = {
   notes?: string | null;
   paymentMode: 'FULL' | 'PARTIAL';
   paymentMethod: 'CASH' | 'CARD' | 'E_WALLET';
+  rewardRedemptionUsed?: boolean;
   createdAt: string;
 };
 
@@ -606,6 +628,11 @@ export function PosScreen({
   const [availableRewards, setAvailableRewards] = useState<PosRewardRecord[]>([]);
   const [rewardsLoading, setRewardsLoading] = useState(false);
   const [selectedRewardId, setSelectedRewardId] = useState('');
+  const [postSaleLending, setPostSaleLending] = useState<PostSaleLendingState | null>(null);
+  const [lendingQtyByProduct, setLendingQtyByProduct] = useState<Record<string, string>>({});
+  const [lendingDepositByProduct, setLendingDepositByProduct] = useState<Record<string, string>>({});
+  const [lendingRemarks, setLendingRemarks] = useState('');
+  const [lendingSaving, setLendingSaving] = useState(false);
   const [saving, setSaving] = useState(false);
   const [selectedCustomerOutstanding, setSelectedCustomerOutstanding] = useState(0);
   const prevSyncBusyRef = useRef(syncBusy);
@@ -941,6 +968,95 @@ export function PosScreen({
       toastInfo('Rewards unavailable', cause instanceof Error ? cause.message : 'Could not load rewards.');
     } finally {
       setRewardsLoading(false);
+    }
+  };
+
+  const openPostSaleLendingModal = (state: PostSaleLendingState): void => {
+    setPostSaleLending(state);
+    setLendingRemarks('');
+    setLendingQtyByProduct(
+      Object.fromEntries(state.products.map((product) => [product.product_id, '']))
+    );
+    setLendingDepositByProduct(
+      Object.fromEntries(
+        state.products.map((product) => [
+          product.product_id,
+          product.default_deposit_amount !== null ? product.default_deposit_amount.toFixed(2) : ''
+        ])
+      )
+    );
+  };
+
+  const closePostSaleLendingModal = (): void => {
+    if (lendingSaving) {
+      return;
+    }
+    setPostSaleLending(null);
+    setLendingRemarks('');
+    setLendingQtyByProduct({});
+    setLendingDepositByProduct({});
+  };
+
+  const savePostSaleLending = async (): Promise<void> => {
+    if (!postSaleLending || lendingSaving) {
+      return;
+    }
+    const lines = postSaleLending.products
+      .map((product) => {
+        const qty = Number(lendingQtyByProduct[product.product_id] || '0');
+        const depositRaw = lendingDepositByProduct[product.product_id];
+        const deposit = depositRaw?.trim().length ? Number(depositRaw) : null;
+        return {
+          product,
+          qty,
+          deposit
+        };
+      })
+      .filter((entry) => Number.isFinite(entry.qty) && entry.qty > 0);
+
+    if (lines.length === 0) {
+      toastInfo('Lending', 'Enter quantity for at least one lendable item.');
+      return;
+    }
+    for (const entry of lines) {
+      if (entry.qty > entry.product.available_qty) {
+        toastError(
+          'Lending',
+          `${entry.product.name} only has ${entry.product.available_qty.toFixed(4)} available.`
+        );
+        return;
+      }
+      if (entry.product.requires_deposit && (entry.deposit === null || !Number.isFinite(entry.deposit) || entry.deposit < 0)) {
+        toastError('Lending', `Deposit is required for ${entry.product.name}.`);
+        return;
+      }
+      if (entry.deposit !== null && (!Number.isFinite(entry.deposit) || entry.deposit < 0)) {
+        toastError('Lending', `Deposit must be 0 or higher for ${entry.product.name}.`);
+        return;
+      }
+    }
+
+    setLendingSaving(true);
+    try {
+      await vcardApiRequest('/lending', {
+        method: 'POST',
+        body: JSON.stringify({
+          sale_id: postSaleLending.saleId,
+          remarks: lendingRemarks.trim() || null,
+          lines: lines.map((entry) => ({
+            product_id: entry.product.product_id,
+            quantity: entry.qty,
+            deposit_amount: entry.deposit
+          }))
+        })
+      });
+      toastSuccess('Lending saved', `Linked to sale ${postSaleLending.saleId}.`);
+      closePostSaleLendingModal();
+      await onDataChanged?.();
+    } catch (cause) {
+      toastError('Lending failed', cause instanceof Error ? cause.message : 'Unable to save lending.');
+    } finally {
+      setLendingSaving(false);
     }
   };
 
@@ -1831,6 +1947,7 @@ export function PosScreen({
         try {
           const printResult = await onPrintQueuedSaleReceipt({
             saleId,
+            customerId: customerId.trim() || null,
             branchId: branchId.trim(),
             branchName: branch?.label ?? branchId.trim(),
             locationId: locationId.trim(),
@@ -1855,6 +1972,7 @@ export function PosScreen({
             notes: paymentNotes.trim() || null,
             paymentMode,
             paymentMethod,
+            rewardRedemptionUsed: Boolean(reservedReward),
             createdAt: new Date().toISOString()
           });
 
@@ -1871,6 +1989,29 @@ export function PosScreen({
           toastInfo('Receipt not printed', message);
         }
       }
+
+      let eligibleLendingProducts: LendingEligibleProductRecord[] = [];
+      if (customerId.trim()) {
+        try {
+          eligibleLendingProducts = await vcardApiRequest<LendingEligibleProductRecord[]>(
+            `/lending/eligible-products/by-sale/${encodeURIComponent(saleId)}`
+          );
+        } catch {
+          eligibleLendingProducts = [];
+        }
+      }
+
+      const postSaleLendingSeed =
+        customerId.trim() && eligibleLendingProducts.length > 0
+          ? {
+              saleId,
+              customerId: customerId.trim(),
+              customerName: selectedCustomer?.label ?? null,
+              branchName: branch?.label ?? branchId.trim(),
+              locationName: location?.label ?? locationId.trim(),
+              products: eligibleLendingProducts
+            }
+          : null;
 
       setCart([]);
       setDiscount('0');
@@ -1889,6 +2030,19 @@ export function PosScreen({
       setHelperSearch('');
       await refreshCatalog();
       await onDataChanged?.();
+      if (postSaleLendingSeed) {
+        Alert.alert(
+          'Create Lending',
+          'Sale is saved. Do you want to create a lending record for this customer now?',
+          [
+            { text: 'Later', style: 'cancel' },
+            {
+              text: 'Create Lending',
+              onPress: () => openPostSaleLendingModal(postSaleLendingSeed)
+            }
+          ]
+        );
+      }
     } catch (cause) {
       if (reservedReward?.id) {
         try {
@@ -2043,6 +2197,11 @@ export function PosScreen({
           <Text style={[styles.selectorValue, isCompactLayout ? { fontSize: 13 } : null, { color: theme.inputText }]} numberOfLines={1}>
             {selectedCustomer?.label ?? 'Select customer'}
           </Text>
+          {selectedCustomer ? (
+            <Text style={[styles.selectorMeta, { color: theme.subtext }]}>
+              Points: {currentPointsBalance} | Balance: PHP {selectedCustomerOutstanding.toFixed(2)}
+            </Text>
+          ) : null}
         </Pressable>
       </View>
 
@@ -2685,6 +2844,118 @@ export function PosScreen({
           </View>
         </View>
       </Modal>
+
+      <Modal
+        visible={Boolean(postSaleLending)}
+        transparent
+        animationType="slide"
+        onRequestClose={closePostSaleLendingModal}
+      >
+        <View style={styles.modalBackdrop}>
+          <Pressable style={StyleSheet.absoluteFillObject} onPress={closePostSaleLendingModal} />
+          <View
+            style={[
+              styles.modalCard,
+              styles.paymentModalCard,
+              isCompactLayout ? { height: '90%', maxHeight: '94%', paddingHorizontal: 10, paddingVertical: 10, gap: 8 } : null,
+              { backgroundColor: theme.card, borderColor: theme.cardBorder }
+            ]}
+          >
+            <Text style={[styles.modalTitle, { color: theme.heading }]}>Post-Sale Lending</Text>
+            <Text style={[styles.paymentHint, isCompactLayout ? { fontSize: 11 } : null, { color: theme.subtext }]}>
+              Select returnable items to lend out for this completed sale. Inventory will be deducted immediately.
+            </Text>
+
+            {postSaleLending ? (
+              <>
+                <View style={[styles.summary, { borderColor: theme.cardBorder }]}>
+                  <Text style={[styles.summaryText, { color: theme.subtext }]}>Sale: {postSaleLending.saleId}</Text>
+                  <Text style={[styles.summaryText, { color: theme.subtext }]}>Customer: {postSaleLending.customerName ?? postSaleLending.customerId}</Text>
+                  <Text style={[styles.summaryText, { color: theme.subtext }]}>Branch: {postSaleLending.branchName}</Text>
+                  <Text style={[styles.summaryText, { color: theme.subtext }]}>Location: {postSaleLending.locationName}</Text>
+                </View>
+
+                <ScrollView style={styles.paymentModalBody} contentContainerStyle={{ gap: 10 }} keyboardShouldPersistTaps="handled">
+                  {postSaleLending.products.map((product) => (
+                    <View
+                      key={product.product_id}
+                      style={[styles.lendingProductCard, { borderColor: theme.cardBorder, backgroundColor: theme.inputBg }]}
+                    >
+                      <Text style={[styles.cartName, { color: theme.heading }]}>{product.name}</Text>
+                      <Text style={[styles.summaryText, { color: theme.subtext }]}>
+                        {product.sku} | Available {product.available_qty.toFixed(4)} {product.lending_unit_type ?? product.unit}
+                      </Text>
+                      {product.requires_deposit || product.default_deposit_amount !== null ? (
+                        <Text style={[styles.summaryText, { color: theme.subtext }]}>
+                          Deposit {product.default_deposit_amount !== null ? `default PHP ${product.default_deposit_amount.toFixed(2)}` : 'required'}
+                        </Text>
+                      ) : null}
+
+                      <Text style={[styles.fieldLabel, { color: theme.subtext }]}>Quantity To Lend</Text>
+                      <TextInput
+                        value={lendingQtyByProduct[product.product_id] ?? ''}
+                        onChangeText={(value) =>
+                          setLendingQtyByProduct((prev) => ({ ...prev, [product.product_id]: value }))
+                        }
+                        keyboardType="numeric"
+                        placeholder="0"
+                        placeholderTextColor={theme.inputPlaceholder}
+                        style={[styles.input, { backgroundColor: theme.card, color: theme.inputText }]}
+                      />
+
+                      {product.requires_deposit || product.default_deposit_amount !== null ? (
+                        <>
+                          <Text style={[styles.fieldLabel, { color: theme.subtext }]}>Deposit Amount</Text>
+                          <TextInput
+                            value={lendingDepositByProduct[product.product_id] ?? ''}
+                            onChangeText={(value) =>
+                              setLendingDepositByProduct((prev) => ({ ...prev, [product.product_id]: value }))
+                            }
+                            keyboardType="numeric"
+                            placeholder="0.00"
+                            placeholderTextColor={theme.inputPlaceholder}
+                            style={[styles.input, { backgroundColor: theme.card, color: theme.inputText }]}
+                          />
+                        </>
+                      ) : null}
+                    </View>
+                  ))}
+
+                  <Text style={[styles.fieldLabel, { color: theme.subtext }]}>Remarks (Optional)</Text>
+                  <TextInput
+                    value={lendingRemarks}
+                    onChangeText={setLendingRemarks}
+                    placeholder="Reason or reminder for this lending"
+                    placeholderTextColor={theme.inputPlaceholder}
+                    style={[styles.input, { backgroundColor: theme.inputBg, color: theme.inputText }]}
+                  />
+                </ScrollView>
+
+                <View style={[styles.paymentModalActions, isCompactLayout ? { flexDirection: 'column', gap: 6 } : null]}>
+                  <Pressable
+                    onPress={closePostSaleLendingModal}
+                    disabled={lendingSaving}
+                    style={[styles.modalSecondaryBtn, { backgroundColor: lendingSaving ? theme.primaryMuted : theme.pillBg }]}
+                  >
+                    <Text style={[styles.modalSecondaryText, { color: lendingSaving ? '#FFFFFF' : theme.pillText }]}>Skip</Text>
+                  </Pressable>
+                  <Pressable
+                    style={[
+                      styles.modalPrimaryBtn,
+                      isCompactLayout ? { width: '100%' } : null,
+                      { backgroundColor: lendingSaving ? theme.primaryMuted : theme.primary }
+                    ]}
+                    onPress={() => void savePostSaleLending()}
+                    disabled={lendingSaving}
+                  >
+                    <Text style={styles.modalPrimaryText}>{lendingSaving ? 'Saving Lending...' : 'Save Lending'}</Text>
+                  </Pressable>
+                </View>
+              </>
+            ) : null}
+          </View>
+        </View>
+      </Modal>
     </View>
   );
 }
@@ -2774,6 +3045,10 @@ const styles = StyleSheet.create({
   selectorValue: {
     fontSize: 14,
     fontWeight: '700'
+  },
+  selectorMeta: {
+    fontSize: 11,
+    marginTop: 2
   },
   block: {
     borderWidth: 1,
@@ -3124,6 +3399,13 @@ const styles = StyleSheet.create({
   paymentModalActions: {
     flexDirection: 'row',
     gap: 8
+  },
+  lendingProductCard: {
+    borderWidth: 1,
+    borderRadius: 12,
+    paddingHorizontal: 10,
+    paddingVertical: 10,
+    gap: 6
   },
   modalSecondaryBtn: {
     minHeight: 42,

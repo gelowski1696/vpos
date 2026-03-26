@@ -289,6 +289,29 @@ const ROUTE_SPECIFIC_WALKTHROUGHS: Record<string, AdminTourStep[]> = {
   '/users': buildEntityRouteSteps('/users', 'users', 'Users'),
   '/customers': buildEntityRouteSteps('/customers', 'customers', 'Customers'),
   '/customer-cards': buildEntityRouteSteps('/customer-cards', 'customer-cards', 'Customer Cards'),
+  '/lending': [
+    {
+      id: 'lending-overview',
+      title: 'Lending tracker',
+      description: 'Use this page to review open lendings, inspect what is still with customers, and record returns.',
+      selectors: ['[data-tour="lending-root"]', '[data-tour="header-page-title"]'],
+      placement: 'bottom'
+    },
+    {
+      id: 'lending-filters',
+      title: 'Search by branch or status',
+      description: 'Filter the list first so operators can quickly focus on open, partial, or overdue lendings.',
+      selectors: ['[data-tour="lending-search"]', '[data-tour="lending-branch-filter"]', '[data-tour="lending-status-filter"]'],
+      placement: 'bottom'
+    },
+    {
+      id: 'lending-table',
+      title: 'Open the full detail view',
+      description: 'Select any lending record to review the line items, return history, and record new returns.',
+      selectors: ['[data-tour="lending-table"]'],
+      placement: 'top'
+    }
+  ],
   '/product-categories': buildEntityRouteSteps('/product-categories', 'product-categories', 'Product Categories'),
   '/product-brands': buildEntityRouteSteps('/product-brands', 'product-brands', 'Product Brands'),
   '/cylinder-types': buildEntityRouteSteps('/cylinder-types', 'cylinder-types', 'Cylinder Types'),
@@ -331,6 +354,7 @@ const NAV_SECTIONS: Array<{ title: string; items: NavItem[] }> = [
     title: 'Stock Movement',
     items: [
       { href: '/transfer-list' as Route, label: 'Transfer List', icon: 'transfer' },
+      { href: '/lending' as Route, label: 'Lending', icon: 'transfer' },
       { href: '/branches', label: 'Branches', icon: 'branch' },
       { href: '/locations', label: 'Locations', icon: 'location' },
       { href: '/users', label: 'Users', icon: 'users' },
