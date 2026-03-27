@@ -195,9 +195,16 @@ type DeliveryOrderRow = {
 type CylinderRow = {
   serial: string;
   typeCode: string;
-  status: 'FULL' | 'EMPTY' | 'DAMAGED' | 'LOST';
+  status: 'FULL' | 'EMPTY' | 'DAMAGED' | 'JUNKED' | 'DISPOSED' | 'LOST';
   locationId: string;
   updatedAt: string;
+};
+
+type CylinderServiceActionRow = {
+  id: string;
+  actionType: 'JUNK' | 'DISPOSE' | 'REPLACE';
+  createdAt: string;
+  branchId: string;
 };
 
 type SyncReviewRow = {
@@ -268,6 +275,7 @@ type ReportsState = {
   transfers: TransferRow[];
   deliveryOrders: DeliveryOrderRow[];
   cylinders: CylinderRow[];
+  cylinderServiceActions: CylinderServiceActionRow[];
   syncReviews: SyncReviewRow[];
   auditLogs: AuditRow[];
   products: ProductRow[];
@@ -291,6 +299,7 @@ const INITIAL_STATE: ReportsState = {
   transfers: [],
   deliveryOrders: [],
   cylinders: [],
+  cylinderServiceActions: [],
   syncReviews: [],
   auditLogs: [],
   products: [],
@@ -520,6 +529,9 @@ export default function ReportsPage(): JSX.Element {
         safeRequest<TransferRow[]>('/transfers'),
         safeRequest<DeliveryOrderRow[]>('/delivery/orders'),
         safeRequest<CylinderRow[]>('/cylinders'),
+        safeRequest<CylinderServiceActionRow[]>(
+          `/cylinders/service-actions?${baseParams.toString()}&limit=500`
+        ),
         safeRequest<{ rows: SyncReviewRow[] }>(`/reviews?${reviewParams.toString()}`),
         safeRequest<{ rows: AuditRow[] }>(`/reports/audit-logs?${baseParams.toString()}&limit=500`),
         safeRequest<ProductRow[]>('/master-data/products'),
@@ -544,6 +556,7 @@ export default function ReportsPage(): JSX.Element {
         transfersRes,
         deliveryOrdersRes,
         cylindersRes,
+        cylinderServiceActionsRes,
         syncReviewsRes,
         auditLogsRes,
         productsRes,
@@ -573,6 +586,7 @@ export default function ReportsPage(): JSX.Element {
         transfers: transfersRes.data ?? [],
         deliveryOrders: deliveryOrdersRes.data ?? [],
         cylinders: cylindersRes.data ?? [],
+        cylinderServiceActions: cylinderServiceActionsRes.data ?? [],
         syncReviews: syncReviewsRes.data?.rows ?? [],
         auditLogs: auditLogsRes.data?.rows ?? [],
         products: productsRes.data ?? [],
@@ -634,6 +648,14 @@ export default function ReportsPage(): JSX.Element {
     }
     return [...counts.entries()].map(([status, count]) => ({ status, count })).sort((a, b) => b.count - a.count);
   }, [data.cylinders]);
+
+  const cylinderServiceActionCounts = useMemo(() => {
+    const counts = new Map<string, number>();
+    for (const row of data.cylinderServiceActions) {
+      counts.set(row.actionType, (counts.get(row.actionType) ?? 0) + 1);
+    }
+    return counts;
+  }, [data.cylinderServiceActions]);
 
   const cylinderAuditRows = useMemo(
     () => data.auditLogs.filter((row) => row.action.toUpperCase().startsWith('CYLINDER_')).slice(0, 40),
@@ -1216,9 +1238,12 @@ export default function ReportsPage(): JSX.Element {
               <div className="space-y-1 text-xs">{cylinderAuditRows.slice(0, 40).map((row) => <p key={row.id}>{dt(row.created_at)} | {row.action} | {row.entity} | {row.user_name ?? '-'}</p>)}</div>
             </ReportCard>
 
-            <ReportCard title="16. Cylinder Loss/Damage and Adjustments" subtitle="Damaged/lost counts and related records" status="DERIVED">
+            <ReportCard title="16. Cylinder Service Status Snapshot" subtitle="Current damage/service counts and replacement activity" status="DERIVED">
               <div className="space-y-2 text-xs">
                 <p>Damaged: <span className="font-semibold">{cylinderStatusCounts.find((row) => row.status === 'DAMAGED')?.count ?? 0}</span></p>
+                <p>Junked: <span className="font-semibold">{cylinderStatusCounts.find((row) => row.status === 'JUNKED')?.count ?? 0}</span></p>
+                <p>Disposed: <span className="font-semibold">{cylinderStatusCounts.find((row) => row.status === 'DISPOSED')?.count ?? 0}</span></p>
+                <p>Replaced actions: <span className="font-semibold">{cylinderServiceActionCounts.get('REPLACE') ?? 0}</span></p>
                 <p>Lost: <span className="font-semibold">{cylinderStatusCounts.find((row) => row.status === 'LOST')?.count ?? 0}</span></p>
                 <p>Adjustment movements: <span className="font-semibold">{data.inventoryMovements.filter((row) => row.movement_type.toUpperCase().includes('ADJUST')).length}</span></p>
               </div>

@@ -1,7 +1,7 @@
 import type { SQLiteDatabase } from 'expo-sqlite';
 import { SQLiteOutboxRepository } from '../../outbox/sqlite-outbox.repository';
 
-type CylinderStatus = 'FULL' | 'EMPTY' | 'DAMAGED' | 'LOST';
+type CylinderStatus = 'FULL' | 'EMPTY' | 'DAMAGED' | 'JUNKED' | 'DISPOSED' | 'LOST';
 
 type CylinderRow = {
   serial: string;
@@ -31,6 +31,24 @@ type SeedCylinder = {
   status: CylinderStatus;
   locationId: string;
   ownership?: 'COMPANY' | 'CUSTOMER';
+};
+
+type ServiceActionType = 'JUNK' | 'DISPOSE' | 'REPLACE';
+
+type ServiceActionRow = {
+  id: string;
+  action_type: ServiceActionType;
+  source_serial: string | null;
+  replacement_serial: string | null;
+  branch_id: string | null;
+  location_id: string;
+  customer_id: string | null;
+  sale_id: string | null;
+  reason: string;
+  notes: string | null;
+  sync_status: string;
+  created_at: string;
+  updated_at: string;
 };
 
 export class OfflineCylinderWorkflowService {
@@ -134,6 +152,155 @@ export class OfflineCylinderWorkflowService {
     return { fullOut, emptyIn };
   }
 
+  async junk(input: {
+    serial: string;
+    branchId?: string | null;
+    reason: string;
+    notes?: string | null;
+  }): Promise<{ cylinder: CylinderRow; actionId: string }> {
+    const cylinder = await this.requireCylinder(input.serial);
+    if (cylinder.status === 'JUNKED') {
+      throw new Error('Cylinder is already junked');
+    }
+    if (cylinder.status === 'DISPOSED') {
+      throw new Error('Disposed cylinders cannot be junked');
+    }
+    if (cylinder.status === 'LOST') {
+      throw new Error('Lost cylinders cannot be junked');
+    }
+    const reason = input.reason.trim();
+    if (!reason) {
+      throw new Error('Reason is required');
+    }
+
+    const updated = await this.updateCylinder(cylinder, { status: 'JUNKED' });
+    const id = await this.recordServiceAction('JUNK', {
+      source_serial: updated.serial,
+      branch_id: input.branchId ?? null,
+      location_id: updated.location_id,
+      reason,
+      notes: input.notes ?? null
+    });
+    return { cylinder: updated, actionId: id };
+  }
+
+  async dispose(input: {
+    serial: string;
+    branchId?: string | null;
+    reason: string;
+    notes?: string | null;
+  }): Promise<{ cylinder: CylinderRow; actionId: string }> {
+    const cylinder = await this.requireCylinder(input.serial);
+    if (cylinder.status === 'DISPOSED') {
+      throw new Error('Cylinder is already disposed');
+    }
+    if (cylinder.status === 'LOST') {
+      throw new Error('Lost cylinders cannot be disposed');
+    }
+    if (cylinder.status !== 'DAMAGED' && cylinder.status !== 'JUNKED') {
+      throw new Error('Only damaged or junked cylinders can be disposed');
+    }
+    const reason = input.reason.trim();
+    if (!reason) {
+      throw new Error('Reason is required');
+    }
+
+    const updated = await this.updateCylinder(cylinder, { status: 'DISPOSED' });
+    const id = await this.recordServiceAction('DISPOSE', {
+      source_serial: updated.serial,
+      branch_id: input.branchId ?? null,
+      location_id: updated.location_id,
+      reason,
+      notes: input.notes ?? null
+    });
+    return { cylinder: updated, actionId: id };
+  }
+
+  async replace(input: {
+    sourceSerial: string;
+    replacementSerial: string;
+    fromLocationId: string;
+    toLocationId: string;
+    branchId?: string | null;
+    customerId?: string | null;
+    saleId?: string | null;
+    reason: string;
+    notes?: string | null;
+  }): Promise<{ sourceCylinder: CylinderRow; replacementCylinder: CylinderRow; actionId: string }> {
+    const source = await this.requireCylinder(input.sourceSerial);
+    const replacement = await this.requireCylinder(input.replacementSerial);
+    if (source.serial === replacement.serial) {
+      throw new Error('Source and replacement cylinder must be different');
+    }
+    if (source.location_id !== input.toLocationId) {
+      throw new Error(`Replace location mismatch for source serial ${source.serial}`);
+    }
+    if (replacement.location_id !== input.fromLocationId) {
+      throw new Error(`Replace location mismatch for replacement serial ${replacement.serial}`);
+    }
+    if (replacement.status !== 'FULL') {
+      throw new Error('Replacement cylinder must be FULL at the source location');
+    }
+    if (source.status === 'DISPOSED' || source.status === 'LOST' || source.status === 'JUNKED') {
+      throw new Error('Source cylinder is not eligible for replacement');
+    }
+    const reason = input.reason.trim();
+    if (!reason) {
+      throw new Error('Reason is required');
+    }
+
+    const updatedSource = await this.updateCylinder(source, {
+      status: 'DAMAGED',
+      locationId: input.fromLocationId
+    });
+    const updatedReplacement = await this.updateCylinder(replacement, {
+      status: 'FULL',
+      locationId: input.toLocationId
+    });
+    const id = await this.recordServiceAction('REPLACE', {
+      source_serial: updatedSource.serial,
+      replacement_serial: updatedReplacement.serial,
+      branch_id: input.branchId ?? null,
+      location_id: input.fromLocationId,
+      customer_id: input.customerId ?? null,
+      sale_id: input.saleId ?? null,
+      from_location_id: input.fromLocationId,
+      to_location_id: input.toLocationId,
+      reason,
+      notes: input.notes ?? null
+    });
+    return {
+      sourceCylinder: updatedSource,
+      replacementCylinder: updatedReplacement,
+      actionId: id
+    };
+  }
+
+  async listLocalServiceActions(limit = 100): Promise<ServiceActionRow[]> {
+    return this.db.getAllAsync<ServiceActionRow>(
+      `
+      SELECT
+        id,
+        json_extract(payload, '$.action_type') AS action_type,
+        json_extract(payload, '$.source_serial') AS source_serial,
+        json_extract(payload, '$.replacement_serial') AS replacement_serial,
+        json_extract(payload, '$.branch_id') AS branch_id,
+        json_extract(payload, '$.location_id') AS location_id,
+        json_extract(payload, '$.customer_id') AS customer_id,
+        json_extract(payload, '$.sale_id') AS sale_id,
+        json_extract(payload, '$.reason') AS reason,
+        json_extract(payload, '$.notes') AS notes,
+        sync_status,
+        created_at,
+        updated_at
+      FROM cylinder_service_actions_local
+      ORDER BY created_at DESC
+      LIMIT ?
+      `,
+      limit
+    );
+  }
+
   async getLocationCounts(locationId: string): Promise<{ locationId: string; qtyFull: number; qtyEmpty: number }> {
     const rows = await this.db.getAllAsync<{ status: CylinderStatus }>(
       'SELECT status FROM cylinders_local WHERE location_id = ?',
@@ -217,5 +384,40 @@ export class OfflineCylinderWorkflowService {
       payload: { event_type: eventType, ...payload },
       idempotencyKey: `idem-${id}`
     });
+  }
+
+  private async recordServiceAction(
+    actionType: ServiceActionType,
+    payload: Record<string, unknown>
+  ): Promise<string> {
+    const id = `cyl-service-${Date.now()}-${Math.floor(Math.random() * 1_000_000)}`;
+    const now = new Date().toISOString();
+    const record = {
+      id,
+      action_type: actionType,
+      ...payload,
+      created_at: now
+    };
+    await this.db.runAsync(
+      `
+      INSERT INTO cylinder_service_actions_local(id, payload, sync_status, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?)
+      `,
+      id,
+      JSON.stringify(record),
+      'pending',
+      now,
+      now
+    );
+
+    const outbox = new SQLiteOutboxRepository(this.db);
+    await outbox.enqueue({
+      id,
+      entity: 'cylinder_service_action',
+      action: actionType.toLowerCase(),
+      payload: record,
+      idempotencyKey: `idem-${id}`
+    });
+    return id;
   }
 }

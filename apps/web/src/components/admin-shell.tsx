@@ -314,6 +314,29 @@ const ROUTE_SPECIFIC_WALKTHROUGHS: Record<string, AdminTourStep[]> = {
   ],
   '/product-categories': buildEntityRouteSteps('/product-categories', 'product-categories', 'Product Categories'),
   '/product-brands': buildEntityRouteSteps('/product-brands', 'product-brands', 'Product Brands'),
+  '/cylinders': [
+    {
+      id: 'cylinders-overview',
+      title: 'Cylinder service workspace',
+      description: 'Review serial cylinders here, then open the detail panel to junk, dispose, or replace assets safely.',
+      selectors: ['[data-tour="cylinders-root"]', '[data-tour="header-page-title"]'],
+      placement: 'bottom'
+    },
+    {
+      id: 'cylinders-search',
+      title: 'Search and filter serial assets',
+      description: 'Use branch, status, and search together so the team only sees the cylinders they need to act on.',
+      selectors: ['[data-tour="cylinders-search"]', '[data-tour="cylinders-branch-filter"]'],
+      placement: 'bottom'
+    },
+    {
+      id: 'cylinders-list',
+      title: 'Open cylinder details',
+      description: 'Select a cylinder card to review recent service actions and perform junk, dispose, or replace flows.',
+      selectors: ['[data-tour="cylinders-list"]'],
+      placement: 'top'
+    }
+  ],
   '/cylinder-types': buildEntityRouteSteps('/cylinder-types', 'cylinder-types', 'Cylinder Types'),
   '/expenses': buildEntityRouteSteps('/expenses', 'expense-categories', 'Expense Categories'),
   '/suppliers': buildEntityRouteSteps('/suppliers', 'suppliers', 'Suppliers'),
@@ -344,6 +367,7 @@ const NAV_SECTIONS: Array<{ title: string; items: NavItem[] }> = [
       { href: '/products', label: 'Products', icon: 'product' },
       { href: '/product-categories' as Route, label: 'Product Categories', icon: 'product' },
       { href: '/product-brands' as Route, label: 'Product Brands', icon: 'product' },
+      { href: '/cylinders' as Route, label: 'Cylinders', icon: 'cylinder' },
       { href: '/cylinder-types', label: 'Cylinder Types', icon: 'cylinder' },
       { href: '/inventory-opening' as Route, label: 'Opening Stock', icon: 'product' },
       { href: '/price-lists', label: 'Price Lists', icon: 'pricing' },

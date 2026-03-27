@@ -9,6 +9,7 @@ import {
 } from '../customer-payments/customer-payments.service';
 import { LendingService, type LendingDetailRecord } from '../lending/lending.service';
 import { TransfersService, type TransferRecord } from '../transfers/transfers.service';
+import { CylindersService } from '../cylinders/cylinders.service';
 import { TenantDatasourceRouterService } from '../../common/tenant-datasource-router.service';
 
 export interface SyncReviewRecord {
@@ -42,7 +43,7 @@ export class SyncService {
   private readonly pettyCashByCompany = new Map<string, PettyCashEntryRecord[]>();
   private readonly cylindersByCompany = new Map<
     string,
-    Map<string, { status: 'FULL' | 'EMPTY' | 'DAMAGED' | 'LOST'; locationId: string }>
+    Map<string, { status: 'FULL' | 'EMPTY' | 'DAMAGED' | 'JUNKED' | 'DISPOSED' | 'LOST'; locationId: string }>
   >();
 
   constructor(
@@ -50,6 +51,7 @@ export class SyncService {
     @Optional() private readonly customerPaymentsService?: CustomerPaymentsService,
     @Optional() private readonly lendingService?: LendingService,
     @Optional() private readonly transfersService?: TransfersService,
+    @Optional() private readonly cylindersService?: CylindersService,
     @Optional() private readonly tenantRouter?: TenantDatasourceRouterService
   ) {}
 
@@ -233,12 +235,41 @@ export class SyncService {
         });
         continue;
       }
+      const cylinderServicePosting = await this.tryPostCylinderServiceActionOutbox(
+        companyId,
+        item,
+        actorUserId
+      );
+      if (!cylinderServicePosting.ok) {
+        const reviewId = this.createReview(
+          companyId,
+          item.id,
+          item.entity,
+          cylinderServicePosting.reason,
+          item.payload
+        );
+        rejected.push({
+          id: item.id,
+          reason: cylinderServicePosting.reason,
+          review_id: reviewId
+        });
+        await this.persistIdempotencyDecision(companyId, item.idempotency_key, requestHash, {
+          status: 'rejected',
+          reason: cylinderServicePosting.reason,
+          review_id: reviewId
+        });
+        continue;
+      }
 
       const transferPostedServerSide =
         item.entity === 'transfer' &&
         item.action === 'create' &&
         Boolean(transferPosting.transfer);
-      if (!transferPostedServerSide) {
+      const cylinderServicePostedServerSide =
+        item.entity === 'cylinder_service_action' &&
+        (item.action === 'junk' || item.action === 'dispose' || item.action === 'replace') &&
+        Boolean(cylinderServicePosting.action);
+      if (!transferPostedServerSide && !cylinderServicePostedServerSide) {
         const validation = await this.validateAndApply(
           companyId,
           item.entity,
@@ -339,6 +370,12 @@ export class SyncService {
                     status: lendingReturnPosting.lending.status,
                     total_quantity_returned: lendingReturnPosting.lending.total_quantity_returned
                   }
+                }
+              : {}),
+            ...(cylinderServicePosting.action
+              ? {
+                  server_cylinder_service_action_posted: true,
+                  server_cylinder_service_action_result: cylinderServicePosting.action
                 }
               : {})
           },
@@ -1042,6 +1079,106 @@ export class SyncService {
     } catch (cause) {
       const message =
         cause instanceof Error ? cause.message : 'Lending return posting failed during sync';
+      return { ok: false, reason: message };
+    }
+  }
+
+  private async tryPostCylinderServiceActionOutbox(
+    companyId: string,
+    item: SyncPushRequest['outbox_items'][number],
+    actorUserId?: string
+  ): Promise<{ ok: true; action?: Record<string, unknown> } | { ok: false; reason: string }> {
+    if (item.entity !== 'cylinder_service_action') {
+      return { ok: true };
+    }
+    if (!this.cylindersService) {
+      return { ok: true };
+    }
+
+    const payload = item.payload ?? {};
+    const action = (typeof item.action === 'string' ? item.action : '').toLowerCase();
+
+    try {
+      if (action === 'junk') {
+        const result = await this.cylindersService.junk(companyId, {
+          serial: this.asString(payload.source_serial ?? payload.serial) ?? '',
+          branch_id: this.asString(payload.branch_id ?? payload.branchId) ?? undefined,
+          reason: this.asString(payload.reason) ?? '',
+          notes: this.asString(payload.notes) ?? undefined,
+          actor_user_id: this.asString(payload.user_id ?? payload.userId) ?? actorUserId ?? null
+        });
+        return {
+          ok: true,
+          action: {
+            id: result.action.id,
+            action_type: result.action.actionType,
+            source_serial: result.action.sourceSerial,
+            replacement_serial: result.action.replacementSerial,
+            location_id: result.action.locationId,
+            branch_id: result.action.branchId
+          }
+        };
+      }
+      if (action === 'dispose') {
+        const result = await this.cylindersService.dispose(companyId, {
+          serial: this.asString(payload.source_serial ?? payload.serial) ?? '',
+          branch_id: this.asString(payload.branch_id ?? payload.branchId) ?? undefined,
+          reason: this.asString(payload.reason) ?? '',
+          notes: this.asString(payload.notes) ?? undefined,
+          actor_user_id: this.asString(payload.user_id ?? payload.userId) ?? actorUserId ?? null
+        });
+        return {
+          ok: true,
+          action: {
+            id: result.action.id,
+            action_type: result.action.actionType,
+            source_serial: result.action.sourceSerial,
+            replacement_serial: result.action.replacementSerial,
+            location_id: result.action.locationId,
+            branch_id: result.action.branchId
+          }
+        };
+      }
+      if (action === 'replace') {
+        const result = await this.cylindersService.replace(companyId, {
+          source_serial: this.asString(payload.source_serial ?? payload.sourceSerial) ?? '',
+          replacement_serial:
+            this.asString(payload.replacement_serial ?? payload.replacementSerial) ?? '',
+          from_location_id:
+            this.asString(payload.from_location_id ?? payload.fromLocationId) ?? '',
+          to_location_id: this.asString(payload.to_location_id ?? payload.toLocationId) ?? '',
+          branch_id: this.asString(payload.branch_id ?? payload.branchId) ?? undefined,
+          customer_id:
+            payload.customer_id === null || payload.customerId === null
+              ? null
+              : this.asString(payload.customer_id ?? payload.customerId),
+          sale_id:
+            payload.sale_id === null || payload.saleId === null
+              ? null
+              : this.asString(payload.sale_id ?? payload.saleId),
+          reason: this.asString(payload.reason) ?? '',
+          notes: this.asString(payload.notes) ?? undefined,
+          actor_user_id: this.asString(payload.user_id ?? payload.userId) ?? actorUserId ?? null
+        });
+        return {
+          ok: true,
+          action: {
+            id: result.action.id,
+            action_type: result.action.actionType,
+            source_serial: result.action.sourceSerial,
+            replacement_serial: result.action.replacementSerial,
+            location_id: result.action.locationId,
+            branch_id: result.action.branchId
+          }
+        };
+      }
+
+      return { ok: false, reason: `Unsupported cylinder service action: ${item.action}` };
+    } catch (cause) {
+      const message =
+        cause instanceof Error
+          ? cause.message
+          : 'Cylinder service action posting failed during sync';
       return { ok: false, reason: message };
     }
   }
@@ -2216,12 +2353,12 @@ export class SyncService {
 
   private getCompanyCylinders(
     companyId: string
-  ): Map<string, { status: 'FULL' | 'EMPTY' | 'DAMAGED' | 'LOST'; locationId: string }> {
+  ): Map<string, { status: 'FULL' | 'EMPTY' | 'DAMAGED' | 'JUNKED' | 'DISPOSED' | 'LOST'; locationId: string }> {
     const existing = this.cylindersByCompany.get(companyId);
     if (existing) {
       return existing;
     }
-    const seeded = new Map<string, { status: 'FULL' | 'EMPTY' | 'DAMAGED' | 'LOST'; locationId: string }>();
+    const seeded = new Map<string, { status: 'FULL' | 'EMPTY' | 'DAMAGED' | 'JUNKED' | 'DISPOSED' | 'LOST'; locationId: string }>();
     seeded.set('CYL11-0001', { status: 'FULL', locationId: 'loc-wh1' });
     seeded.set('CYL11-0002', { status: 'EMPTY', locationId: 'loc-wh1' });
     seeded.set('CYL11-0003', { status: 'FULL', locationId: 'loc-main' });

@@ -414,7 +414,12 @@ export class MasterDataBootstrapService {
         continue;
       }
       const status =
-        statusRaw === 'FULL' || statusRaw === 'EMPTY' || statusRaw === 'DAMAGED' || statusRaw === 'LOST'
+        statusRaw === 'FULL' ||
+        statusRaw === 'EMPTY' ||
+        statusRaw === 'DAMAGED' ||
+        statusRaw === 'JUNKED' ||
+        statusRaw === 'DISPOSED' ||
+        statusRaw === 'LOST'
           ? statusRaw
           : 'EMPTY';
       await this.db.runAsync(
