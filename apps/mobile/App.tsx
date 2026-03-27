@@ -52,6 +52,7 @@ import { type AppTheme, darkTheme, lightTheme } from "./src/app/theme";
 import { HomeScreen } from "./src/app/screens/HomeScreen";
 import {
   PosScreen,
+  type PosRecreateDraft,
   type PosQueuedSaleReceiptPayload,
 } from "./src/app/screens/PosScreen";
 import { SalesScreen } from "./src/app/screens/SalesScreen";
@@ -718,6 +719,8 @@ function AppShell(): JSX.Element {
   const [activeSideModule, setActiveSideModule] = useState<SideModule | null>(
     null,
   );
+  const [pendingRecreateDraft, setPendingRecreateDraft] =
+    useState<PosRecreateDraft | null>(null);
   const [selectedBranchId, setSelectedBranchId] = useState("");
   const [selectedBranchName, setSelectedBranchName] = useState<string | null>(
     null,
@@ -3411,6 +3414,8 @@ function AppShell(): JSX.Element {
             setActivePrimaryTab("HOME");
             setActiveSideModule("SHIFT");
           }}
+          recreateDraft={pendingRecreateDraft}
+          onConsumeRecreateDraft={() => setPendingRecreateDraft(null)}
           syncBusy={syncBusy}
         />
       );
@@ -3446,6 +3451,11 @@ function AppShell(): JSX.Element {
           preferredBranchId={selectedBranchId}
           onDataChanged={handleLocalDataChanged}
           onPrintSaleReceipt={handlePrintSaleReceipt}
+          onCancelAndRecreateSale={(draft) => {
+            setPendingRecreateDraft(draft);
+            setActivePrimaryTab("POS");
+            setActiveSideModule(null);
+          }}
           syncBusy={syncBusy}
         />
       );

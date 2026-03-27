@@ -4,6 +4,7 @@ import { MobileSubscriptionPolicyService } from '../features/sync/mobile-subscri
 
 type SaleInput = {
   saleId?: string;
+  recreatedFromSaleId?: string | null;
   branchId: string;
   locationId: string;
   shiftId?: string | null;
@@ -152,6 +153,23 @@ type ShiftCashEntryInput = {
   notes?: string;
 };
 
+type SaleCancelInput = {
+  outboxId?: string;
+  saleId: string;
+  reason: string;
+};
+
+type SaleReturnInput = {
+  outboxId?: string;
+  saleId: string;
+  reason: string;
+  lines: Array<{
+    productId: string;
+    quantity: number;
+    saleLineId?: string | null;
+  }>;
+};
+
 export class OfflineTransactionService {
   constructor(
     private readonly db: SQLiteDatabase,
@@ -164,6 +182,7 @@ export class OfflineTransactionService {
     const now = new Date().toISOString();
     const payload = {
       id,
+      recreated_from_sale_id: input.recreatedFromSaleId ?? null,
       branch_id: input.branchId,
       location_id: input.locationId,
       shift_id: input.shiftId ?? null,
@@ -586,6 +605,63 @@ export class OfflineTransactionService {
       idempotencyKey: `idem-shift-cash-${id}`
     });
 
+    return id;
+  }
+
+  async createOfflineSaleCancel(input: SaleCancelInput): Promise<string> {
+    await this.assertCanCreate('sale_cancel');
+    const id = input.outboxId ?? this.id('sale-cancel');
+    const now = new Date().toISOString();
+    const payload = {
+      id: input.saleId,
+      sale_id: input.saleId,
+      reason: input.reason.trim(),
+      created_at: now
+    };
+    await new SQLiteOutboxRepository(this.db).enqueue({
+      id,
+      entity: 'sale_cancel',
+      action: 'create',
+      payload,
+      idempotencyKey: `idem-sale-cancel-${id}`
+    });
+    return id;
+  }
+
+  async createOfflineSaleReturn(input: SaleReturnInput): Promise<string> {
+    await this.assertCanCreate('sale_return');
+    const id = input.outboxId ?? this.id('sale-return');
+    const now = new Date().toISOString();
+    const lines = input.lines
+      .map((line) => ({
+        sale_line_id: line.saleLineId ?? null,
+        product_id: line.productId,
+        quantity: line.quantity
+      }))
+      .filter(
+        (line) =>
+          typeof line.product_id === 'string' &&
+          line.product_id.trim().length > 0 &&
+          Number.isFinite(Number(line.quantity)) &&
+          Number(line.quantity) > 0
+      );
+    if (!lines.length) {
+      throw new Error('At least one sale return line is required.');
+    }
+    const payload = {
+      id: input.saleId,
+      sale_id: input.saleId,
+      reason: input.reason.trim(),
+      lines,
+      created_at: now
+    };
+    await new SQLiteOutboxRepository(this.db).enqueue({
+      id,
+      entity: 'sale_return',
+      action: 'create',
+      payload,
+      idempotencyKey: `idem-sale-return-${id}`
+    });
     return id;
   }
 

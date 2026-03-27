@@ -17,6 +17,7 @@ import type { AppTheme } from '../theme';
 import { SyncStatusBadge } from '../components/SyncStatusBadge';
 import { toastError, toastInfo, toastSuccess } from '../goey-toast';
 import { OfflineTransactionService } from '../../services/offline-transaction.service';
+import type { PosRecreateDraft } from './PosScreen';
 import { LocalSessionService } from '../../features/auth/local-session.service';
 import { HttpAuthTransport } from '../../features/auth/http-auth.transport';
 import {
@@ -47,6 +48,8 @@ type SalePayload = {
   status?: 'ACTIVE' | 'CANCELLED' | 'VOIDED';
   cancelled_at?: string | null;
   cancel_reason?: string | null;
+  recreated_from_sale_id?: string | null;
+  recreated_by_sale_id?: string | null;
   sale_returns?: Array<{
     sale_return_id?: string;
     returned_at?: string;
@@ -258,6 +261,7 @@ type Props = {
   onPrintSaleReceipt?: (
     saleId: string
   ) => Promise<{ printed: boolean; receiptNumber?: string; message?: string }>;
+  onCancelAndRecreateSale?: (draft: PosRecreateDraft) => void;
   syncBusy?: boolean;
 };
 
@@ -433,6 +437,7 @@ export function SalesScreen({
   preferredBranchId,
   onDataChanged,
   onPrintSaleReceipt,
+  onCancelAndRecreateSale,
   syncBusy = false
 }: Props): JSX.Element {
   const tutorialSearch = useTutorialTarget('sales-search');
@@ -477,6 +482,7 @@ export function SalesScreen({
   const [lendingRemarks, setLendingRemarks] = useState('');
   const [lendingFocusedSaleLineId, setLendingFocusedSaleLineId] = useState<string | null>(null);
   const [cancelModalOpen, setCancelModalOpen] = useState(false);
+  const [recreateModalOpen, setRecreateModalOpen] = useState(false);
   const [cancelSaving, setCancelSaving] = useState(false);
   const [cancelReason, setCancelReason] = useState('');
   const [returnModalOpen, setReturnModalOpen] = useState(false);
@@ -542,7 +548,8 @@ export function SalesScreen({
 
   const updateLocalSalePayload = async (
     saleId: string,
-    updater: (current: SalePayload) => SalePayload
+    updater: (current: SalePayload) => SalePayload,
+    nextSyncStatus?: string
   ): Promise<void> => {
     const row = await db.getFirstAsync<{ payload: string | null }>(
       'SELECT payload FROM sales_local WHERE id = ?',
@@ -552,10 +559,11 @@ export function SalesScreen({
     const nextPayload = updater(current);
     const now = new Date().toISOString();
     await db.runAsync(
-      'UPDATE sales_local SET payload = ?, updated_at = ? WHERE id = ?',
+      nextSyncStatus
+        ? 'UPDATE sales_local SET payload = ?, sync_status = ?, updated_at = ? WHERE id = ?'
+        : 'UPDATE sales_local SET payload = ?, updated_at = ? WHERE id = ?',
       JSON.stringify(nextPayload),
-      now,
-      saleId
+      ...(nextSyncStatus ? [nextSyncStatus, now, saleId] : [now, saleId])
     );
   };
 
@@ -1021,6 +1029,7 @@ export function SalesScreen({
     setLendingRemarks('');
     setLendingFocusedSaleLineId(null);
     setCancelModalOpen(false);
+    setRecreateModalOpen(false);
     setCancelReason('');
     setReturnModalOpen(false);
     setReturnReason('');
@@ -1036,6 +1045,14 @@ export function SalesScreen({
     setCancelReason('');
   };
 
+  const closeRecreateModal = (): void => {
+    if (cancelSaving) {
+      return;
+    }
+    setRecreateModalOpen(false);
+    setCancelReason('');
+  };
+
   const closeLendingModal = (): void => {
     if (lendingSaving) {
       return;
@@ -1048,7 +1065,10 @@ export function SalesScreen({
     setLendingFocusedSaleLineId(null);
   };
 
-  const openReturnModal = (productId: string): void => {
+  const openReturnModal = (
+    productId: string,
+    cylinderFlow?: 'REFILL_EXCHANGE' | 'NON_REFILL' | null
+  ): void => {
     if (!selectedSale) {
       return;
     }
@@ -1056,8 +1076,11 @@ export function SalesScreen({
       toastInfo('Return', 'Cancelled sales can no longer accept item returns.');
       return;
     }
-    if (selectedSale.row.sync_status !== 'synced') {
-      toastInfo('Return', 'Only synced sales can post item returns right now.');
+    if (cylinderFlow === 'REFILL_EXCHANGE' || cylinderFlow === 'NON_REFILL') {
+      toastInfo(
+        'Return',
+        'Item return for LPG lines is not supported yet. Use whole-sale cancel for LPG reversals.'
+      );
       return;
     }
     const matchingLine = (selectedSale.payload.lines ?? []).find(
@@ -1286,10 +1309,6 @@ export function SalesScreen({
       toastInfo('Sale Cancel', 'This sale is already cancelled.');
       return;
     }
-    if (selectedSale.row.sync_status !== 'synced') {
-      toastInfo('Sale Cancel', 'Only synced sales can be cancelled right now.');
-      return;
-    }
     const reason = cancelReason.trim();
     if (reason.length < 3) {
       toastInfo('Sale Cancel', 'Enter a short reason before cancelling this sale.');
@@ -1298,25 +1317,180 @@ export function SalesScreen({
 
     setCancelSaving(true);
     try {
-      const result = await apiRequest<SaleCancelApiResponse>(
-        `/sales/${encodeURIComponent(selectedSale.row.id)}/cancel`,
-        {
-          method: 'POST',
-          body: JSON.stringify({ reason })
+      let queuedOffline = selectedSale.row.sync_status !== 'synced';
+      let result: SaleCancelApiResponse | null = null;
+      if (!queuedOffline) {
+        try {
+          result = await apiRequest<SaleCancelApiResponse>(
+            `/sales/${encodeURIComponent(selectedSale.row.id)}/cancel`,
+            {
+              method: 'POST',
+              body: JSON.stringify({ reason })
+            }
+          );
+        } catch (cause) {
+          const message = cause instanceof Error ? cause.message : 'Unable to cancel sale.';
+          if (!shouldQueueOffline(message)) {
+            throw cause;
+          }
+          queuedOffline = true;
         }
+      }
+      if (queuedOffline) {
+        const service = new OfflineTransactionService(db);
+        await service.createOfflineSaleCancel({
+          saleId: selectedSale.row.id,
+          reason
+        });
+      }
+      await updateLocalSalePayload(
+        selectedSale.row.id,
+        (current) => ({
+          ...current,
+          status: 'CANCELLED',
+          cancelled_at: result?.cancelled_at ?? new Date().toISOString(),
+          cancel_reason: result?.cancel_reason ?? reason
+        }),
+        queuedOffline ? 'pending' : undefined
       );
-      await updateLocalSalePayload(selectedSale.row.id, (current) => ({
-        ...current,
-        status: result.status,
-        cancelled_at: result.cancelled_at,
-        cancel_reason: result.cancel_reason
-      }));
-      toastSuccess('Sale Cancelled', `Sale ${selectedSale.row.id} was cancelled.`);
+      toastSuccess(
+        queuedOffline ? 'Sale Cancel queued' : 'Sale Cancelled',
+        `Sale ${selectedSale.row.id} was cancelled.`
+      );
       closeCancelModal();
       await refresh();
       await onDataChanged?.();
     } catch (cause) {
       toastError('Sale Cancel Failed', cause instanceof Error ? cause.message : 'Unable to cancel sale.');
+    } finally {
+      setCancelSaving(false);
+    }
+  };
+
+  const buildRecreateDraft = (sale: ParsedSale): PosRecreateDraft | null => {
+    const lines: PosRecreateDraft['lines'] = [];
+    for (const line of sale.payload.lines ?? []) {
+      const productId = (line.product_id ?? line.productId ?? '').trim();
+      const quantity = toAmount(line.quantity ?? line.qty);
+      if (!productId || quantity <= 0) {
+        continue;
+      }
+      lines.push({
+        productId,
+        quantity,
+        unitPrice: toAmount(line.unit_price ?? line.unitPrice),
+        cylinderFlow: line.cylinder_flow ?? line.cylinderFlow ?? null
+      });
+    }
+    if (!lines.length) {
+      return null;
+    }
+    const firstPaymentMethod = String(sale.payload.payments?.[0]?.method ?? 'CASH')
+      .trim()
+      .toUpperCase();
+    const paymentMethod: 'CASH' | 'CARD' | 'E_WALLET' =
+      firstPaymentMethod === 'CARD' || firstPaymentMethod === 'E_WALLET'
+        ? firstPaymentMethod
+        : 'CASH';
+    return {
+      requestId: `recreate-${sale.row.id}-${Date.now()}`,
+      sourceSaleId: sale.row.id,
+      branchId: sale.payload.branch_id?.trim() || preferredBranchId?.trim() || '',
+      locationId: sale.payload.location_id?.trim() || '',
+      customerId: sale.payload.customer_id?.trim() || null,
+      saleType: sale.payload.sale_type ?? 'PICKUP',
+      paymentMode: sale.payload.payment_mode === 'PARTIAL' ? 'PARTIAL' : 'FULL',
+      paymentMethod,
+      discountAmount: toAmount(sale.payload.discount_amount),
+      creditNotes: normalizeText(sale.payload.credit_notes) ?? null,
+      driverId: normalizeText(sale.payload.driver_id ?? sale.payload.driverId) ?? null,
+      helperId: normalizeText(sale.payload.helper_id ?? sale.payload.helperId) ?? null,
+      lines
+    };
+  };
+
+  const handleCancelAndRecreateSelectedSale = async (): Promise<void> => {
+    if (!selectedSale || cancelSaving) {
+      return;
+    }
+    if (!onCancelAndRecreateSale) {
+      toastInfo('Recreate Sale', 'POS recreate flow is not available right now.');
+      return;
+    }
+    if (!selectedSaleIsActive) {
+      toastInfo('Recreate Sale', 'Only active sales can be recreated.');
+      return;
+    }
+    if (selectedSale.payload.recreated_by_sale_id?.trim()) {
+      toastInfo('Recreate Sale', 'This sale already has a replacement sale.');
+      return;
+    }
+    if ((selectedSale.payload.sale_returns ?? []).length > 0) {
+      toastInfo('Recreate Sale', 'Sales with posted returns cannot be recreated.');
+      return;
+    }
+    const knownPendingLentQty = Array.from(
+      (pendingLentQtyBySaleId.get(selectedSale.row.id) ?? new Map<number, number>()).values()
+    ).reduce((sum, qty) => sum + qty, 0);
+    if (knownPendingLentQty > 0) {
+      toastInfo('Recreate Sale', 'Sales with open or pending lending cannot be recreated.');
+      return;
+    }
+    const reason = cancelReason.trim();
+    if (reason.length < 3) {
+      toastInfo('Recreate Sale', 'Enter a short reason before recreating this sale.');
+      return;
+    }
+    const draft = buildRecreateDraft(selectedSale);
+    if (!draft) {
+      toastError('Recreate Sale', 'This sale has no valid lines to copy into POS.');
+      return;
+    }
+
+    setCancelSaving(true);
+    try {
+      let queuedOffline = selectedSale.row.sync_status !== 'synced';
+      let result: SaleCancelApiResponse | null = null;
+      if (!queuedOffline) {
+        result = await apiRequest<SaleCancelApiResponse>(
+          `/sales/${encodeURIComponent(selectedSale.row.id)}/cancel`,
+          {
+            method: 'POST',
+            body: JSON.stringify({ reason })
+          }
+        );
+      } else {
+        const service = new OfflineTransactionService(db);
+        await service.createOfflineSaleCancel({
+          saleId: selectedSale.row.id,
+          reason
+        });
+      }
+
+      await updateLocalSalePayload(
+        selectedSale.row.id,
+        (current) => ({
+          ...current,
+          status: 'CANCELLED',
+          cancelled_at: result?.cancelled_at ?? new Date().toISOString(),
+          cancel_reason: result?.cancel_reason ?? reason
+        }),
+        queuedOffline ? 'pending' : undefined
+      );
+
+      toastSuccess(
+        queuedOffline ? 'Sale Cancel queued' : 'Sale Cancelled',
+        `Sale ${selectedSale.row.id} is ready to recreate.`
+      );
+      closeSaleDetails();
+      onCancelAndRecreateSale(draft);
+      await refresh();
+      await onDataChanged?.();
+    } catch (cause) {
+      toastError(
+        'Recreate Sale Failed',
+        cause instanceof Error ? cause.message : 'Unable to cancel and recreate this sale.'
+      );
     } finally {
       setCancelSaving(false);
     }
@@ -1349,43 +1523,81 @@ export function SalesScreen({
 
     setReturnSaving(true);
     try {
-      const result = await apiRequest<SaleReturnApiResponse>(
-        `/sales/${encodeURIComponent(selectedSale.row.id)}/return`,
-        {
-          method: 'POST',
-          body: JSON.stringify({
-            reason,
-            lines: [
-              {
-                product_id: returnProductId,
-                quantity
-              }
-            ]
-          })
-        }
-      );
-      await updateLocalSalePayload(selectedSale.row.id, (current) => ({
-        ...current,
-        sale_returns: [
-          ...(current.sale_returns ?? []),
+      const payload = {
+        reason,
+        lines: [
           {
-            sale_return_id: result.sale_return_id,
-            returned_at: result.returned_at,
-            reason: result.reason,
-            total_amount: result.total_amount,
-            points_reversed: result.points_reversed,
-            lines: result.lines.map((line) => ({
-              sale_line_id: line.sale_line_id,
-              product_id: line.product_id,
-              quantity: line.quantity,
-              unit_price: line.unit_price,
-              line_total: line.line_total
-            }))
+            product_id: returnProductId,
+            quantity
           }
         ]
-      }));
+      };
+      let queuedOffline = selectedSale.row.sync_status !== 'synced';
+      let result: SaleReturnApiResponse | null = null;
+      if (!queuedOffline) {
+        try {
+          result = await apiRequest<SaleReturnApiResponse>(
+            `/sales/${encodeURIComponent(selectedSale.row.id)}/return`,
+            {
+              method: 'POST',
+              body: JSON.stringify(payload)
+            }
+          );
+        } catch (cause) {
+          const message = cause instanceof Error ? cause.message : 'Unable to post return.';
+          if (!shouldQueueOffline(message)) {
+            throw cause;
+          }
+          queuedOffline = true;
+        }
+      }
+      if (queuedOffline) {
+        const service = new OfflineTransactionService(db);
+        await service.createOfflineSaleReturn({
+          saleId: selectedSale.row.id,
+          reason,
+          lines: [
+            {
+              productId: returnProductId,
+              quantity
+            }
+          ]
+        });
+      }
+      await updateLocalSalePayload(
+        selectedSale.row.id,
+        (current) => ({
+          ...current,
+          sale_returns: [
+            ...(current.sale_returns ?? []),
+            {
+              sale_return_id:
+                result?.sale_return_id ?? `local-sale-return-${Date.now()}-${Math.floor(Math.random() * 1_000_000)}`,
+              returned_at: result?.returned_at ?? new Date().toISOString(),
+              reason: result?.reason ?? reason,
+              total_amount: result?.total_amount ?? Number((quantity * toAmount(matchingLine?.unit_price ?? matchingLine?.unitPrice)).toFixed(2)),
+              points_reversed: result?.points_reversed ?? 0,
+              lines: result?.lines.map((line) => ({
+                sale_line_id: line.sale_line_id,
+                product_id: line.product_id,
+                quantity: line.quantity,
+                unit_price: line.unit_price,
+                line_total: line.line_total
+              })) ?? [
+                {
+                  product_id: returnProductId,
+                  quantity,
+                  unit_price: toAmount(matchingLine?.unit_price ?? matchingLine?.unitPrice),
+                  line_total: Number((quantity * toAmount(matchingLine?.unit_price ?? matchingLine?.unitPrice)).toFixed(2))
+                }
+              ]
+            }
+          ]
+        }),
+        queuedOffline ? 'pending' : undefined
+      );
       toastSuccess(
-        'Return Posted',
+        queuedOffline ? 'Return queued' : 'Return Posted',
         `Returned ${quantity.toFixed(4)} item(s) from sale ${selectedSale.row.id}.`
       );
       closeReturnModal();
@@ -2004,20 +2216,43 @@ export function SalesScreen({
                         </Text>
                       </Pressable>
                       <Pressable
-                        onPress={() => openReturnModal(productId)}
-                        disabled={syncBusy || !selectedSaleIsActive || remainingQty <= 0}
+                        onPress={() =>
+                          openReturnModal(
+                            productId,
+                            rawFlow === 'REFILL_EXCHANGE'
+                              ? 'REFILL_EXCHANGE'
+                              : rawFlow === 'NON_REFILL'
+                                ? 'NON_REFILL'
+                                : null
+                          )
+                        }
+                        disabled={
+                          syncBusy ||
+                          !selectedSaleIsActive ||
+                          remainingQty <= 0 ||
+                          rawFlow === 'REFILL_EXCHANGE' ||
+                          rawFlow === 'NON_REFILL'
+                        }
                         style={[
                           styles.inlineActionBtn,
                           {
                             borderColor: theme.cardBorder,
                             backgroundColor:
-                              syncBusy || !selectedSaleIsActive || remainingQty <= 0
+                              syncBusy ||
+                              !selectedSaleIsActive ||
+                              remainingQty <= 0 ||
+                              rawFlow === 'REFILL_EXCHANGE' ||
+                              rawFlow === 'NON_REFILL'
                                 ? theme.pillBg
                                 : theme.card
                           }
                         ]}
                       >
-                        <Text style={[styles.inlineActionText, { color: theme.pillText }]}>Return Item</Text>
+                        <Text style={[styles.inlineActionText, { color: theme.pillText }]}>
+                          {rawFlow === 'REFILL_EXCHANGE' || rawFlow === 'NON_REFILL'
+                            ? 'LPG Cancel Only'
+                            : 'Return Item'}
+                        </Text>
                       </Pressable>
                     </View>
                   </View>
@@ -2088,6 +2323,22 @@ export function SalesScreen({
                     <Text style={[styles.infoLabel, { color: theme.subtext }]}>Personnel</Text>
                     <Text style={[styles.infoValue, { color: theme.heading }]}>{selectedPersonnelLabel}</Text>
                   </View>
+                  {selectedSale.payload.recreated_from_sale_id ? (
+                    <View style={[styles.infoCard, { borderColor: theme.cardBorder, backgroundColor: theme.inputBg }]}>
+                      <Text style={[styles.infoLabel, { color: theme.subtext }]}>Recreated From</Text>
+                      <Text style={[styles.infoValue, { color: theme.heading }]}>
+                        {selectedSale.payload.recreated_from_sale_id}
+                      </Text>
+                    </View>
+                  ) : null}
+                  {selectedSale.payload.recreated_by_sale_id ? (
+                    <View style={[styles.infoCard, { borderColor: theme.cardBorder, backgroundColor: theme.inputBg }]}>
+                      <Text style={[styles.infoLabel, { color: theme.subtext }]}>Replacement Sale</Text>
+                      <Text style={[styles.infoValue, { color: theme.heading }]}>
+                        {selectedSale.payload.recreated_by_sale_id}
+                      </Text>
+                    </View>
+                  ) : null}
                 </View>
 
                 <View style={styles.totalsRow}>
@@ -2230,20 +2481,49 @@ export function SalesScreen({
                       {
                         borderColor: theme.cardBorder,
                         backgroundColor:
-                          syncBusy || cancelSaving || !selectedSaleIsActive || selectedSale.row.sync_status !== 'synced'
+                          syncBusy || cancelSaving || !selectedSaleIsActive
                             ? theme.pillBg
                             : theme.inputBg
                       }
                     ]}
                     onPress={() => setCancelModalOpen(true)}
                     disabled={
-                      syncBusy || cancelSaving || !selectedSaleIsActive || selectedSale.row.sync_status !== 'synced'
+                      syncBusy || cancelSaving || !selectedSaleIsActive
                     }
                   >
                     <Text style={[styles.breakdownBtnText, { color: theme.pillText }]}>Cancel Sale</Text>
                   </Pressable>
                 </View>
                 <View style={styles.detailFooterRow}>
+                  <Pressable
+                    style={[
+                      styles.settlementBtn,
+                      styles.footerBtn,
+                      {
+                        borderColor: theme.cardBorder,
+                        backgroundColor:
+                          syncBusy ||
+                          cancelSaving ||
+                          !selectedSaleIsActive ||
+                          !onCancelAndRecreateSale ||
+                          Boolean(selectedSale.payload.recreated_by_sale_id)
+                            ? theme.pillBg
+                            : theme.inputBg
+                      }
+                    ]}
+                    onPress={() => setRecreateModalOpen(true)}
+                    disabled={
+                      syncBusy ||
+                      cancelSaving ||
+                      !selectedSaleIsActive ||
+                      !onCancelAndRecreateSale ||
+                      Boolean(selectedSale.payload.recreated_by_sale_id)
+                    }
+                  >
+                    <Text style={[styles.settlementBtnText, { color: theme.pillText }]}>
+                      {selectedSale.payload.recreated_by_sale_id ? 'Already Recreated' : 'Cancel & Recreate'}
+                    </Text>
+                  </Pressable>
                   <Pressable
                     style={[
                       styles.settlementBtn,
@@ -2362,6 +2642,61 @@ export function SalesScreen({
                 disabled={returnSaving || syncBusy}
               >
                 <Text style={styles.printText}>{returnSaving ? 'Posting Return...' : 'Confirm Return Item'}</Text>
+              </Pressable>
+            </Pressable>
+          </Pressable>
+        ) : null}
+      </Modal>
+
+      <Modal
+        visible={recreateModalOpen && Boolean(selectedSale)}
+        transparent
+        animationType="fade"
+        onRequestClose={closeRecreateModal}
+      >
+        {selectedSale ? (
+          <Pressable style={styles.modalOverlay} onPress={closeRecreateModal}>
+            <Pressable
+              style={[styles.paymentModalCard, { backgroundColor: theme.card, borderColor: theme.cardBorder }]}
+              onPress={(event) => event.stopPropagation()}
+            >
+              <View style={styles.paymentModalHead}>
+                <Text style={[styles.blockTitle, { color: theme.heading }]}>Cancel and Recreate</Text>
+                <Pressable
+                  style={[styles.closeBtn, { borderColor: theme.cardBorder, backgroundColor: theme.inputBg }]}
+                  onPress={closeRecreateModal}
+                  disabled={cancelSaving}
+                >
+                  <Text style={[styles.closeText, { color: theme.heading }]}>Close</Text>
+                </Pressable>
+              </View>
+
+              <Text style={[styles.itemMeta, { color: theme.subtext }]}>
+                Sale {selectedSale.row.id} | {selectedSale.row.receipt_number ?? 'No receipt'}
+              </Text>
+              <Text style={[styles.itemMeta, { color: theme.subtext }]}>
+                This will cancel the current sale and open POS with the same sale details copied into a new draft.
+              </Text>
+
+              <TextInput
+                value={cancelReason}
+                onChangeText={setCancelReason}
+                placeholder="Why does this sale need to be recreated?"
+                placeholderTextColor={theme.inputPlaceholder}
+                style={[styles.searchInput, { backgroundColor: theme.inputBg, color: theme.inputText }]}
+              />
+
+              <Pressable
+                style={[
+                  styles.printBtn,
+                  { backgroundColor: cancelSaving || syncBusy ? theme.primaryMuted : theme.primary }
+                ]}
+                onPress={() => void handleCancelAndRecreateSelectedSale()}
+                disabled={cancelSaving || syncBusy}
+              >
+                <Text style={styles.printText}>
+                  {cancelSaving ? 'Preparing Draft...' : 'Confirm Cancel and Recreate'}
+                </Text>
               </Pressable>
             </Pressable>
           </Pressable>

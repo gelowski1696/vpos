@@ -1343,27 +1343,29 @@ model ZRead {
 }
 
 model Sale {
-  id             String    @id @default(uuid())
-  companyId      String
-  branchId       String
-  locationId     String
-  shiftId        String?
-  userId         String
-  customerId     String?
-  saleType       SaleType
-  status         SaleStatus @default(ACTIVE)
-  subtotal       Decimal   @db.Decimal(14, 2)
-  discountAmount Decimal   @default(0) @db.Decimal(14, 2)
-  totalAmount    Decimal   @db.Decimal(14, 2)
-  cogsAmount     Decimal?  @db.Decimal(14, 2)
-  postedAt       DateTime?
-  cancelledAt    DateTime?
+  id                  String    @id @default(uuid())
+  companyId           String
+  branchId            String
+  locationId          String
+  shiftId             String?
+  userId              String
+  customerId          String?
+  recreatedFromSaleId String?
+  recreatedBySaleId   String?   @unique
+  saleType            SaleType
+  status              SaleStatus @default(ACTIVE)
+  subtotal            Decimal   @db.Decimal(14, 2)
+  discountAmount      Decimal   @default(0) @db.Decimal(14, 2)
+  totalAmount         Decimal   @db.Decimal(14, 2)
+  cogsAmount          Decimal?  @db.Decimal(14, 2)
+  postedAt            DateTime?
+  cancelledAt         DateTime?
   cancelledByUserId String?
-  cancelReason   String?   @db.Text
-  voidedAt       DateTime?
-  voidedByUserId String?
-  voidReason     String?   @db.Text
-  createdAt      DateTime  @default(now())
+  cancelReason        String?   @db.Text
+  voidedAt            DateTime?
+  voidedByUserId      String?
+  voidReason          String?   @db.Text
+  createdAt           DateTime  @default(now())
 
   company             Company               @relation(fields: [companyId], references: [id], onDelete: Cascade)
   branch              Branch                @relation(fields: [branchId], references: [id], onDelete: Restrict)
@@ -1371,6 +1373,10 @@ model Sale {
   shift               Shift?                @relation(fields: [shiftId], references: [id], onDelete: SetNull)
   user                User                  @relation(fields: [userId], references: [id], onDelete: Restrict)
   customer            Customer?             @relation(fields: [customerId], references: [id], onDelete: SetNull)
+  recreatedFromSale   Sale?                 @relation("SaleRecreatedFrom", fields: [recreatedFromSaleId], references: [id], onDelete: SetNull)
+  replacementSale     Sale?                 @relation("SaleRecreatedBy", fields: [recreatedBySaleId], references: [id], onDelete: SetNull)
+  recreatedSales      Sale[]                @relation("SaleRecreatedFrom")
+  sourceForSales      Sale[]                @relation("SaleRecreatedBy")
   cancelledByUser     User?                 @relation("SaleCancelledBy", fields: [cancelledByUserId], references: [id], onDelete: SetNull)
   voidedByUser        User?                 @relation("SaleVoidedBy", fields: [voidedByUserId], references: [id], onDelete: SetNull)
   lines               SaleLine[]
@@ -1385,6 +1391,8 @@ model Sale {
 
   @@index([companyId, status, createdAt])
   @@index([companyId, branchId, status, createdAt])
+  @@index([companyId, recreatedFromSaleId])
+  @@index([companyId, recreatedBySaleId])
 }
 
 model SaleLine {

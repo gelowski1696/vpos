@@ -81,15 +81,6 @@ type LendingEligibleProductRecord = {
   lending_unit_type: string | null;
 };
 
-type PostSaleLendingState = {
-  saleId: string;
-  customerId: string;
-  customerName: string | null;
-  branchName: string;
-  locationName: string;
-  products: LendingEligibleProductRecord[];
-};
-
 type LocalPriceRule = {
   productId: string;
   flowMode: 'ANY' | CylinderFlowSelection;
@@ -113,6 +104,27 @@ type CartLine = Product & {
   lineId: string;
   quantity: number;
   cylinderFlow?: CylinderFlowSelection | null;
+};
+
+export type PosRecreateDraft = {
+  requestId: string;
+  sourceSaleId: string;
+  branchId: string;
+  locationId: string;
+  customerId: string | null;
+  saleType: 'PICKUP' | 'DELIVERY';
+  paymentMode: 'FULL' | 'PARTIAL';
+  paymentMethod: 'CASH' | 'CARD' | 'E_WALLET';
+  discountAmount: number;
+  creditNotes: string | null;
+  driverId: string | null;
+  helperId: string | null;
+  lines: Array<{
+    productId: string;
+    quantity: number;
+    unitPrice: number;
+    cylinderFlow?: CylinderFlowSelection | null;
+  }>;
 };
 type ShiftStateRow = {
   id: string;
@@ -178,6 +190,8 @@ type Props = {
   onDataChanged?: () => Promise<void> | void;
   onPrintQueuedSaleReceipt?: (payload: PosQueuedSaleReceiptPayload) => Promise<PosQueuedSaleReceiptResult>;
   onGoToShift?: () => void;
+  recreateDraft?: PosRecreateDraft | null;
+  onConsumeRecreateDraft?: () => void;
   syncBusy?: boolean;
 };
 
@@ -591,6 +605,8 @@ export function PosScreen({
   onDataChanged,
   onPrintQueuedSaleReceipt,
   onGoToShift,
+  recreateDraft = null,
+  onConsumeRecreateDraft,
   syncBusy = false
 }: Props): JSX.Element {
   const { width, height } = useWindowDimensions();
@@ -628,14 +644,11 @@ export function PosScreen({
   const [availableRewards, setAvailableRewards] = useState<PosRewardRecord[]>([]);
   const [rewardsLoading, setRewardsLoading] = useState(false);
   const [selectedRewardId, setSelectedRewardId] = useState('');
-  const [postSaleLending, setPostSaleLending] = useState<PostSaleLendingState | null>(null);
-  const [lendingQtyByProduct, setLendingQtyByProduct] = useState<Record<string, string>>({});
-  const [lendingDepositByProduct, setLendingDepositByProduct] = useState<Record<string, string>>({});
-  const [lendingRemarks, setLendingRemarks] = useState('');
-  const [lendingSaving, setLendingSaving] = useState(false);
   const [saving, setSaving] = useState(false);
   const [selectedCustomerOutstanding, setSelectedCustomerOutstanding] = useState(0);
   const prevSyncBusyRef = useRef(syncBusy);
+  const lastAppliedRecreateDraftIdRef = useRef<string | null>(null);
+  const activeRecreatedFromSaleIdRef = useRef<string | null>(null);
   const [activeShiftId, setActiveShiftId] = useState<string | null>(null);
 
   const [customerModalOpen, setCustomerModalOpen] = useState(false);
@@ -971,95 +984,6 @@ export function PosScreen({
     }
   };
 
-  const openPostSaleLendingModal = (state: PostSaleLendingState): void => {
-    setPostSaleLending(state);
-    setLendingRemarks('');
-    setLendingQtyByProduct(
-      Object.fromEntries(state.products.map((product) => [product.product_id, '']))
-    );
-    setLendingDepositByProduct(
-      Object.fromEntries(
-        state.products.map((product) => [
-          product.product_id,
-          product.default_deposit_amount !== null ? product.default_deposit_amount.toFixed(2) : ''
-        ])
-      )
-    );
-  };
-
-  const closePostSaleLendingModal = (): void => {
-    if (lendingSaving) {
-      return;
-    }
-    setPostSaleLending(null);
-    setLendingRemarks('');
-    setLendingQtyByProduct({});
-    setLendingDepositByProduct({});
-  };
-
-  const savePostSaleLending = async (): Promise<void> => {
-    if (!postSaleLending || lendingSaving) {
-      return;
-    }
-    const lines = postSaleLending.products
-      .map((product) => {
-        const qty = Number(lendingQtyByProduct[product.product_id] || '0');
-        const depositRaw = lendingDepositByProduct[product.product_id];
-        const deposit = depositRaw?.trim().length ? Number(depositRaw) : null;
-        return {
-          product,
-          qty,
-          deposit
-        };
-      })
-      .filter((entry) => Number.isFinite(entry.qty) && entry.qty > 0);
-
-    if (lines.length === 0) {
-      toastInfo('Lending', 'Enter quantity for at least one lendable item.');
-      return;
-    }
-    for (const entry of lines) {
-      if (entry.qty > entry.product.available_qty) {
-        toastError(
-          'Lending',
-          `${entry.product.name} only has ${entry.product.available_qty.toFixed(4)} available.`
-        );
-        return;
-      }
-      if (entry.product.requires_deposit && (entry.deposit === null || !Number.isFinite(entry.deposit) || entry.deposit < 0)) {
-        toastError('Lending', `Deposit is required for ${entry.product.name}.`);
-        return;
-      }
-      if (entry.deposit !== null && (!Number.isFinite(entry.deposit) || entry.deposit < 0)) {
-        toastError('Lending', `Deposit must be 0 or higher for ${entry.product.name}.`);
-        return;
-      }
-    }
-
-    setLendingSaving(true);
-    try {
-      await vcardApiRequest('/lending', {
-        method: 'POST',
-        body: JSON.stringify({
-          sale_id: postSaleLending.saleId,
-          remarks: lendingRemarks.trim() || null,
-          lines: lines.map((entry) => ({
-            product_id: entry.product.product_id,
-            quantity: entry.qty,
-            deposit_amount: entry.deposit
-          }))
-        })
-      });
-      toastSuccess('Lending saved', `Linked to sale ${postSaleLending.saleId}.`);
-      closePostSaleLendingModal();
-      await onDataChanged?.();
-    } catch (cause) {
-      toastError('Lending failed', cause instanceof Error ? cause.message : 'Unable to save lending.');
-    } finally {
-      setLendingSaving(false);
-    }
-  };
-
   const handleSelectReward = (reward: PosRewardRecord): void => {
     setSelectedRewardId(reward.id);
     if (reward.reward_type === 'DISCOUNT_FIXED' && Number(discount || '0') <= 0 && reward.discount_value !== null) {
@@ -1218,6 +1142,57 @@ export function PosScreen({
     }
     setLocationId(preferredLocationId);
   }, [preferredLocationId, scopedLocations]);
+
+  useEffect(() => {
+    if (!recreateDraft || lastAppliedRecreateDraftIdRef.current === recreateDraft.requestId) {
+      return;
+    }
+
+    const nextCart: CartLine[] = recreateDraft.lines.map((line) => {
+      const product = catalog.find((entry) => entry.id === line.productId);
+      return {
+        ...(product ?? {
+          id: line.productId,
+          name: line.productId,
+          unitPrice: line.unitPrice,
+          subtitle: line.productId,
+          isLpg: Boolean(line.cylinderFlow)
+        }),
+        lineId: `${line.productId}:${line.cylinderFlow ?? 'NA'}:${Date.now()}:${Math.random()
+          .toString(36)
+          .slice(2, 7)}`,
+        quantity: line.quantity,
+        unitPrice: line.unitPrice,
+        cylinderFlow: line.cylinderFlow ?? null
+      };
+    });
+
+    setBranchId(recreateDraft.branchId);
+    setLocationId(recreateDraft.locationId);
+    setOrderType(recreateDraft.saleType);
+    setCustomerId(recreateDraft.customerId ?? '');
+    setDriverId(recreateDraft.driverId ?? '');
+    setHelperId(recreateDraft.helperId ?? '');
+    setCart(nextCart);
+    setDiscount(recreateDraft.discountAmount.toFixed(2));
+    setDeliveryFee('0.00');
+    setPaymentMode(recreateDraft.paymentMode);
+    setPaymentMethod(recreateDraft.paymentMethod);
+    setPaidAmount('0');
+    setPaymentNotes(recreateDraft.creditNotes ?? '');
+    setSelectedRewardId('');
+    setAvailableRewards([]);
+    setShowPaymentStep(false);
+    setCustomerModalOpen(false);
+    setDriverModalOpen(false);
+    setHelperModalOpen(false);
+    setItemModalOpen(false);
+
+    activeRecreatedFromSaleIdRef.current = recreateDraft.sourceSaleId;
+    lastAppliedRecreateDraftIdRef.current = recreateDraft.requestId;
+    onConsumeRecreateDraft?.();
+    toastInfo('Sale recreated', 'Review the copied draft, then complete the corrected sale.');
+  }, [catalog, onConsumeRecreateDraft, recreateDraft]);
 
   const refreshMasterData = async (): Promise<void> => {
     const [nextBranches, nextLocations, nextCustomers, nextPersonnels] = await Promise.all([
@@ -1463,6 +1438,27 @@ export function PosScreen({
 
   const createLineId = (productId: string, flow?: CylinderFlowSelection | null): string =>
     `${productId}:${flow ?? 'NA'}:${Date.now()}:${Math.random().toString(36).slice(2, 7)}`;
+
+  const linkRecreatedSourceSaleLocally = async (sourceSaleId: string, recreatedSaleId: string): Promise<void> => {
+    const row = await db.getFirstAsync<{ payload: string }>(
+      'SELECT payload FROM sales_local WHERE id = ?',
+      sourceSaleId
+    );
+    if (!row?.payload) {
+      return;
+    }
+    const payload = parseRecord<Record<string, unknown>>(row.payload, {});
+    const nextPayload = {
+      ...payload,
+      recreated_by_sale_id: recreatedSaleId
+    };
+    await db.runAsync(
+      'UPDATE sales_local SET payload = ?, updated_at = ? WHERE id = ?',
+      JSON.stringify(nextPayload),
+      new Date().toISOString(),
+      sourceSaleId
+    );
+  };
 
   const resolveDefaultFlowForNewLine = (): CylinderFlowSelection | null => {
     if (defaultLpgFlowForNewItem === 'REFILL_EXCHANGE' || defaultLpgFlowForNewItem === 'NON_REFILL') {
@@ -1871,6 +1867,7 @@ export function PosScreen({
       const postingDiscountAmount = round2(discountValue - deliveryFeeValue);
       const service = new OfflineTransactionService(db);
       const saleId = await service.createOfflineSale({
+        recreatedFromSaleId: activeRecreatedFromSaleIdRef.current,
         branchId: branchId.trim(),
         locationId: locationId.trim(),
         shiftId: activeShiftId,
@@ -1903,6 +1900,10 @@ export function PosScreen({
         })),
         payments: [{ method: paymentMethod, amount: appliedPaidAmount }]
       });
+
+      if (activeRecreatedFromSaleIdRef.current) {
+        await linkRecreatedSourceSaleLocally(activeRecreatedFromSaleIdRef.current, saleId);
+      }
 
       if (reservedReward) {
         await vcardApiRequest<PosRewardRedemptionRecord>(
@@ -1990,29 +1991,6 @@ export function PosScreen({
         }
       }
 
-      let eligibleLendingProducts: LendingEligibleProductRecord[] = [];
-      if (customerId.trim()) {
-        try {
-          eligibleLendingProducts = await vcardApiRequest<LendingEligibleProductRecord[]>(
-            `/lending/eligible-products/by-sale/${encodeURIComponent(saleId)}`
-          );
-        } catch {
-          eligibleLendingProducts = [];
-        }
-      }
-
-      const postSaleLendingSeed =
-        customerId.trim() && eligibleLendingProducts.length > 0
-          ? {
-              saleId,
-              customerId: customerId.trim(),
-              customerName: selectedCustomer?.label ?? null,
-              branchName: branch?.label ?? branchId.trim(),
-              locationName: location?.label ?? locationId.trim(),
-              products: eligibleLendingProducts
-            }
-          : null;
-
       setCart([]);
       setDiscount('0');
       setDeliveryFee('0.00');
@@ -2028,21 +2006,9 @@ export function PosScreen({
       setDriverSearch('');
       setHelperId('');
       setHelperSearch('');
+      activeRecreatedFromSaleIdRef.current = null;
       await refreshCatalog();
       await onDataChanged?.();
-      if (postSaleLendingSeed) {
-        Alert.alert(
-          'Create Lending',
-          'Sale is saved. Do you want to create a lending record for this customer now?',
-          [
-            { text: 'Later', style: 'cancel' },
-            {
-              text: 'Create Lending',
-              onPress: () => openPostSaleLendingModal(postSaleLendingSeed)
-            }
-          ]
-        );
-      }
     } catch (cause) {
       if (reservedReward?.id) {
         try {
@@ -2845,117 +2811,6 @@ export function PosScreen({
         </View>
       </Modal>
 
-      <Modal
-        visible={Boolean(postSaleLending)}
-        transparent
-        animationType="slide"
-        onRequestClose={closePostSaleLendingModal}
-      >
-        <View style={styles.modalBackdrop}>
-          <Pressable style={StyleSheet.absoluteFillObject} onPress={closePostSaleLendingModal} />
-          <View
-            style={[
-              styles.modalCard,
-              styles.paymentModalCard,
-              isCompactLayout ? { height: '90%', maxHeight: '94%', paddingHorizontal: 10, paddingVertical: 10, gap: 8 } : null,
-              { backgroundColor: theme.card, borderColor: theme.cardBorder }
-            ]}
-          >
-            <Text style={[styles.modalTitle, { color: theme.heading }]}>Post-Sale Lending</Text>
-            <Text style={[styles.paymentHint, isCompactLayout ? { fontSize: 11 } : null, { color: theme.subtext }]}>
-              Select returnable items to lend out for this completed sale. Inventory will be deducted immediately.
-            </Text>
-
-            {postSaleLending ? (
-              <>
-                <View style={[styles.summary, { borderColor: theme.cardBorder }]}>
-                  <Text style={[styles.summaryText, { color: theme.subtext }]}>Sale: {postSaleLending.saleId}</Text>
-                  <Text style={[styles.summaryText, { color: theme.subtext }]}>Customer: {postSaleLending.customerName ?? postSaleLending.customerId}</Text>
-                  <Text style={[styles.summaryText, { color: theme.subtext }]}>Branch: {postSaleLending.branchName}</Text>
-                  <Text style={[styles.summaryText, { color: theme.subtext }]}>Location: {postSaleLending.locationName}</Text>
-                </View>
-
-                <ScrollView style={styles.paymentModalBody} contentContainerStyle={{ gap: 10 }} keyboardShouldPersistTaps="handled">
-                  {postSaleLending.products.map((product) => (
-                    <View
-                      key={product.product_id}
-                      style={[styles.lendingProductCard, { borderColor: theme.cardBorder, backgroundColor: theme.inputBg }]}
-                    >
-                      <Text style={[styles.cartName, { color: theme.heading }]}>{product.name}</Text>
-                      <Text style={[styles.summaryText, { color: theme.subtext }]}>
-                        {product.sku} | Available {product.available_qty.toFixed(4)} {product.lending_unit_type ?? product.unit}
-                      </Text>
-                      {product.requires_deposit || product.default_deposit_amount !== null ? (
-                        <Text style={[styles.summaryText, { color: theme.subtext }]}>
-                          Deposit {product.default_deposit_amount !== null ? `default PHP ${product.default_deposit_amount.toFixed(2)}` : 'required'}
-                        </Text>
-                      ) : null}
-
-                      <Text style={[styles.fieldLabel, { color: theme.subtext }]}>Quantity To Lend</Text>
-                      <TextInput
-                        value={lendingQtyByProduct[product.product_id] ?? ''}
-                        onChangeText={(value) =>
-                          setLendingQtyByProduct((prev) => ({ ...prev, [product.product_id]: value }))
-                        }
-                        keyboardType="numeric"
-                        placeholder="0"
-                        placeholderTextColor={theme.inputPlaceholder}
-                        style={[styles.input, { backgroundColor: theme.card, color: theme.inputText }]}
-                      />
-
-                      {product.requires_deposit || product.default_deposit_amount !== null ? (
-                        <>
-                          <Text style={[styles.fieldLabel, { color: theme.subtext }]}>Deposit Amount</Text>
-                          <TextInput
-                            value={lendingDepositByProduct[product.product_id] ?? ''}
-                            onChangeText={(value) =>
-                              setLendingDepositByProduct((prev) => ({ ...prev, [product.product_id]: value }))
-                            }
-                            keyboardType="numeric"
-                            placeholder="0.00"
-                            placeholderTextColor={theme.inputPlaceholder}
-                            style={[styles.input, { backgroundColor: theme.card, color: theme.inputText }]}
-                          />
-                        </>
-                      ) : null}
-                    </View>
-                  ))}
-
-                  <Text style={[styles.fieldLabel, { color: theme.subtext }]}>Remarks (Optional)</Text>
-                  <TextInput
-                    value={lendingRemarks}
-                    onChangeText={setLendingRemarks}
-                    placeholder="Reason or reminder for this lending"
-                    placeholderTextColor={theme.inputPlaceholder}
-                    style={[styles.input, { backgroundColor: theme.inputBg, color: theme.inputText }]}
-                  />
-                </ScrollView>
-
-                <View style={[styles.paymentModalActions, isCompactLayout ? { flexDirection: 'column', gap: 6 } : null]}>
-                  <Pressable
-                    onPress={closePostSaleLendingModal}
-                    disabled={lendingSaving}
-                    style={[styles.modalSecondaryBtn, { backgroundColor: lendingSaving ? theme.primaryMuted : theme.pillBg }]}
-                  >
-                    <Text style={[styles.modalSecondaryText, { color: lendingSaving ? '#FFFFFF' : theme.pillText }]}>Skip</Text>
-                  </Pressable>
-                  <Pressable
-                    style={[
-                      styles.modalPrimaryBtn,
-                      isCompactLayout ? { width: '100%' } : null,
-                      { backgroundColor: lendingSaving ? theme.primaryMuted : theme.primary }
-                    ]}
-                    onPress={() => void savePostSaleLending()}
-                    disabled={lendingSaving}
-                  >
-                    <Text style={styles.modalPrimaryText}>{lendingSaving ? 'Saving Lending...' : 'Save Lending'}</Text>
-                  </Pressable>
-                </View>
-              </>
-            ) : null}
-          </View>
-        </View>
-      </Modal>
     </View>
   );
 }

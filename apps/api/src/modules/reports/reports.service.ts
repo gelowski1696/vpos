@@ -661,6 +661,8 @@ export class ReportsService {
     rows: Array<{
       sale_id: string;
       status: 'ACTIVE' | 'CANCELLED' | 'VOIDED';
+      recreated_from_sale_id: string | null;
+      recreated_by_sale_id: string | null;
       posted_at: string | null;
       created_at: string;
       receipt_number: string | null;
@@ -712,6 +714,8 @@ export class ReportsService {
       select: {
         id: true,
         status: true,
+        recreatedFromSaleId: true,
+        recreatedBySaleId: true,
         postedAt: true,
         createdAt: true,
         cancelledAt: true,
@@ -796,6 +800,8 @@ export class ReportsService {
         return {
           sale_id: row.id,
           status: row.status,
+          recreated_from_sale_id: row.recreatedFromSaleId ?? null,
+          recreated_by_sale_id: row.recreatedBySaleId ?? null,
           posted_at: row.postedAt ? row.postedAt.toISOString() : null,
           created_at: row.createdAt.toISOString(),
           cancelled_at: row.cancelledAt ? row.cancelledAt.toISOString() : null,
@@ -836,6 +842,8 @@ export class ReportsService {
     sale: {
       sale_id: string;
       status: 'ACTIVE' | 'CANCELLED' | 'VOIDED';
+      recreated_from_sale_id: string | null;
+      recreated_by_sale_id: string | null;
       posted_at: string | null;
       created_at: string;
       cancelled_at: string | null;
@@ -939,6 +947,8 @@ export class ReportsService {
       select: {
         id: true,
         status: true,
+        recreatedFromSaleId: true,
+        recreatedBySaleId: true,
         postedAt: true,
         createdAt: true,
         cancelledAt: true,
@@ -1221,6 +1231,8 @@ export class ReportsService {
       sale: {
         sale_id: row.id,
         status: row.status,
+        recreated_from_sale_id: row.recreatedFromSaleId ?? null,
+        recreated_by_sale_id: row.recreatedBySaleId ?? null,
         posted_at: row.postedAt ? row.postedAt.toISOString() : null,
         created_at: row.createdAt.toISOString(),
         cancelled_at: row.cancelledAt ? row.cancelledAt.toISOString() : null,

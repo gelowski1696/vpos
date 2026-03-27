@@ -15,6 +15,8 @@ type BranchRecord = {
 type SalesListRow = {
   sale_id: string;
   status: 'ACTIVE' | 'CANCELLED' | 'VOIDED';
+  recreated_from_sale_id: string | null;
+  recreated_by_sale_id: string | null;
   posted_at: string | null;
   created_at: string;
   cancelled_at: string | null;
@@ -181,6 +183,19 @@ function saleStatusLabel(status: 'ACTIVE' | 'CANCELLED' | 'VOIDED'): string {
     return 'Voided Sale';
   }
   return 'Active Sale';
+}
+
+function recreateLabel(row: {
+  recreated_from_sale_id: string | null;
+  recreated_by_sale_id: string | null;
+}): string | null {
+  if (row.recreated_from_sale_id) {
+    return `Recreated from ${row.recreated_from_sale_id}`;
+  }
+  if (row.recreated_by_sale_id) {
+    return `Replacement sale ${row.recreated_by_sale_id}`;
+  }
+  return null;
 }
 
 function saleReturnStatusLabel(status: 'POSTED' | 'VOIDED'): string {
@@ -549,7 +564,13 @@ export default function SalesListPage(): JSX.Element {
                       </span>
                     </td>
                     <td className="px-3 py-2 text-slate-700 dark:text-slate-200">{row.receipt_number ?? 'N/A'}</td>
-                    <td className="px-3 py-2 text-slate-700 dark:text-slate-200">{row.sale_id}</td>
+                    <td className="px-3 py-2 text-slate-700 dark:text-slate-200">
+                      <div>{row.sale_id}</div>
+                      {recreateLabel(row) ? (
+                        <div className="mt-1 text-xs text-slate-500 dark:text-slate-400">{recreateLabel(row)}</div>
+                      ) : null}
+                    </td>
+
                     <td className="px-3 py-2 text-slate-700 dark:text-slate-200">
                       {row.branch_name} ({row.branch_code})
                     </td>
@@ -752,6 +773,14 @@ export default function SalesListPage(): JSX.Element {
                     </div>
                   ) : null}
 
+                  {recreateLabel(selectedDetails.sale) ? (
+                    <div className="rounded-xl border border-sky-300 bg-sky-50 p-3 text-sm text-sky-700 dark:border-sky-700 dark:bg-sky-950/40 dark:text-sky-200">
+                      {selectedDetails.sale.recreated_from_sale_id
+                        ? `This is a replacement sale created from ${selectedDetails.sale.recreated_from_sale_id}.`
+                        : `This cancelled sale was replaced by ${selectedDetails.sale.recreated_by_sale_id}.`}
+                    </div>
+                  ) : null}
+
                   <div className="grid gap-3 md:grid-cols-2">
                     <article className="rounded-xl border border-slate-200 bg-white p-3 dark:border-slate-700 dark:bg-slate-800/40">
                       <h3 className="text-sm font-semibold text-slate-800 dark:text-slate-100">Transaction Info</h3>
@@ -791,6 +820,14 @@ export default function SalesListPage(): JSX.Element {
                                 selectedDetails.sale.shift_opened_at
                               )})`
                             : 'N/A'}
+                        </dd>
+                        <dt className="text-slate-500 dark:text-slate-400">Recreated From</dt>
+                        <dd className="text-slate-800 dark:text-slate-100">
+                          {selectedDetails.sale.recreated_from_sale_id ?? 'N/A'}
+                        </dd>
+                        <dt className="text-slate-500 dark:text-slate-400">Replacement Sale</dt>
+                        <dd className="text-slate-800 dark:text-slate-100">
+                          {selectedDetails.sale.recreated_by_sale_id ?? 'N/A'}
                         </dd>
                         <dt className="text-slate-500 dark:text-slate-400">Personnel</dt>
                         <dd className="text-slate-800 dark:text-slate-100">{selectedPersonnelNames}</dd>

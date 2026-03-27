@@ -121,6 +121,36 @@ export class SyncService {
         });
         continue;
       }
+      const saleCancelPosting = await this.tryPostSaleCancelOutbox(companyId, item, actorUserId);
+      if (!saleCancelPosting.ok) {
+        const reviewId = this.createReview(companyId, item.id, item.entity, saleCancelPosting.reason, item.payload);
+        rejected.push({
+          id: item.id,
+          reason: saleCancelPosting.reason,
+          review_id: reviewId
+        });
+        await this.persistIdempotencyDecision(companyId, item.idempotency_key, requestHash, {
+          status: 'rejected',
+          reason: saleCancelPosting.reason,
+          review_id: reviewId
+        });
+        continue;
+      }
+      const saleReturnPosting = await this.tryPostSaleReturnOutbox(companyId, item, actorUserId);
+      if (!saleReturnPosting.ok) {
+        const reviewId = this.createReview(companyId, item.id, item.entity, saleReturnPosting.reason, item.payload);
+        rejected.push({
+          id: item.id,
+          reason: saleReturnPosting.reason,
+          review_id: reviewId
+        });
+        await this.persistIdempotencyDecision(companyId, item.idempotency_key, requestHash, {
+          status: 'rejected',
+          reason: saleReturnPosting.reason,
+          review_id: reviewId
+        });
+        continue;
+      }
       const customerPaymentPosting = await this.tryPostCustomerPaymentOutbox(
         companyId,
         item,
@@ -240,82 +270,83 @@ export class SyncService {
       await this.persistIdempotencyDecision(companyId, item.idempotency_key, requestHash, {
         status: 'accepted'
       });
-      const companyChanges = this.getCompanyChanges(companyId);
-      companyChanges.push({
-        entity: item.entity,
-        action: item.action,
-        payload: {
-          ...item.payload,
-          server_posted: true,
-          server_posted_at: new Date().toISOString(),
-          ...(salePosting.sale
-            ? {
-                server_sale_posted: true,
-                server_sale_result: {
-                  sale_id: salePosting.sale.sale_id,
-                  receipt_number: salePosting.sale.receipt_number,
-                  total_amount: salePosting.sale.total_amount,
-                  final_cogs: salePosting.sale.final_cogs,
-                  deposit_liability_delta: salePosting.sale.deposit_liability_delta
+      if (item.entity !== 'sale_cancel' && item.entity !== 'sale_return') {
+        const companyChanges = this.getCompanyChanges(companyId);
+        companyChanges.push({
+          entity: item.entity,
+          action: item.action,
+          payload: {
+            ...item.payload,
+            server_posted: true,
+            server_posted_at: new Date().toISOString(),
+            ...(salePosting.sale
+              ? {
+                  server_sale_posted: true,
+                  server_sale_result: {
+                    sale_id: salePosting.sale.sale_id,
+                    receipt_number: salePosting.sale.receipt_number,
+                    total_amount: salePosting.sale.total_amount,
+                    final_cogs: salePosting.sale.final_cogs,
+                    deposit_liability_delta: salePosting.sale.deposit_liability_delta
+                  }
                 }
-              }
-            : {}),
-          ...(customerPaymentPosting.payment
-            ? {
-                server_customer_payment_posted: true,
-                server_customer_payment_result: {
-                  payment_id: customerPaymentPosting.payment.payment_id,
-                  sale_id: customerPaymentPosting.payment.sale_id,
-                  customer_id: customerPaymentPosting.payment.customer_id,
-                  amount: customerPaymentPosting.payment.amount,
-                  method: customerPaymentPosting.payment.method,
-                  outstanding_balance:
-                    customerPaymentPosting.payment.customer_outstanding_balance,
-                  posted_at: customerPaymentPosting.payment.posted_at
+              : {}),
+            ...(customerPaymentPosting.payment
+              ? {
+                  server_customer_payment_posted: true,
+                  server_customer_payment_result: {
+                    payment_id: customerPaymentPosting.payment.payment_id,
+                    sale_id: customerPaymentPosting.payment.sale_id,
+                    customer_id: customerPaymentPosting.payment.customer_id,
+                    amount: customerPaymentPosting.payment.amount,
+                    method: customerPaymentPosting.payment.method,
+                    outstanding_balance:
+                      customerPaymentPosting.payment.customer_outstanding_balance,
+                    posted_at: customerPaymentPosting.payment.posted_at
+                  }
                 }
-              }
-            : {}),
-          ...(transferPosting.transfer
-            ? {
-                server_transfer_posted: true,
-                server_transfer_result: {
-                  transfer_id: transferPosting.transfer.id,
-                  status: transferPosting.transfer.status,
-                  source_location_id: transferPosting.transfer.source_location_id,
-                  destination_location_id: transferPosting.transfer.destination_location_id,
-                  posted_at: transferPosting.transfer.posted_at ?? transferPosting.transfer.updated_at
+              : {}),
+            ...(transferPosting.transfer
+              ? {
+                  server_transfer_posted: true,
+                  server_transfer_result: {
+                    transfer_id: transferPosting.transfer.id,
+                    status: transferPosting.transfer.status,
+                    source_location_id: transferPosting.transfer.source_location_id,
+                    destination_location_id: transferPosting.transfer.destination_location_id,
+                    posted_at: transferPosting.transfer.posted_at ?? transferPosting.transfer.updated_at
+                  }
                 }
-              }
-            : {})
-          ,
-          ...(lendingPosting.lending
-            ? {
-                server_lending_posted: true,
-                server_lending_result: {
-                  lending_id: lendingPosting.lending.lending_id,
-                  sale_id: lendingPosting.lending.sale_id,
-                  customer_id: lendingPosting.lending.customer_id,
-                  status: lendingPosting.lending.status,
-                  total_quantity_lent: lendingPosting.lending.total_quantity_lent
+              : {}),
+            ...(lendingPosting.lending
+              ? {
+                  server_lending_posted: true,
+                  server_lending_result: {
+                    lending_id: lendingPosting.lending.lending_id,
+                    sale_id: lendingPosting.lending.sale_id,
+                    customer_id: lendingPosting.lending.customer_id,
+                    status: lendingPosting.lending.status,
+                    total_quantity_lent: lendingPosting.lending.total_quantity_lent
+                  }
                 }
-              }
-            : {}),
-          ...(lendingReturnPosting.lending
-            ? {
-                server_lending_return_posted: true,
-                server_lending_return_result: {
-                  lending_id: lendingReturnPosting.lending.lending_id,
-                  sale_id: lendingReturnPosting.lending.sale_id,
-                  status: lendingReturnPosting.lending.status,
-                  total_quantity_returned: lendingReturnPosting.lending.total_quantity_returned
+              : {}),
+            ...(lendingReturnPosting.lending
+              ? {
+                  server_lending_return_posted: true,
+                  server_lending_return_result: {
+                    lending_id: lendingReturnPosting.lending.lending_id,
+                    sale_id: lendingReturnPosting.lending.sale_id,
+                    status: lendingReturnPosting.lending.status,
+                    total_quantity_returned: lendingReturnPosting.lending.total_quantity_returned
+                  }
                 }
-              }
-            : {})
-        },
-        updated_at: new Date().toISOString()
-      });
-      if (salePosting.inventoryChanges?.length) {
-        companyChanges.push(...salePosting.inventoryChanges);
+              : {})
+          },
+          updated_at: new Date().toISOString()
+        });
+        if (salePosting.inventoryChanges?.length) {
+          companyChanges.push(...salePosting.inventoryChanges);
+        }
       }
     }
 
@@ -560,6 +591,10 @@ export class SyncService {
             payload.customer_id === null || payload.customerId === null
               ? null
               : this.asString(payload.customer_id ?? payload.customerId),
+          recreated_from_sale_id:
+            payload.recreated_from_sale_id === null || payload.recreatedFromSaleId === null
+              ? null
+              : this.asString(payload.recreated_from_sale_id ?? payload.recreatedFromSaleId),
           sale_type: this.normalizeOrderType(payload.sale_type ?? payload.saleType),
           payment_mode:
             this.asString(payload.payment_mode ?? payload.paymentMode)?.toUpperCase() === 'PARTIAL'
@@ -589,6 +624,86 @@ export class SyncService {
       return { ok: true, sale, inventoryChanges };
     } catch (cause) {
       const message = cause instanceof Error ? cause.message : 'Sale posting failed during sync';
+      return { ok: false, reason: message };
+    }
+  }
+
+  private async tryPostSaleCancelOutbox(
+    companyId: string,
+    item: SyncPushRequest['outbox_items'][number],
+    actorUserId?: string
+  ): Promise<{ ok: true } | { ok: false; reason: string }> {
+    if (item.entity !== 'sale_cancel' || item.action !== 'create') {
+      return { ok: true };
+    }
+    if (!this.salesService) {
+      return { ok: true };
+    }
+
+    const payload = item.payload ?? {};
+    const saleId = this.asString(payload.sale_id ?? payload.saleId ?? payload.id);
+    const reason = this.asString(payload.reason);
+    if (!saleId) {
+      return { ok: false, reason: 'Sale cancel sync payload is missing sale id' };
+    }
+    if (!reason) {
+      return { ok: false, reason: 'Sale cancel sync payload is missing reason' };
+    }
+
+    try {
+      await this.salesService.cancel(companyId, saleId, {
+        reason,
+        actorUserId: this.asString(payload.user_id ?? payload.userId) ?? actorUserId ?? null
+      });
+      return { ok: true };
+    } catch (cause) {
+      const message = cause instanceof Error ? cause.message : 'Sale cancellation failed during sync';
+      return { ok: false, reason: message };
+    }
+  }
+
+  private async tryPostSaleReturnOutbox(
+    companyId: string,
+    item: SyncPushRequest['outbox_items'][number],
+    actorUserId?: string
+  ): Promise<{ ok: true } | { ok: false; reason: string }> {
+    if (item.entity !== 'sale_return' || item.action !== 'create') {
+      return { ok: true };
+    }
+    if (!this.salesService) {
+      return { ok: true };
+    }
+
+    const payload = item.payload ?? {};
+    const saleId = this.asString(payload.sale_id ?? payload.saleId ?? payload.id);
+    const reason = this.asString(payload.reason);
+    const linesRaw = Array.isArray(payload.lines) ? payload.lines : [];
+    if (!saleId) {
+      return { ok: false, reason: 'Sale return sync payload is missing sale id' };
+    }
+    if (!reason) {
+      return { ok: false, reason: 'Sale return sync payload is missing reason' };
+    }
+    if (linesRaw.length === 0) {
+      return { ok: false, reason: 'Sale return sync payload is missing lines' };
+    }
+
+    try {
+      await this.salesService.returnSale(companyId, saleId, {
+        reason,
+        actorUserId: this.asString(payload.user_id ?? payload.userId) ?? actorUserId ?? null,
+        lines: linesRaw.map((entry) => {
+          const row = (entry as Record<string, unknown>) ?? {};
+          return {
+            sale_line_id: this.asString(row.sale_line_id ?? row.saleLineId),
+            product_id: this.asString(row.product_id ?? row.productId),
+            quantity: this.asNumber(row.quantity)
+          };
+        })
+      });
+      return { ok: true };
+    } catch (cause) {
+      const message = cause instanceof Error ? cause.message : 'Sale return failed during sync';
       return { ok: false, reason: message };
     }
   }

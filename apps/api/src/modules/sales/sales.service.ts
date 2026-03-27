@@ -36,6 +36,8 @@ type SalePostInput = {
   shift_id?: string | null;
   shiftId?: string | null;
   customer_id?: string | null;
+  recreated_from_sale_id?: string | null;
+  recreatedFromSaleId?: string | null;
   sale_type?: 'PICKUP' | 'DELIVERY';
   payment_mode?: 'FULL' | 'PARTIAL';
   credit_balance?: number;
@@ -91,6 +93,7 @@ type PostedSale = {
   branchId: string;
   locationId: string;
   customerId: string | null;
+  recreatedFromSaleId?: string | null;
   saleType: 'PICKUP' | 'DELIVERY';
   lines: SaleLineInput[];
   payments: SalePaymentInput[];
@@ -175,6 +178,29 @@ export type SaleReturnVoidResponse = {
   points_restored: number;
 };
 
+export type SaleCancelAndRecreateDraftResponse = {
+  cancelled_sale: SaleCancelResponse;
+  recreate_draft: {
+    source_sale_id: string;
+    branch_id: string;
+    location_id: string;
+    customer_id: string | null;
+    sale_type: 'PICKUP' | 'DELIVERY';
+    payment_mode: 'FULL' | 'PARTIAL';
+    payment_method: 'CASH' | 'CARD' | 'E_WALLET';
+    discount_amount: number;
+    credit_notes: string | null;
+    driver_id: string | null;
+    helper_id: string | null;
+    lines: Array<{
+      product_id: string;
+      quantity: number;
+      unit_price: number;
+      cylinder_flow: 'REFILL_EXCHANGE' | 'NON_REFILL' | null;
+    }>;
+  };
+};
+
 @Injectable()
 export class SalesService {
   private readonly postedSales = new Map<string, PostedSale>();
@@ -244,6 +270,23 @@ export class SalesService {
       throw new NotFoundException('Sale return not found');
     }
     return this.voidSaleReturnWithDatabase(binding, saleReturnId, input);
+  }
+
+  async cancelAndPrepareRecreate(
+    companyId: string,
+    saleId: string,
+    input: { reason?: string | null; actorUserId?: string | null }
+  ): Promise<SaleCancelAndRecreateDraftResponse> {
+    const binding = await this.getTenantBinding(companyId);
+    if (!binding) {
+      throw new NotFoundException('Sale not found');
+    }
+    const recreateDraft = await this.buildRecreateDraftFromSale(binding, saleId);
+    const cancelledSale = await this.cancelWithDatabase(binding, saleId, input);
+    return {
+      cancelled_sale: cancelledSale,
+      recreate_draft: recreateDraft
+    };
   }
 
   private postInMemory(companyId: string, input: SalePostInput): SalePostResponse {
@@ -396,6 +439,34 @@ export class SalesService {
         const location = await this.resolveLocation(tx, companyId, branch.id, input.location_id);
         const customer = await this.resolveCustomer(tx, companyId, input.customer_id);
         const actor = await this.resolveActorUser(tx, companyId, actorUserId);
+        const recreatedFromSaleId =
+          input.recreated_from_sale_id?.trim() ||
+          input.recreatedFromSaleId?.trim() ||
+          null;
+        const recreatedFromSale = recreatedFromSaleId
+          ? await tx.sale.findFirst({
+              where: {
+                id: recreatedFromSaleId,
+                companyId
+              },
+              select: {
+                id: true,
+                status: true,
+                recreatedBySaleId: true
+              }
+            })
+          : null;
+        if (recreatedFromSaleId && !recreatedFromSale) {
+          throw new BadRequestException('Recreated source sale was not found');
+        }
+        if (recreatedFromSale && recreatedFromSale.status !== 'CANCELLED') {
+          throw new BadRequestException(
+            'Replacement sale can only be created from a cancelled source sale'
+          );
+        }
+        if (recreatedFromSale?.recreatedBySaleId) {
+          throw new BadRequestException('This sale already has a replacement sale');
+        }
         const shift = await this.resolveSaleShift(
           tx,
           companyId,
@@ -578,6 +649,7 @@ export class SalesService {
             shiftId: shift?.id ?? null,
             userId: actor.id,
             customerId: customer?.id ?? null,
+            recreatedFromSaleId,
             saleType: input.sale_type ?? 'PICKUP',
             subtotal,
             discountAmount,
@@ -586,6 +658,15 @@ export class SalesService {
             postedAt: now
           }
         });
+
+        if (recreatedFromSaleId) {
+          await tx.sale.update({
+            where: { id: recreatedFromSaleId },
+            data: {
+              recreatedBySaleId: sale.id
+            }
+          });
+        }
 
         await tx.saleLine.createMany({
           data: saleLineRows.map((row) => ({
@@ -678,6 +759,7 @@ export class SalesService {
               sale_id: sale.id,
               branch_id: branch.id,
               location_id: location.id,
+              recreated_from_sale_id: recreatedFromSaleId,
               total_amount: totalAmount,
               payment_mode: paymentMode,
               paid_amount: paymentTotal,
@@ -758,6 +840,7 @@ export class SalesService {
           branchId: branch.id,
           locationId: location.id,
           customerId: customer?.id ?? null,
+          recreatedFromSaleId,
           saleType: input.sale_type ?? 'PICKUP',
           lines: normalizedLines.map((line) => ({
             product_id: line.originalProductRef,
@@ -1782,6 +1865,160 @@ export class SalesService {
     return `${companyId}::${saleId}`;
   }
 
+  private async buildRecreateDraftFromSale(
+    binding: TenantPrismaBinding,
+    saleId: string
+  ): Promise<SaleCancelAndRecreateDraftResponse['recreate_draft']> {
+    const db = binding.client as DbClient;
+    const companyId = binding.companyId;
+    const normalizedSaleId = saleId.trim();
+    if (!normalizedSaleId) {
+      throw new BadRequestException('saleId is required');
+    }
+
+    const sale = await db.sale.findFirst({
+      where: {
+        companyId,
+        id: normalizedSaleId
+      },
+      select: {
+        id: true,
+        status: true,
+        branchId: true,
+        locationId: true,
+        customerId: true,
+        saleType: true,
+        discountAmount: true,
+        recreatedBySaleId: true,
+        lines: {
+          select: {
+            productId: true,
+            quantity: true,
+            unitPrice: true
+          },
+          orderBy: { id: 'asc' }
+        },
+        payments: {
+          select: {
+            method: true
+          },
+          orderBy: { id: 'asc' }
+        },
+        returns: {
+          where: {
+            status: 'POSTED'
+          },
+          select: {
+            id: true
+          }
+        }
+      }
+    });
+    if (!sale) {
+      throw new NotFoundException('Sale not found');
+    }
+    if (sale.status !== 'ACTIVE') {
+      throw new BadRequestException('Only active sales can be cancelled and recreated');
+    }
+    if (sale.recreatedBySaleId) {
+      throw new BadRequestException('This sale already has a replacement sale');
+    }
+    if (sale.returns.length > 0) {
+      throw new BadRequestException('Sales with posted returns cannot be recreated');
+    }
+
+    const saleEvent = await db.eventSales.findFirst({
+      where: {
+        companyId,
+        saleId: sale.id
+      },
+      select: {
+        payload: true
+      },
+      orderBy: { happenedAt: 'asc' }
+    });
+    const salePayload =
+      saleEvent?.payload && typeof saleEvent.payload === 'object' && !Array.isArray(saleEvent.payload)
+        ? (saleEvent.payload as Record<string, unknown>)
+        : undefined;
+    const finiteText = (value: unknown): string | null => {
+      if (typeof value !== 'string') {
+        return null;
+      }
+      const normalized = value.trim();
+      return normalized.length > 0 ? normalized : null;
+    };
+    const payloadLines = Array.isArray(salePayload?.lines)
+      ? salePayload.lines
+          .map((entry) =>
+            entry && typeof entry === 'object' ? (entry as Record<string, unknown>) : null
+          )
+          .filter((entry): entry is Record<string, unknown> => Boolean(entry))
+      : [];
+    const payloadLineUsage = new Set<number>();
+    const resolvePayloadLineFlow = (
+      index: number,
+      productId: string
+    ): 'REFILL_EXCHANGE' | 'NON_REFILL' | null => {
+      const byIndex = payloadLines[index];
+      if (byIndex) {
+        const byIndexProductId =
+          finiteText(byIndex.product_id) ?? finiteText(byIndex.productId);
+        if (!byIndexProductId || byIndexProductId === productId) {
+          payloadLineUsage.add(index);
+          const flow = finiteText(byIndex.cylinder_flow ?? byIndex.cylinderFlow);
+          return flow ? this.normalizeLineCylinderFlow(flow) : null;
+        }
+      }
+      for (let i = 0; i < payloadLines.length; i += 1) {
+        if (payloadLineUsage.has(i)) {
+          continue;
+        }
+        const candidate = payloadLines[i];
+        const candidateProductId =
+          finiteText(candidate.product_id) ?? finiteText(candidate.productId);
+        if (candidateProductId && candidateProductId !== productId) {
+          continue;
+        }
+        payloadLineUsage.add(i);
+        const flow = finiteText(candidate.cylinder_flow ?? candidate.cylinderFlow);
+        return flow ? this.normalizeLineCylinderFlow(flow) : null;
+      }
+      return null;
+    };
+
+    const firstPaymentMethod = sale.payments[0]?.method ?? PaymentMethod.CASH;
+    const paymentMethod: 'CASH' | 'CARD' | 'E_WALLET' =
+      firstPaymentMethod === PaymentMethod.CARD || firstPaymentMethod === PaymentMethod.E_WALLET
+        ? firstPaymentMethod
+        : 'CASH';
+    const paymentMode =
+      finiteText(salePayload?.payment_mode ?? salePayload?.paymentMode)?.toUpperCase() === 'PARTIAL'
+        ? 'PARTIAL'
+        : 'FULL';
+
+    return {
+      source_sale_id: sale.id,
+      branch_id: sale.branchId,
+      location_id: sale.locationId,
+      customer_id: sale.customerId ?? null,
+      sale_type: sale.saleType,
+      payment_mode: paymentMode,
+      payment_method: paymentMethod,
+      discount_amount: this.roundMoney(Number(sale.discountAmount)),
+      credit_notes:
+        finiteText(salePayload?.credit_notes) ?? finiteText(salePayload?.creditNotes),
+      driver_id: finiteText(salePayload?.driver_id) ?? finiteText(salePayload?.driverId),
+      helper_id: finiteText(salePayload?.helper_id) ?? finiteText(salePayload?.helperId),
+      lines: sale.lines.map((line, index) => ({
+        product_id: line.productId,
+        quantity: this.roundQty(Number(line.quantity)),
+        unit_price: this.roundMoney(Number(line.unitPrice)),
+        cylinder_flow: resolvePayloadLineFlow(index, line.productId)
+      }))
+    };
+  }
+
   private normalizeInput(input: SalePostInput): SalePostInput {
     return {
       ...input,
@@ -1790,6 +2027,8 @@ export class SalesService {
       location_id: input.location_id?.trim(),
       shift_id: input.shift_id?.trim() || input.shiftId?.trim() || null,
       customer_id: input.customer_id?.trim() || null,
+      recreated_from_sale_id:
+        input.recreated_from_sale_id?.trim() || input.recreatedFromSaleId?.trim() || null,
       personnel_id: input.personnel_id?.trim() || input.personnelId?.trim() || null,
       personnel_name: input.personnel_name?.trim() || input.personnelName?.trim() || null,
       driver_id: input.driver_id?.trim() || input.driverId?.trim() || null,

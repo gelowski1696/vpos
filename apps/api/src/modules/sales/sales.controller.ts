@@ -6,7 +6,8 @@ import {
   SaleReprintResponse,
   SaleCancelResponse,
   SaleReturnResponse,
-  SaleReturnVoidResponse
+  SaleReturnVoidResponse,
+  SaleCancelAndRecreateDraftResponse
 } from './sales.service';
 import { EntitlementsService } from '../entitlements/entitlements.service';
 import { AuditService } from '../audit/audit.service';
@@ -30,6 +31,7 @@ export class SalesController {
       branch_id?: string;
       location_id?: string;
       customer_id?: string | null;
+      recreated_from_sale_id?: string | null;
       sale_type?: 'PICKUP' | 'DELIVERY';
       payment_mode?: 'FULL' | 'PARTIAL';
       credit_balance?: number;
@@ -111,6 +113,34 @@ export class SalesController {
         inventoryReversed: result.inventory_reversed,
         rewardsVoided: result.rewards_voided,
         pointsDeltaReversed: result.points_delta_reversed
+      }
+    });
+    return result;
+  }
+
+  @Post(':saleId/cancel-and-recreate')
+  async cancelAndRecreate(
+    @Req() req: Request & { user?: { sub?: string; company_id?: string } },
+    @Param('saleId') saleId: string,
+    @Body() body: { reason?: string | null }
+  ): Promise<SaleCancelAndRecreateDraftResponse> {
+    const companyId = this.requireCompanyId(req);
+    await this.tenantRoutingPolicy.assertRoutable(companyId);
+    await this.entitlementsService.enforceTransactionalWrite(companyId);
+    const result = await this.salesService.cancelAndPrepareRecreate(companyId, saleId, {
+      reason: body.reason ?? null,
+      actorUserId: req.user?.sub ?? null
+    });
+    await this.auditService.record({
+      companyId,
+      userId: req.user?.sub ?? null,
+      action: 'SALE_CANCEL_AND_RECREATE',
+      entity: 'Sale',
+      entityId: result.cancelled_sale.sale_id,
+      metadata: {
+        status: result.cancelled_sale.status,
+        cancelReason: result.cancelled_sale.cancel_reason,
+        recreateDraftLines: result.recreate_draft.lines.length
       }
     });
     return result;
