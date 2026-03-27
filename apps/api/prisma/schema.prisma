@@ -96,6 +96,17 @@ enum SaleType {
   DELIVERY
 }
 
+enum SaleStatus {
+  ACTIVE
+  CANCELLED
+  VOIDED
+}
+
+enum SaleReturnStatus {
+  POSTED
+  VOIDED
+}
+
 enum PaymentMethod {
   CASH
   CARD
@@ -323,6 +334,7 @@ model Company {
   lendingTransactions       LendingTransaction[]
   lendingLines              LendingLine[]
   lendingReturns            LendingReturn[]
+  saleReturns               SaleReturn[]
 }
 
 model TenantDatastoreRegistry {
@@ -488,6 +500,7 @@ model Branch {
   cardInventory          CardInventory[]
   rewardScopes           RedeemableRewardScope[]
   lendingTransactions    LendingTransaction[]
+  saleReturns            SaleReturn[]
 
   @@unique([companyId, code])
   @@index([companyId, updatedAt])
@@ -559,6 +572,7 @@ model Location {
   cardInventory          CardInventory[]
   rewardScopes           RedeemableRewardScope[]
   lendingTransactions    LendingTransaction[]
+  saleReturns            SaleReturn[]
 
   @@unique([companyId, code])
   @@index([companyId, updatedAt])
@@ -599,6 +613,10 @@ model User {
   createdLendingTransactions    LendingTransaction[]       @relation("LendingCreatedBy")
   approvedLendingTransactions   LendingTransaction[]       @relation("LendingApprovedBy")
   receivedLendingReturns        LendingReturn[]            @relation("LendingReturnReceivedBy")
+  cancelledSales                Sale[]                     @relation("SaleCancelledBy")
+  voidedSales                   Sale[]                     @relation("SaleVoidedBy")
+  createdSaleReturns            SaleReturn[]               @relation("SaleReturnCreatedBy")
+  voidedSaleReturns             SaleReturn[]               @relation("SaleReturnVoidedBy")
 
   @@unique([companyId, email])
   @@index([companyId, updatedAt])
@@ -882,6 +900,7 @@ model Customer {
   pointsLedger        CustomerPointsLedger[]
   rewardRedemptions   CustomerRewardRedemption[]
   lendingTransactions LendingTransaction[]
+  saleReturns         SaleReturn[]
 
   @@unique([companyId, code])
   @@index([companyId, updatedAt])
@@ -937,6 +956,7 @@ model Product {
   inventoryLedgers  InventoryLedger[]
   transferLines     StockTransferLine[]
   saleLines         SaleLine[]
+  saleReturnLines   SaleReturnLine[]
   redeemableRewards RedeemableReward[]
   lendingLines      LendingLine[]
 
@@ -1328,11 +1348,18 @@ model Sale {
   userId         String
   customerId     String?
   saleType       SaleType
+  status         SaleStatus @default(ACTIVE)
   subtotal       Decimal   @db.Decimal(14, 2)
   discountAmount Decimal   @default(0) @db.Decimal(14, 2)
   totalAmount    Decimal   @db.Decimal(14, 2)
   cogsAmount     Decimal?  @db.Decimal(14, 2)
   postedAt       DateTime?
+  cancelledAt    DateTime?
+  cancelledByUserId String?
+  cancelReason   String?   @db.Text
+  voidedAt       DateTime?
+  voidedByUserId String?
+  voidReason     String?   @db.Text
   createdAt      DateTime  @default(now())
 
   company             Company               @relation(fields: [companyId], references: [id], onDelete: Cascade)
@@ -1341,6 +1368,8 @@ model Sale {
   shift               Shift?                @relation(fields: [shiftId], references: [id], onDelete: SetNull)
   user                User                  @relation(fields: [userId], references: [id], onDelete: Restrict)
   customer            Customer?             @relation(fields: [customerId], references: [id], onDelete: SetNull)
+  cancelledByUser     User?                 @relation("SaleCancelledBy", fields: [cancelledByUserId], references: [id], onDelete: SetNull)
+  voidedByUser        User?                 @relation("SaleVoidedBy", fields: [voidedByUserId], references: [id], onDelete: SetNull)
   lines               SaleLine[]
   payments            Payment[]
   customerPayments    CustomerPayment[]
@@ -1348,6 +1377,11 @@ model Sale {
   deliveryOrder       DeliveryOrder?
   discountOverride    DiscountOverrideLog[]
   lendingTransactions LendingTransaction[]
+  returns             SaleReturn[]
+  returnLines         SaleReturnLine[]
+
+  @@index([companyId, status, createdAt])
+  @@index([companyId, branchId, status, createdAt])
 }
 
 model SaleLine {
@@ -1361,6 +1395,59 @@ model SaleLine {
 
   sale    Sale    @relation(fields: [saleId], references: [id], onDelete: Cascade)
   product Product @relation(fields: [productId], references: [id], onDelete: Restrict)
+  returnLines SaleReturnLine[]
+}
+
+model SaleReturn {
+  id              String           @id @default(uuid())
+  companyId       String
+  saleId          String
+  branchId        String
+  locationId      String
+  customerId      String?
+  status          SaleReturnStatus @default(POSTED)
+  reason          String           @db.Text
+  totalAmount     Decimal          @db.Decimal(14, 2)
+  pointsReversed  Int              @default(0)
+  createdByUserId String?
+  voidedByUserId  String?
+  voidedAt        DateTime?
+  createdAt       DateTime         @default(now())
+  updatedAt       DateTime         @updatedAt
+
+  company   Company   @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  sale      Sale      @relation(fields: [saleId], references: [id], onDelete: Cascade)
+  branch    Branch    @relation(fields: [branchId], references: [id], onDelete: Restrict)
+  location  Location  @relation(fields: [locationId], references: [id], onDelete: Restrict)
+  customer  Customer? @relation(fields: [customerId], references: [id], onDelete: SetNull)
+  createdBy User?     @relation("SaleReturnCreatedBy", fields: [createdByUserId], references: [id], onDelete: SetNull)
+  voidedBy  User?     @relation("SaleReturnVoidedBy", fields: [voidedByUserId], references: [id], onDelete: SetNull)
+  lines     SaleReturnLine[]
+
+  @@index([companyId, saleId, createdAt])
+  @@index([companyId, branchId, createdAt])
+  @@index([companyId, customerId, createdAt])
+}
+
+model SaleReturnLine {
+  id           String   @id @default(uuid())
+  saleReturnId String
+  saleId       String
+  saleLineId   String
+  productId    String
+  quantity     Decimal  @db.Decimal(14, 4)
+  unitPrice    Decimal  @db.Decimal(12, 2)
+  lineTotal    Decimal  @db.Decimal(14, 2)
+  createdAt    DateTime @default(now())
+
+  saleReturn SaleReturn @relation(fields: [saleReturnId], references: [id], onDelete: Cascade)
+  sale       Sale       @relation(fields: [saleId], references: [id], onDelete: Cascade)
+  saleLine   SaleLine   @relation(fields: [saleLineId], references: [id], onDelete: Restrict)
+  product    Product    @relation(fields: [productId], references: [id], onDelete: Restrict)
+
+  @@index([saleReturnId])
+  @@index([saleId, saleLineId])
+  @@index([productId])
 }
 
 model Payment {

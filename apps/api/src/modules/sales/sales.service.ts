@@ -1,10 +1,13 @@
 import { BadRequestException, Injectable, NotFoundException, Optional } from '@nestjs/common';
 import {
   CylinderStatus,
+  CustomerPointsSourceType,
+  CustomerPointsTxnType,
   InventoryMovementType,
   LocationType,
   PaymentMethod,
   Prisma,
+  RewardRedemptionStatus,
   type PrismaClient
 } from '@prisma/client';
 import { PrismaService } from '../../common/prisma.service';
@@ -135,6 +138,33 @@ export type SaleReprintResponse = {
   receipt_document: SalePostResponse['receipt_document'];
 };
 
+export type SaleCancelResponse = {
+  sale_id: string;
+  status: 'CANCELLED';
+  cancelled_at: string;
+  cancel_reason: string;
+  inventory_reversed: boolean;
+  rewards_voided: number;
+  points_delta_reversed: number;
+};
+
+export type SaleReturnResponse = {
+  sale_id: string;
+  sale_return_id: string;
+  status: 'POSTED';
+  returned_at: string;
+  reason: string;
+  total_amount: number;
+  points_reversed: number;
+  lines: Array<{
+    sale_line_id: string;
+    product_id: string;
+    quantity: number;
+    unit_price: number;
+    line_total: number;
+  }>;
+};
+
 @Injectable()
 export class SalesService {
   private readonly postedSales = new Map<string, PostedSale>();
@@ -160,6 +190,38 @@ export class SalesService {
       return this.reprintWithDatabase(binding, saleId);
     }
     return this.reprintInMemory(companyId, saleId);
+  }
+
+  async cancel(
+    companyId: string,
+    saleId: string,
+    input: { reason?: string | null; actorUserId?: string | null }
+  ): Promise<SaleCancelResponse> {
+    const binding = await this.getTenantBinding(companyId);
+    if (!binding) {
+      throw new NotFoundException('Sale not found');
+    }
+    return this.cancelWithDatabase(binding, saleId, input);
+  }
+
+  async returnSale(
+    companyId: string,
+    saleId: string,
+    input: {
+      reason?: string | null;
+      actorUserId?: string | null;
+      lines?: Array<{
+        sale_line_id?: string | null;
+        product_id?: string | null;
+        quantity?: number | null;
+      }>;
+    }
+  ): Promise<SaleReturnResponse> {
+    const binding = await this.getTenantBinding(companyId);
+    if (!binding) {
+      throw new NotFoundException('Sale not found');
+    }
+    return this.returnSaleWithDatabase(binding, saleId, input);
   }
 
   private postInMemory(companyId: string, input: SalePostInput): SalePostResponse {
@@ -713,7 +775,7 @@ export class SalesService {
     const db = binding.client as DbClient;
     const companyId = binding.companyId;
     const updated = await db.$transaction(async (tx) => {
-      const sale = await tx.sale.findFirst({
+      const sale = (await tx.sale.findFirst({
         where: { id: saleId, companyId },
         include: {
           lines: {
@@ -723,9 +785,12 @@ export class SalesService {
           payments: true,
           receipt: true
         }
-      });
+      })) as any;
       if (!sale || !sale.receipt) {
         throw new NotFoundException('Sale not found');
+      }
+      if (sale.status !== 'ACTIVE') {
+        throw new BadRequestException('Cancelled or voided sales cannot be reprinted');
       }
       await tx.receipt.update({
         where: { saleId: sale.id },
@@ -744,6 +809,745 @@ export class SalesService {
       is_reprint: true,
       receipt_document: this.buildReceiptDocument(postedSale, true)
     };
+  }
+
+  private async cancelWithDatabase(
+    binding: TenantPrismaBinding,
+    saleId: string,
+    input: { reason?: string | null; actorUserId?: string | null }
+  ): Promise<SaleCancelResponse> {
+    const db = binding.client as DbClient;
+    const companyId = binding.companyId;
+    const cancelReason = this.normalizeCancelReason(input.reason);
+    const cancelledAt = new Date();
+
+    return db.$transaction(
+      async (tx) => {
+        const sale = (await tx.sale.findFirst({
+          where: { id: saleId, companyId },
+          include: {
+            lines: {
+              include: {
+                product: {
+                  select: {
+                    id: true,
+                    sku: true,
+                    name: true,
+                    isLpg: true,
+                    cylinderTypeId: true
+                  }
+                }
+              },
+              orderBy: { id: 'asc' }
+            },
+            receipt: true,
+            lendingTransactions: {
+              select: {
+                id: true,
+                status: true
+              }
+            },
+            customerPayments: {
+              select: {
+                id: true
+              }
+            }
+          }
+        })) as any;
+
+        if (!sale) {
+          throw new NotFoundException('Sale not found');
+        }
+        if (sale.status !== 'ACTIVE') {
+          throw new BadRequestException('Only active sales can be cancelled');
+        }
+        if (
+          sale.lendingTransactions.some((row: { status: string }) =>
+            ['OPEN', 'PARTIALLY_RETURNED', 'OVERDUE'].includes(row.status)
+          )
+        ) {
+          throw new BadRequestException(
+            'Sale cannot be cancelled while linked lending records are still open'
+          );
+        }
+        if (sale.customerPayments.length > 0) {
+          throw new BadRequestException(
+            'Sale cannot be cancelled after customer settlement payments are posted'
+          );
+        }
+
+        const actor = await this.resolveActorUser(tx, companyId, input.actorUserId ?? undefined);
+        const inventoryLedgers = await tx.inventoryLedger.findMany({
+          where: {
+            companyId,
+            referenceType: 'SALE',
+            referenceId: { startsWith: `${sale.id}::` }
+          },
+          orderBy: [{ referenceId: 'asc' }]
+        });
+        const depositRows = await tx.depositLiabilityLedger.findMany({
+          where: { companyId, saleId: sale.id },
+          orderBy: [{ createdAt: 'asc' }]
+        });
+        const pointRows = await tx.customerPointsLedger.findMany({
+          where: {
+            companyId,
+            sourceType: CustomerPointsSourceType.SALE,
+            sourceId: sale.id
+          },
+          orderBy: [{ createdAt: 'asc' }]
+        });
+        const rewardRedemptions = await tx.customerRewardRedemption.findMany({
+          where: {
+            companyId,
+            saleId: sale.id,
+            status: {
+              in: [RewardRedemptionStatus.RESERVED, RewardRedemptionStatus.APPLIED]
+            }
+          },
+          include: {
+            reward: {
+              select: { name: true }
+            }
+          },
+          orderBy: [{ redeemedAt: 'asc' }]
+        });
+        const cylinderReversed = await this.reverseAutoCylinderSaleEffects(tx, {
+          companyId,
+          branchId: sale.branchId,
+          saleId: sale.id,
+          saleLocationId: sale.locationId,
+          actorUserId: actor.id,
+          cancelledAt,
+          lines: sale.lines.map(
+            (line: {
+              product: { sku: string; cylinderTypeId?: string | null; isLpg?: boolean };
+            }) => ({
+              product: {
+                sku: line.product.sku,
+                cylinderTypeId: line.product.cylinderTypeId ?? null,
+                isLpg: Boolean(line.product.isLpg)
+              }
+            })
+          )
+        });
+
+        const customerDeltaById = new Map<string, number>();
+        for (const row of pointRows) {
+          const next = (customerDeltaById.get(row.customerId) ?? 0) - Number(row.points);
+          customerDeltaById.set(row.customerId, next);
+        }
+        for (const redemption of rewardRedemptions) {
+          const next =
+            (customerDeltaById.get(redemption.customerId) ?? 0) + redemption.pointsSpent;
+          customerDeltaById.set(redemption.customerId, next);
+        }
+
+        const customerBalances = new Map<string, number>();
+        for (const [customerId, delta] of customerDeltaById.entries()) {
+          const customer = await tx.customer.findFirst({
+            where: { id: customerId, companyId, isActive: true },
+            select: { id: true, pointsBalance: true }
+          });
+          if (!customer) {
+            throw new BadRequestException(
+              `Customer ${customerId} no longer exists or is inactive, so this sale cannot be cancelled`
+            );
+          }
+          customerBalances.set(customerId, customer.pointsBalance);
+          if (delta < 0 && customer.pointsBalance < Math.abs(delta)) {
+            throw new BadRequestException(
+              'Customer points balance is no longer sufficient to reverse this sale'
+            );
+          }
+        }
+
+        for (const row of inventoryLedgers) {
+          const reverseQtyDelta = this.roundQty(-Number(row.qtyDelta));
+          const currentBalance = await tx.inventoryBalance.findUnique({
+            where: {
+              locationId_productId: {
+                locationId: row.locationId,
+                productId: row.productId
+              }
+            }
+          });
+          const currentQty = Number(currentBalance?.qtyOnHand ?? 0);
+          const currentAvgCost = Number(currentBalance?.avgCost ?? 0);
+          const nextQty = this.roundQty(currentQty + reverseQtyDelta);
+          const nextAvgCost =
+            reverseQtyDelta > 0 && nextQty > 0
+              ? this.roundQty(
+                  (currentQty * currentAvgCost + reverseQtyDelta * Number(row.unitCost)) / nextQty
+                )
+              : currentQty <= 0
+                ? this.roundQty(Number(row.unitCost))
+                : this.roundQty(currentAvgCost);
+
+          await tx.inventoryBalance.upsert({
+            where: {
+              locationId_productId: {
+                locationId: row.locationId,
+                productId: row.productId
+              }
+            },
+            update: {
+              qtyOnHand: nextQty,
+              avgCost: nextAvgCost
+            },
+            create: {
+              companyId,
+              locationId: row.locationId,
+              productId: row.productId,
+              qtyOnHand: nextQty,
+              avgCost: nextAvgCost
+            }
+          });
+
+          const reversalLedger = await tx.inventoryLedger.create({
+            data: {
+              companyId,
+              locationId: row.locationId,
+              productId: row.productId,
+              movementType: InventoryMovementType.RETURN,
+              referenceType: 'SALE_CANCEL',
+              referenceId: `${sale.id}::${row.referenceId}`,
+              qtyDelta: reverseQtyDelta,
+              unitCost: row.unitCost,
+              avgCostAfter: nextAvgCost,
+              qtyAfter: nextQty
+            }
+          });
+
+          await tx.eventStockMovement.create({
+            data: {
+              companyId,
+              locationId: row.locationId,
+              ledgerId: reversalLedger.id,
+              happenedAt: cancelledAt,
+              payload: {
+                product_id: row.productId,
+                qty_delta: reverseQtyDelta,
+                unit_cost: Number(row.unitCost),
+                avg_cost_after: nextAvgCost,
+                qty_after: nextQty,
+                source: 'SALE_CANCEL'
+              }
+            }
+          });
+        }
+
+        for (const row of depositRows) {
+          await tx.depositLiabilityLedger.create({
+            data: {
+              companyId,
+              customerId: row.customerId,
+              saleId: sale.id,
+              direction: row.direction === 'INCREASE' ? 'DECREASE' : 'INCREASE',
+              amount: row.amount
+            }
+          });
+        }
+
+        for (const row of pointRows) {
+          await tx.customerPointsLedger.create({
+            data: {
+              companyId,
+              customerId: row.customerId,
+              cardInventoryId: row.cardInventoryId,
+              txnType:
+                Number(row.points) >= 0
+                  ? CustomerPointsTxnType.ADJUST_DOWN
+                  : CustomerPointsTxnType.ADJUST_UP,
+              sourceType: CustomerPointsSourceType.SALE,
+              sourceId: sale.id,
+              points: -Number(row.points),
+              remarks: `Sale cancelled: ${sale.id}`,
+              metadata: {
+                sale_id: sale.id,
+                phase: 'SALE_CANCEL'
+              } as Prisma.InputJsonValue,
+              createdByUserId: actor.id
+            }
+          });
+        }
+
+        for (const redemption of rewardRedemptions) {
+          await tx.customerPointsLedger.create({
+            data: {
+              companyId,
+              customerId: redemption.customerId,
+              cardInventoryId: redemption.cardInventoryId,
+              txnType: CustomerPointsTxnType.ADJUST_UP,
+              sourceType: CustomerPointsSourceType.REWARD,
+              sourceId: redemption.id,
+              points: redemption.pointsSpent,
+              remarks: `Sale cancelled - reward voided: ${redemption.reward.name}`,
+              metadata: {
+                sale_id: sale.id,
+                reward_id: redemption.rewardId,
+                redemption_id: redemption.id,
+                phase: 'SALE_CANCEL_REWARD_VOID'
+              } as Prisma.InputJsonValue,
+              createdByUserId: actor.id
+            }
+          });
+
+          await tx.customerRewardRedemption.update({
+            where: { id: redemption.id },
+            data: {
+              status: RewardRedemptionStatus.VOIDED,
+              remarks: redemption.remarks ?? `Voided because sale ${sale.id} was cancelled`,
+              voidedAt: cancelledAt,
+              metadata: {
+                ...((redemption.metadata as Record<string, unknown> | null) ?? {}),
+                phase: 'VOID',
+                void_reason: `Sale ${sale.id} cancelled`
+              } as Prisma.InputJsonValue
+            }
+          });
+        }
+
+        for (const [customerId, delta] of customerDeltaById.entries()) {
+          if (delta === 0) {
+            continue;
+          }
+          await tx.customer.update({
+            where: { id: customerId },
+            data: {
+              pointsBalance:
+                delta > 0
+                  ? { increment: delta }
+                  : { decrement: Math.abs(delta) }
+            }
+          });
+        }
+
+        const updatedSale = (await tx.sale.update({
+          where: { id: sale.id },
+          data: {
+            status: 'CANCELLED',
+            cancelledAt,
+            cancelledByUserId: actor.id,
+            cancelReason
+          } as any
+        })) as any;
+
+        await tx.eventSales.create({
+          data: {
+            companyId,
+            branchId: sale.branchId,
+            saleId: sale.id,
+            happenedAt: cancelledAt,
+            payload: {
+              sale_id: sale.id,
+              status: 'CANCELLED',
+              cancel_reason: cancelReason,
+              inventory_reversed: inventoryLedgers.length > 0 || cylinderReversed,
+              rewards_voided: rewardRedemptions.length,
+              points_delta_reversed: pointRows.reduce((sum, row) => sum + Number(row.points), 0)
+            }
+          }
+        });
+
+        return {
+          sale_id: updatedSale.id,
+          status: 'CANCELLED' as const,
+          cancelled_at: updatedSale.cancelledAt?.toISOString() ?? cancelledAt.toISOString(),
+          cancel_reason: cancelReason,
+          inventory_reversed: inventoryLedgers.length > 0 || cylinderReversed,
+          rewards_voided: rewardRedemptions.length,
+          points_delta_reversed: pointRows.reduce((sum, row) => sum + Number(row.points), 0)
+        };
+      },
+      {
+        isolationLevel: Prisma.TransactionIsolationLevel.Serializable
+      }
+    );
+  }
+
+  private async returnSaleWithDatabase(
+    binding: TenantPrismaBinding,
+    saleId: string,
+    input: {
+      reason?: string | null;
+      actorUserId?: string | null;
+      lines?: Array<{
+        sale_line_id?: string | null;
+        product_id?: string | null;
+        quantity?: number | null;
+      }>;
+    }
+  ): Promise<SaleReturnResponse> {
+    const db = binding.client as DbClient;
+    const companyId = binding.companyId;
+    const reason = this.normalizeCancelReason(input.reason);
+    const normalizedLines = this.normalizeReturnLines(input.lines);
+    const returnedAt = new Date();
+
+    return db.$transaction(
+      async (tx) => {
+        const sale = (await tx.sale.findFirst({
+          where: { id: saleId, companyId },
+          include: {
+            lines: {
+              include: {
+                product: {
+                  select: {
+                    id: true,
+                    sku: true,
+                    name: true,
+                    isLpg: true,
+                    cylinderTypeId: true
+                  }
+                }
+              },
+              orderBy: { id: 'asc' }
+            },
+            lendingTransactions: {
+              select: { id: true, status: true }
+            },
+            customerPayments: {
+              select: { id: true }
+            }
+          }
+        })) as any;
+
+        if (!sale) {
+          throw new NotFoundException('Sale not found');
+        }
+        if (sale.status !== 'ACTIVE') {
+          throw new BadRequestException('Only active sales can accept returns');
+        }
+        if (
+          sale.lendingTransactions.some((row: { status: string }) =>
+            ['OPEN', 'PARTIALLY_RETURNED', 'OVERDUE'].includes(row.status)
+          )
+        ) {
+          throw new BadRequestException(
+            'Sale cannot accept item returns while linked lending records are still open'
+          );
+        }
+        if (sale.customerPayments.length > 0) {
+          throw new BadRequestException(
+            'Sale cannot accept item returns after customer settlement payments are posted'
+          );
+        }
+
+        const rewardRedemptions = await tx.customerRewardRedemption.count({
+          where: {
+            companyId,
+            saleId: sale.id,
+            status: {
+              in: [RewardRedemptionStatus.RESERVED, RewardRedemptionStatus.APPLIED]
+            }
+          }
+        });
+        if (rewardRedemptions > 0) {
+          throw new BadRequestException(
+            'Sale item returns are blocked when a reward redemption is linked to the sale. Cancel the full sale or void the reward first.'
+          );
+        }
+
+        const actor = await this.resolveActorUser(tx, companyId, input.actorUserId ?? undefined);
+        const postedReturnLines = (await tx.saleReturnLine.findMany({
+          where: {
+            saleId: sale.id,
+            saleReturn: {
+              status: 'POSTED'
+            }
+          },
+          select: {
+            saleLineId: true,
+            quantity: true
+          }
+        })) as Array<{ saleLineId: string; quantity: Prisma.Decimal }>;
+
+        const returnedQtyBySaleLineId = new Map<string, number>();
+        for (const row of postedReturnLines) {
+          returnedQtyBySaleLineId.set(
+            row.saleLineId,
+            this.roundQty((returnedQtyBySaleLineId.get(row.saleLineId) ?? 0) + Number(row.quantity))
+          );
+        }
+
+        const saleLineMap = new Map<
+          string,
+          {
+            id: string;
+            productId: string;
+            quantity: Prisma.Decimal;
+            unitPrice: Prisma.Decimal;
+            product: {
+              id: string;
+              sku: string;
+              name: string;
+              isLpg: boolean;
+              cylinderTypeId: string | null;
+            };
+          }
+        >(sale.lines.map((line: any) => [line.id, line]));
+        const saleLineByProduct = new Map<string, any[]>();
+        for (const line of sale.lines as any[]) {
+          const existing = saleLineByProduct.get(line.productId) ?? [];
+          existing.push(line);
+          saleLineByProduct.set(line.productId, existing);
+        }
+
+        const resolvedLines = normalizedLines.map((entry) => {
+          const line =
+            entry.saleLineId && saleLineMap.has(entry.saleLineId)
+              ? saleLineMap.get(entry.saleLineId)!
+              : (saleLineByProduct.get(entry.productId ?? '') ?? []).find((candidate) => {
+                  const soldQty = Number(candidate.quantity);
+                  const returnedQty = returnedQtyBySaleLineId.get(candidate.id) ?? 0;
+                  return soldQty - returnedQty > 0;
+                });
+          if (!line) {
+            throw new BadRequestException(
+              `Sale line ${entry.saleLineId ?? entry.productId ?? 'unknown'} could not be resolved`
+            );
+          }
+          if (line.product.isLpg && line.product.cylinderTypeId) {
+            throw new BadRequestException(
+              `Item return for LPG line ${line.product.sku} is not supported yet. Use whole-sale cancel for LPG reversals.`
+            );
+          }
+          const soldQty = this.roundQty(Number(line.quantity));
+          const alreadyReturned = returnedQtyBySaleLineId.get(line.id) ?? 0;
+          const remainingQty = this.roundQty(soldQty - alreadyReturned);
+          if (entry.quantity > remainingQty) {
+            throw new BadRequestException(
+              `${line.product.name} only has ${remainingQty.toFixed(4)} remaining returnable quantity`
+            );
+          }
+          return {
+            saleLineId: line.id,
+            productId: line.productId as string,
+            quantity: entry.quantity,
+            unitPrice: Number(line.unitPrice),
+            lineTotal: this.roundMoney(entry.quantity * Number(line.unitPrice)),
+            product: line.product
+          };
+        });
+
+        let totalAmount = 0;
+        for (const line of resolvedLines) {
+          totalAmount = this.roundMoney(totalAmount + line.lineTotal);
+          const currentBalance = await tx.inventoryBalance.findUnique({
+            where: {
+              locationId_productId: {
+                locationId: sale.locationId,
+                productId: line.productId
+              }
+            }
+          });
+          const currentQty = Number(currentBalance?.qtyOnHand ?? 0);
+          const currentAvgCost = Number(currentBalance?.avgCost ?? 0);
+          const nextQty = this.roundQty(currentQty + line.quantity);
+          const nextAvgCost =
+            line.quantity > 0 && nextQty > 0
+              ? this.roundQty(
+                  (currentQty * currentAvgCost + line.quantity * Number(currentBalance?.avgCost ?? 0)) /
+                    nextQty
+                )
+              : this.roundQty(currentAvgCost);
+
+          await tx.inventoryBalance.upsert({
+            where: {
+              locationId_productId: {
+                locationId: sale.locationId,
+                productId: line.productId
+              }
+            },
+            update: {
+              qtyOnHand: nextQty,
+              avgCost: nextAvgCost
+            },
+            create: {
+              companyId,
+              locationId: sale.locationId,
+              productId: line.productId,
+              qtyOnHand: nextQty,
+              avgCost: nextAvgCost
+            }
+          });
+
+          const ledger = await tx.inventoryLedger.create({
+            data: {
+              companyId,
+              locationId: sale.locationId,
+              productId: line.productId,
+              movementType: InventoryMovementType.RETURN,
+              referenceType: 'SALE_RETURN',
+              referenceId: `${sale.id}::${line.saleLineId}::${returnedAt.getTime()}`,
+              qtyDelta: line.quantity,
+              unitCost: Number(currentBalance?.avgCost ?? 0),
+              avgCostAfter: nextAvgCost,
+              qtyAfter: nextQty
+            }
+          });
+
+          await tx.eventStockMovement.create({
+            data: {
+              companyId,
+              locationId: sale.locationId,
+              ledgerId: ledger.id,
+              happenedAt: returnedAt,
+              payload: {
+                product_id: line.productId,
+                qty_delta: line.quantity,
+                unit_cost: Number(currentBalance?.avgCost ?? 0),
+                avg_cost_after: nextAvgCost,
+                qty_after: nextQty,
+                source: 'SALE_RETURN'
+              }
+            }
+          });
+        }
+
+        let pointsReversed = 0;
+        if (sale.customerId && Number(sale.totalAmount) > 0 && totalAmount > 0) {
+          const earnedPointsRows = await tx.customerPointsLedger.findMany({
+            where: {
+              companyId,
+              customerId: sale.customerId,
+              sourceType: CustomerPointsSourceType.SALE,
+              sourceId: sale.id,
+              points: { gt: 0 }
+            },
+            select: {
+              points: true
+            }
+          });
+          const earnedPointsTotal = earnedPointsRows.reduce((sum, row) => sum + Number(row.points), 0);
+          if (earnedPointsTotal > 0) {
+            const priorReturns = await tx.saleReturn.findMany({
+              where: {
+                companyId,
+                saleId: sale.id,
+                status: 'POSTED'
+              },
+              select: {
+                totalAmount: true,
+                pointsReversed: true
+              }
+            });
+            const priorReturnedAmount = priorReturns.reduce(
+              (sum, row) => this.roundMoney(sum + Number(row.totalAmount)),
+              0
+            );
+            const priorPointsReversed = priorReturns.reduce((sum, row) => sum + row.pointsReversed, 0);
+            const targetPointsReversed = Math.min(
+              earnedPointsTotal,
+              Math.floor(((priorReturnedAmount + totalAmount) / Number(sale.totalAmount)) * earnedPointsTotal)
+            );
+            pointsReversed = Math.max(0, targetPointsReversed - priorPointsReversed);
+            if (pointsReversed > 0) {
+              const customer = await tx.customer.findFirst({
+                where: { id: sale.customerId, companyId, isActive: true },
+                select: { id: true, pointsBalance: true }
+              });
+              if (!customer || customer.pointsBalance < pointsReversed) {
+                throw new BadRequestException(
+                  'Customer points balance is no longer sufficient to reverse points for this return'
+                );
+              }
+              await tx.customer.update({
+                where: { id: customer.id },
+                data: {
+                  pointsBalance: {
+                    decrement: pointsReversed
+                  }
+                }
+              });
+              await tx.customerPointsLedger.create({
+                data: {
+                  companyId,
+                  customerId: customer.id,
+                  txnType: CustomerPointsTxnType.ADJUST_DOWN,
+                  sourceType: CustomerPointsSourceType.SALE,
+                  sourceId: sale.id,
+                  points: -pointsReversed,
+                  remarks: `Sale return posted: ${sale.id}`,
+                  metadata: {
+                    sale_id: sale.id,
+                    phase: 'SALE_RETURN'
+                  } as Prisma.InputJsonValue,
+                  createdByUserId: actor.id
+                }
+              });
+            }
+          }
+        }
+
+        const saleReturn = await tx.saleReturn.create({
+          data: {
+            companyId,
+            saleId: sale.id,
+            branchId: sale.branchId,
+            locationId: sale.locationId,
+            customerId: sale.customerId,
+            reason,
+            totalAmount,
+            pointsReversed,
+            createdByUserId: actor.id,
+            lines: {
+              create: resolvedLines.map((line) => ({
+                saleId: sale.id,
+                saleLineId: line.saleLineId,
+                productId: line.productId,
+                quantity: line.quantity,
+                unitPrice: line.unitPrice,
+                lineTotal: line.lineTotal
+              }))
+            }
+          },
+          include: {
+            lines: {
+              orderBy: { createdAt: 'asc' }
+            }
+          }
+        });
+
+        await tx.eventSales.create({
+          data: {
+            companyId,
+            branchId: sale.branchId,
+            saleId: sale.id,
+            happenedAt: returnedAt,
+            payload: {
+              sale_id: sale.id,
+              sale_return_id: saleReturn.id,
+              status: 'RETURN_POSTED',
+              reason,
+              total_amount: totalAmount,
+              points_reversed: pointsReversed
+            }
+          }
+        });
+
+        return {
+          sale_id: sale.id,
+          sale_return_id: saleReturn.id,
+          status: 'POSTED' as const,
+          returned_at: saleReturn.createdAt.toISOString(),
+          reason,
+          total_amount: totalAmount,
+          points_reversed: pointsReversed,
+          lines: saleReturn.lines.map((line) => ({
+            sale_line_id: line.saleLineId,
+            product_id: line.productId,
+            quantity: Number(line.quantity),
+            unit_price: Number(line.unitPrice),
+            line_total: Number(line.lineTotal)
+          }))
+        };
+      },
+      {
+        isolationLevel: Prisma.TransactionIsolationLevel.Serializable
+      }
+    );
   }
 
   private nextReceiptNumber(companyId: string, branchId: string): string {
@@ -849,6 +1653,47 @@ export class SalesService {
   private roundToScale(value: number, scale: number): number {
     const safeScale = [2, 3, 4].includes(scale) ? scale : 4;
     return Number(Number(value).toFixed(safeScale));
+  }
+
+  private normalizeCancelReason(value?: string | null): string {
+    const normalized = value?.trim();
+    if (!normalized) {
+      throw new BadRequestException('cancel reason is required');
+    }
+    if (normalized.length < 3) {
+      throw new BadRequestException('cancel reason must be at least 3 characters');
+    }
+    return normalized;
+  }
+
+  private normalizeReturnLines(
+    lines:
+      | Array<{
+          sale_line_id?: string | null;
+          product_id?: string | null;
+          quantity?: number | null;
+        }>
+      | undefined
+  ): Array<{ saleLineId?: string; productId?: string; quantity: number }> {
+    if (!Array.isArray(lines) || lines.length === 0) {
+      throw new BadRequestException('At least one return line is required');
+    }
+    return lines.map((line, index) => {
+      const saleLineId = line.sale_line_id?.trim() || undefined;
+      const productId = line.product_id?.trim() || undefined;
+      if (!saleLineId && !productId) {
+        throw new BadRequestException(`lines[${index}] requires sale_line_id or product_id`);
+      }
+      const quantity = this.roundQty(Number(line.quantity ?? 0));
+      if (!Number.isFinite(quantity) || quantity <= 0) {
+        throw new BadRequestException(`lines[${index}].quantity must be greater than 0`);
+      }
+      return {
+        saleLineId,
+        productId,
+        quantity
+      };
+    });
   }
 
   private async resolveBranch(
@@ -1532,6 +2377,253 @@ export class SalesService {
     }
   }
 
+  private async reverseAutoCylinderSaleEffects(
+    tx: DbTransaction,
+    input: {
+      companyId: string;
+      branchId: string;
+      saleId: string;
+      saleLocationId: string;
+      actorUserId: string;
+      cancelledAt: Date;
+      lines: Array<{
+        product: {
+          sku: string;
+          cylinderTypeId: string | null;
+          isLpg: boolean;
+        };
+      }>;
+    }
+  ): Promise<boolean> {
+    const saleLineCylinderTypeBySku = new Map<string, string>();
+    for (const line of input.lines) {
+      if (line.product.isLpg && line.product.cylinderTypeId) {
+        saleLineCylinderTypeBySku.set(line.product.sku, line.product.cylinderTypeId);
+      }
+    }
+    if (saleLineCylinderTypeBySku.size === 0) {
+      return false;
+    }
+
+    const cylinderMovements = await tx.eventStockMovement.findMany({
+      where: {
+        companyId: input.companyId,
+        payload: {
+          path: ['source'],
+          equals: 'SALE_AUTO_CYLINDER'
+        }
+      },
+      orderBy: [{ happenedAt: 'asc' }, { createdAt: 'asc' }]
+    });
+
+    const saleMovements = cylinderMovements.filter((row) => {
+      const payload = this.asJsonObject(row.payload);
+      return payload?.sale_id === input.saleId;
+    });
+    if (saleMovements.length === 0) {
+      return false;
+    }
+
+    const outboundLocation = await this.resolveOrCreateCustomerOutboundLocation(
+      tx,
+      input.companyId,
+      input.branchId
+    );
+
+    for (const movement of saleMovements) {
+      const payload = this.asJsonObject(movement.payload);
+      if (!payload) {
+        continue;
+      }
+      const workflow = typeof payload.workflow === 'string' ? payload.workflow : null;
+      const productSku = typeof payload.product_sku === 'string' ? payload.product_sku : null;
+      const cylinderTypeId = productSku ? saleLineCylinderTypeBySku.get(productSku) ?? null : null;
+
+      if (!workflow || !cylinderTypeId) {
+        continue;
+      }
+
+      if (payload.mode === 'AGGREGATE_FALLBACK') {
+        const qty = Number(payload.qty ?? 0);
+        if (qty <= 0) {
+          continue;
+        }
+        if (workflow === 'REFILL_EXCHANGE') {
+          await this.adjustCylinderBalance(tx, {
+            companyId: input.companyId,
+            locationId: input.saleLocationId,
+            cylinderTypeId,
+            qtyFullDelta: qty,
+            qtyEmptyDelta: -qty
+          });
+        } else if (workflow === 'NON_REFILL') {
+          await this.adjustCylinderBalance(tx, {
+            companyId: input.companyId,
+            locationId: input.saleLocationId,
+            cylinderTypeId,
+            qtyFullDelta: qty,
+            qtyEmptyDelta: 0
+          });
+          await this.adjustCylinderBalance(tx, {
+            companyId: input.companyId,
+            locationId: outboundLocation.id,
+            cylinderTypeId,
+            qtyFullDelta: -qty,
+            qtyEmptyDelta: 0
+          });
+        }
+
+        await tx.eventStockMovement.create({
+          data: {
+            companyId: input.companyId,
+            locationId: input.saleLocationId,
+            ledgerId: `sale-cylinder-cancel:aggregate:${input.saleId}:${movement.id}`,
+            happenedAt: input.cancelledAt,
+            payload: {
+              source: 'SALE_CANCEL_AUTO_CYLINDER',
+              sale_id: input.saleId,
+              product_sku: productSku,
+              workflow,
+              mode: 'AGGREGATE_FALLBACK',
+              qty,
+              full_delta: Number(payload.full_delta ?? 0) * -1,
+              empty_delta: Number(payload.empty_delta ?? 0) * -1
+            }
+          }
+        });
+        continue;
+      }
+
+      const serial = typeof payload.serial === 'string' ? payload.serial : null;
+      if (!serial) {
+        continue;
+      }
+
+      const cylinder = await tx.cylinder.findFirst({
+        where: {
+          companyId: input.companyId,
+          serial
+        },
+        select: {
+          id: true,
+          currentLocationId: true,
+          status: true
+        }
+      });
+      if (!cylinder) {
+        throw new BadRequestException(
+          `Cylinder ${serial} could not be resolved for sale cancellation`
+        );
+      }
+
+      if (workflow === 'REFILL_EXCHANGE') {
+        await tx.cylinder.update({
+          where: { id: cylinder.id },
+          data: {
+            currentLocationId: input.saleLocationId,
+            status: CylinderStatus.FULL
+          }
+        });
+        await tx.cylinderEvent.create({
+          data: {
+            companyId: input.companyId,
+            cylinderId: cylinder.id,
+            eventType: 'REFILL',
+            fromLocationId: input.saleLocationId,
+            toLocationId: input.saleLocationId,
+            actorUserId: input.actorUserId,
+            notes: `${this.buildSaleCancelCylinderNote(input.saleId, productSku ?? serial, workflow)}|FULL_RESTORE`
+          }
+        });
+        await this.adjustCylinderBalance(tx, {
+          companyId: input.companyId,
+          locationId: input.saleLocationId,
+          cylinderTypeId,
+          qtyFullDelta: 1,
+          qtyEmptyDelta: -1
+        });
+        await tx.eventStockMovement.create({
+          data: {
+            companyId: input.companyId,
+            locationId: input.saleLocationId,
+            ledgerId: `sale-cylinder-cancel:${movement.id}`,
+            happenedAt: input.cancelledAt,
+            payload: {
+              source: 'SALE_CANCEL_AUTO_CYLINDER',
+              sale_id: input.saleId,
+              serial,
+              product_sku: productSku,
+              workflow,
+              full_delta: 1,
+              empty_delta: -1
+            }
+          }
+        });
+        continue;
+      }
+
+      if (workflow === 'NON_REFILL') {
+        const toLocationId =
+          typeof payload.to_location_id === 'string' && payload.to_location_id.trim().length > 0
+            ? payload.to_location_id
+            : outboundLocation.id;
+        await tx.cylinder.update({
+          where: { id: cylinder.id },
+          data: {
+            currentLocationId: input.saleLocationId,
+            status: CylinderStatus.FULL
+          }
+        });
+        await tx.cylinderEvent.create({
+          data: {
+            companyId: input.companyId,
+            cylinderId: cylinder.id,
+            eventType: 'RETURN',
+            fromLocationId: toLocationId,
+            toLocationId: input.saleLocationId,
+            actorUserId: input.actorUserId,
+            notes: `${this.buildSaleCancelCylinderNote(input.saleId, productSku ?? serial, workflow)}|FULL_RETURN`
+          }
+        });
+        await this.adjustCylinderBalance(tx, {
+          companyId: input.companyId,
+          locationId: input.saleLocationId,
+          cylinderTypeId,
+          qtyFullDelta: 1,
+          qtyEmptyDelta: 0
+        });
+        await this.adjustCylinderBalance(tx, {
+          companyId: input.companyId,
+          locationId: toLocationId,
+          cylinderTypeId,
+          qtyFullDelta: -1,
+          qtyEmptyDelta: 0
+        });
+        await tx.eventStockMovement.create({
+          data: {
+            companyId: input.companyId,
+            locationId: input.saleLocationId,
+            ledgerId: `sale-cylinder-cancel:${movement.id}`,
+            happenedAt: input.cancelledAt,
+            payload: {
+              source: 'SALE_CANCEL_AUTO_CYLINDER',
+              sale_id: input.saleId,
+              serial,
+              product_sku: productSku,
+              workflow,
+              from_location_id: toLocationId,
+              to_location_id: input.saleLocationId,
+              full_delta: 1,
+              empty_delta: 0
+            }
+          }
+        });
+      }
+    }
+
+    return true;
+  }
+
   private async adjustCylinderBalance(
     tx: DbTransaction,
     input: {
@@ -1647,6 +2739,21 @@ export class SalesService {
     flowMode: CylinderFlowMode
   ): string {
     return `AUTO_SALE|sale=${saleId}|line=${lineIndex + 1}|sku=${productSku}|flow=${flowMode}`;
+  }
+
+  private buildSaleCancelCylinderNote(
+    saleId: string,
+    productRef: string,
+    flowMode: string
+  ): string {
+    return `AUTO_SALE_CANCEL|sale=${saleId}|ref=${productRef}|flow=${flowMode}`;
+  }
+
+  private asJsonObject(value: Prisma.JsonValue | null | undefined): Record<string, unknown> | null {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) {
+      return null;
+    }
+    return value as Record<string, unknown>;
   }
 
   private normalizePayments(payments: SalePaymentInput[] | undefined): Array<{

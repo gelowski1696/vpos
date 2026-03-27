@@ -1,6 +1,12 @@
 import { Body, Controller, Param, Post, Req, UnauthorizedException } from '@nestjs/common';
 import { Request } from 'express';
-import { SalesService, SalePostResponse, SaleReprintResponse } from './sales.service';
+import {
+  SalesService,
+  SalePostResponse,
+  SaleReprintResponse,
+  SaleCancelResponse,
+  SaleReturnResponse
+} from './sales.service';
 import { EntitlementsService } from '../entitlements/entitlements.service';
 import { AuditService } from '../audit/audit.service';
 import { TenantRoutingPolicyService } from '../entitlements/tenant-routing-policy.service';
@@ -75,6 +81,72 @@ export class SalesController {
       metadata: {
         receiptNumber: result.receipt_number,
         isReprint: result.is_reprint
+      }
+    });
+    return result;
+  }
+
+  @Post(':saleId/cancel')
+  async cancel(
+    @Req() req: Request & { user?: { sub?: string; company_id?: string } },
+    @Param('saleId') saleId: string,
+    @Body() body: { reason?: string | null }
+  ): Promise<SaleCancelResponse> {
+    const companyId = this.requireCompanyId(req);
+    await this.tenantRoutingPolicy.assertRoutable(companyId);
+    await this.entitlementsService.enforceTransactionalWrite(companyId);
+    const result = await this.salesService.cancel(companyId, saleId, {
+      reason: body.reason ?? null,
+      actorUserId: req.user?.sub ?? null
+    });
+    await this.auditService.record({
+      companyId,
+      userId: req.user?.sub ?? null,
+      action: 'SALE_CANCEL',
+      entity: 'Sale',
+      entityId: result.sale_id,
+      metadata: {
+        status: result.status,
+        inventoryReversed: result.inventory_reversed,
+        rewardsVoided: result.rewards_voided,
+        pointsDeltaReversed: result.points_delta_reversed
+      }
+    });
+    return result;
+  }
+
+  @Post(':saleId/return')
+  async returnSale(
+    @Req() req: Request & { user?: { sub?: string; company_id?: string } },
+    @Param('saleId') saleId: string,
+    @Body()
+    body: {
+      reason?: string | null;
+      lines?: Array<{
+        sale_line_id?: string | null;
+        product_id?: string | null;
+        quantity?: number | null;
+      }>;
+    }
+  ): Promise<SaleReturnResponse> {
+    const companyId = this.requireCompanyId(req);
+    await this.tenantRoutingPolicy.assertRoutable(companyId);
+    await this.entitlementsService.enforceTransactionalWrite(companyId);
+    const result = await this.salesService.returnSale(companyId, saleId, {
+      reason: body.reason ?? null,
+      lines: body.lines,
+      actorUserId: req.user?.sub ?? null
+    });
+    await this.auditService.record({
+      companyId,
+      userId: req.user?.sub ?? null,
+      action: 'SALE_RETURN_POST',
+      entity: 'SaleReturn',
+      entityId: result.sale_return_id,
+      metadata: {
+        saleId: result.sale_id,
+        totalAmount: result.total_amount,
+        pointsReversed: result.points_reversed
       }
     });
     return result;

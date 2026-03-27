@@ -17,6 +17,8 @@ import type { AppTheme } from '../theme';
 import { SyncStatusBadge } from '../components/SyncStatusBadge';
 import { toastError, toastInfo, toastSuccess } from '../goey-toast';
 import { OfflineTransactionService } from '../../services/offline-transaction.service';
+import { LocalSessionService } from '../../features/auth/local-session.service';
+import { HttpAuthTransport } from '../../features/auth/http-auth.transport';
 import {
   loadBranchOptions,
   loadCustomerOptions,
@@ -24,6 +26,7 @@ import {
   loadProductOptions,
   type MasterDataOption
 } from '../master-data-local';
+import { normalizeApiBaseUrl } from '../api-base-url';
 import { useTutorialTarget } from '../tutorial/tutorial-provider';
 
 type SaleRow = {
@@ -41,6 +44,23 @@ type SalePayload = {
   branch_id?: string;
   location_id?: string;
   customer_id?: string | null;
+  status?: 'ACTIVE' | 'CANCELLED' | 'VOIDED';
+  cancelled_at?: string | null;
+  cancel_reason?: string | null;
+  sale_returns?: Array<{
+    sale_return_id?: string;
+    returned_at?: string;
+    reason?: string;
+    total_amount?: number;
+    points_reversed?: number;
+    lines?: Array<{
+      sale_line_id?: string;
+      product_id?: string;
+      quantity?: number;
+      unit_price?: number;
+      line_total?: number;
+    }>;
+  }>;
   sale_type?: 'PICKUP' | 'DELIVERY';
   lines?: Array<{
     productId?: string;
@@ -87,12 +107,14 @@ type SalePayload = {
 type ParsedSale = {
   row: SaleRow;
   payload: SalePayload;
+  status: 'ACTIVE' | 'CANCELLED' | 'VOIDED';
   subtotal: number;
   discount: number;
   total: number;
   paid: number;
   balance: number;
   settled: number;
+  returnedTotal: number;
 };
 
 type CustomerPaymentRow = {
@@ -128,6 +150,44 @@ type LocalCustomerPaymentView = {
   syncStatus: string;
 };
 
+type LendingEligibleProductRecord = {
+  product_id: string;
+  sku: string;
+  name: string;
+  unit: string;
+  available_qty: number;
+  requires_deposit: boolean;
+  default_deposit_amount: number | null;
+  lending_unit_type: string | null;
+};
+
+type SaleCancelApiResponse = {
+  sale_id: string;
+  status: 'CANCELLED';
+  cancelled_at: string;
+  cancel_reason: string;
+  inventory_reversed: boolean;
+  rewards_voided: number;
+  points_delta_reversed: number;
+};
+
+type SaleReturnApiResponse = {
+  sale_id: string;
+  sale_return_id: string;
+  status: 'POSTED';
+  returned_at: string;
+  reason: string;
+  total_amount: number;
+  points_reversed: number;
+  lines: Array<{
+    sale_line_id: string;
+    product_id: string;
+    quantity: number;
+    unit_price: number;
+    line_total: number;
+  }>;
+};
+
 type Props = {
   db: SQLiteDatabase;
   theme: AppTheme;
@@ -142,6 +202,12 @@ type Props = {
 type SalesFilter = 'ALL' | 'PENDING' | 'SYNCED' | 'FAILED';
 const SALES_PAGE_SIZE = 50;
 const SALES_SCROLL_THRESHOLD = 120;
+const env = (
+  globalThis as { process?: { env?: Record<string, string | undefined> } }
+).process?.env;
+const API_BASE_URL = normalizeApiBaseUrl(
+  env?.EXPO_PUBLIC_API_BASE_URL ?? 'https://vmjamtech.com/api'
+);
 
 function parsePayload<T = SalePayload>(value: string): T {
   try {
@@ -247,6 +313,25 @@ function mapById(options: MasterDataOption[]): Map<string, MasterDataOption> {
   return new Map(options.map((item) => [item.id, item]));
 }
 
+function resolveSaleLifecycleStatus(payload: SalePayload | null | undefined): 'ACTIVE' | 'CANCELLED' | 'VOIDED' {
+  const raw = String(payload?.status ?? '')
+    .trim()
+    .toUpperCase();
+  if (raw === 'CANCELLED' || raw === 'VOIDED') {
+    return raw;
+  }
+  return 'ACTIVE';
+}
+
+function computeSaleReturnedTotal(payload: SalePayload | null | undefined): number {
+  const returns = Array.isArray(payload?.sale_returns) ? payload.sale_returns : [];
+  return Number(
+    returns
+      .reduce((sum, entry) => sum + toAmount(entry.total_amount), 0)
+      .toFixed(2)
+  );
+}
+
 export function SalesScreen({
   db,
   theme,
@@ -282,7 +367,96 @@ export function SalesScreen({
   const [customerPaymentHistoryBySaleId, setCustomerPaymentHistoryBySaleId] = useState<
     Map<string, LocalCustomerPaymentView[]>
   >(new Map());
+  const [lendingModalOpen, setLendingModalOpen] = useState(false);
+  const [lendingLoading, setLendingLoading] = useState(false);
+  const [lendingSaving, setLendingSaving] = useState(false);
+  const [lendingProducts, setLendingProducts] = useState<LendingEligibleProductRecord[]>([]);
+  const [lendingQtyByProduct, setLendingQtyByProduct] = useState<Record<string, string>>({});
+  const [lendingDepositByProduct, setLendingDepositByProduct] = useState<Record<string, string>>({});
+  const [lendingRemarks, setLendingRemarks] = useState('');
+  const [lendingFocusedProductId, setLendingFocusedProductId] = useState<string | null>(null);
+  const [cancelModalOpen, setCancelModalOpen] = useState(false);
+  const [cancelSaving, setCancelSaving] = useState(false);
+  const [cancelReason, setCancelReason] = useState('');
+  const [returnModalOpen, setReturnModalOpen] = useState(false);
+  const [returnSaving, setReturnSaving] = useState(false);
+  const [returnReason, setReturnReason] = useState('');
+  const [returnQuantity, setReturnQuantity] = useState('');
+  const [returnProductId, setReturnProductId] = useState<string | null>(null);
   const prevSyncBusyRef = useRef(syncBusy);
+
+  const apiRequest = async <T,>(path: string, init?: RequestInit): Promise<T> => {
+    const session = new LocalSessionService(db);
+    await session.initializeFromStorage();
+    const transport = new HttpAuthTransport({ baseUrl: API_BASE_URL });
+    const send = async (token?: string): Promise<Response> => {
+      const clientId = await session.getClientId();
+      const headers = new Headers(init?.headers ?? {});
+      headers.set('content-type', 'application/json');
+      if (!(init?.body instanceof FormData)) {
+        headers.set('content-type', 'application/json');
+      }
+      if (token) {
+        headers.set('authorization', `Bearer ${token}`);
+      }
+      if (clientId?.trim()) {
+        headers.set('x-client-id', clientId.trim());
+      }
+      return fetch(`${API_BASE_URL}${path}`, {
+        ...init,
+        headers
+      });
+    };
+
+    let token = await session.getAccessToken();
+    let response = await send(token);
+    if (response.status === 401) {
+      const refreshed = await session.refreshSession(transport);
+      if (refreshed) {
+        token = await session.getAccessToken();
+        response = await send(token);
+      }
+    }
+    if (!response.ok) {
+      let message = `Request failed (${response.status})`;
+      try {
+        const payload = (await response.json()) as { message?: string | string[]; error?: string };
+        if (Array.isArray(payload.message)) {
+          message = payload.message.join(', ');
+        } else if (typeof payload.message === 'string') {
+          message = payload.message;
+        } else if (typeof payload.error === 'string') {
+          message = payload.error;
+        }
+      } catch {
+        // ignore parse failure
+      }
+      throw new Error(message);
+    }
+    if (response.status === 204) {
+      return undefined as T;
+    }
+    return (await response.json()) as T;
+  };
+
+  const updateLocalSalePayload = async (
+    saleId: string,
+    updater: (current: SalePayload) => SalePayload
+  ): Promise<void> => {
+    const row = await db.getFirstAsync<{ payload: string | null }>(
+      'SELECT payload FROM sales_local WHERE id = ?',
+      saleId
+    );
+    const current = parsePayload<SalePayload>(row?.payload ?? '{}');
+    const nextPayload = updater(current);
+    const now = new Date().toISOString();
+    await db.runAsync(
+      'UPDATE sales_local SET payload = ?, updated_at = ? WHERE id = ?',
+      JSON.stringify(nextPayload),
+      now,
+      saleId
+    );
+  };
 
   const fetchSalesPage = async (nextOffset: number): Promise<SaleRow[]> => {
     return db.getAllAsync<SaleRow>(
@@ -433,6 +607,8 @@ export function SalesScreen({
     const byBranch = rows
       .map((row) => {
         const payload = parsePayload(row.payload);
+        const status = resolveSaleLifecycleStatus(payload);
+        const returnedTotal = computeSaleReturnedTotal(payload);
         const lineSubtotal = (payload.lines ?? []).reduce((sum, line) => {
           const qty = toAmount(line.quantity);
           const unitPrice = toAmount(line.unitPrice);
@@ -444,7 +620,8 @@ export function SalesScreen({
           0
         );
         const settled = settledBySaleId.get(row.id) ?? 0;
-        const total = Math.max(0, lineSubtotal - discount);
+        const activeTotal = Math.max(0, Number((lineSubtotal - discount - returnedTotal).toFixed(2)));
+        const total = status === 'ACTIVE' ? activeTotal : 0;
         const paid = Math.min(total, Number((paidFromSale + settled).toFixed(2)));
         const hasCreditTracking =
           String(payload.payment_mode ?? '').toUpperCase() === 'PARTIAL' ||
@@ -454,17 +631,19 @@ export function SalesScreen({
           Number((toAmount(payload.credit_balance) - settled).toFixed(2))
         );
         const balance = hasCreditTracking
-          ? creditRemaining
+          ? (status === 'ACTIVE' ? creditRemaining : 0)
           : Math.max(0, Number((total - paid).toFixed(2)));
         return {
           row,
           payload,
+          status,
           subtotal: lineSubtotal,
           discount,
           total,
           paid,
           balance,
-          settled
+          settled,
+          returnedTotal
         };
       })
       .filter((item) => {
@@ -546,17 +725,336 @@ export function SalesScreen({
   const selectedSaleCustomerPaymentHistory = selectedSale
     ? customerPaymentHistoryBySaleId.get(selectedSale.row.id) ?? []
     : [];
+  const selectedSaleReturns = selectedSale?.payload.sale_returns ?? [];
   const selectedPersonnelLabel = selectedSale ? resolveSalePersonnelLabel(selectedSale.payload) : '-';
   const selectedSaleDirectPayments = selectedSale?.payload.payments ?? [];
   const selectedSaleDirectPaid = selectedSaleDirectPayments.reduce(
     (sum, payment) => sum + toAmount(payment.amount),
     0
   );
+  const selectedSaleIsActive = selectedSale?.status === 'ACTIVE';
+
+  const getReturnedQtyForProduct = (productId: string): number => {
+    if (!selectedSale) {
+      return 0;
+    }
+    return Number(
+      (selectedSale.payload.sale_returns ?? []).reduce((sum, entry) => {
+        const lines = Array.isArray(entry.lines) ? entry.lines : [];
+        return (
+          sum +
+          lines.reduce((lineSum, line) => {
+            const lineProductId = (line.product_id ?? '').trim();
+            return lineProductId === productId.trim() ? lineSum + toAmount(line.quantity) : lineSum;
+          }, 0)
+        );
+      }, 0).toFixed(4)
+    );
+  };
 
   const closeSaleDetails = (): void => {
     setSelectedSaleId(null);
     setBreakdownModalOpen(false);
     setPaymentModalOpen(false);
+    setLendingModalOpen(false);
+    setLendingProducts([]);
+    setLendingQtyByProduct({});
+    setLendingDepositByProduct({});
+    setLendingRemarks('');
+    setLendingFocusedProductId(null);
+    setCancelModalOpen(false);
+    setCancelReason('');
+    setReturnModalOpen(false);
+    setReturnReason('');
+    setReturnQuantity('');
+    setReturnProductId(null);
+  };
+
+  const closeCancelModal = (): void => {
+    if (cancelSaving) {
+      return;
+    }
+    setCancelModalOpen(false);
+    setCancelReason('');
+  };
+
+  const closeLendingModal = (): void => {
+    if (lendingSaving) {
+      return;
+    }
+    setLendingModalOpen(false);
+    setLendingProducts([]);
+    setLendingQtyByProduct({});
+    setLendingDepositByProduct({});
+    setLendingRemarks('');
+    setLendingFocusedProductId(null);
+  };
+
+  const openReturnModal = (productId: string): void => {
+    if (!selectedSale) {
+      return;
+    }
+    if (!selectedSaleIsActive) {
+      toastInfo('Return', 'Cancelled sales can no longer accept item returns.');
+      return;
+    }
+    if (selectedSale.row.sync_status !== 'synced') {
+      toastInfo('Return', 'Only synced sales can post item returns right now.');
+      return;
+    }
+    const matchingLine = (selectedSale.payload.lines ?? []).find(
+      (line) => (line.product_id ?? line.productId ?? '').trim() === productId.trim()
+    );
+    const soldQty = toAmount(matchingLine?.quantity ?? matchingLine?.qty);
+    const remaining = Math.max(0, Number((soldQty - getReturnedQtyForProduct(productId)).toFixed(4)));
+    if (remaining <= 0) {
+      toastInfo('Return', 'This item has already been fully returned.');
+      return;
+    }
+    setReturnProductId(productId);
+    setReturnQuantity(remaining.toString());
+    setReturnReason('');
+    setReturnModalOpen(true);
+  };
+
+  const closeReturnModal = (): void => {
+    if (returnSaving) {
+      return;
+    }
+    setReturnModalOpen(false);
+    setReturnReason('');
+    setReturnQuantity('');
+    setReturnProductId(null);
+  };
+
+  const openLendingModal = async (productId?: string | null): Promise<void> => {
+    if (!selectedSale) {
+      return;
+    }
+    if (!selectedSale.payload.customer_id?.trim()) {
+      toastError('Lending', 'A customer-linked sale is required before lending.');
+      return;
+    }
+    setLendingLoading(true);
+    try {
+      const allProducts = await apiRequest<LendingEligibleProductRecord[]>(
+        `/lending/eligible-products/by-sale/${encodeURIComponent(selectedSale.row.id)}`
+      );
+      const products =
+        productId?.trim()
+          ? allProducts.filter((product) => product.product_id === productId.trim())
+          : allProducts;
+      if (!products.length) {
+        toastInfo(
+          'Lending',
+          productId?.trim()
+            ? 'This sale item is not configured as lendable for this sale location.'
+            : 'No lendable items are available for this sale location.'
+        );
+        return;
+      }
+      setLendingProducts(products);
+      setLendingRemarks('');
+      setLendingFocusedProductId(productId?.trim() || null);
+      setLendingQtyByProduct(Object.fromEntries(products.map((product) => [product.product_id, ''])));
+      setLendingDepositByProduct(
+        Object.fromEntries(
+          products.map((product) => [
+            product.product_id,
+            product.default_deposit_amount !== null ? product.default_deposit_amount.toFixed(2) : ''
+          ])
+        )
+      );
+      setLendingModalOpen(true);
+    } catch (cause) {
+      toastError('Lending', cause instanceof Error ? cause.message : 'Unable to load lendable items.');
+    } finally {
+      setLendingLoading(false);
+    }
+  };
+
+  const saveLendingForSelectedSale = async (): Promise<void> => {
+    if (!selectedSale || lendingSaving) {
+      return;
+    }
+    const lines = lendingProducts
+      .map((product) => {
+        const qty = Number(lendingQtyByProduct[product.product_id] || '0');
+        const depositRaw = lendingDepositByProduct[product.product_id];
+        const deposit = depositRaw?.trim().length ? Number(depositRaw) : null;
+        return { product, qty, deposit };
+      })
+      .filter((entry) => Number.isFinite(entry.qty) && entry.qty > 0);
+
+    if (lines.length === 0) {
+      toastInfo('Lending', 'Enter quantity for at least one lendable item.');
+      return;
+    }
+
+    for (const entry of lines) {
+      if (entry.qty > entry.product.available_qty) {
+        toastError(
+          'Lending',
+          `${entry.product.name} only has ${entry.product.available_qty.toFixed(4)} available.`
+        );
+        return;
+      }
+      if (
+        entry.product.requires_deposit &&
+        (entry.deposit === null || !Number.isFinite(entry.deposit) || entry.deposit < 0)
+      ) {
+        toastError('Lending', `Deposit is required for ${entry.product.name}.`);
+        return;
+      }
+      if (entry.deposit !== null && (!Number.isFinite(entry.deposit) || entry.deposit < 0)) {
+        toastError('Lending', `Deposit must be 0 or higher for ${entry.product.name}.`);
+        return;
+      }
+    }
+
+    setLendingSaving(true);
+    try {
+      await apiRequest('/lending', {
+        method: 'POST',
+        body: JSON.stringify({
+          sale_id: selectedSale.row.id,
+          remarks: lendingRemarks.trim() || null,
+          lines: lines.map((entry) => ({
+            product_id: entry.product.product_id,
+            quantity: entry.qty,
+            deposit_amount: entry.deposit
+          }))
+        })
+      });
+      toastSuccess('Lending saved', `Linked to sale ${selectedSale.row.id}.`);
+      closeLendingModal();
+      await refresh();
+      await onDataChanged?.();
+    } catch (cause) {
+      toastError('Lending failed', cause instanceof Error ? cause.message : 'Unable to save lending.');
+    } finally {
+      setLendingSaving(false);
+    }
+  };
+
+  const handleCancelSelectedSale = async (): Promise<void> => {
+    if (!selectedSale || cancelSaving) {
+      return;
+    }
+    if (!selectedSaleIsActive) {
+      toastInfo('Sale Cancel', 'This sale is already cancelled.');
+      return;
+    }
+    if (selectedSale.row.sync_status !== 'synced') {
+      toastInfo('Sale Cancel', 'Only synced sales can be cancelled right now.');
+      return;
+    }
+    const reason = cancelReason.trim();
+    if (reason.length < 3) {
+      toastInfo('Sale Cancel', 'Enter a short reason before cancelling this sale.');
+      return;
+    }
+
+    setCancelSaving(true);
+    try {
+      const result = await apiRequest<SaleCancelApiResponse>(
+        `/sales/${encodeURIComponent(selectedSale.row.id)}/cancel`,
+        {
+          method: 'POST',
+          body: JSON.stringify({ reason })
+        }
+      );
+      await updateLocalSalePayload(selectedSale.row.id, (current) => ({
+        ...current,
+        status: result.status,
+        cancelled_at: result.cancelled_at,
+        cancel_reason: result.cancel_reason
+      }));
+      toastSuccess('Sale Cancelled', `Sale ${selectedSale.row.id} was cancelled.`);
+      closeCancelModal();
+      await refresh();
+      await onDataChanged?.();
+    } catch (cause) {
+      toastError('Sale Cancel Failed', cause instanceof Error ? cause.message : 'Unable to cancel sale.');
+    } finally {
+      setCancelSaving(false);
+    }
+  };
+
+  const handleReturnSelectedSaleItem = async (): Promise<void> => {
+    if (!selectedSale || !returnProductId || returnSaving) {
+      return;
+    }
+    const reason = returnReason.trim();
+    if (reason.length < 3) {
+      toastInfo('Return', 'Enter a short reason before posting this return.');
+      return;
+    }
+    const quantity = Number(returnQuantity || '0');
+    if (!Number.isFinite(quantity) || quantity <= 0) {
+      toastInfo('Return', 'Return quantity must be greater than 0.');
+      return;
+    }
+
+    const matchingLine = (selectedSale.payload.lines ?? []).find(
+      (line) => (line.product_id ?? line.productId ?? '').trim() === returnProductId.trim()
+    );
+    const soldQty = toAmount(matchingLine?.quantity ?? matchingLine?.qty);
+    const remaining = Math.max(0, Number((soldQty - getReturnedQtyForProduct(returnProductId)).toFixed(4)));
+    if (quantity > remaining) {
+      toastError('Return', `Only ${remaining.toFixed(4)} can still be returned for this item.`);
+      return;
+    }
+
+    setReturnSaving(true);
+    try {
+      const result = await apiRequest<SaleReturnApiResponse>(
+        `/sales/${encodeURIComponent(selectedSale.row.id)}/return`,
+        {
+          method: 'POST',
+          body: JSON.stringify({
+            reason,
+            lines: [
+              {
+                product_id: returnProductId,
+                quantity
+              }
+            ]
+          })
+        }
+      );
+      await updateLocalSalePayload(selectedSale.row.id, (current) => ({
+        ...current,
+        sale_returns: [
+          ...(current.sale_returns ?? []),
+          {
+            sale_return_id: result.sale_return_id,
+            returned_at: result.returned_at,
+            reason: result.reason,
+            total_amount: result.total_amount,
+            points_reversed: result.points_reversed,
+            lines: result.lines.map((line) => ({
+              sale_line_id: line.sale_line_id,
+              product_id: line.product_id,
+              quantity: line.quantity,
+              unit_price: line.unit_price,
+              line_total: line.line_total
+            }))
+          }
+        ]
+      }));
+      toastSuccess(
+        'Return Posted',
+        `Returned ${quantity.toFixed(4)} item(s) from sale ${selectedSale.row.id}.`
+      );
+      closeReturnModal();
+      await refresh();
+      await onDataChanged?.();
+    } catch (cause) {
+      toastError('Return Failed', cause instanceof Error ? cause.message : 'Unable to post return.');
+    } finally {
+      setReturnSaving(false);
+    }
   };
 
   const handlePrintSelectedSale = async (): Promise<void> => {
@@ -775,6 +1273,11 @@ export function SalesScreen({
                     <Text style={[styles.itemId, { color: theme.heading }]}>
                       Sale ID {item.row.id}
                     </Text>
+                    {item.status !== 'ACTIVE' ? (
+                      <Text style={[styles.itemMeta, { color: '#B91C1C', fontWeight: '700' }]}>
+                        {item.status}
+                      </Text>
+                    ) : null}
                     <Text style={[styles.itemMeta, { color: theme.subtext }]}>
                       {item.row.receipt_number ? `Receipt #${item.row.receipt_number}` : 'Receipt not assigned'}
                     </Text>
@@ -787,6 +1290,11 @@ export function SalesScreen({
                   </View>
                   <View style={{ alignItems: 'flex-end', gap: 6 }}>
                     <Text style={[styles.itemTotal, { color: theme.heading }]}>{fmtMoney(item.total)}</Text>
+                    {item.returnedTotal > 0 ? (
+                      <Text style={[styles.itemPaid, { color: theme.subtext }]}>
+                        Returned {fmtMoney(item.returnedTotal)}
+                      </Text>
+                    ) : null}
                     <Text style={[styles.itemPaid, { color: theme.subtext }]}>Paid {fmtMoney(item.paid)}</Text>
                     <Text style={[styles.itemPaid, { color: theme.subtext }]}>Due {fmtMoney(item.balance)}</Text>
                     <SyncStatusBadge status={item.row.sync_status} />
@@ -1036,6 +1544,8 @@ export function SalesScreen({
               const qty = toAmount(line.quantity ?? line.qty);
               const unitPrice = toAmount(line.unitPrice ?? line.unit_price);
               const lineTotal = qty * unitPrice;
+              const returnedQty = getReturnedQtyForProduct(productId);
+              const remainingQty = Math.max(0, Number((qty - returnedQty).toFixed(4)));
               const productLabel = productMap.get(productId)?.label ?? productId;
               const rawFlow = String(line.cylinderFlow ?? line.cylinder_flow ?? '').trim().toUpperCase();
               const flowLabel =
@@ -1054,6 +1564,55 @@ export function SalesScreen({
                     {flowLabel ? (
                       <Text style={[styles.itemMeta, { color: theme.subtext }]}>Flow: {flowLabel}</Text>
                     ) : null}
+                    {returnedQty > 0 ? (
+                      <Text style={[styles.itemMeta, { color: theme.subtext }]}>
+                        Returned {returnedQty.toFixed(4)} | Remaining {remainingQty.toFixed(4)}
+                      </Text>
+                    ) : null}
+                    <View style={styles.itemActionRow}>
+                      <Pressable
+                        onPress={() => void openLendingModal(productId)}
+                        disabled={
+                          syncBusy ||
+                          lendingLoading ||
+                          !selectedSale.payload.customer_id ||
+                          !selectedSaleIsActive
+                        }
+                        style={[
+                          styles.inlineActionBtn,
+                          {
+                            borderColor: theme.cardBorder,
+                            backgroundColor:
+                              syncBusy ||
+                              lendingLoading ||
+                              !selectedSale.payload.customer_id ||
+                              !selectedSaleIsActive
+                                ? theme.pillBg
+                                : theme.card
+                          }
+                        ]}
+                      >
+                        <Text style={[styles.inlineActionText, { color: theme.pillText }]}>
+                          {!selectedSale.payload.customer_id ? 'Customer Required' : 'Lend'}
+                        </Text>
+                      </Pressable>
+                      <Pressable
+                        onPress={() => openReturnModal(productId)}
+                        disabled={syncBusy || !selectedSaleIsActive || remainingQty <= 0}
+                        style={[
+                          styles.inlineActionBtn,
+                          {
+                            borderColor: theme.cardBorder,
+                            backgroundColor:
+                              syncBusy || !selectedSaleIsActive || remainingQty <= 0
+                                ? theme.pillBg
+                                : theme.card
+                          }
+                        ]}
+                      >
+                        <Text style={[styles.inlineActionText, { color: theme.pillText }]}>Return Item</Text>
+                      </Pressable>
+                    </View>
                   </View>
                   <Text style={[styles.tableCell, { color: theme.heading }]}>{fmtMoney(lineTotal)}</Text>
                 </View>
@@ -1084,7 +1643,17 @@ export function SalesScreen({
                         {selectedSale.payload.payment_mode ?? 'FULL'}
                       </Text>
                     </View>
+                    <View style={[styles.typeChip, { backgroundColor: selectedSaleIsActive ? theme.pillBg : '#FEE2E2' }]}>
+                      <Text style={[styles.typeChipText, { color: selectedSaleIsActive ? theme.pillText : '#B91C1C' }]}>
+                        {selectedSale.status}
+                      </Text>
+                    </View>
                   </View>
+                  {!selectedSaleIsActive && selectedSale.payload.cancel_reason ? (
+                    <Text style={[styles.heroSub, { color: '#B91C1C' }]}>
+                      Cancel reason: {selectedSale.payload.cancel_reason}
+                    </Text>
+                  ) : null}
                 </View>
 
                 <View style={styles.infoGrid}>
@@ -1139,6 +1708,12 @@ export function SalesScreen({
                     <Text style={[styles.totalLabel, { color: theme.subtext }]}>Balance</Text>
                     <Text style={[styles.totalValue, { color: theme.heading }]}>{fmtMoney(selectedSale.balance)}</Text>
                   </View>
+                  {selectedSale.returnedTotal > 0 ? (
+                    <View style={[styles.totalCard, { borderColor: theme.cardBorder }]}>
+                      <Text style={[styles.totalLabel, { color: theme.subtext }]}>Returned</Text>
+                      <Text style={[styles.totalValue, { color: theme.heading }]}>{fmtMoney(selectedSale.returnedTotal)}</Text>
+                    </View>
+                  ) : null}
                 </View>
 
                 <Text style={[styles.sectionTitle, { color: theme.heading }]}>Items</Text>
@@ -1149,6 +1724,31 @@ export function SalesScreen({
             }
             ListFooterComponent={(
               <View style={[styles.detailFooter, { borderTopColor: theme.cardBorder, backgroundColor: theme.card }]}>
+                {selectedSaleReturns.length > 0 ? (
+                  <>
+                    <Text style={[styles.sectionTitle, { color: theme.heading }]}>Returns</Text>
+                    {selectedSaleReturns.map((entry) => (
+                      <View
+                        key={entry.sale_return_id ?? `${entry.returned_at}-${entry.reason}`}
+                        style={[styles.paymentCard, { borderColor: theme.cardBorder, backgroundColor: theme.inputBg }]}
+                      >
+                        <View style={{ flex: 1 }}>
+                          <Text style={[styles.tableCellName, { color: theme.heading }]}>
+                            {fmtMoney(toAmount(entry.total_amount))} returned
+                          </Text>
+                          <Text style={[styles.itemMeta, { color: theme.subtext }]}>
+                            {fmtDate(entry.returned_at)} | {entry.reason ?? 'No reason'}
+                          </Text>
+                          {toAmount(entry.points_reversed) > 0 ? (
+                            <Text style={[styles.itemMeta, { color: theme.subtext }]}>
+                              Points reversed {toAmount(entry.points_reversed)}
+                            </Text>
+                          ) : null}
+                        </View>
+                      </View>
+                    ))}
+                  </>
+                ) : null}
                 <View style={styles.detailFooterRow}>
                   <Pressable
                     style={[
@@ -1156,13 +1756,13 @@ export function SalesScreen({
                       styles.footerBtn,
                       {
                         backgroundColor:
-                          printing || syncBusy || !selectedSale.row.receipt_number
+                          printing || syncBusy || !selectedSale.row.receipt_number || !selectedSaleIsActive
                             ? theme.primaryMuted
                             : theme.primary
                       }
                     ]}
                     onPress={() => void handlePrintSelectedSale()}
-                    disabled={printing || syncBusy || !selectedSale.row.receipt_number}
+                    disabled={printing || syncBusy || !selectedSale.row.receipt_number || !selectedSaleIsActive}
                   >
                     <Text style={styles.printText}>
                       {printing
@@ -1182,7 +1782,8 @@ export function SalesScreen({
                           syncBusy ||
                           !selectedSale.payload.customer_id ||
                           selectedSaleCreditDue <= 0 ||
-                          paymentSaving
+                          paymentSaving ||
+                          !selectedSaleIsActive
                             ? theme.pillBg
                             : theme.inputBg
                       }
@@ -1192,7 +1793,8 @@ export function SalesScreen({
                       syncBusy ||
                       !selectedSale.payload.customer_id ||
                       selectedSaleCreditDue <= 0 ||
-                      paymentSaving
+                      paymentSaving ||
+                      !selectedSaleIsActive
                     }
                   >
                     <Text style={[styles.settlementBtnText, { color: theme.pillText }]}>
@@ -1216,6 +1818,27 @@ export function SalesScreen({
                   </Pressable>
                   <Pressable
                     style={[
+                      styles.breakdownBtn,
+                      styles.footerBtn,
+                      {
+                        borderColor: theme.cardBorder,
+                        backgroundColor:
+                          syncBusy || cancelSaving || !selectedSaleIsActive || selectedSale.row.sync_status !== 'synced'
+                            ? theme.pillBg
+                            : theme.inputBg
+                      }
+                    ]}
+                    onPress={() => setCancelModalOpen(true)}
+                    disabled={
+                      syncBusy || cancelSaving || !selectedSaleIsActive || selectedSale.row.sync_status !== 'synced'
+                    }
+                  >
+                    <Text style={[styles.breakdownBtnText, { color: theme.pillText }]}>Cancel Sale</Text>
+                  </Pressable>
+                </View>
+                <View style={styles.detailFooterRow}>
+                  <Pressable
+                    style={[
                       styles.settlementBtn,
                       styles.footerBtn,
                       { borderColor: theme.cardBorder, backgroundColor: theme.inputBg }
@@ -1230,6 +1853,234 @@ export function SalesScreen({
           />
         </View>
       ) : null}
+
+      <Modal
+        visible={cancelModalOpen && Boolean(selectedSale)}
+        transparent
+        animationType="fade"
+        onRequestClose={closeCancelModal}
+      >
+        {selectedSale ? (
+          <Pressable style={styles.modalOverlay} onPress={closeCancelModal}>
+            <Pressable
+              style={[styles.paymentModalCard, { backgroundColor: theme.card, borderColor: theme.cardBorder }]}
+              onPress={(event) => event.stopPropagation()}
+            >
+              <View style={styles.paymentModalHead}>
+                <Text style={[styles.blockTitle, { color: theme.heading }]}>Cancel Sale</Text>
+                <Pressable
+                  style={[styles.closeBtn, { borderColor: theme.cardBorder, backgroundColor: theme.inputBg }]}
+                  onPress={closeCancelModal}
+                  disabled={cancelSaving}
+                >
+                  <Text style={[styles.closeText, { color: theme.heading }]}>Close</Text>
+                </Pressable>
+              </View>
+
+              <Text style={[styles.itemMeta, { color: theme.subtext }]}>
+                Sale {selectedSale.row.id} | {selectedSale.row.receipt_number ?? 'No receipt'}
+              </Text>
+
+              <TextInput
+                value={cancelReason}
+                onChangeText={setCancelReason}
+                placeholder="Why is this sale being cancelled?"
+                placeholderTextColor={theme.inputPlaceholder}
+                style={[styles.searchInput, { backgroundColor: theme.inputBg, color: theme.inputText }]}
+              />
+
+              <Pressable
+                style={[
+                  styles.printBtn,
+                  { backgroundColor: cancelSaving || syncBusy ? theme.primaryMuted : theme.primary }
+                ]}
+                onPress={() => void handleCancelSelectedSale()}
+                disabled={cancelSaving || syncBusy}
+              >
+                <Text style={styles.printText}>{cancelSaving ? 'Cancelling...' : 'Confirm Cancel Sale'}</Text>
+              </Pressable>
+            </Pressable>
+          </Pressable>
+        ) : null}
+      </Modal>
+
+      <Modal
+        visible={returnModalOpen && Boolean(selectedSale) && Boolean(returnProductId)}
+        transparent
+        animationType="fade"
+        onRequestClose={closeReturnModal}
+      >
+        {selectedSale ? (
+          <Pressable style={styles.modalOverlay} onPress={closeReturnModal}>
+            <Pressable
+              style={[styles.paymentModalCard, { backgroundColor: theme.card, borderColor: theme.cardBorder }]}
+              onPress={(event) => event.stopPropagation()}
+            >
+              <View style={styles.paymentModalHead}>
+                <Text style={[styles.blockTitle, { color: theme.heading }]}>Return Sale Item</Text>
+                <Pressable
+                  style={[styles.closeBtn, { borderColor: theme.cardBorder, backgroundColor: theme.inputBg }]}
+                  onPress={closeReturnModal}
+                  disabled={returnSaving}
+                >
+                  <Text style={[styles.closeText, { color: theme.heading }]}>Close</Text>
+                </Pressable>
+              </View>
+
+              <Text style={[styles.itemMeta, { color: theme.subtext }]}>
+                {productMap.get(returnProductId ?? '')?.label ?? returnProductId}
+              </Text>
+              <TextInput
+                value={returnQuantity}
+                onChangeText={setReturnQuantity}
+                keyboardType="numeric"
+                placeholder="Quantity to return"
+                placeholderTextColor={theme.inputPlaceholder}
+                style={[styles.searchInput, { backgroundColor: theme.inputBg, color: theme.inputText }]}
+              />
+              <TextInput
+                value={returnReason}
+                onChangeText={setReturnReason}
+                placeholder="Why is this item being returned?"
+                placeholderTextColor={theme.inputPlaceholder}
+                style={[styles.searchInput, { backgroundColor: theme.inputBg, color: theme.inputText }]}
+              />
+
+              <Pressable
+                style={[
+                  styles.printBtn,
+                  { backgroundColor: returnSaving || syncBusy ? theme.primaryMuted : theme.primary }
+                ]}
+                onPress={() => void handleReturnSelectedSaleItem()}
+                disabled={returnSaving || syncBusy}
+              >
+                <Text style={styles.printText}>{returnSaving ? 'Posting Return...' : 'Confirm Return Item'}</Text>
+              </Pressable>
+            </Pressable>
+          </Pressable>
+        ) : null}
+      </Modal>
+
+      <Modal
+        visible={lendingModalOpen && Boolean(selectedSale)}
+        transparent
+        animationType="slide"
+        onRequestClose={closeLendingModal}
+      >
+        {selectedSale ? (
+          <Pressable style={styles.modalOverlay} onPress={closeLendingModal}>
+            <Pressable
+              style={[styles.lendingModalCard, { backgroundColor: theme.card, borderColor: theme.cardBorder }]}
+              onPress={(event) => event.stopPropagation()}
+            >
+              <View style={styles.paymentModalHead}>
+                <Text style={[styles.blockTitle, { color: theme.heading }]}>
+                  {lendingFocusedProductId ? 'Lend Sale Item' : 'Create Lending'}
+                </Text>
+                <Pressable
+                  style={[styles.closeBtn, { borderColor: theme.cardBorder, backgroundColor: theme.inputBg }]}
+                  onPress={closeLendingModal}
+                  disabled={lendingSaving}
+                >
+                  <Text style={[styles.closeText, { color: theme.heading }]}>Close</Text>
+                </Pressable>
+              </View>
+
+              <Text style={[styles.itemMeta, { color: theme.subtext }]}>
+                Sale {selectedSale.row.id} | {selectedCustomerLabel}
+              </Text>
+
+              <View style={[styles.outstandingCard, { borderColor: theme.cardBorder, backgroundColor: theme.inputBg }]}>
+                <Text style={[styles.infoLabel, { color: theme.subtext }]}>Location</Text>
+                <Text style={[styles.infoValue, { color: theme.heading }]}>
+                  {selectedBranchLabel} / {selectedLocationLabel}
+                </Text>
+              </View>
+
+              <ScrollView style={styles.lendingScroll} contentContainerStyle={styles.modalBody} keyboardShouldPersistTaps="handled">
+                {lendingProducts.map((product) => (
+                  <View
+                    key={product.product_id}
+                    style={[styles.lendingProductCard, { borderColor: theme.cardBorder, backgroundColor: theme.inputBg }]}
+                  >
+                    <Text style={[styles.tableCellName, { color: theme.heading }]}>{product.name}</Text>
+                    <Text style={[styles.itemMeta, { color: theme.subtext }]}>
+                      {product.sku} | Available {product.available_qty.toFixed(4)} {product.lending_unit_type ?? product.unit}
+                    </Text>
+                    {product.requires_deposit || product.default_deposit_amount !== null ? (
+                      <Text style={[styles.itemMeta, { color: theme.subtext }]}>
+                        Deposit {product.default_deposit_amount !== null ? `default PHP ${product.default_deposit_amount.toFixed(2)}` : 'required'}
+                      </Text>
+                    ) : null}
+
+                    <Text style={[styles.infoLabel, { color: theme.subtext }]}>Quantity To Lend</Text>
+                    <TextInput
+                      value={lendingQtyByProduct[product.product_id] ?? ''}
+                      onChangeText={(value) =>
+                        setLendingQtyByProduct((prev) => ({ ...prev, [product.product_id]: value }))
+                      }
+                      keyboardType="numeric"
+                      placeholder="0"
+                      placeholderTextColor={theme.inputPlaceholder}
+                      style={[styles.searchInput, { backgroundColor: theme.card, color: theme.inputText }]}
+                    />
+
+                    {product.requires_deposit || product.default_deposit_amount !== null ? (
+                      <>
+                        <Text style={[styles.infoLabel, { color: theme.subtext }]}>Deposit Amount</Text>
+                        <TextInput
+                          value={lendingDepositByProduct[product.product_id] ?? ''}
+                          onChangeText={(value) =>
+                            setLendingDepositByProduct((prev) => ({ ...prev, [product.product_id]: value }))
+                          }
+                          keyboardType="numeric"
+                          placeholder="0.00"
+                          placeholderTextColor={theme.inputPlaceholder}
+                          style={[styles.searchInput, { backgroundColor: theme.card, color: theme.inputText }]}
+                        />
+                      </>
+                    ) : null}
+                  </View>
+                ))}
+
+                <Text style={[styles.infoLabel, { color: theme.subtext }]}>Remarks (Optional)</Text>
+                <TextInput
+                  value={lendingRemarks}
+                  onChangeText={setLendingRemarks}
+                  placeholder="Reason or reminder for this lending"
+                  placeholderTextColor={theme.inputPlaceholder}
+                  style={[styles.searchInput, { backgroundColor: theme.inputBg, color: theme.inputText }]}
+                />
+              </ScrollView>
+
+              <View style={styles.detailFooterRow}>
+                <Pressable
+                  style={[
+                    styles.settlementBtn,
+                    styles.footerBtn,
+                    { borderColor: theme.cardBorder, backgroundColor: theme.inputBg }
+                  ]}
+                  onPress={closeLendingModal}
+                  disabled={lendingSaving}
+                >
+                  <Text style={[styles.settlementBtnText, { color: theme.pillText }]}>Cancel</Text>
+                </Pressable>
+                <Pressable
+                  style={[
+                    styles.printBtn,
+                    styles.footerBtn,
+                    { backgroundColor: lendingSaving || syncBusy ? theme.primaryMuted : theme.primary }
+                  ]}
+                  onPress={() => void saveLendingForSelectedSale()}
+                  disabled={lendingSaving || syncBusy}
+                >
+                  <Text style={styles.printText}>{lendingSaving ? 'Saving Lending...' : 'Save Lending'}</Text>
+                </Pressable>
+              </View>
+            </Pressable>
+          </Pressable>
+        ) : null}
+      </Modal>
     </View>
   );
 }
@@ -1446,6 +2297,16 @@ const styles = StyleSheet.create({
     paddingVertical: 12,
     gap: 8
   },
+  lendingModalCard: {
+    marginHorizontal: 16,
+    marginBottom: 20,
+    maxHeight: '88%',
+    borderRadius: 14,
+    borderWidth: 1,
+    paddingHorizontal: 12,
+    paddingVertical: 12,
+    gap: 8
+  },
   breakdownModalCard: {
     marginHorizontal: 16,
     marginBottom: 20,
@@ -1457,6 +2318,9 @@ const styles = StyleSheet.create({
     gap: 8
   },
   breakdownScroll: {
+    flexGrow: 0
+  },
+  lendingScroll: {
     flexGrow: 0
   },
   paymentModalHead: {
@@ -1610,9 +2474,26 @@ const styles = StyleSheet.create({
     paddingHorizontal: 10,
     paddingVertical: 8,
     flexDirection: 'row',
-    alignItems: 'center',
+    alignItems: 'flex-start',
     gap: 8,
     marginBottom: 6
+  },
+  itemActionRow: {
+    flexDirection: 'row',
+    gap: 8,
+    marginTop: 8
+  },
+  inlineActionBtn: {
+    minHeight: 34,
+    borderWidth: 1,
+    borderRadius: 8,
+    paddingHorizontal: 10,
+    alignItems: 'center',
+    justifyContent: 'center'
+  },
+  inlineActionText: {
+    fontSize: 11,
+    fontWeight: '700'
   },
   paymentCard: {
     borderWidth: 1,
@@ -1622,6 +2503,14 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     gap: 8,
+    marginBottom: 6
+  },
+  lendingProductCard: {
+    borderWidth: 1,
+    borderRadius: 10,
+    paddingHorizontal: 10,
+    paddingVertical: 8,
+    gap: 6,
     marginBottom: 6
   },
   tableCellName: {
