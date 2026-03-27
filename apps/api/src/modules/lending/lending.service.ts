@@ -276,6 +276,9 @@ export class LendingService {
           inventoryBalances: {
             where: { locationId: sale.locationId },
             select: { qtyOnHand: true, avgCost: true }
+          },
+          cylinderType: {
+            select: { id: true }
           }
         }
       });
@@ -287,9 +290,6 @@ export class LendingService {
         }
         if (!product.isActive) {
           throw new BadRequestException(`Product ${product.name} is inactive`);
-        }
-        if (!product.isLendable) {
-          throw new BadRequestException(`Product ${product.name} is not marked as lendable`);
         }
         if (line.source_sale_line_id) {
           const saleLine = saleLinesById.get(line.source_sale_line_id);
@@ -309,6 +309,12 @@ export class LendingService {
               `${product.name} can only be lent from a non-refill sale line`
             );
           }
+          const canLendFromSaleLine = product.isLendable || Boolean(product.cylinderType);
+          if (!canLendFromSaleLine) {
+            throw new BadRequestException(
+              `${product.name} is not configured for sale-linked lending`
+            );
+          }
           const soldQty = this.toNumber(saleLine.quantity);
           const alreadyLentQty = lentBySaleLineId.get(saleLine.id) ?? 0;
           const remainingQty = this.roundQty(soldQty - alreadyLentQty);
@@ -318,6 +324,9 @@ export class LendingService {
             );
           }
         } else {
+          if (!product.isLendable) {
+            throw new BadRequestException(`Product ${product.name} is not marked as lendable`);
+          }
           const availableQty = this.toNumber(product.inventoryBalances[0]?.qtyOnHand ?? 0);
           if (availableQty < line.quantity_number) {
             throw new BadRequestException(
@@ -616,6 +625,8 @@ export class LendingService {
                 unit: true,
                 isActive: true,
                 isLendable: true,
+                isLpg: true,
+                cylinderTypeId: true,
                 requiresDeposit: true,
                 defaultDepositAmount: true,
                 lendingUnitType: true
@@ -690,17 +701,25 @@ export class LendingService {
           default_deposit_amount: this.toNullableNumber(line.product.defaultDepositAmount),
           lending_unit_type: line.product.lendingUnitType ?? null,
           is_product_active: line.product.isActive,
-          is_product_lendable: line.product.isLendable
+          is_product_lendable: line.product.isLendable,
+          is_sale_link_lendable: line.product.isLendable || (line.product.isLpg && Boolean(line.product.cylinderTypeId))
         };
       })
       .filter(
         (line) =>
           line.is_product_active &&
-          line.is_product_lendable &&
+          line.is_sale_link_lendable &&
           line.cylinder_flow === 'NON_REFILL'
       )
       .sort((a, b) => a.line_index - b.line_index)
-      .map(({ is_product_active: _active, is_product_lendable: _lendable, ...line }) => line);
+      .map(
+        ({
+          is_product_active: _active,
+          is_product_lendable: _lendable,
+          is_sale_link_lendable: _saleLinkLendable,
+          ...line
+        }) => line
+      );
   }
 
   private normalizeCreateInput(input: CreateLendingInput): NormalizedCreateLendingInput {
