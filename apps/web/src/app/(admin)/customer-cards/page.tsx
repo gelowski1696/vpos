@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useMemo, useState } from 'react';
-import { apiRequest } from '../../../lib/api-client';
+import { apiRequest, getSessionRoles } from '../../../lib/api-client';
 import { toastError, toastInfo, toastSuccess } from '../../../lib/web-toast';
 
 type Branch = { id: string; code: string; name: string; isActive: boolean };
@@ -182,6 +182,13 @@ function emptyRewardForm(): RewardFormState {
 }
 
 export default function CustomerCardsPage(): JSX.Element {
+  const sessionRoles = useMemo(() => getSessionRoles().map((role) => role.toLowerCase()), []);
+  const canManageCards = useMemo(
+    () => sessionRoles.includes('admin') || sessionRoles.includes('owner') || sessionRoles.includes('platform_owner'),
+    [sessionRoles]
+  );
+  const canManageRewards = canManageCards;
+  const canManagePoints = canManageCards;
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -488,7 +495,7 @@ export default function CustomerCardsPage(): JSX.Element {
   }
 
   async function openCardActions(card: { id: string; card_number: string; isAssigned: boolean }): Promise<void> {
-    if (customers.length === 0) {
+    if (canManageCards && customers.length === 0) {
       toastInfo('No customers available for assignment.');
       return;
     }
@@ -546,6 +553,7 @@ export default function CustomerCardsPage(): JSX.Element {
   }
 
   function openPointsForCard(): void {
+    if (!canManagePoints) return;
     if (!activeActionBinding) return;
     setPointsCustomerId(activeActionBinding.customer.id);
     setPointsCardId(activeActionBinding.card.id);
@@ -556,6 +564,7 @@ export default function CustomerCardsPage(): JSX.Element {
   }
 
   async function doStatus(id: string, status: 'ACTIVE' | 'INACTIVE' | 'REVOKED'): Promise<void> {
+    if (!canManageCards) return;
     setBusy(true);
     try {
       await apiRequest(`/vcard/cards/${encodeURIComponent(id)}/status`, {
@@ -572,6 +581,7 @@ export default function CustomerCardsPage(): JSX.Element {
   }
 
   async function unassign(id: string): Promise<void> {
+    if (!canManageCards) return;
     setBusy(true);
     try {
       await apiRequest(`/vcard/cards/${encodeURIComponent(id)}/unassign`, { method: 'PATCH', body: {} });
@@ -585,6 +595,7 @@ export default function CustomerCardsPage(): JSX.Element {
   }
 
   async function savePolicy(): Promise<void> {
+    if (!canManagePoints) return;
     setPolicyBusy(true);
     try {
       await apiRequest('/vcard/points/policy', {
@@ -607,6 +618,7 @@ export default function CustomerCardsPage(): JSX.Element {
   }
 
   async function submitPoints(action: 'earn' | 'redeem' | 'adjust'): Promise<void> {
+    if (!canManagePoints) return;
     if (!pointsCustomerId) {
       toastInfo('Select customer first');
       return;
@@ -657,11 +669,13 @@ export default function CustomerCardsPage(): JSX.Element {
   }
 
   function openCreateReward(): void {
+    if (!canManageRewards) return;
     setRewardForm(emptyRewardForm());
     setRewardModalOpen(true);
   }
 
   function openEditReward(reward: RewardRecord): void {
+    if (!canManageRewards) return;
     setRewardForm({
       id: reward.id,
       code: reward.code,
@@ -685,6 +699,7 @@ export default function CustomerCardsPage(): JSX.Element {
   }
 
   async function saveReward(): Promise<void> {
+    if (!canManageRewards) return;
     if (!branchId) {
       toastInfo('Select branch first.');
       return;
@@ -741,6 +756,7 @@ export default function CustomerCardsPage(): JSX.Element {
     redemption: RewardRedemptionRecord,
     action: 'cancel' | 'void'
   ): Promise<void> {
+    if (!canManageRewards) return;
     const label = action === 'cancel' ? 'cancel' : 'void';
     if (!window.confirm(`Are you sure you want to ${label} this redemption?`)) {
       return;
@@ -773,7 +789,11 @@ export default function CustomerCardsPage(): JSX.Element {
     <section className="space-y-4">
       <div className="rounded-2xl border border-slate-200 bg-white p-4 dark:border-slate-800 dark:bg-slate-900">
         <h1 className="text-2xl font-bold text-brandPrimary">Customer Cards</h1>
-        <p className="mt-1 text-sm text-slate-600 dark:text-slate-300">Branch card assignment, revoke/reactivate, and points in one non-technical workflow.</p>
+        <p className="mt-1 text-sm text-slate-600 dark:text-slate-300">
+          {canManageCards
+            ? 'Branch card assignment, revoke/reactivate, and points in one non-technical workflow.'
+            : 'View branch customer cards, active rewards, and redemption history in one non-technical workflow.'}
+        </p>
       </div>
 
       {error ? <div className="rounded-xl border border-rose-300 bg-rose-50 p-3 text-sm text-rose-700 dark:border-rose-700 dark:bg-rose-950/40 dark:text-rose-200">{error}</div> : null}
@@ -786,7 +806,14 @@ export default function CustomerCardsPage(): JSX.Element {
             { key: 'redemption-history', label: 'Redemption History' },
             { key: 'points-policy', label: 'Points Policy' },
             { key: 'points-actions', label: 'Points Actions' }
-          ] as const).map((tab) => (
+          ] as const)
+            .filter((tab) => {
+              if ((tab.key === 'points-policy' || tab.key === 'points-actions') && !canManagePoints) {
+                return false;
+              }
+              return true;
+            })
+            .map((tab) => (
             <button
               key={tab.key}
               type="button"
@@ -799,7 +826,7 @@ export default function CustomerCardsPage(): JSX.Element {
             >
               {tab.label}
             </button>
-          ))}
+            ))}
         </div>
       </div>
 
@@ -815,7 +842,9 @@ export default function CustomerCardsPage(): JSX.Element {
             </button>
           </div>
           <p className="mt-3 text-xs text-slate-500 dark:text-slate-400">
-            Only cards created for the selected branch are shown. Click any card to open assign/reassign/status/revoke/unassign actions.
+            {canManageCards
+              ? 'Only cards created for the selected branch are shown. Click any card to open assign/reassign/status/revoke/unassign actions.'
+              : 'Only cards created for the selected branch are shown. Click any card to view assigned customer, status, and points.'}
           </p>
 
           <div className="mt-4 grid gap-2 md:grid-cols-[1fr_auto]">
@@ -933,7 +962,9 @@ export default function CustomerCardsPage(): JSX.Element {
               <input className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-800" value={expiryDays} onChange={(e) => setExpiryDays(e.target.value)} placeholder="No expiry" />
             </label>
           </div>
-          <button type="button" className="mt-3 rounded-lg bg-brandPrimary px-4 py-2 text-sm font-semibold text-white disabled:opacity-60" disabled={policyBusy} onClick={() => void savePolicy()}>{policyBusy ? 'Saving...' : 'Save Policy'}</button>
+          {canManagePoints ? (
+            <button type="button" className="mt-3 rounded-lg bg-brandPrimary px-4 py-2 text-sm font-semibold text-white disabled:opacity-60" disabled={policyBusy} onClick={() => void savePolicy()}>{policyBusy ? 'Saving...' : 'Save Policy'}</button>
+          ) : null}
         </div>
       ) : null}
 
@@ -951,9 +982,13 @@ export default function CustomerCardsPage(): JSX.Element {
             <input className="rounded-lg border border-slate-300 bg-white px-3 py-2 dark:border-slate-600 dark:bg-slate-800" value={pointsRemarks} onChange={(e) => setPointsRemarks(e.target.value)} placeholder="Remarks" />
           </div>
           <div className="mt-3 flex gap-2">
-            <button type="button" className="rounded-lg border border-slate-300 px-3 py-2 text-sm font-semibold dark:border-slate-600 disabled:opacity-60" disabled={pointsBusy} onClick={() => void submitPoints('earn')}>Earn</button>
-            <button type="button" className="rounded-lg border border-slate-300 px-3 py-2 text-sm font-semibold dark:border-slate-600 disabled:opacity-60" disabled={pointsBusy} onClick={() => void submitPoints('redeem')}>Redeem</button>
-            <button type="button" className="rounded-lg border border-slate-300 px-3 py-2 text-sm font-semibold dark:border-slate-600 disabled:opacity-60" disabled={pointsBusy} onClick={() => void submitPoints('adjust')}>Adjust</button>
+            {canManagePoints ? (
+              <>
+                <button type="button" className="rounded-lg border border-slate-300 px-3 py-2 text-sm font-semibold dark:border-slate-600 disabled:opacity-60" disabled={pointsBusy} onClick={() => void submitPoints('earn')}>Earn</button>
+                <button type="button" className="rounded-lg border border-slate-300 px-3 py-2 text-sm font-semibold dark:border-slate-600 disabled:opacity-60" disabled={pointsBusy} onClick={() => void submitPoints('redeem')}>Redeem</button>
+                <button type="button" className="rounded-lg border border-slate-300 px-3 py-2 text-sm font-semibold dark:border-slate-600 disabled:opacity-60" disabled={pointsBusy} onClick={() => void submitPoints('adjust')}>Adjust</button>
+              </>
+            ) : null}
           </div>
           <div className="mt-3 overflow-x-auto">
             <table className="min-w-[760px] text-sm">
@@ -984,14 +1019,16 @@ export default function CustomerCardsPage(): JSX.Element {
                 Build branch reward offers that POS can redeem during checkout.
               </p>
             </div>
-            <button
-              type="button"
-              className="rounded-lg bg-brandPrimary px-4 py-2 text-sm font-semibold text-white disabled:opacity-60"
-              onClick={openCreateReward}
-              disabled={rewardsBusy || !branchId}
-            >
-              Add Reward
-            </button>
+            {canManageRewards ? (
+              <button
+                type="button"
+                className="rounded-lg bg-brandPrimary px-4 py-2 text-sm font-semibold text-white disabled:opacity-60"
+                onClick={openCreateReward}
+                disabled={rewardsBusy || !branchId}
+              >
+                Add Reward
+              </button>
+            ) : null}
           </div>
 
           <div className="mt-4 grid gap-2 md:grid-cols-[1fr_auto]">
@@ -1016,8 +1053,14 @@ export default function CustomerCardsPage(): JSX.Element {
                 <button
                   key={reward.id}
                   type="button"
-                  className="rounded-2xl border border-slate-200 bg-white p-4 text-left shadow-sm transition hover:-translate-y-0.5 hover:border-brandPrimary/40 dark:border-slate-700 dark:bg-slate-950"
-                  onClick={() => openEditReward(reward)}
+                  className={`rounded-2xl border border-slate-200 bg-white p-4 text-left shadow-sm dark:border-slate-700 dark:bg-slate-950 ${
+                    canManageRewards ? 'transition hover:-translate-y-0.5 hover:border-brandPrimary/40' : ''
+                  }`}
+                  onClick={() => {
+                    if (canManageRewards) {
+                      openEditReward(reward);
+                    }
+                  }}
                 >
                   <div className="flex items-start justify-between gap-3">
                     <div>
@@ -1071,7 +1114,9 @@ export default function CustomerCardsPage(): JSX.Element {
             <div>
               <h2 className="text-sm font-semibold text-slate-800 dark:text-slate-100">Redemption History</h2>
               <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">
-                Branch-scoped reward reservations and applications. Staff can cancel reserved rewards or void applied ones.
+                {canManageRewards
+                  ? 'Branch-scoped reward reservations and applications. Staff can cancel reserved rewards or void applied ones.'
+                  : 'Branch-scoped reward reservations and applications for read-only review.'}
               </p>
             </div>
             <div className="flex flex-wrap items-center gap-2">
@@ -1164,24 +1209,26 @@ export default function CustomerCardsPage(): JSX.Element {
                           Remarks: {row.remarks?.trim() || 'No remarks'}
                         </div>
                       </div>
-                      <div className="flex flex-wrap gap-2">
-                        <button
-                          type="button"
-                          className="rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-sm font-semibold text-amber-900 disabled:opacity-60 dark:border-amber-700 dark:bg-amber-950/40 dark:text-amber-100"
-                          disabled={!canCancel || rewardHistoryBusy}
-                          onClick={() => void updateRewardRedemptionStatus(row, 'cancel')}
-                        >
-                          Cancel
-                        </button>
-                        <button
-                          type="button"
-                          className="rounded-lg border border-rose-300 bg-rose-50 px-3 py-2 text-sm font-semibold text-rose-900 disabled:opacity-60 dark:border-rose-700 dark:bg-rose-950/40 dark:text-rose-100"
-                          disabled={!canVoid || rewardHistoryBusy}
-                          onClick={() => void updateRewardRedemptionStatus(row, 'void')}
-                        >
-                          Void
-                        </button>
-                      </div>
+                      {canManageRewards ? (
+                        <div className="flex flex-wrap gap-2">
+                          <button
+                            type="button"
+                            className="rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-sm font-semibold text-amber-900 disabled:opacity-60 dark:border-amber-700 dark:bg-amber-950/40 dark:text-amber-100"
+                            disabled={!canCancel || rewardHistoryBusy}
+                            onClick={() => void updateRewardRedemptionStatus(row, 'cancel')}
+                          >
+                            Cancel
+                          </button>
+                          <button
+                            type="button"
+                            className="rounded-lg border border-rose-300 bg-rose-50 px-3 py-2 text-sm font-semibold text-rose-900 disabled:opacity-60 dark:border-rose-700 dark:bg-rose-950/40 dark:text-rose-100"
+                            disabled={!canVoid || rewardHistoryBusy}
+                            onClick={() => void updateRewardRedemptionStatus(row, 'void')}
+                          >
+                            Void
+                          </button>
+                        </div>
+                      ) : null}
                     </div>
                   </div>
                 );
@@ -1228,37 +1275,45 @@ export default function CustomerCardsPage(): JSX.Element {
                 ? `Current customer: ${activeActionBinding.customer.name} (${activeActionBinding.customer.code})`
                 : 'No customer assigned yet.'}
             </p>
-            <input
-              className="mt-3 w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-800"
-              value={assignCustomerSearch}
-              onChange={(e) => setAssignCustomerSearch(e.target.value)}
-              placeholder="Search customer..."
-            />
-            <div className="mt-3 max-h-56 space-y-2 overflow-auto rounded-lg border border-slate-200 p-2 dark:border-slate-700">
-              {filteredAssignCustomers.length === 0 ? (
-                <p className="px-2 py-1 text-xs text-slate-500 dark:text-slate-400">No customer found.</p>
-              ) : (
-                filteredAssignCustomers.map((row) => {
-                  const active = row.id === assignTargetCustomerId;
-                  return (
-                    <button
-                      key={row.id}
-                      type="button"
-                      className={`w-full rounded-lg border px-3 py-2 text-left text-sm ${
-                        active
-                          ? 'border-brandPrimary bg-brandPrimary/10 text-brandPrimary'
-                          : 'border-slate-200 bg-white text-slate-700 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200'
-                      }`}
-                      onClick={() => setAssignTargetCustomerId(row.id)}
-                    >
-                      <div className="font-semibold">{row.name}</div>
-                      <div className="text-xs opacity-80">{row.code}</div>
-                    </button>
-                  );
-                })
-              )}
-            </div>
-            {activeActionBinding ? (
+            {canManageCards ? (
+              <>
+                <input
+                  className="mt-3 w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-800"
+                  value={assignCustomerSearch}
+                  onChange={(e) => setAssignCustomerSearch(e.target.value)}
+                  placeholder="Search customer..."
+                />
+                <div className="mt-3 max-h-56 space-y-2 overflow-auto rounded-lg border border-slate-200 p-2 dark:border-slate-700">
+                  {filteredAssignCustomers.length === 0 ? (
+                    <p className="px-2 py-1 text-xs text-slate-500 dark:text-slate-400">No customer found.</p>
+                  ) : (
+                    filteredAssignCustomers.map((row) => {
+                      const active = row.id === assignTargetCustomerId;
+                      return (
+                        <button
+                          key={row.id}
+                          type="button"
+                          className={`w-full rounded-lg border px-3 py-2 text-left text-sm ${
+                            active
+                              ? 'border-brandPrimary bg-brandPrimary/10 text-brandPrimary'
+                              : 'border-slate-200 bg-white text-slate-700 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200'
+                          }`}
+                          onClick={() => setAssignTargetCustomerId(row.id)}
+                        >
+                          <div className="font-semibold">{row.name}</div>
+                          <div className="text-xs opacity-80">{row.code}</div>
+                        </button>
+                      );
+                    })
+                  )}
+                </div>
+              </>
+            ) : (
+              <div className="mt-4 rounded-xl border border-slate-200 bg-slate-50 p-3 text-sm text-slate-600 dark:border-slate-700 dark:bg-slate-800/50 dark:text-slate-300">
+                View-only mode. Card assignment and status changes require admin or owner access.
+              </div>
+            )}
+            {activeActionBinding && canManageCards ? (
               <div className="mt-4 grid gap-2 rounded-xl border border-slate-200 p-3 dark:border-slate-700 md:grid-cols-2">
                 <button
                   type="button"
@@ -1314,20 +1369,22 @@ export default function CustomerCardsPage(): JSX.Element {
               >
                 Cancel
               </button>
-              <button
-                type="button"
-                className="rounded-lg bg-brandPrimary px-4 py-2 text-sm font-semibold text-white disabled:opacity-60"
-                onClick={() => void confirmAssignCard()}
-                disabled={busy || !assignTargetCustomerId || Boolean(activeActionBinding)}
-              >
-                {busy ? 'Assigning...' : activeActionBinding ? 'Already Assigned' : 'Confirm Assign'}
-              </button>
+              {canManageCards ? (
+                <button
+                  type="button"
+                  className="rounded-lg bg-brandPrimary px-4 py-2 text-sm font-semibold text-white disabled:opacity-60"
+                  onClick={() => void confirmAssignCard()}
+                  disabled={busy || !assignTargetCustomerId || Boolean(activeActionBinding)}
+                >
+                  {busy ? 'Assigning...' : activeActionBinding ? 'Already Assigned' : 'Confirm Assign'}
+                </button>
+              ) : null}
             </div>
           </div>
         </div>
       ) : null}
 
-      {rewardModalOpen ? (
+      {rewardModalOpen && canManageRewards ? (
         <div
           className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/55 p-4"
           onClick={() => {

@@ -81,6 +81,7 @@ export type CustomerRecord = Timestamped & {
   tier?: string | null;
   contractPrice?: number | null;
   outstandingBalance?: number;
+  pointsBalance?: number;
   isActive: boolean;
 };
 
@@ -6325,6 +6326,7 @@ export class MasterDataService {
     type: 'RETAIL' | 'BUSINESS';
     tier: string | null;
     contractPrice: Prisma.Decimal | null;
+    pointsBalance: number;
     isActive: boolean;
     createdAt: Date;
     updatedAt: Date;
@@ -6336,6 +6338,7 @@ export class MasterDataService {
       type: row.type,
       tier: row.tier,
       contractPrice: row.contractPrice ? Number(row.contractPrice) : null,
+      pointsBalance: Math.max(0, Math.floor(row.pointsBalance ?? 0)),
       isActive: row.isActive,
       createdAt: row.createdAt.toISOString(),
       updatedAt: row.updatedAt.toISOString()
