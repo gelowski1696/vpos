@@ -5,7 +5,8 @@ import {
   SalePostResponse,
   SaleReprintResponse,
   SaleCancelResponse,
-  SaleReturnResponse
+  SaleReturnResponse,
+  SaleReturnVoidResponse
 } from './sales.service';
 import { EntitlementsService } from '../entitlements/entitlements.service';
 import { AuditService } from '../audit/audit.service';
@@ -147,6 +148,34 @@ export class SalesController {
         saleId: result.sale_id,
         totalAmount: result.total_amount,
         pointsReversed: result.points_reversed
+      }
+    });
+    return result;
+  }
+
+  @Post('returns/:saleReturnId/void')
+  async voidSaleReturn(
+    @Req() req: Request & { user?: { sub?: string; company_id?: string } },
+    @Param('saleReturnId') saleReturnId: string,
+    @Body() body: { reason?: string | null }
+  ): Promise<SaleReturnVoidResponse> {
+    const companyId = this.requireCompanyId(req);
+    await this.tenantRoutingPolicy.assertRoutable(companyId);
+    await this.entitlementsService.enforceTransactionalWrite(companyId);
+    const result = await this.salesService.voidSaleReturn(companyId, saleReturnId, {
+      reason: body.reason ?? null,
+      actorUserId: req.user?.sub ?? null
+    });
+    await this.auditService.record({
+      companyId,
+      userId: req.user?.sub ?? null,
+      action: 'SALE_RETURN_VOID',
+      entity: 'SaleReturn',
+      entityId: result.sale_return_id,
+      metadata: {
+        saleId: result.sale_id,
+        pointsRestored: result.points_restored,
+        inventoryReversed: result.inventory_reversed
       }
     });
     return result;

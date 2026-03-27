@@ -1412,6 +1412,7 @@ model SaleReturn {
   createdByUserId String?
   voidedByUserId  String?
   voidedAt        DateTime?
+  voidReason      String?          @db.Text
   createdAt       DateTime         @default(now())
   updatedAt       DateTime         @updatedAt
 

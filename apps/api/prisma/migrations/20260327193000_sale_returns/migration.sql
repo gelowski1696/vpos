@@ -16,6 +16,7 @@ CREATE TABLE "public"."SaleReturn" (
     "createdByUserId" TEXT,
     "voidedByUserId" TEXT,
     "voidedAt" TIMESTAMP(3),
+    "voidReason" TEXT,
     "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
     "updatedAt" TIMESTAMP(3) NOT NULL,
 

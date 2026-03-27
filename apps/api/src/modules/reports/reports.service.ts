@@ -660,6 +660,7 @@ export class ReportsService {
     period: { since: string | null; until: string | null };
     rows: Array<{
       sale_id: string;
+      status: 'ACTIVE' | 'CANCELLED' | 'VOIDED';
       posted_at: string | null;
       created_at: string;
       receipt_number: string | null;
@@ -679,6 +680,11 @@ export class ReportsService {
       total_amount: number;
       cogs_amount: number;
       gross_profit: number;
+      returned_total: number;
+      cancel_reason: string | null;
+      cancelled_at: string | null;
+      void_reason: string | null;
+      voided_at: string | null;
       payment_total: number;
       payment_methods: string[];
     }>;
@@ -705,8 +711,13 @@ export class ReportsService {
       take: limit,
       select: {
         id: true,
+        status: true,
         postedAt: true,
         createdAt: true,
+        cancelledAt: true,
+        cancelReason: true,
+        voidedAt: true,
+        voidReason: true,
         saleType: true,
         subtotal: true,
         discountAmount: true,
@@ -754,6 +765,14 @@ export class ReportsService {
             method: true,
             amount: true
           }
+        },
+        returns: {
+          where: {
+            status: 'POSTED'
+          },
+          select: {
+            totalAmount: true
+          }
         }
       }
     });
@@ -771,10 +790,18 @@ export class ReportsService {
         const totalAmount = this.roundMoney(this.toNumber(row.totalAmount));
         const cogsAmount = this.roundMoney(this.toNumber(row.cogsAmount));
         const grossProfit = this.roundMoney(totalAmount - cogsAmount);
+        const returnedTotal = this.roundMoney(
+          row.returns.reduce((sum, item) => sum + this.toNumber(item.totalAmount), 0)
+        );
         return {
           sale_id: row.id,
+          status: row.status,
           posted_at: row.postedAt ? row.postedAt.toISOString() : null,
           created_at: row.createdAt.toISOString(),
+          cancelled_at: row.cancelledAt ? row.cancelledAt.toISOString() : null,
+          cancel_reason: row.cancelReason ?? null,
+          voided_at: row.voidedAt ? row.voidedAt.toISOString() : null,
+          void_reason: row.voidReason ?? null,
           receipt_number: row.receipt?.receiptNumber ?? null,
           branch_id: row.branchId,
           branch_name: row.branch?.name ?? row.branchId,
@@ -792,6 +819,7 @@ export class ReportsService {
           total_amount: totalAmount,
           cogs_amount: cogsAmount,
           gross_profit: grossProfit,
+          returned_total: returnedTotal,
           payment_total: paymentTotal,
           payment_methods: [
             ...new Set([
@@ -807,8 +835,13 @@ export class ReportsService {
   async salesDetail(companyId: string, saleId: string): Promise<{
     sale: {
       sale_id: string;
+      status: 'ACTIVE' | 'CANCELLED' | 'VOIDED';
       posted_at: string | null;
       created_at: string;
+      cancelled_at: string | null;
+      cancel_reason: string | null;
+      voided_at: string | null;
+      void_reason: string | null;
       receipt_number: string | null;
       branch_id: string;
       branch_name: string;
@@ -831,6 +864,7 @@ export class ReportsService {
       total_amount: number;
       cogs_amount: number;
       gross_profit: number;
+      returned_total: number;
       payment_total: number;
       payment_methods: string[];
     };
@@ -845,6 +879,25 @@ export class ReportsService {
       line_total: number;
       estimated_cost: number;
       gross_profit: number;
+    }>;
+    returns: Array<{
+      sale_return_id: string;
+      status: 'POSTED' | 'VOIDED';
+      reason: string;
+      created_at: string;
+      voided_at: string | null;
+      void_reason: string | null;
+      total_amount: number;
+      points_reversed: number;
+      lines: Array<{
+        sale_line_id: string;
+        product_id: string;
+        item_code: string;
+        product_name: string;
+        quantity: number;
+        unit_price: number;
+        line_total: number;
+      }>;
     }>;
     payments: Array<{
       payment_id: string;
@@ -885,8 +938,13 @@ export class ReportsService {
       },
       select: {
         id: true,
+        status: true,
         postedAt: true,
         createdAt: true,
+        cancelledAt: true,
+        cancelReason: true,
+        voidedAt: true,
+        voidReason: true,
         saleType: true,
         subtotal: true,
         discountAmount: true,
@@ -946,6 +1004,35 @@ export class ReportsService {
             }
           },
           orderBy: { id: 'asc' }
+        },
+        returns: {
+          orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+          select: {
+            id: true,
+            status: true,
+            reason: true,
+            totalAmount: true,
+            pointsReversed: true,
+            createdAt: true,
+            voidedAt: true,
+            voidReason: true,
+            lines: {
+              orderBy: { createdAt: 'asc' },
+              select: {
+                saleLineId: true,
+                productId: true,
+                quantity: true,
+                unitPrice: true,
+                lineTotal: true,
+                product: {
+                  select: {
+                    sku: true,
+                    name: true
+                  }
+                }
+              }
+            }
+          }
         },
         payments: {
           select: {
@@ -1124,12 +1211,22 @@ export class ReportsService {
     );
     const totalAmount = this.roundMoney(this.toNumber(row.totalAmount));
     const cogsAmount = this.roundMoney(this.toNumber(row.cogsAmount));
+    const returnedTotal = this.roundMoney(
+      row.returns
+        .filter((entry) => entry.status === 'POSTED')
+        .reduce((sum, entry) => sum + this.toNumber(entry.totalAmount), 0)
+    );
 
     return {
       sale: {
         sale_id: row.id,
+        status: row.status,
         posted_at: row.postedAt ? row.postedAt.toISOString() : null,
         created_at: row.createdAt.toISOString(),
+        cancelled_at: row.cancelledAt ? row.cancelledAt.toISOString() : null,
+        cancel_reason: row.cancelReason ?? null,
+        voided_at: row.voidedAt ? row.voidedAt.toISOString() : null,
+        void_reason: row.voidReason ?? null,
         receipt_number: row.receipt?.receiptNumber ?? null,
         branch_id: row.branchId,
         branch_name: row.branch?.name ?? row.branchId,
@@ -1152,6 +1249,7 @@ export class ReportsService {
         total_amount: totalAmount,
         cogs_amount: cogsAmount,
         gross_profit: this.roundMoney(totalAmount - cogsAmount),
+        returned_total: returnedTotal,
         payment_total: paymentTotal,
         payment_methods: [
           ...new Set([
@@ -1176,6 +1274,25 @@ export class ReportsService {
           gross_profit: this.roundMoney(lineTotal - estimatedCost)
         };
       }),
+      returns: row.returns.map((entry) => ({
+        sale_return_id: entry.id,
+        status: entry.status,
+        reason: entry.reason,
+        created_at: entry.createdAt.toISOString(),
+        voided_at: entry.voidedAt ? entry.voidedAt.toISOString() : null,
+        void_reason: entry.voidReason ?? null,
+        total_amount: this.roundMoney(this.toNumber(entry.totalAmount)),
+        points_reversed: entry.pointsReversed,
+        lines: entry.lines.map((line) => ({
+          sale_line_id: line.saleLineId,
+          product_id: line.productId,
+          item_code: line.product.sku,
+          product_name: line.product.name,
+          quantity: this.roundQty(this.toNumber(line.quantity)),
+          unit_price: this.roundMoney(this.toNumber(line.unitPrice)),
+          line_total: this.roundMoney(this.toNumber(line.lineTotal))
+        }))
+      })),
       payments: [
         ...row.payments.map((payment) => ({
           payment_id: payment.id,
@@ -1210,6 +1327,136 @@ export class ReportsService {
             }))
           }
         : null
+    };
+  }
+
+  async salesReturnsList(companyId: string, query: SalesReportQuery & { limit?: string }): Promise<{
+    period: { since: string | null; until: string | null };
+    rows: Array<{
+      sale_return_id: string;
+      sale_id: string;
+      sale_status: 'ACTIVE' | 'CANCELLED' | 'VOIDED';
+      status: 'POSTED' | 'VOIDED';
+      created_at: string;
+      voided_at: string | null;
+      void_reason: string | null;
+      reason: string;
+      total_amount: number;
+      points_reversed: number;
+      receipt_number: string | null;
+      branch_id: string;
+      branch_name: string;
+      branch_code: string;
+      location_id: string;
+      location_name: string;
+      location_code: string;
+      customer_name: string | null;
+      customer_code: string | null;
+      line_count: number;
+    }>;
+  }> {
+    const binding = await this.getTenantBinding(companyId);
+    const range = this.parseRange(query);
+    if (!binding) {
+      return {
+        period: {
+          since: range.since?.toISOString() ?? null,
+          until: range.until?.toISOString() ?? null
+        },
+        rows: []
+      };
+    }
+
+    const db = binding.client as DbClient;
+    const limit = this.parseLimit(query.limit, 200, 1000);
+    const saleScopeWhere = this.buildSaleScopeWhere(companyId, query);
+
+    const rows = await db.saleReturn.findMany({
+      where: {
+        companyId,
+        sale: saleScopeWhere,
+        createdAt: {
+          ...(range.since ? { gte: range.since } : {}),
+          ...(range.until ? { lte: range.until } : {})
+        }
+      },
+      orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+      take: limit,
+      select: {
+        id: true,
+        saleId: true,
+        status: true,
+        createdAt: true,
+        voidedAt: true,
+        voidReason: true,
+        reason: true,
+        totalAmount: true,
+        pointsReversed: true,
+        branchId: true,
+        locationId: true,
+        branch: {
+          select: {
+            name: true,
+            code: true
+          }
+        },
+        location: {
+          select: {
+            name: true,
+            code: true
+          }
+        },
+        customer: {
+          select: {
+            name: true,
+            code: true
+          }
+        },
+        sale: {
+          select: {
+            status: true,
+            receipt: {
+              select: {
+                receiptNumber: true
+              }
+            }
+          }
+        },
+        lines: {
+          select: {
+            id: true
+          }
+        }
+      }
+    });
+
+    return {
+      period: {
+        since: range.since?.toISOString() ?? null,
+        until: range.until?.toISOString() ?? null
+      },
+      rows: rows.map((row) => ({
+        sale_return_id: row.id,
+        sale_id: row.saleId,
+        sale_status: row.sale.status,
+        status: row.status,
+        created_at: row.createdAt.toISOString(),
+        voided_at: row.voidedAt ? row.voidedAt.toISOString() : null,
+        void_reason: row.voidReason ?? null,
+        reason: row.reason,
+        total_amount: this.roundMoney(this.toNumber(row.totalAmount)),
+        points_reversed: row.pointsReversed,
+        receipt_number: row.sale.receipt?.receiptNumber ?? null,
+        branch_id: row.branchId,
+        branch_name: row.branch?.name ?? row.branchId,
+        branch_code: row.branch?.code ?? row.branchId,
+        location_id: row.locationId,
+        location_name: row.location?.name ?? row.locationId,
+        location_code: row.location?.code ?? row.locationId,
+        customer_name: row.customer?.name ?? null,
+        customer_code: row.customer?.code ?? null,
+        line_count: row.lines.length
+      }))
     };
   }
 
@@ -2034,12 +2281,18 @@ export class ReportsService {
   private buildSaleWhere(companyId: string, query: SalesReportQuery): Prisma.SaleWhereInput {
     const range = this.parseRange(query);
     return {
-      companyId,
+      ...this.buildSaleScopeWhere(companyId, query),
       postedAt: {
         not: null,
         ...(range.since ? { gte: range.since } : {}),
         ...(range.until ? { lte: range.until } : {})
-      },
+      }
+    };
+  }
+
+  private buildSaleScopeWhere(companyId: string, query: SalesReportQuery): Prisma.SaleWhereInput {
+    return {
+      companyId,
       ...(query.branch_id?.trim()
         ? {
             branchId: query.branch_id.trim()

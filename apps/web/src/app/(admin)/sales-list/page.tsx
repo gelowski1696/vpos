@@ -14,8 +14,13 @@ type BranchRecord = {
 
 type SalesListRow = {
   sale_id: string;
+  status: 'ACTIVE' | 'CANCELLED' | 'VOIDED';
   posted_at: string | null;
   created_at: string;
+  cancelled_at: string | null;
+  cancel_reason: string | null;
+  voided_at: string | null;
+  void_reason: string | null;
   receipt_number: string | null;
   branch_id: string;
   branch_name: string;
@@ -33,6 +38,7 @@ type SalesListRow = {
   total_amount: number;
   cogs_amount: number;
   gross_profit: number;
+  returned_total: number;
   payment_total: number;
   payment_methods: string[];
 };
@@ -49,6 +55,7 @@ type SalesDetailResponse = {
     personnel_name: string | null;
     driver_name: string | null;
     helper_name: string | null;
+    returned_total: number;
   };
   lines: Array<{
     line_id: string;
@@ -61,6 +68,25 @@ type SalesDetailResponse = {
     line_total: number;
     estimated_cost: number;
     gross_profit: number;
+  }>;
+  returns: Array<{
+    sale_return_id: string;
+    status: 'POSTED' | 'VOIDED';
+    reason: string;
+    created_at: string;
+    voided_at: string | null;
+    void_reason: string | null;
+    total_amount: number;
+    points_reversed: number;
+    lines: Array<{
+      sale_line_id: string;
+      product_id: string;
+      item_code: string;
+      product_name: string;
+      quantity: number;
+      unit_price: number;
+      line_total: number;
+    }>;
   }>;
   payments: Array<{
     payment_id: string;
@@ -83,6 +109,34 @@ type SalesDetailResponse = {
   } | null;
 };
 
+type SalesReturnHistoryRow = {
+  sale_return_id: string;
+  sale_id: string;
+  sale_status: 'ACTIVE' | 'CANCELLED' | 'VOIDED';
+  status: 'POSTED' | 'VOIDED';
+  created_at: string;
+  voided_at: string | null;
+  void_reason: string | null;
+  reason: string;
+  total_amount: number;
+  points_reversed: number;
+  receipt_number: string | null;
+  branch_id: string;
+  branch_name: string;
+  branch_code: string;
+  location_id: string;
+  location_name: string;
+  location_code: string;
+  customer_name: string | null;
+  customer_code: string | null;
+  line_count: number;
+};
+
+type SalesReturnsHistoryResponse = {
+  period: { since: string | null; until: string | null };
+  rows: SalesReturnHistoryRow[];
+};
+
 function fmtDateTime(value: string | null): string {
   if (!value) {
     return 'N/A';
@@ -100,6 +154,23 @@ function fmtMoney(value: number): string {
 
 function fmtQty(value: number): string {
   return Number(value).toFixed(4).replace(/\.?0+$/, '');
+}
+
+function saleStatusClasses(status: 'ACTIVE' | 'CANCELLED' | 'VOIDED'): string {
+  if (status === 'CANCELLED') {
+    return 'bg-rose-100 text-rose-700 dark:bg-rose-950/40 dark:text-rose-200';
+  }
+  if (status === 'VOIDED') {
+    return 'bg-amber-100 text-amber-700 dark:bg-amber-950/40 dark:text-amber-200';
+  }
+  return 'bg-emerald-100 text-emerald-700 dark:bg-emerald-950/40 dark:text-emerald-200';
+}
+
+function saleReturnStatusClasses(status: 'POSTED' | 'VOIDED'): string {
+  if (status === 'VOIDED') {
+    return 'bg-slate-200 text-slate-700 dark:bg-slate-700 dark:text-slate-200';
+  }
+  return 'bg-sky-100 text-sky-700 dark:bg-sky-950/40 dark:text-sky-200';
 }
 
 function assignmentNamesByRole(
@@ -132,13 +203,21 @@ export default function SalesListPage(): JSX.Element {
   const [since, setSince] = useState('');
   const [until, setUntil] = useState('');
   const [rows, setRows] = useState<SalesListRow[]>([]);
+  const [returnRows, setReturnRows] = useState<SalesReturnHistoryRow[]>([]);
   const [loading, setLoading] = useState(false);
+  const [returnsLoading, setReturnsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [returnsError, setReturnsError] = useState<string | null>(null);
+  const [actionMessage, setActionMessage] = useState<string | null>(null);
   const [selectedSaleId, setSelectedSaleId] = useState<string | null>(null);
   const [selectedDetails, setSelectedDetails] = useState<SalesDetailResponse | null>(null);
   const [detailsLoading, setDetailsLoading] = useState(false);
   const [detailsError, setDetailsError] = useState<string | null>(null);
   const [paymentBreakdownOpen, setPaymentBreakdownOpen] = useState(false);
+  const [voidReturnOpen, setVoidReturnOpen] = useState(false);
+  const [selectedReturnToVoid, setSelectedReturnToVoid] = useState<SalesDetailResponse['returns'][number] | null>(null);
+  const [voidReturnReason, setVoidReturnReason] = useState('');
+  const [voidReturnSaving, setVoidReturnSaving] = useState(false);
   const handledSearchSaleIdRef = useRef<string | null>(null);
 
   async function loadBranches(): Promise<void> {
@@ -177,12 +256,42 @@ export default function SalesListPage(): JSX.Element {
     }
   }
 
+  async function loadSaleReturns(): Promise<void> {
+    setReturnsLoading(true);
+    setReturnsError(null);
+    try {
+      const params = new URLSearchParams();
+      if (since.trim()) {
+        params.set('since', new Date(`${since}T00:00:00.000`).toISOString());
+      }
+      if (until.trim()) {
+        params.set('until', new Date(`${until}T23:59:59.999`).toISOString());
+      }
+      if (branchFilter !== 'ALL') {
+        params.set('branch_id', branchFilter);
+      }
+      params.set('limit', '500');
+
+      const query = params.toString();
+      const data = await apiRequest<SalesReturnsHistoryResponse>(
+        `/reports/sales/returns${query ? `?${query}` : ''}`
+      );
+      setReturnRows(data.rows);
+    } catch (cause) {
+      setReturnsError(cause instanceof Error ? cause.message : 'Failed to load sale returns');
+      setReturnRows([]);
+    } finally {
+      setReturnsLoading(false);
+    }
+  }
+
   useEffect(() => {
     void loadBranches();
   }, []);
 
   useEffect(() => {
     void loadSales();
+    void loadSaleReturns();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [branchFilter, since, until]);
 
@@ -233,6 +342,54 @@ export default function SalesListPage(): JSX.Element {
       return;
     }
     await openDetails(selectedSaleId);
+  }
+
+  async function refreshAllViews(): Promise<void> {
+    await Promise.all([loadSales(), loadSaleReturns(), refreshDetails()]);
+  }
+
+  function openVoidReturnDialog(saleReturn: SalesDetailResponse['returns'][number]): void {
+    setSelectedReturnToVoid(saleReturn);
+    setVoidReturnReason('');
+    setVoidReturnOpen(true);
+  }
+
+  function closeVoidReturnDialog(): void {
+    if (voidReturnSaving) {
+      return;
+    }
+    setVoidReturnOpen(false);
+    setSelectedReturnToVoid(null);
+    setVoidReturnReason('');
+  }
+
+  async function submitVoidSaleReturn(): Promise<void> {
+    if (!selectedReturnToVoid) {
+      return;
+    }
+    const reason = voidReturnReason.trim();
+    if (reason.length < 3) {
+      setActionMessage('Void reason must be at least 3 characters.');
+      return;
+    }
+
+    setVoidReturnSaving(true);
+    setActionMessage(null);
+    try {
+      await apiRequest(`/sales/returns/${encodeURIComponent(selectedReturnToVoid.sale_return_id)}/void`, {
+        method: 'POST',
+        body: { reason }
+      });
+      setActionMessage(`Sale return ${selectedReturnToVoid.sale_return_id} was voided.`);
+      setVoidReturnOpen(false);
+      setSelectedReturnToVoid(null);
+      setVoidReturnReason('');
+      await refreshAllViews();
+    } catch (cause) {
+      setActionMessage(cause instanceof Error ? cause.message : 'Failed to void sale return.');
+    } finally {
+      setVoidReturnSaving(false);
+    }
   }
 
   const selectedAssignments = selectedDetails?.delivery?.assignments ?? [];
@@ -317,6 +474,18 @@ export default function SalesListPage(): JSX.Element {
         </div>
       ) : null}
 
+      {returnsError ? (
+        <div className="rounded-xl border border-amber-300 bg-amber-50 p-3 text-sm text-amber-700 dark:border-amber-700 dark:bg-amber-950/40 dark:text-amber-200">
+          {returnsError}
+        </div>
+      ) : null}
+
+      {actionMessage ? (
+        <div className="rounded-xl border border-emerald-300 bg-emerald-50 p-3 text-sm text-emerald-700 dark:border-emerald-700 dark:bg-emerald-950/40 dark:text-emerald-200">
+          {actionMessage}
+        </div>
+      ) : null}
+
       <div className="rounded-2xl border border-slate-200 bg-white p-0 dark:border-slate-800 dark:bg-slate-900">
         <div className="flex items-center justify-between border-b border-slate-200 px-4 py-3 dark:border-slate-800">
           <h2 className="text-sm font-semibold text-slate-800 dark:text-slate-100">Sales Records</h2>
@@ -329,6 +498,7 @@ export default function SalesListPage(): JSX.Element {
             <thead className="bg-slate-50 text-left text-xs uppercase tracking-wide text-slate-600 dark:bg-slate-800/80 dark:text-slate-300">
               <tr>
                 <th className="px-3 py-2">Posted At</th>
+                <th className="px-3 py-2">Status</th>
                 <th className="px-3 py-2">Receipt</th>
                 <th className="px-3 py-2">Sale ID</th>
                 <th className="px-3 py-2">Branch</th>
@@ -337,6 +507,7 @@ export default function SalesListPage(): JSX.Element {
                 <th className="px-3 py-2">Customer</th>
                 <th className="px-3 py-2">Type</th>
                 <th className="px-3 py-2 text-right">Total</th>
+                <th className="px-3 py-2 text-right">Returned</th>
                 <th className="px-3 py-2 text-right">Paid</th>
                 <th className="px-3 py-2 text-right">COGS</th>
                 <th className="px-3 py-2 text-right">Gross</th>
@@ -347,7 +518,7 @@ export default function SalesListPage(): JSX.Element {
             <tbody>
               {rows.length === 0 ? (
                 <tr>
-                  <td className="px-3 py-6 text-center text-slate-500 dark:text-slate-400" colSpan={14}>
+                  <td className="px-3 py-6 text-center text-slate-500 dark:text-slate-400" colSpan={16}>
                     {loading ? 'Loading sales...' : 'No sales found for selected filter.'}
                   </td>
                 </tr>
@@ -355,6 +526,11 @@ export default function SalesListPage(): JSX.Element {
                 rows.map((row) => (
                   <tr className="border-t border-slate-100 dark:border-slate-800" key={row.sale_id}>
                     <td className="px-3 py-2 text-slate-700 dark:text-slate-200">{fmtDateTime(row.posted_at)}</td>
+                    <td className="px-3 py-2">
+                      <span className={`inline-flex rounded-full px-2 py-1 text-[11px] font-semibold ${saleStatusClasses(row.status)}`}>
+                        {row.status}
+                      </span>
+                    </td>
                     <td className="px-3 py-2 text-slate-700 dark:text-slate-200">{row.receipt_number ?? 'N/A'}</td>
                     <td className="px-3 py-2 text-slate-700 dark:text-slate-200">{row.sale_id}</td>
                     <td className="px-3 py-2 text-slate-700 dark:text-slate-200">
@@ -369,6 +545,7 @@ export default function SalesListPage(): JSX.Element {
                     </td>
                     <td className="px-3 py-2 text-slate-700 dark:text-slate-200">{row.sale_type}</td>
                     <td className="px-3 py-2 text-right text-slate-700 dark:text-slate-200">{fmtMoney(row.total_amount)}</td>
+                    <td className="px-3 py-2 text-right text-slate-700 dark:text-slate-200">{fmtMoney(row.returned_total)}</td>
                     <td className="px-3 py-2 text-right text-slate-700 dark:text-slate-200">{fmtMoney(row.payment_total)}</td>
                     <td className="px-3 py-2 text-right text-slate-700 dark:text-slate-200">{fmtMoney(row.cogs_amount)}</td>
                     <td className="px-3 py-2 text-right text-slate-700 dark:text-slate-200">{fmtMoney(row.gross_profit)}</td>
@@ -391,6 +568,78 @@ export default function SalesListPage(): JSX.Element {
         </div>
       </div>
 
+      <div className="rounded-2xl border border-slate-200 bg-white p-0 dark:border-slate-800 dark:bg-slate-900">
+        <div className="flex items-center justify-between border-b border-slate-200 px-4 py-3 dark:border-slate-800">
+          <div>
+            <h2 className="text-sm font-semibold text-slate-800 dark:text-slate-100">Return History</h2>
+            <p className="text-xs text-slate-500 dark:text-slate-400">
+              Posted and voided sale returns for the same branch/date filter above.
+            </p>
+          </div>
+          <span className="rounded-full bg-slate-100 px-2 py-1 text-xs text-slate-700 dark:bg-slate-800 dark:text-slate-200">
+            {returnRows.length} row(s)
+          </span>
+        </div>
+        <div className="overflow-x-auto">
+          <table className="min-w-[1250px] text-sm">
+            <thead className="bg-slate-50 text-left text-xs uppercase tracking-wide text-slate-600 dark:bg-slate-800/80 dark:text-slate-300">
+              <tr>
+                <th className="px-3 py-2">Returned At</th>
+                <th className="px-3 py-2">Status</th>
+                <th className="px-3 py-2">Return ID</th>
+                <th className="px-3 py-2">Receipt / Sale</th>
+                <th className="px-3 py-2">Customer</th>
+                <th className="px-3 py-2">Branch</th>
+                <th className="px-3 py-2">Location</th>
+                <th className="px-3 py-2 text-right">Amount</th>
+                <th className="px-3 py-2 text-right">Points Reversed</th>
+                <th className="px-3 py-2 text-right">Lines</th>
+                <th className="px-3 py-2">Reason</th>
+              </tr>
+            </thead>
+            <tbody>
+              {returnRows.length === 0 ? (
+                <tr>
+                  <td className="px-3 py-6 text-center text-slate-500 dark:text-slate-400" colSpan={11}>
+                    {returnsLoading ? 'Loading return history...' : 'No sale returns found for selected filter.'}
+                  </td>
+                </tr>
+              ) : (
+                returnRows.map((row) => (
+                  <tr className="border-t border-slate-100 dark:border-slate-800" key={row.sale_return_id}>
+                    <td className="px-3 py-2 text-slate-700 dark:text-slate-200">{fmtDateTime(row.created_at)}</td>
+                    <td className="px-3 py-2">
+                      <span className={`inline-flex rounded-full px-2 py-1 text-[11px] font-semibold ${saleReturnStatusClasses(row.status)}`}>
+                        {row.status}
+                      </span>
+                    </td>
+                    <td className="px-3 py-2 text-slate-700 dark:text-slate-200">{row.sale_return_id}</td>
+                    <td className="px-3 py-2 text-slate-700 dark:text-slate-200">
+                      {row.receipt_number ?? row.sale_id}
+                      <div className="mt-1 text-xs text-slate-500 dark:text-slate-400">Sale status: {row.sale_status}</div>
+                    </td>
+                    <td className="px-3 py-2 text-slate-700 dark:text-slate-200">
+                      {row.customer_name ? `${row.customer_name}${row.customer_code ? ` (${row.customer_code})` : ''}` : 'Walk-in / N/A'}
+                    </td>
+                    <td className="px-3 py-2 text-slate-700 dark:text-slate-200">{row.branch_name}</td>
+                    <td className="px-3 py-2 text-slate-700 dark:text-slate-200">{row.location_name}</td>
+                    <td className="px-3 py-2 text-right text-slate-700 dark:text-slate-200">{fmtMoney(row.total_amount)}</td>
+                    <td className="px-3 py-2 text-right text-slate-700 dark:text-slate-200">{row.points_reversed}</td>
+                    <td className="px-3 py-2 text-right text-slate-700 dark:text-slate-200">{row.line_count}</td>
+                    <td className="px-3 py-2 text-slate-700 dark:text-slate-200">
+                      {row.reason}
+                      {row.status === 'VOIDED' && row.void_reason ? (
+                        <div className="mt-1 text-xs text-slate-500 dark:text-slate-400">Void: {row.void_reason}</div>
+                      ) : null}
+                    </td>
+                  </tr>
+                ))
+              )}
+            </tbody>
+          </table>
+        </div>
+      </div>
+
       {selectedSaleId ? (
         <div className="fixed inset-0 z-40 flex items-center justify-center bg-slate-950/45 p-4">
           <section className="flex max-h-[90vh] w-full max-w-6xl flex-col overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-xl dark:border-slate-700 dark:bg-slate-900">
@@ -404,6 +653,11 @@ export default function SalesListPage(): JSX.Element {
                 </p>
               </div>
               <div className="flex items-center gap-2">
+                {selectedDetails ? (
+                  <span className={`inline-flex rounded-full px-2 py-1 text-[11px] font-semibold ${saleStatusClasses(selectedDetails.sale.status)}`}>
+                    {selectedDetails.sale.status}
+                  </span>
+                ) : null}
                 <button
                   className="rounded-md border border-slate-300 px-2 py-1 text-xs text-slate-600 dark:border-slate-600 dark:text-slate-300"
                   onClick={() => void refreshDetails()}
@@ -463,7 +717,21 @@ export default function SalesListPage(): JSX.Element {
                         {fmtMoney(selectedDetails.sale.gross_profit)}
                       </p>
                     </article>
+                    <article className="rounded-xl border border-slate-200 bg-slate-50 p-3 dark:border-slate-700 dark:bg-slate-800/50">
+                      <p className="text-xs uppercase tracking-wide text-slate-500 dark:text-slate-400">Returned</p>
+                      <p className="mt-1 text-lg font-semibold text-slate-900 dark:text-slate-100">
+                        {fmtMoney(selectedDetails.sale.returned_total)}
+                      </p>
+                    </article>
                   </div>
+
+                  {selectedDetails.sale.status !== 'ACTIVE' ? (
+                    <div className="rounded-xl border border-rose-300 bg-rose-50 p-3 text-sm text-rose-700 dark:border-rose-700 dark:bg-rose-950/40 dark:text-rose-200">
+                      {selectedDetails.sale.status === 'CANCELLED'
+                        ? `Sale cancelled${selectedDetails.sale.cancelled_at ? ` on ${fmtDateTime(selectedDetails.sale.cancelled_at)}` : ''}${selectedDetails.sale.cancel_reason ? `: ${selectedDetails.sale.cancel_reason}` : '.'}`
+                        : `Sale voided${selectedDetails.sale.voided_at ? ` on ${fmtDateTime(selectedDetails.sale.voided_at)}` : ''}${selectedDetails.sale.void_reason ? `: ${selectedDetails.sale.void_reason}` : '.'}`}
+                    </div>
+                  ) : null}
 
                   <div className="grid gap-3 md:grid-cols-2">
                     <article className="rounded-xl border border-slate-200 bg-white p-3 dark:border-slate-700 dark:bg-slate-800/40">
@@ -601,6 +869,78 @@ export default function SalesListPage(): JSX.Element {
                                 </td>
                                 <td className="px-2 py-1.5 text-right text-slate-700 dark:text-slate-200">
                                   {fmtMoney(line.gross_profit)}
+                                </td>
+                              </tr>
+                            ))
+                          )}
+                        </tbody>
+                      </table>
+                    </div>
+                  </article>
+
+                  <article className="rounded-xl border border-slate-200 bg-white p-3 dark:border-slate-700 dark:bg-slate-800/40">
+                    <div className="flex items-center justify-between gap-3">
+                      <h3 className="text-sm font-semibold text-slate-800 dark:text-slate-100">Return History</h3>
+                      <span className="rounded-full bg-slate-100 px-2 py-1 text-xs text-slate-700 dark:bg-slate-800 dark:text-slate-200">
+                        {selectedDetails.returns.length} return record(s)
+                      </span>
+                    </div>
+                    <div className="mt-2 overflow-x-auto">
+                      <table className="min-w-[980px] text-sm">
+                        <thead className="bg-slate-50 text-left text-xs uppercase tracking-wide text-slate-600 dark:bg-slate-800/70 dark:text-slate-300">
+                          <tr>
+                            <th className="px-2 py-1.5">Returned At</th>
+                            <th className="px-2 py-1.5">Status</th>
+                            <th className="px-2 py-1.5">Return ID</th>
+                            <th className="px-2 py-1.5 text-right">Amount</th>
+                            <th className="px-2 py-1.5 text-right">Points Reversed</th>
+                            <th className="px-2 py-1.5">Reason</th>
+                            <th className="px-2 py-1.5">Lines</th>
+                            <th className="px-2 py-1.5 text-center">Actions</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {selectedDetails.returns.length === 0 ? (
+                            <tr>
+                              <td className="px-2 py-2 text-slate-500 dark:text-slate-400" colSpan={8}>
+                                No item returns recorded for this sale.
+                              </td>
+                            </tr>
+                          ) : (
+                            selectedDetails.returns.map((saleReturn) => (
+                              <tr className="border-t border-slate-100 dark:border-slate-800" key={saleReturn.sale_return_id}>
+                                <td className="px-2 py-1.5 text-slate-700 dark:text-slate-200">{fmtDateTime(saleReturn.created_at)}</td>
+                                <td className="px-2 py-1.5">
+                                  <span className={`inline-flex rounded-full px-2 py-1 text-[11px] font-semibold ${saleReturnStatusClasses(saleReturn.status)}`}>
+                                    {saleReturn.status}
+                                  </span>
+                                </td>
+                                <td className="px-2 py-1.5 text-slate-700 dark:text-slate-200">{saleReturn.sale_return_id}</td>
+                                <td className="px-2 py-1.5 text-right text-slate-700 dark:text-slate-200">{fmtMoney(saleReturn.total_amount)}</td>
+                                <td className="px-2 py-1.5 text-right text-slate-700 dark:text-slate-200">{saleReturn.points_reversed}</td>
+                                <td className="px-2 py-1.5 text-slate-700 dark:text-slate-200">
+                                  {saleReturn.reason}
+                                  {saleReturn.status === 'VOIDED' && saleReturn.void_reason ? (
+                                    <div className="mt-1 text-xs text-slate-500 dark:text-slate-400">
+                                      Void: {saleReturn.void_reason}
+                                    </div>
+                                  ) : null}
+                                </td>
+                                <td className="px-2 py-1.5 text-slate-700 dark:text-slate-200">
+                                  {saleReturn.lines.map((line) => `${line.product_name} x ${fmtQty(line.quantity)}`).join(', ')}
+                                </td>
+                                <td className="px-2 py-1.5 text-center">
+                                  {saleReturn.status === 'POSTED' && selectedDetails.sale.status === 'ACTIVE' ? (
+                                    <button
+                                      className="rounded-md border border-slate-300 px-2.5 py-1 text-xs font-semibold text-slate-700 hover:bg-slate-100 dark:border-slate-600 dark:text-slate-200 dark:hover:bg-slate-800"
+                                      onClick={() => openVoidReturnDialog(saleReturn)}
+                                      type="button"
+                                    >
+                                      Void Return
+                                    </button>
+                                  ) : (
+                                    <span className="text-xs text-slate-400 dark:text-slate-500">-</span>
+                                  )}
                                 </td>
                               </tr>
                             ))
@@ -760,6 +1100,60 @@ export default function SalesListPage(): JSX.Element {
                   </table>
                 </div>
               </article>
+            </div>
+          </section>
+        </div>
+      ) : null}
+
+      {voidReturnOpen && selectedReturnToVoid ? (
+        <div className="fixed inset-0 z-[60] flex items-center justify-center bg-slate-950/55 p-4">
+          <section className="w-full max-w-lg rounded-2xl border border-slate-200 bg-white shadow-xl dark:border-slate-700 dark:bg-slate-900">
+            <header className="flex items-center justify-between border-b border-slate-200 px-4 py-3 dark:border-slate-700">
+              <div>
+                <h2 className="text-lg font-semibold text-slate-900 dark:text-slate-100">Void Sale Return</h2>
+                <p className="text-xs text-slate-500 dark:text-slate-400">
+                  Return {selectedReturnToVoid.sale_return_id} | {fmtMoney(selectedReturnToVoid.total_amount)}
+                </p>
+              </div>
+              <button
+                className="rounded-md border border-slate-300 px-2 py-1 text-xs text-slate-600 dark:border-slate-600 dark:text-slate-300"
+                onClick={closeVoidReturnDialog}
+                type="button"
+                disabled={voidReturnSaving}
+              >
+                Close
+              </button>
+            </header>
+            <div className="space-y-3 p-4">
+              <div className="rounded-xl border border-amber-300 bg-amber-50 p-3 text-sm text-amber-700 dark:border-amber-700 dark:bg-amber-950/40 dark:text-amber-200">
+                Voiding this return will remove the restored stock and add back any points that were reversed when the return was posted.
+              </div>
+              <label className="block text-sm">
+                <span className="mb-1 block font-medium text-slate-700 dark:text-slate-200">Void Reason</span>
+                <textarea
+                  className="min-h-[110px] w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-slate-900 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-100"
+                  onChange={(event) => setVoidReturnReason(event.target.value)}
+                  value={voidReturnReason}
+                />
+              </label>
+              <div className="flex justify-end gap-2">
+                <button
+                  className="rounded-lg border border-slate-300 px-4 py-2 text-sm font-semibold text-slate-700 dark:border-slate-600 dark:text-slate-200"
+                  onClick={closeVoidReturnDialog}
+                  type="button"
+                  disabled={voidReturnSaving}
+                >
+                  Cancel
+                </button>
+                <button
+                  className="rounded-lg bg-rose-600 px-4 py-2 text-sm font-semibold text-white disabled:opacity-60"
+                  onClick={() => void submitVoidSaleReturn()}
+                  type="button"
+                  disabled={voidReturnSaving}
+                >
+                  {voidReturnSaving ? 'Voiding...' : 'Confirm Void Return'}
+                </button>
+              </div>
             </div>
           </section>
         </div>

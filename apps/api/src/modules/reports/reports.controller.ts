@@ -153,6 +153,26 @@ export class ReportsController {
     return this.reportsService.salesList(companyId, query);
   }
 
+  @Get('sales/returns')
+  async salesReturns(
+    @Req() req: Request & { user?: { company_id?: string } },
+    @Query()
+    query: {
+      since?: string;
+      until?: string;
+      branch_id?: string;
+      location_id?: string;
+      user_id?: string;
+      shift_id?: string;
+      customer_id?: string;
+      limit?: string;
+    }
+  ): Promise<ReturnType<ReportsService['salesReturnsList']>> {
+    const companyId = this.requireCompanyId(req);
+    await this.tenantRoutingPolicy.assertRoutable(companyId);
+    return this.reportsService.salesReturnsList(companyId, query);
+  }
+
   @Get('sales/:saleId')
   async saleDetails(
     @Req() req: Request & { user?: { company_id?: string } },

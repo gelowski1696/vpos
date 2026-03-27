@@ -165,6 +165,16 @@ export type SaleReturnResponse = {
   }>;
 };
 
+export type SaleReturnVoidResponse = {
+  sale_id: string;
+  sale_return_id: string;
+  status: 'VOIDED';
+  voided_at: string;
+  void_reason: string;
+  inventory_reversed: boolean;
+  points_restored: number;
+};
+
 @Injectable()
 export class SalesService {
   private readonly postedSales = new Map<string, PostedSale>();
@@ -222,6 +232,18 @@ export class SalesService {
       throw new NotFoundException('Sale not found');
     }
     return this.returnSaleWithDatabase(binding, saleId, input);
+  }
+
+  async voidSaleReturn(
+    companyId: string,
+    saleReturnId: string,
+    input: { reason?: string | null; actorUserId?: string | null }
+  ): Promise<SaleReturnVoidResponse> {
+    const binding = await this.getTenantBinding(companyId);
+    if (!binding) {
+      throw new NotFoundException('Sale return not found');
+    }
+    return this.voidSaleReturnWithDatabase(binding, saleReturnId, input);
   }
 
   private postInMemory(companyId: string, input: SalePostInput): SalePostResponse {
@@ -1542,6 +1564,203 @@ export class SalesService {
             unit_price: Number(line.unitPrice),
             line_total: Number(line.lineTotal)
           }))
+        };
+      },
+      {
+        isolationLevel: Prisma.TransactionIsolationLevel.Serializable
+      }
+    );
+  }
+
+  private async voidSaleReturnWithDatabase(
+    binding: TenantPrismaBinding,
+    saleReturnId: string,
+    input: { reason?: string | null; actorUserId?: string | null }
+  ): Promise<SaleReturnVoidResponse> {
+    const db = binding.client as DbClient;
+    const companyId = binding.companyId;
+    const reason = this.normalizeCancelReason(input.reason);
+    const voidedAt = new Date();
+
+    return db.$transaction(
+      async (tx) => {
+        const saleReturn = await tx.saleReturn.findFirst({
+          where: {
+            companyId,
+            id: saleReturnId
+          },
+          include: {
+            sale: {
+              select: {
+                id: true,
+                status: true,
+                locationId: true,
+                customerId: true
+              }
+            },
+            lines: {
+              orderBy: { createdAt: 'asc' }
+            }
+          }
+        });
+
+        if (!saleReturn) {
+          throw new NotFoundException('Sale return not found');
+        }
+        if (saleReturn.status !== 'POSTED') {
+          throw new BadRequestException('Only posted sale returns can be voided');
+        }
+        if (saleReturn.sale.status !== 'ACTIVE') {
+          throw new BadRequestException('Only returns from active sales can be voided');
+        }
+
+        const actor = await this.resolveActorUser(tx, companyId, input.actorUserId ?? undefined);
+
+        for (const line of saleReturn.lines) {
+          const currentBalance = await tx.inventoryBalance.findUnique({
+            where: {
+              locationId_productId: {
+                locationId: saleReturn.sale.locationId,
+                productId: line.productId
+              }
+            }
+          });
+          const currentQty = Number(currentBalance?.qtyOnHand ?? 0);
+          if (currentQty < Number(line.quantity)) {
+            throw new BadRequestException(
+              `Insufficient inventory to void sale return for product ${line.productId}`
+            );
+          }
+          const currentAvgCost = Number(currentBalance?.avgCost ?? 0);
+          const nextQty = this.roundQty(currentQty - Number(line.quantity));
+
+          await tx.inventoryBalance.update({
+            where: {
+              locationId_productId: {
+                locationId: saleReturn.sale.locationId,
+                productId: line.productId
+              }
+            },
+            data: {
+              qtyOnHand: nextQty,
+              avgCost: this.roundQty(currentAvgCost)
+            }
+          });
+
+          const ledger = await tx.inventoryLedger.create({
+            data: {
+              companyId,
+              locationId: saleReturn.sale.locationId,
+              productId: line.productId,
+              movementType: InventoryMovementType.RETURN,
+              referenceType: 'SALE_RETURN_VOID',
+              referenceId: `${saleReturn.saleId}::${saleReturn.id}::${line.saleLineId}::${voidedAt.getTime()}`,
+              qtyDelta: this.roundQty(-Number(line.quantity)),
+              unitCost: currentAvgCost,
+              avgCostAfter: this.roundQty(currentAvgCost),
+              qtyAfter: nextQty
+            }
+          });
+
+          await tx.eventStockMovement.create({
+            data: {
+              companyId,
+              locationId: saleReturn.sale.locationId,
+              ledgerId: ledger.id,
+              happenedAt: voidedAt,
+              payload: {
+                sale_id: saleReturn.saleId,
+                sale_return_id: saleReturn.id,
+                product_id: line.productId,
+                qty_delta: this.roundQty(-Number(line.quantity)),
+                unit_cost: currentAvgCost,
+                avg_cost_after: this.roundQty(currentAvgCost),
+                qty_after: nextQty,
+                source: 'SALE_RETURN_VOID'
+              }
+            }
+          });
+        }
+
+        let pointsRestored = 0;
+        if (saleReturn.customerId && saleReturn.pointsReversed > 0) {
+          const customer = await tx.customer.findFirst({
+            where: {
+              companyId,
+              id: saleReturn.customerId,
+              isActive: true
+            },
+            select: {
+              id: true
+            }
+          });
+          if (!customer) {
+            throw new BadRequestException(
+              'Customer is no longer active, so points cannot be restored for this sale return'
+            );
+          }
+          pointsRestored = saleReturn.pointsReversed;
+          await tx.customer.update({
+            where: { id: customer.id },
+            data: {
+              pointsBalance: {
+                increment: pointsRestored
+              }
+            }
+          });
+          await tx.customerPointsLedger.create({
+            data: {
+              companyId,
+              customerId: customer.id,
+              txnType: CustomerPointsTxnType.ADJUST_UP,
+              sourceType: CustomerPointsSourceType.SALE,
+              sourceId: saleReturn.saleId,
+              points: pointsRestored,
+              remarks: `Sale return voided: ${saleReturn.id}`,
+              metadata: {
+                sale_id: saleReturn.saleId,
+                sale_return_id: saleReturn.id,
+                phase: 'SALE_RETURN_VOID'
+              } as Prisma.InputJsonValue,
+              createdByUserId: actor.id
+            }
+          });
+        }
+
+        await tx.saleReturn.update({
+          where: { id: saleReturn.id },
+          data: {
+            status: 'VOIDED',
+            voidedAt,
+            voidedByUserId: actor.id,
+            voidReason: reason
+          }
+        });
+
+        await tx.eventSales.create({
+          data: {
+            companyId,
+            branchId: saleReturn.branchId,
+            saleId: saleReturn.saleId,
+            happenedAt: voidedAt,
+            payload: {
+              sale_id: saleReturn.saleId,
+              sale_return_id: saleReturn.id,
+              status: 'RETURN_VOIDED',
+              reason,
+              points_restored: pointsRestored
+            }
+          }
+        });
+
+        return {
+          sale_id: saleReturn.saleId,
+          sale_return_id: saleReturn.id,
+          status: 'VOIDED' as const,
+          voided_at: voidedAt.toISOString(),
+          void_reason: reason,
+          inventory_reversed: true,
+          points_restored: pointsRestored
         };
       },
       {
