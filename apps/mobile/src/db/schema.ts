@@ -33,6 +33,24 @@ export const MOBILE_SQL_SCHEMA = {
     );
     CREATE INDEX IF NOT EXISTS idx_customer_payments_local_sync_status ON customer_payments_local(sync_status, created_at);
 
+    CREATE TABLE IF NOT EXISTS lending_local (
+      id TEXT PRIMARY KEY,
+      payload TEXT NOT NULL,
+      sync_status TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_lending_local_sync_status ON lending_local(sync_status, created_at);
+
+    CREATE TABLE IF NOT EXISTS lending_returns_local (
+      id TEXT PRIMARY KEY,
+      payload TEXT NOT NULL,
+      sync_status TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_lending_returns_local_sync_status ON lending_returns_local(sync_status, created_at);
+
     CREATE TABLE IF NOT EXISTS transfers_local (
       id TEXT PRIMARY KEY,
       payload TEXT NOT NULL,

@@ -29,6 +29,7 @@ export type CreateLendingInput = {
   lines: Array<{
     product_id: string;
     source_sale_line_id?: string | null;
+    source_sale_line_index?: number | null;
     quantity: number;
     deposit_amount?: number | null;
     remarks?: string | null;
@@ -133,6 +134,7 @@ type NormalizedCreateLendingInput = {
   lines: Array<{
     product_id: string;
     source_sale_line_id: string | null;
+    source_sale_line_index: number | null;
     quantity: Prisma.Decimal;
     quantity_number: number;
     deposit_amount: Prisma.Decimal | null;
@@ -225,6 +227,7 @@ export class LendingService {
       }
 
       const saleLinesById = new Map(sale.lines.map((line) => [line.id, line]));
+      const saleLinesByIndex = sale.lines;
       const saleLineFlowMeta = await this.resolveSaleLineFlowMeta(
         tx,
         companyId,
@@ -298,12 +301,24 @@ export class LendingService {
               `Sale line ${line.source_sale_line_id} does not belong to this sale`
             );
           }
+        }
+        const resolvedSaleLine =
+          line.source_sale_line_id
+            ? saleLinesById.get(line.source_sale_line_id) ?? null
+            : line.source_sale_line_index !== null
+              ? saleLinesByIndex[line.source_sale_line_index] ?? null
+              : null;
+        if (line.source_sale_line_id || line.source_sale_line_index !== null) {
+          const saleLine = resolvedSaleLine;
+          if (!saleLine) {
+            throw new BadRequestException('Referenced sale line does not belong to this sale');
+          }
           if (saleLine.productId !== product.id) {
             throw new BadRequestException(
-              `Sale line ${line.source_sale_line_id} does not match ${product.name}`
+              `Sale line ${saleLine.id} does not match ${product.name}`
             );
           }
-          const flow = saleLineFlowMeta.get(line.source_sale_line_id)?.cylinder_flow ?? null;
+          const flow = saleLineFlowMeta.get(saleLine.id)?.cylinder_flow ?? null;
           if (flow !== 'NON_REFILL') {
             throw new BadRequestException(
               `${product.name} can only be lent from a non-refill sale line`
@@ -370,7 +385,11 @@ export class LendingService {
             lendingTransactionId: lending.id,
             companyId,
             productId: product.id,
-            sourceSaleLineId: line.source_sale_line_id,
+            sourceSaleLineId:
+              line.source_sale_line_id ??
+              (line.source_sale_line_index !== null
+                ? saleLinesByIndex[line.source_sale_line_index]?.id ?? null
+                : null),
             quantityLent: line.quantity,
             quantityReturned: new Prisma.Decimal(0),
             depositAmount,
@@ -733,7 +752,16 @@ export class LendingService {
     const normalizedLines = lines.map((line, index) => {
       const productId = this.requireId(line.product_id, `lines[${index}].product_id`);
       const sourceSaleLineId = this.optionalId(line.source_sale_line_id);
-      const seenKey = sourceSaleLineId ? `sale-line:${sourceSaleLineId}` : `product:${productId}`;
+      const sourceSaleLineIndex = this.optionalInteger(
+        line.source_sale_line_index,
+        `lines[${index}].source_sale_line_index`
+      );
+      const seenKey =
+        sourceSaleLineId
+          ? `sale-line:${sourceSaleLineId}`
+          : sourceSaleLineIndex !== null
+            ? `sale-line-index:${sourceSaleLineIndex}`
+            : `product:${productId}`;
       if (seenKeys.has(seenKey)) {
         throw new BadRequestException(`Duplicate lending line ${seenKey} is not allowed`);
       }
@@ -748,6 +776,7 @@ export class LendingService {
       return {
         product_id: productId,
         source_sale_line_id: sourceSaleLineId,
+        source_sale_line_index: sourceSaleLineIndex,
         quantity: new Prisma.Decimal(quantityNumber),
         quantity_number: quantityNumber,
         deposit_amount:
@@ -1036,6 +1065,17 @@ export class LendingService {
     }
     const normalized = value.trim();
     return normalized.length > 0 ? normalized : null;
+  }
+
+  private optionalInteger(value: unknown, field: string): number | null {
+    if (value === undefined || value === null || value === '') {
+      return null;
+    }
+    const parsed = Number(value);
+    if (!Number.isInteger(parsed) || parsed < 0) {
+      throw new BadRequestException(`${field} must be a non-negative integer`);
+    }
+    return parsed;
   }
 
   private optionalText(value: unknown): string | null {

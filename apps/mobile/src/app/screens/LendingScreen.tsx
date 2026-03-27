@@ -11,6 +11,7 @@ import {
 import type { SQLiteDatabase } from 'expo-sqlite';
 import { LocalSessionService } from '../../features/auth/local-session.service';
 import { HttpAuthTransport } from '../../features/auth/http-auth.transport';
+import { OfflineTransactionService } from '../../services/offline-transaction.service';
 import { normalizeApiBaseUrl } from '../api-base-url';
 import { toastError, toastInfo, toastSuccess } from '../goey-toast';
 import type { AppTheme } from '../theme';
@@ -78,6 +79,65 @@ type LendingDetailRecord = LendingRecord & {
   returns: LendingReturnRecord[];
 };
 
+type LocalLendingRow = {
+  id: string;
+  payload: string;
+  sync_status: string;
+  created_at: string;
+  updated_at: string;
+};
+
+type LocalLendingPayload = {
+  lending_id?: string;
+  sale_id?: string;
+  branch_id?: string;
+  branch_name?: string | null;
+  location_id?: string;
+  location_name?: string | null;
+  customer_id?: string;
+  customer_name?: string | null;
+  status?: string;
+  due_at?: string | null;
+  remarks?: string | null;
+  opened_at?: string;
+  line_count?: number;
+  total_quantity_lent?: number;
+  total_quantity_returned?: number;
+  lines?: Array<{
+    product_id?: string;
+    product_name?: string | null;
+    product_sku?: string | null;
+    quantity?: number;
+    deposit_amount?: number | null;
+    remarks?: string | null;
+    source_sale_line_id?: string | null;
+  }>;
+};
+
+type LocalLendingReturnRow = {
+  id: string;
+  payload: string;
+  sync_status: string;
+  created_at: string;
+  updated_at: string;
+};
+
+type LocalLendingReturnPayload = {
+  lending_return_id?: string;
+  lending_id?: string;
+  sale_id?: string | null;
+  customer_id?: string | null;
+  remarks?: string | null;
+  lines?: Array<{
+    lending_line_id?: string;
+    product_id?: string | null;
+    product_name?: string | null;
+    returned_qty?: number;
+    condition?: LendingReturnCondition;
+  }>;
+  created_at?: string;
+};
+
 const env = (
   globalThis as { process?: { env?: Record<string, string | undefined> } }
 ).process?.env;
@@ -110,6 +170,26 @@ function fmtQty(value: number | null | undefined): string {
   return Number(value).toLocaleString(undefined, { maximumFractionDigits: 4 });
 }
 
+function parsePayload<T>(value: string): T {
+  try {
+    return JSON.parse(value) as T;
+  } catch {
+    return {} as T;
+  }
+}
+
+function shouldQueueOffline(message: string): boolean {
+  const normalized = message.trim().toLowerCase();
+  return (
+    normalized.includes('network request failed') ||
+    normalized.includes('failed to fetch') ||
+    normalized.includes('network error') ||
+    normalized.includes('request failed (503)') ||
+    normalized.includes('request failed (502)') ||
+    normalized.includes('request failed (504)')
+  );
+}
+
 export function LendingScreen({
   db,
   theme,
@@ -121,6 +201,10 @@ export function LendingScreen({
   const [statusFilter, setStatusFilter] = useState<'ALL' | LendingStatus>('ALL');
   const [loading, setLoading] = useState(false);
   const [rows, setRows] = useState<LendingRecord[]>([]);
+  const [localPendingRowsById, setLocalPendingRowsById] = useState<Map<string, LendingDetailRecord>>(new Map());
+  const [pendingReturnsByLendingId, setPendingReturnsByLendingId] = useState<
+    Map<string, LocalLendingReturnPayload[]>
+  >(new Map());
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [selectedDetail, setSelectedDetail] = useState<LendingDetailRecord | null>(null);
   const [detailLoading, setDetailLoading] = useState(false);
@@ -183,9 +267,149 @@ export function LendingScreen({
     [db]
   );
 
+  const applyPendingReturns = useCallback(
+    (
+      detail: LendingDetailRecord,
+      pending: LocalLendingReturnPayload[] | undefined
+    ): LendingDetailRecord => {
+      if (!pending?.length) {
+        return detail;
+      }
+      const extraReturnedByLine = new Map<string, number>();
+      const extraReturns: LendingReturnRecord[] = [];
+      for (const entry of pending) {
+        for (const line of entry.lines ?? []) {
+          const lineId = line.lending_line_id?.trim();
+          const qty = Number(line.returned_qty ?? 0);
+          if (!lineId || !Number.isFinite(qty) || qty <= 0) {
+            continue;
+          }
+          extraReturnedByLine.set(
+            lineId,
+            Number(((extraReturnedByLine.get(lineId) ?? 0) + qty).toFixed(4))
+          );
+          extraReturns.push({
+            lending_return_id:
+              entry.lending_return_id ?? `${detail.lending_id}-${lineId}-${extraReturns.length + 1}`,
+            lending_line_id: lineId,
+            returned_qty: qty,
+            condition: line.condition ?? 'GOOD',
+            remarks: entry.remarks ?? null,
+            received_by_name: 'Pending Sync',
+            returned_at: entry.created_at ?? new Date().toISOString()
+          });
+        }
+      }
+
+      const lines = detail.lines.map((line) => {
+        const extraReturned = extraReturnedByLine.get(line.lending_line_id) ?? 0;
+        const quantityReturned = Number((line.quantity_returned + extraReturned).toFixed(4));
+        return {
+          ...line,
+          quantity_returned: quantityReturned,
+          quantity_open: Number(Math.max(0, line.quantity_lent - quantityReturned).toFixed(4))
+        };
+      });
+      const totalQuantityReturned = Number(
+        lines.reduce((sum, line) => sum + line.quantity_returned, 0).toFixed(4)
+      );
+      const hasOpen = lines.some((line) => line.quantity_open > 0);
+      const status: LendingStatus = hasOpen
+        ? totalQuantityReturned > 0
+          ? 'PARTIALLY_RETURNED'
+          : detail.status
+        : 'CLOSED';
+      return {
+        ...detail,
+        status,
+        total_quantity_returned: totalQuantityReturned,
+        lines,
+        returns: [...extraReturns, ...detail.returns]
+      };
+    },
+    []
+  );
+
   const refresh = useCallback(async (): Promise<void> => {
     setLoading(true);
+    const localMap = new Map<string, LendingDetailRecord>();
+    const localList: LendingRecord[] = [];
     try {
+      const localRows = await db.getAllAsync<LocalLendingRow>(
+        `
+        SELECT id, payload, sync_status, created_at, updated_at
+        FROM lending_local
+        WHERE sync_status IN ('pending', 'processing', 'failed')
+        ORDER BY created_at DESC
+        `
+      );
+      for (const row of localRows) {
+        const payload = parsePayload<LocalLendingPayload>(row.payload);
+        const detail: LendingDetailRecord = {
+          lending_id: payload.lending_id ?? row.id,
+          branch_id: payload.branch_id ?? '-',
+          branch_name: payload.branch_name ?? null,
+          location_id: payload.location_id ?? '-',
+          location_name: payload.location_name ?? null,
+          customer_id: payload.customer_id ?? '-',
+          customer_code: null,
+          customer_name: payload.customer_name ?? null,
+          sale_id: payload.sale_id ?? '-',
+          status: 'OPEN',
+          due_at: payload.due_at ?? null,
+          remarks: payload.remarks ?? null,
+          opened_at: payload.opened_at ?? row.created_at,
+          line_count: Number(payload.line_count ?? (payload.lines?.length ?? 0)),
+          total_quantity_lent: Number(payload.total_quantity_lent ?? 0),
+          total_quantity_returned: Number(payload.total_quantity_returned ?? 0),
+          lines: (payload.lines ?? []).map((line, index) => ({
+            lending_line_id: `${row.id}-line-${index}`,
+            product_id: line.product_id ?? '-',
+            product_sku: line.product_sku ?? null,
+            product_name: line.product_name ?? null,
+            quantity_lent: Number(line.quantity ?? 0),
+            quantity_returned: 0,
+            quantity_open: Number(line.quantity ?? 0),
+            deposit_amount:
+              line.deposit_amount === null || line.deposit_amount === undefined
+                ? null
+                : Number(line.deposit_amount),
+            remarks: line.remarks ?? null
+          })),
+          returns: []
+        };
+        localMap.set(detail.lending_id, detail);
+        if (statusFilter === 'ALL' || statusFilter === 'OPEN') {
+          localList.push(detail);
+        }
+      }
+      setLocalPendingRowsById(localMap);
+
+      const localReturnRows = await db.getAllAsync<LocalLendingReturnRow>(
+        `
+        SELECT id, payload, sync_status, created_at, updated_at
+        FROM lending_returns_local
+        WHERE sync_status IN ('pending', 'processing', 'failed')
+        ORDER BY created_at DESC
+        `
+      );
+      const pendingReturnsMap = new Map<string, LocalLendingReturnPayload[]>();
+      for (const row of localReturnRows) {
+        const payload = parsePayload<LocalLendingReturnPayload>(row.payload);
+        const lendingId = payload.lending_id?.trim();
+        if (!lendingId) {
+          continue;
+        }
+        const existing = pendingReturnsMap.get(lendingId) ?? [];
+        existing.push({
+          ...payload,
+          lending_return_id: payload.lending_return_id ?? row.id,
+          created_at: payload.created_at ?? row.created_at
+        });
+        pendingReturnsMap.set(lendingId, existing);
+      }
+      setPendingReturnsByLendingId(pendingReturnsMap);
+
       const params = new URLSearchParams();
       if (preferredBranchId?.trim()) {
         params.set('branch_id', preferredBranchId.trim());
@@ -195,30 +419,59 @@ export function LendingScreen({
       }
       params.set('limit', '120');
       const data = await apiRequest<LendingRecord[]>(`/lending?${params.toString()}`);
-      setRows(data);
+      const merged = data.map((row) => {
+        const pending = pendingReturnsMap.get(row.lending_id);
+        if (!pending?.length) {
+          return row;
+        }
+        const extraReturned = pending.reduce((sum, entry) => {
+          return (
+            sum +
+            (entry.lines ?? []).reduce((lineSum, line) => lineSum + Number(line.returned_qty ?? 0), 0)
+          );
+        }, 0);
+        const totalReturned = Number((row.total_quantity_returned + extraReturned).toFixed(4));
+        const totalOpen = Number((row.total_quantity_lent - totalReturned).toFixed(4));
+        return {
+          ...row,
+          status: totalOpen <= 0 ? 'CLOSED' : totalReturned > 0 ? 'PARTIALLY_RETURNED' : row.status,
+          total_quantity_returned: totalReturned
+        };
+      });
+      setRows([...localList, ...merged]);
     } catch (cause) {
-      toastError('Lending', cause instanceof Error ? cause.message : 'Unable to load lending records.');
+      if (localList.length > 0) {
+        setRows([...localList]);
+      } else {
+        toastError('Lending', cause instanceof Error ? cause.message : 'Unable to load lending records.');
+      }
     } finally {
       setLoading(false);
     }
-  }, [apiRequest, preferredBranchId, statusFilter]);
+  }, [apiRequest, db, preferredBranchId, statusFilter]);
 
   const openDetail = useCallback(
     async (lendingId: string): Promise<void> => {
       setSelectedId(lendingId);
+      const localDetail = localPendingRowsById.get(lendingId);
+      if (localDetail) {
+        setSelectedDetail(localDetail);
+        setDetailLoading(false);
+        return;
+      }
       setDetailLoading(true);
       try {
         const detail = await apiRequest<LendingDetailRecord>(
           `/lending/${encodeURIComponent(lendingId)}`
         );
-        setSelectedDetail(detail);
+        setSelectedDetail(applyPendingReturns(detail, pendingReturnsByLendingId.get(lendingId)));
       } catch (cause) {
         toastError('Lending', cause instanceof Error ? cause.message : 'Unable to load lending detail.');
       } finally {
         setDetailLoading(false);
       }
     },
-    [apiRequest]
+    [apiRequest, applyPendingReturns, localPendingRowsById, pendingReturnsByLendingId]
   );
 
   useEffect(() => {
@@ -239,6 +492,7 @@ export function LendingScreen({
 
   const canReturn =
     selectedDetail &&
+    !localPendingRowsById.has(selectedDetail.lending_id) &&
     selectedDetail.status !== 'CLOSED' &&
     selectedDetail.status !== 'CANCELLED' &&
     selectedDetail.status !== 'FORCE_CLOSED' &&
@@ -286,24 +540,77 @@ export function LendingScreen({
 
     setReturnSaving(true);
     try {
-      const detail = await apiRequest<LendingDetailRecord>(
-        `/lending/${encodeURIComponent(selectedDetail.lending_id)}/return`,
-        {
-          method: 'POST',
-          body: JSON.stringify({
-            remarks: returnRemarks.trim() || null,
-            lines: lines.map((entry) => ({
-              lending_line_id: entry.line.lending_line_id,
-              returned_qty: entry.qty,
-              condition: entry.condition
-            }))
-          })
+      const body = {
+        remarks: returnRemarks.trim() || null,
+        lines: lines.map((entry) => ({
+          lending_line_id: entry.line.lending_line_id,
+          returned_qty: entry.qty,
+          condition: entry.condition
+        }))
+      };
+      let queuedOffline = false;
+      let detail: LendingDetailRecord | null = null;
+      try {
+        detail = await apiRequest<LendingDetailRecord>(
+          `/lending/${encodeURIComponent(selectedDetail.lending_id)}/return`,
+          {
+            method: 'POST',
+            body: JSON.stringify(body)
+          }
+        );
+      } catch (cause) {
+        const message = cause instanceof Error ? cause.message : 'Unable to save return.';
+        if (!shouldQueueOffline(message)) {
+          throw cause;
         }
-      );
-      setSelectedDetail(detail);
+        queuedOffline = true;
+      }
+      if (queuedOffline) {
+        const service = new OfflineTransactionService(db);
+        await service.createOfflineLendingReturn({
+          lendingId: selectedDetail.lending_id,
+          saleId: selectedDetail.sale_id,
+          customerId: selectedDetail.customer_id,
+          remarks: returnRemarks.trim() || null,
+          lines: lines.map((entry) => ({
+            lendingLineId: entry.line.lending_line_id,
+            productId: entry.line.product_id,
+            productName: entry.line.product_name,
+            returnedQty: entry.qty,
+            condition: entry.condition
+          }))
+        });
+      }
       setReturnModalOpen(false);
-      toastSuccess('Return saved', `Updated lending ${detail.lending_id}.`);
+      toastSuccess(
+        queuedOffline ? 'Return queued offline' : 'Return saved',
+        `Updated lending ${selectedDetail.lending_id}.`
+      );
       await refresh();
+      if (queuedOffline) {
+        setSelectedDetail(
+          applyPendingReturns(selectedDetail, [
+            ...(pendingReturnsByLendingId.get(selectedDetail.lending_id) ?? []),
+            {
+              lending_return_id: '',
+              lending_id: selectedDetail.lending_id,
+              sale_id: selectedDetail.sale_id,
+              customer_id: selectedDetail.customer_id,
+              remarks: returnRemarks.trim() || null,
+              created_at: new Date().toISOString(),
+              lines: lines.map((entry) => ({
+                lending_line_id: entry.line.lending_line_id,
+                product_id: entry.line.product_id,
+                product_name: entry.line.product_name,
+                returned_qty: entry.qty,
+                condition: entry.condition
+              }))
+            }
+          ])
+        );
+      } else if (detail) {
+        setSelectedDetail(detail);
+      }
       await onDataChanged?.();
     } catch (cause) {
       toastError('Return failed', cause instanceof Error ? cause.message : 'Unable to save return.');
@@ -435,6 +742,24 @@ export function LendingScreen({
                     <Text style={[styles.closeText, { color: theme.pillText }]}>Close</Text>
                   </Pressable>
                 </View>
+
+                {localPendingRowsById.has(selectedDetail.lending_id) ? (
+                  <View style={[styles.detailCard, { borderColor: theme.cardBorder, backgroundColor: theme.inputBg }]}>
+                    <Text style={[styles.itemName, { color: theme.heading }]}>Pending Sync</Text>
+                    <Text style={[styles.itemMeta, { color: theme.subtext }]}>
+                      This lending was queued offline. Returns become available after the record syncs to the server.
+                    </Text>
+                  </View>
+                ) : null}
+                {!localPendingRowsById.has(selectedDetail.lending_id) &&
+                (pendingReturnsByLendingId.get(selectedDetail.lending_id)?.length ?? 0) > 0 ? (
+                  <View style={[styles.detailCard, { borderColor: theme.cardBorder, backgroundColor: theme.inputBg }]}>
+                    <Text style={[styles.itemName, { color: theme.heading }]}>Pending Return Sync</Text>
+                    <Text style={[styles.itemMeta, { color: theme.subtext }]}>
+                      Some returns were queued offline and are already reflected below. They will finalize once sync completes.
+                    </Text>
+                  </View>
+                ) : null}
 
                 <View style={styles.summaryRow}>
                   <View style={[styles.summaryCard, { borderColor: theme.cardBorder, backgroundColor: theme.inputBg }]}>

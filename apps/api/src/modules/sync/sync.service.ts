@@ -7,6 +7,7 @@ import {
   CustomerPaymentsService,
   type CustomerPaymentRecord
 } from '../customer-payments/customer-payments.service';
+import { LendingService, type LendingDetailRecord } from '../lending/lending.service';
 import { TransfersService, type TransferRecord } from '../transfers/transfers.service';
 import { TenantDatasourceRouterService } from '../../common/tenant-datasource-router.service';
 
@@ -47,6 +48,7 @@ export class SyncService {
   constructor(
     @Optional() private readonly salesService?: SalesService,
     @Optional() private readonly customerPaymentsService?: CustomerPaymentsService,
+    @Optional() private readonly lendingService?: LendingService,
     @Optional() private readonly transfersService?: TransfersService,
     @Optional() private readonly tenantRouter?: TenantDatasourceRouterService
   ) {}
@@ -165,6 +167,42 @@ export class SyncService {
         });
         continue;
       }
+      const lendingPosting = await this.tryPostLendingOutbox(companyId, item, actorUserId);
+      if (!lendingPosting.ok) {
+        const reviewId = this.createReview(companyId, item.id, item.entity, lendingPosting.reason, item.payload);
+        rejected.push({
+          id: item.id,
+          reason: lendingPosting.reason,
+          review_id: reviewId
+        });
+        await this.persistIdempotencyDecision(companyId, item.idempotency_key, requestHash, {
+          status: 'rejected',
+          reason: lendingPosting.reason,
+          review_id: reviewId
+        });
+        continue;
+      }
+      const lendingReturnPosting = await this.tryPostLendingReturnOutbox(companyId, item, actorUserId);
+      if (!lendingReturnPosting.ok) {
+        const reviewId = this.createReview(
+          companyId,
+          item.id,
+          item.entity,
+          lendingReturnPosting.reason,
+          item.payload
+        );
+        rejected.push({
+          id: item.id,
+          reason: lendingReturnPosting.reason,
+          review_id: reviewId
+        });
+        await this.persistIdempotencyDecision(companyId, item.idempotency_key, requestHash, {
+          status: 'rejected',
+          reason: lendingReturnPosting.reason,
+          review_id: reviewId
+        });
+        continue;
+      }
 
       const transferPostedServerSide =
         item.entity === 'transfer' &&
@@ -246,6 +284,30 @@ export class SyncService {
                   source_location_id: transferPosting.transfer.source_location_id,
                   destination_location_id: transferPosting.transfer.destination_location_id,
                   posted_at: transferPosting.transfer.posted_at ?? transferPosting.transfer.updated_at
+                }
+              }
+            : {})
+          ,
+          ...(lendingPosting.lending
+            ? {
+                server_lending_posted: true,
+                server_lending_result: {
+                  lending_id: lendingPosting.lending.lending_id,
+                  sale_id: lendingPosting.lending.sale_id,
+                  customer_id: lendingPosting.lending.customer_id,
+                  status: lendingPosting.lending.status,
+                  total_quantity_lent: lendingPosting.lending.total_quantity_lent
+                }
+              }
+            : {}),
+          ...(lendingReturnPosting.lending
+            ? {
+                server_lending_return_posted: true,
+                server_lending_return_result: {
+                  lending_id: lendingReturnPosting.lending.lending_id,
+                  sale_id: lendingReturnPosting.lending.sale_id,
+                  status: lendingReturnPosting.lending.status,
+                  total_quantity_returned: lendingReturnPosting.lending.total_quantity_returned
                 }
               }
             : {})
@@ -758,6 +820,113 @@ export class SyncService {
     } catch (cause) {
       const message =
         cause instanceof Error ? cause.message : 'Customer payment posting failed during sync';
+      return { ok: false, reason: message };
+    }
+  }
+
+  private async tryPostLendingOutbox(
+    companyId: string,
+    item: SyncPushRequest['outbox_items'][number],
+    actorUserId?: string
+  ): Promise<{ ok: true; lending?: LendingDetailRecord } | { ok: false; reason: string }> {
+    if (item.entity !== 'lending' || item.action !== 'create') {
+      return { ok: true };
+    }
+    if (!this.lendingService) {
+      return { ok: true };
+    }
+
+    const payload = item.payload ?? {};
+    const saleId = this.asString(payload.sale_id ?? payload.saleId);
+    if (!saleId) {
+      return { ok: false, reason: 'Lending sync payload is missing sale id' };
+    }
+    const linesRaw = Array.isArray(payload.lines) ? payload.lines : [];
+    if (linesRaw.length === 0) {
+      return { ok: false, reason: 'Lending sync payload is missing lending lines' };
+    }
+
+    try {
+      const lending = await this.lendingService.create(
+        companyId,
+        {
+          sale_id: saleId,
+          due_at: this.asString(payload.due_at ?? payload.dueAt),
+          remarks: this.asString(payload.remarks) ?? null,
+          settlement_type: this.asString(payload.settlement_type ?? payload.settlementType),
+          settlement_amount: this.asNumber(payload.settlement_amount ?? payload.settlementAmount),
+          approved_by_user_id: this.asString(
+            payload.approved_by_user_id ?? payload.approvedByUserId
+          ),
+          lines: linesRaw.map((entry) => {
+            const row = (entry as Record<string, unknown>) ?? {};
+            return {
+              product_id: this.asString(row.product_id ?? row.productId) ?? '',
+              source_sale_line_id: this.asString(
+                row.source_sale_line_id ?? row.sourceSaleLineId
+              ),
+              source_sale_line_index: this.asInteger(
+                row.source_sale_line_index ?? row.sourceSaleLineIndex
+              ),
+              quantity: this.asNumber(row.quantity),
+              deposit_amount: this.asNumber(row.deposit_amount ?? row.depositAmount),
+              remarks: this.asString(row.remarks)
+            };
+          })
+        },
+        this.asString(payload.user_id ?? payload.userId) ?? actorUserId
+      );
+      return { ok: true, lending };
+    } catch (cause) {
+      const message = cause instanceof Error ? cause.message : 'Lending posting failed during sync';
+      return { ok: false, reason: message };
+    }
+  }
+
+  private async tryPostLendingReturnOutbox(
+    companyId: string,
+    item: SyncPushRequest['outbox_items'][number],
+    actorUserId?: string
+  ): Promise<{ ok: true; lending?: LendingDetailRecord } | { ok: false; reason: string }> {
+    if (item.entity !== 'lending_return' || item.action !== 'create') {
+      return { ok: true };
+    }
+    if (!this.lendingService) {
+      return { ok: true };
+    }
+
+    const payload = item.payload ?? {};
+    const lendingId = this.asString(payload.lending_id ?? payload.lendingId);
+    if (!lendingId) {
+      return { ok: false, reason: 'Lending return sync payload is missing lending id' };
+    }
+    const linesRaw = Array.isArray(payload.lines) ? payload.lines : [];
+    if (linesRaw.length === 0) {
+      return { ok: false, reason: 'Lending return sync payload is missing return lines' };
+    }
+
+    try {
+      const lending = await this.lendingService.returnLending(
+        companyId,
+        lendingId,
+        {
+          remarks: this.asString(payload.remarks) ?? null,
+          lines: linesRaw.map((entry) => {
+            const row = (entry as Record<string, unknown>) ?? {};
+            return {
+              lending_line_id: this.asString(row.lending_line_id ?? row.lendingLineId) ?? '',
+              returned_qty: this.asNumber(row.returned_qty ?? row.returnedQty),
+              condition: this.asString(row.condition),
+              remarks: this.asString(row.remarks)
+            };
+          })
+        },
+        this.asString(payload.user_id ?? payload.userId) ?? actorUserId
+      );
+      return { ok: true, lending };
+    } catch (cause) {
+      const message =
+        cause instanceof Error ? cause.message : 'Lending return posting failed during sync';
       return { ok: false, reason: message };
     }
   }
@@ -1790,6 +1959,19 @@ export class SyncService {
       return Number.isFinite(parsed) ? parsed : 0;
     }
     return 0;
+  }
+
+  private asInteger(value: unknown): number | null {
+    if (typeof value === 'number' && Number.isInteger(value) && value >= 0) {
+      return value;
+    }
+    if (typeof value === 'string' && value.trim().length > 0) {
+      const parsed = Number(value);
+      if (Number.isInteger(parsed) && parsed >= 0) {
+        return parsed;
+      }
+    }
+    return null;
   }
 
   private normalizeOrderType(value: unknown): 'PICKUP' | 'DELIVERY' | undefined {

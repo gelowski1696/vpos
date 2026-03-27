@@ -150,6 +150,62 @@ type LocalCustomerPaymentView = {
   syncStatus: string;
 };
 
+type LocalLendingRow = {
+  id: string;
+  payload: string;
+  sync_status: string;
+  created_at: string;
+  updated_at: string;
+};
+
+type LocalLendingPayload = {
+  sale_id?: string;
+  saleId?: string;
+  customer_id?: string;
+  customerId?: string;
+  branch_id?: string;
+  branchId?: string;
+  location_id?: string;
+  locationId?: string;
+  status?: string;
+  remarks?: string | null;
+  opened_at?: string;
+  lines?: Array<{
+    product_id?: string;
+    productId?: string;
+    source_sale_line_id?: string | null;
+    sourceSaleLineId?: string | null;
+    source_sale_line_index?: number | null;
+    sourceSaleLineIndex?: number | null;
+    quantity?: number;
+    deposit_amount?: number | null;
+    product_name?: string | null;
+    productName?: string | null;
+    product_sku?: string | null;
+    productSku?: string | null;
+    cylinder_flow?: 'REFILL_EXCHANGE' | 'NON_REFILL' | null;
+    cylinderFlow?: 'REFILL_EXCHANGE' | 'NON_REFILL' | null;
+    sold_qty?: number | null;
+    soldQty?: number | null;
+    unit?: string | null;
+    lending_unit_type?: string | null;
+    lendingUnitType?: string | null;
+  }>;
+};
+
+type LocalProductMeta = {
+  id: string;
+  sku: string;
+  name: string;
+  unit: string;
+  isActive: boolean;
+  isLpg: boolean;
+  cylinderTypeId: string | null;
+  requiresDeposit: boolean;
+  defaultDepositAmount: number | null;
+  lendingUnitType: string | null;
+};
+
 type LendingEligibleProductRecord = {
   sale_line_id: string;
   line_index: number;
@@ -249,6 +305,39 @@ function normalizeText(value: unknown): string | null {
   }
   const normalized = value.trim();
   return normalized.length > 0 ? normalized : null;
+}
+
+function toBool(value: unknown): boolean {
+  if (typeof value === 'boolean') {
+    return value;
+  }
+  if (typeof value === 'string') {
+    const normalized = value.trim().toLowerCase();
+    return normalized === 'true' || normalized === '1';
+  }
+  return false;
+}
+
+function resolveLocalRecordId(payload: Record<string, unknown>, fallback: string): string {
+  return (
+    normalizeText(payload.id) ??
+    normalizeText(payload.product_id) ??
+    normalizeText(payload.productId) ??
+    normalizeText(payload.code) ??
+    fallback
+  );
+}
+
+function shouldQueueOffline(message: string): boolean {
+  const normalized = message.trim().toLowerCase();
+  return (
+    normalized.includes('network request failed') ||
+    normalized.includes('failed to fetch') ||
+    normalized.includes('network error') ||
+    normalized.includes('request failed (503)') ||
+    normalized.includes('request failed (502)') ||
+    normalized.includes('request failed (504)')
+  );
 }
 
 function resolveSalePerson(
@@ -373,6 +462,9 @@ export function SalesScreen({
   const [customerPaymentHistoryBySaleId, setCustomerPaymentHistoryBySaleId] = useState<
     Map<string, LocalCustomerPaymentView[]>
   >(new Map());
+  const [pendingLentQtyBySaleId, setPendingLentQtyBySaleId] = useState<Map<string, Map<number, number>>>(
+    new Map()
+  );
   const [lendingModalOpen, setLendingModalOpen] = useState(false);
   const [lendingLoading, setLendingLoading] = useState(false);
   const [lendingSaving, setLendingSaving] = useState(false);
@@ -548,6 +640,132 @@ export function SalesScreen({
     return { settledBySaleId, historyBySaleId };
   };
 
+  const loadPendingLendingProjection = async (): Promise<Map<string, Map<number, number>>> => {
+    const rows = await db.getAllAsync<LocalLendingRow>(
+      `
+      SELECT id, payload, sync_status, created_at, updated_at
+      FROM lending_local
+      WHERE sync_status IN ('pending', 'processing', 'failed')
+      ORDER BY created_at DESC
+      `
+    );
+    const bySaleId = new Map<string, Map<number, number>>();
+    for (const row of rows) {
+      const payload = parsePayload<LocalLendingPayload>(row.payload);
+      const saleId = payload.sale_id?.trim() || payload.saleId?.trim() || null;
+      if (!saleId) {
+        continue;
+      }
+      const saleMap = bySaleId.get(saleId) ?? new Map<number, number>();
+      const lines = Array.isArray(payload.lines) ? payload.lines : [];
+      for (const line of lines) {
+        const lineIndex = Number(line.source_sale_line_index ?? line.sourceSaleLineIndex);
+        const quantity = Number(toAmount(line.quantity).toFixed(4));
+        if (!Number.isInteger(lineIndex) || lineIndex < 0 || quantity <= 0) {
+          continue;
+        }
+        saleMap.set(lineIndex, Number(((saleMap.get(lineIndex) ?? 0) + quantity).toFixed(4)));
+      }
+      bySaleId.set(saleId, saleMap);
+    }
+    return bySaleId;
+  };
+
+  const loadLocalProductMeta = async (productIds: string[]): Promise<Map<string, LocalProductMeta>> => {
+    const ids = [...new Set(productIds.map((value) => value.trim()).filter((value) => value.length > 0))];
+    if (!ids.length) {
+      return new Map();
+    }
+    const rows = await db.getAllAsync<{ record_id: string; payload: string }>(
+      `
+      SELECT record_id, payload
+      FROM master_data_local
+      WHERE lower(entity) IN ('product', 'products')
+      `
+    );
+    const idSet = new Set(ids);
+    const map = new Map<string, LocalProductMeta>();
+    for (const row of rows) {
+      const payload = parsePayload<Record<string, unknown>>(row.payload);
+      const id = resolveLocalRecordId(payload, row.record_id);
+      if (!idSet.has(id)) {
+        continue;
+      }
+      map.set(id, {
+        id,
+        sku: normalizeText(payload.sku) ?? normalizeText(payload.code) ?? id,
+        name: normalizeText(payload.name) ?? id,
+        unit: normalizeText(payload.unit) ?? 'unit',
+        isActive: !('isActive' in payload) || toBool(payload.isActive ?? payload.is_active),
+        isLpg: toBool(payload.isLpg ?? payload.is_lpg),
+        cylinderTypeId:
+          normalizeText(payload.cylinderTypeId) ?? normalizeText(payload.cylinder_type_id),
+        requiresDeposit: toBool(payload.requiresDeposit ?? payload.requires_deposit),
+        defaultDepositAmount: (() => {
+          const value = toAmount(payload.defaultDepositAmount ?? payload.default_deposit_amount);
+          return Number.isFinite(value) ? Number(value.toFixed(2)) : null;
+        })(),
+        lendingUnitType:
+          normalizeText(payload.lendingUnitType) ?? normalizeText(payload.lending_unit_type)
+      });
+    }
+    return map;
+  };
+
+  const buildOfflineLendingProducts = async (
+    sale: ParsedSale,
+    input?: { productId?: string | null }
+  ): Promise<LendingEligibleProductRecord[]> => {
+    const rawLines = Array.isArray(sale.payload.lines) ? sale.payload.lines : [];
+    const productIds = rawLines
+      .map((line) => (line.product_id ?? line.productId ?? '').trim())
+      .filter((value) => value.length > 0);
+    const productMetaById = await loadLocalProductMeta(productIds);
+    const pendingByLineIndex = pendingLentQtyBySaleId.get(sale.row.id) ?? new Map<number, number>();
+
+    return rawLines
+      .map((line, index) => {
+        const productId = (line.product_id ?? line.productId ?? '').trim();
+        if (!productId) {
+          return null;
+        }
+        const meta = productMetaById.get(productId);
+        const rawFlow = String(line.cylinder_flow ?? line.cylinderFlow ?? '').trim().toUpperCase();
+        const cylinderFlow =
+          rawFlow === 'NON_REFILL'
+            ? 'NON_REFILL'
+            : rawFlow === 'REFILL_EXCHANGE'
+              ? 'REFILL_EXCHANGE'
+              : null;
+        const soldQty = Number(toAmount(line.quantity ?? line.qty).toFixed(4));
+        const alreadyLentQty = Number((pendingByLineIndex.get(index) ?? 0).toFixed(4));
+        const remainingLendableQty = Number(Math.max(0, soldQty - alreadyLentQty).toFixed(4));
+        return {
+          sale_line_id: `local:${sale.row.id}:${index}`,
+          line_index: index,
+          product_id: productId,
+          sku: meta?.sku ?? productMap.get(productId)?.code ?? productId,
+          name: meta?.name ?? productMap.get(productId)?.label ?? productId,
+          unit: meta?.unit ?? 'unit',
+          cylinder_flow: cylinderFlow,
+          sold_qty: soldQty,
+          already_lent_qty: alreadyLentQty,
+          remaining_lendable_qty: remainingLendableQty,
+          available_qty: remainingLendableQty,
+          requires_deposit: meta?.requiresDeposit ?? false,
+          default_deposit_amount: meta?.defaultDepositAmount ?? null,
+          lending_unit_type: meta?.lendingUnitType ?? null
+        } satisfies LendingEligibleProductRecord;
+      })
+      .filter((product): product is LendingEligibleProductRecord => Boolean(product))
+      .filter((product) => {
+        if (input?.productId?.trim() && product.product_id !== input.productId.trim()) {
+          return false;
+        }
+        return product.cylinder_flow === 'NON_REFILL';
+      });
+  };
+
   const refresh = async (): Promise<void> => {
     if (loading) {
       return;
@@ -558,8 +776,10 @@ export function SalesScreen({
     try {
       await loadReferenceData();
       const projection = await loadLocalSettlementProjection();
+      const pendingLendingProjection = await loadPendingLendingProjection();
       setSettledBySaleId(projection.settledBySaleId);
       setCustomerPaymentHistoryBySaleId(projection.historyBySaleId);
+      setPendingLentQtyBySaleId(pendingLendingProjection);
       const firstPage = await fetchSalesPage(0);
       setRows(firstPage);
       setOffset(firstPage.length);
@@ -742,6 +962,8 @@ export function SalesScreen({
     0
   );
   const selectedSaleIsActive = selectedSale?.status === 'ACTIVE';
+  const getPendingLentQtyForLine = (saleId: string, lineIndex: number): number =>
+    Number(((pendingLentQtyBySaleId.get(saleId)?.get(lineIndex) ?? 0)).toFixed(4));
 
   useEffect(() => {
     if (!selectedSaleId || selectedSale?.row.sync_status !== 'synced') {
@@ -870,10 +1092,6 @@ export function SalesScreen({
     if (!selectedSale) {
       return;
     }
-    if (selectedSale.row.sync_status !== 'synced') {
-      toastInfo('Lending', 'Sync this sale first before marking an item as lent.');
-      return;
-    }
     if (!selectedSale.payload.customer_id?.trim()) {
       toastError('Lending', 'A customer-linked sale is required before lending.');
       return;
@@ -887,9 +1105,30 @@ export function SalesScreen({
     }
     setLendingLoading(true);
     try {
-      const allProducts = await apiRequest<LendingEligibleProductRecord[]>(
-        `/lending/eligible-products/by-sale/${encodeURIComponent(selectedSale.row.id)}`
-      );
+      let allProducts: LendingEligibleProductRecord[] = [];
+      if (selectedSale.row.sync_status === 'synced') {
+        try {
+          allProducts = await apiRequest<LendingEligibleProductRecord[]>(
+            `/lending/eligible-products/by-sale/${encodeURIComponent(selectedSale.row.id)}`
+          );
+        } catch {
+          allProducts = await buildOfflineLendingProducts(selectedSale, input);
+        }
+      } else {
+        allProducts = await buildOfflineLendingProducts(selectedSale, input);
+      }
+      const pendingByLineIndex = pendingLentQtyBySaleId.get(selectedSale.row.id) ?? new Map<number, number>();
+      allProducts = allProducts.map((product) => {
+        const pendingQty = Number((pendingByLineIndex.get(product.line_index) ?? 0).toFixed(4));
+        const alreadyLentQty = Number((product.already_lent_qty + pendingQty).toFixed(4));
+        const remaining = Math.max(0, Number((product.sold_qty - alreadyLentQty).toFixed(4)));
+        return {
+          ...product,
+          already_lent_qty: alreadyLentQty,
+          remaining_lendable_qty: remaining,
+          available_qty: remaining
+        };
+      });
       const matchingProducts =
         input?.productId?.trim()
           ? allProducts.filter((product) => product.product_id === input.productId?.trim())
@@ -969,20 +1208,66 @@ export function SalesScreen({
 
     setLendingSaving(true);
     try {
-      await apiRequest('/lending', {
-        method: 'POST',
-        body: JSON.stringify({
-          sale_id: selectedSale.row.id,
+      const payload = {
+        sale_id: selectedSale.row.id,
+        remarks: lendingRemarks.trim() || null,
+        lines: lines.map((entry) => ({
+          product_id: entry.product.product_id,
+          source_sale_line_id: entry.product.sale_line_id.startsWith('local:')
+            ? null
+            : entry.product.sale_line_id,
+          source_sale_line_index: entry.product.line_index,
+          quantity: entry.qty,
+          deposit_amount: entry.deposit
+        }))
+      };
+      let queuedOffline = selectedSale.row.sync_status !== 'synced';
+      if (!queuedOffline) {
+        try {
+          await apiRequest('/lending', {
+            method: 'POST',
+            body: JSON.stringify(payload)
+          });
+        } catch (cause) {
+          const message = cause instanceof Error ? cause.message : 'Unable to save lending.';
+          if (!shouldQueueOffline(message)) {
+            throw cause;
+          }
+          queuedOffline = true;
+        }
+      }
+      if (queuedOffline) {
+        const service = new OfflineTransactionService(db);
+        await service.createOfflineLending({
+          saleId: selectedSale.row.id,
+          branchId: selectedSale.payload.branch_id?.trim() || preferredBranchId?.trim() || '',
+          branchName: selectedBranchLabel,
+          locationId: selectedSale.payload.location_id?.trim() || '',
+          locationName: selectedLocationLabel,
+          customerId: selectedSale.payload.customer_id?.trim() || '',
+          customerName: selectedCustomerLabel,
           remarks: lendingRemarks.trim() || null,
           lines: lines.map((entry) => ({
-            product_id: entry.product.product_id,
-            source_sale_line_id: entry.product.sale_line_id,
+            productId: entry.product.product_id,
+            productSku: entry.product.sku,
+            productName: entry.product.name,
+            sourceSaleLineId: entry.product.sale_line_id.startsWith('local:')
+              ? null
+              : entry.product.sale_line_id,
+            sourceSaleLineIndex: entry.product.line_index,
             quantity: entry.qty,
-            deposit_amount: entry.deposit
+            depositAmount: entry.deposit,
+            cylinderFlow: entry.product.cylinder_flow,
+            soldQty: entry.product.sold_qty,
+            unit: entry.product.unit,
+            lendingUnitType: entry.product.lending_unit_type
           }))
-        })
-      });
-      toastSuccess('Lending saved', `Linked to sale ${selectedSale.row.id}.`);
+        });
+      }
+      toastSuccess(
+        queuedOffline ? 'Lending queued offline' : 'Lending saved',
+        `Linked to sale ${selectedSale.row.id}.`
+      );
       closeLendingModal();
       await refresh();
       await onDataChanged?.();
@@ -1603,6 +1888,16 @@ export function SalesScreen({
               const returnedQty = getReturnedQtyForProduct(productId);
               const remainingQty = Math.max(0, Number((qty - returnedQty).toFixed(4)));
               const lendingStatus = lendingStatusByLineIndex.get(index) ?? null;
+              const pendingOfflineLentQty = selectedSale
+                ? getPendingLentQtyForLine(selectedSale.row.id, index)
+                : 0;
+              const totalLentQty = Number(
+                ((lendingStatus?.already_lent_qty ?? 0) + pendingOfflineLentQty).toFixed(4)
+              );
+              const remainingLendableQty = Math.max(
+                0,
+                Number((qty - totalLentQty).toFixed(4))
+              );
               const productLabel = productMap.get(productId)?.label ?? productId;
               const rawFlow = String(line.cylinderFlow ?? line.cylinder_flow ?? '').trim().toUpperCase();
               const flowLabel =
@@ -1628,7 +1923,7 @@ export function SalesScreen({
                             styles.itemStatusBadge,
                             {
                               backgroundColor:
-                                lendingStatus && lendingStatus.remaining_lendable_qty <= 0
+                                remainingLendableQty <= 0
                                   ? '#DCFCE7'
                                   : theme.pillBg
                             }
@@ -1639,16 +1934,16 @@ export function SalesScreen({
                               styles.itemStatusBadgeText,
                               {
                                 color:
-                                  lendingStatus && lendingStatus.remaining_lendable_qty <= 0
+                                  remainingLendableQty <= 0
                                     ? '#166534'
                                     : theme.pillText
                               }
                             ]}
                           >
-                            {lendingStatus
-                              ? lendingStatus.remaining_lendable_qty <= 0
-                                ? 'Fully Lent'
-                                : `Lent ${lendingStatus.already_lent_qty.toFixed(4)} / ${lendingStatus.sold_qty.toFixed(4)}`
+                            {remainingLendableQty <= 0
+                              ? 'Fully Lent'
+                              : totalLentQty > 0
+                                ? `Lent ${totalLentQty.toFixed(4)} / ${qty.toFixed(4)}`
                               : 'Ready To Lend'}
                           </Text>
                         </View>
@@ -1675,11 +1970,10 @@ export function SalesScreen({
                         disabled={
                           syncBusy ||
                           lendingLoading ||
-                          selectedSale.row.sync_status !== 'synced' ||
                           !selectedSale.payload.customer_id ||
                           !selectedSaleIsActive ||
                           rawFlow !== 'NON_REFILL' ||
-                          (lendingStatus !== null && lendingStatus.remaining_lendable_qty <= 0)
+                          remainingLendableQty <= 0
                         }
                         style={[
                           styles.inlineActionBtn,
@@ -1688,11 +1982,10 @@ export function SalesScreen({
                             backgroundColor:
                               syncBusy ||
                               lendingLoading ||
-                              selectedSale.row.sync_status !== 'synced' ||
                               !selectedSale.payload.customer_id ||
                               !selectedSaleIsActive ||
                               rawFlow !== 'NON_REFILL' ||
-                              (lendingStatus !== null && lendingStatus.remaining_lendable_qty <= 0)
+                              remainingLendableQty <= 0
                                 ? theme.pillBg
                                 : theme.card
                           }
@@ -1701,11 +1994,9 @@ export function SalesScreen({
                         <Text style={[styles.inlineActionText, { color: theme.pillText }]}>
                           {!selectedSale.payload.customer_id
                             ? 'Customer Required'
-                            : selectedSale.row.sync_status !== 'synced'
-                              ? 'Sync First'
                             : rawFlow === 'REFILL_EXCHANGE'
                               ? 'Refill Only'
-                              : lendingStatus !== null && lendingStatus.remaining_lendable_qty <= 0
+                              : remainingLendableQty <= 0
                                 ? 'Fully Lent'
                               : rawFlow === 'NON_REFILL'
                                 ? 'Lend'

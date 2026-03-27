@@ -4,11 +4,19 @@ import { SyncService } from './sync.service';
 import { EntitlementsModule } from '../entitlements/entitlements.module';
 import { SalesModule } from '../sales/sales.module';
 import { CustomerPaymentsModule } from '../customer-payments/customer-payments.module';
+import { LendingModule } from '../lending/lending.module';
 import { TransfersModule } from '../transfers/transfers.module';
 import { PrismaModule } from '../../common/prisma.module';
 
 @Module({
-  imports: [PrismaModule, EntitlementsModule, SalesModule, CustomerPaymentsModule, TransfersModule],
+  imports: [
+    PrismaModule,
+    EntitlementsModule,
+    SalesModule,
+    CustomerPaymentsModule,
+    LendingModule,
+    TransfersModule
+  ],
   controllers: [SyncController],
   providers: [SyncService],
   exports: [SyncService]

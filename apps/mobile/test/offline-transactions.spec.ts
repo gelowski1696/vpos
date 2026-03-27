@@ -65,6 +65,58 @@ describe('OfflineTransactionService', () => {
     expect(String(db.runAsync.mock.calls[1][0])).toContain('outbox');
   });
 
+  it('stores lending locally and enqueues outbox row', async () => {
+    const db = makeDbMock();
+    const service = new OfflineTransactionService(db as never);
+
+    const id = await service.createOfflineLending({
+      lendingId: 'lend-1',
+      saleId: 'sale-1',
+      branchId: 'branch-main',
+      locationId: 'loc-main',
+      customerId: 'cust-1',
+      lines: [
+        {
+          productId: 'prod-11',
+          productName: 'Shinegas',
+          sourceSaleLineIndex: 1,
+          quantity: 1
+        }
+      ]
+    });
+
+    expect(id).toBe('lend-1');
+    expect(db.runAsync).toHaveBeenCalledTimes(2);
+    expect(String(db.runAsync.mock.calls[0][0])).toContain('lending_local');
+    expect(String(db.runAsync.mock.calls[1][0])).toContain('outbox');
+  });
+
+  it('stores lending return locally and enqueues outbox row', async () => {
+    const db = makeDbMock();
+    const service = new OfflineTransactionService(db as never);
+
+    const id = await service.createOfflineLendingReturn({
+      returnId: 'lend-ret-1',
+      lendingId: 'lend-1',
+      saleId: 'sale-1',
+      customerId: 'cust-1',
+      lines: [
+        {
+          lendingLineId: 'lend-line-1',
+          productId: 'prod-11',
+          productName: 'Shinegas',
+          returnedQty: 1,
+          condition: 'GOOD'
+        }
+      ]
+    });
+
+    expect(id).toBe('lend-ret-1');
+    expect(db.runAsync).toHaveBeenCalledTimes(2);
+    expect(String(db.runAsync.mock.calls[0][0])).toContain('lending_returns_local');
+    expect(String(db.runAsync.mock.calls[1][0])).toContain('outbox');
+  });
+
   it('stores petty cash locally and enqueues outbox row', async () => {
     const db = makeDbMock();
     const service = new OfflineTransactionService(db as never);

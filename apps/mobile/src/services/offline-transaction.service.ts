@@ -41,6 +41,51 @@ type CustomerPaymentInput = {
   notes?: string | null;
 };
 
+type OfflineLendingLineInput = {
+  productId: string;
+  productSku?: string | null;
+  productName?: string | null;
+  sourceSaleLineId?: string | null;
+  sourceSaleLineIndex?: number | null;
+  quantity: number;
+  depositAmount?: number | null;
+  remarks?: string | null;
+  cylinderFlow?: 'REFILL_EXCHANGE' | 'NON_REFILL' | null;
+  soldQty?: number | null;
+  unit?: string | null;
+  lendingUnitType?: string | null;
+};
+
+type LendingInput = {
+  lendingId?: string;
+  saleId: string;
+  branchId: string;
+  branchName?: string | null;
+  locationId: string;
+  locationName?: string | null;
+  customerId: string;
+  customerName?: string | null;
+  remarks?: string | null;
+  lines: OfflineLendingLineInput[];
+};
+
+type OfflineLendingReturnLineInput = {
+  lendingLineId: string;
+  productId?: string | null;
+  productName?: string | null;
+  returnedQty: number;
+  condition?: 'GOOD' | 'DAMAGED' | 'LOST';
+};
+
+type LendingReturnInput = {
+  returnId?: string;
+  lendingId: string;
+  saleId?: string | null;
+  customerId?: string | null;
+  remarks?: string | null;
+  lines: OfflineLendingReturnLineInput[];
+};
+
 type TransferInput = {
   transferId?: string;
   sourceLocationId: string;
@@ -195,6 +240,133 @@ export class OfflineTransactionService {
       action: 'create',
       payload,
       idempotencyKey: `idem-customer-payment-${id}`
+    });
+
+    return id;
+  }
+
+  async createOfflineLending(input: LendingInput): Promise<string> {
+    await this.assertCanCreate('lending');
+    const id = input.lendingId ?? this.id('lending');
+    const now = new Date().toISOString();
+    const lines = input.lines
+      .map((line) => ({
+        product_id: line.productId,
+        product_sku: line.productSku ?? null,
+        product_name: line.productName ?? null,
+        source_sale_line_id: line.sourceSaleLineId ?? null,
+        source_sale_line_index:
+          Number.isInteger(line.sourceSaleLineIndex) && Number(line.sourceSaleLineIndex) >= 0
+            ? Number(line.sourceSaleLineIndex)
+            : null,
+        quantity: line.quantity,
+        deposit_amount: line.depositAmount ?? null,
+        remarks: line.remarks ?? null,
+        cylinder_flow: line.cylinderFlow ?? null,
+        sold_qty: line.soldQty ?? null,
+        unit: line.unit ?? null,
+        lending_unit_type: line.lendingUnitType ?? null
+      }))
+      .filter((line) => Number.isFinite(Number(line.quantity)) && Number(line.quantity) > 0);
+    if (!lines.length) {
+      throw new Error('At least one lending line is required.');
+    }
+
+    const payload = {
+      id,
+      lending_id: id,
+      sale_id: input.saleId,
+      branch_id: input.branchId,
+      branch_name: input.branchName ?? null,
+      location_id: input.locationId,
+      location_name: input.locationName ?? null,
+      customer_id: input.customerId,
+      customer_name: input.customerName ?? null,
+      status: 'OPEN',
+      due_at: null,
+      remarks: input.remarks ?? null,
+      opened_at: now,
+      line_count: lines.length,
+      total_quantity_lent: Number(
+        lines.reduce((sum, line) => sum + Number(line.quantity), 0).toFixed(4)
+      ),
+      total_quantity_returned: 0,
+      lines,
+      returns: [],
+      created_at: now
+    };
+
+    await this.db.runAsync(
+      'INSERT INTO lending_local(id, payload, sync_status, created_at, updated_at) VALUES (?, ?, ?, ?, ?)',
+      id,
+      JSON.stringify(payload),
+      'pending',
+      now,
+      now
+    );
+
+    const outbox = new SQLiteOutboxRepository(this.db);
+    await outbox.enqueue({
+      id,
+      entity: 'lending',
+      action: 'create',
+      payload,
+      idempotencyKey: `idem-lending-${id}`
+    });
+
+    return id;
+  }
+
+  async createOfflineLendingReturn(input: LendingReturnInput): Promise<string> {
+    await this.assertCanCreate('lending_return');
+    const id = input.returnId ?? this.id('lending-return');
+    const now = new Date().toISOString();
+    const lines = input.lines
+      .map((line) => ({
+        lending_line_id: line.lendingLineId,
+        product_id: line.productId ?? null,
+        product_name: line.productName ?? null,
+        returned_qty: line.returnedQty,
+        condition: line.condition ?? 'GOOD'
+      }))
+      .filter(
+        (line) =>
+          typeof line.lending_line_id === 'string' &&
+          line.lending_line_id.trim().length > 0 &&
+          Number.isFinite(Number(line.returned_qty)) &&
+          Number(line.returned_qty) > 0
+      );
+    if (!lines.length) {
+      throw new Error('At least one lending return line is required.');
+    }
+
+    const payload = {
+      id,
+      lending_return_id: id,
+      lending_id: input.lendingId,
+      sale_id: input.saleId ?? null,
+      customer_id: input.customerId ?? null,
+      remarks: input.remarks ?? null,
+      lines,
+      created_at: now
+    };
+
+    await this.db.runAsync(
+      'INSERT INTO lending_returns_local(id, payload, sync_status, created_at, updated_at) VALUES (?, ?, ?, ?, ?)',
+      id,
+      JSON.stringify(payload),
+      'pending',
+      now,
+      now
+    );
+
+    const outbox = new SQLiteOutboxRepository(this.db);
+    await outbox.enqueue({
+      id,
+      entity: 'lending_return',
+      action: 'create',
+      payload,
+      idempotencyKey: `idem-lending-return-${id}`
     });
 
     return id;
