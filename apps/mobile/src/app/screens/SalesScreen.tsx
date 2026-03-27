@@ -612,35 +612,6 @@ export function SalesScreen({
     prevSyncBusyRef.current = syncBusy;
   }, [syncBusy]);
 
-  useEffect(() => {
-    if (!selectedSaleId) {
-      setLendingStatusByLineIndex(new Map());
-      return;
-    }
-    let cancelled = false;
-    const loadLendingStatus = async (): Promise<void> => {
-      try {
-        const rows = await apiRequest<LendingEligibleProductRecord[]>(
-          `/lending/eligible-products/by-sale/${encodeURIComponent(selectedSaleId)}`
-        );
-        if (cancelled) {
-          return;
-        }
-        setLendingStatusByLineIndex(
-          new Map(rows.map((row) => [row.line_index, row]))
-        );
-      } catch {
-        if (!cancelled) {
-          setLendingStatusByLineIndex(new Map());
-        }
-      }
-    };
-    void loadLendingStatus();
-    return () => {
-      cancelled = true;
-    };
-  }, [selectedSaleId]);
-
   const parsedRows = useMemo<ParsedSale[]>(() => {
     const byBranch = rows
       .map((row) => {
@@ -772,6 +743,33 @@ export function SalesScreen({
   );
   const selectedSaleIsActive = selectedSale?.status === 'ACTIVE';
 
+  useEffect(() => {
+    if (!selectedSaleId || selectedSale?.row.sync_status !== 'synced') {
+      setLendingStatusByLineIndex(new Map());
+      return;
+    }
+    let cancelled = false;
+    const loadLendingStatus = async (): Promise<void> => {
+      try {
+        const rows = await apiRequest<LendingEligibleProductRecord[]>(
+          `/lending/eligible-products/by-sale/${encodeURIComponent(selectedSaleId)}`
+        );
+        if (cancelled) {
+          return;
+        }
+        setLendingStatusByLineIndex(new Map(rows.map((row) => [row.line_index, row])));
+      } catch {
+        if (!cancelled) {
+          setLendingStatusByLineIndex(new Map());
+        }
+      }
+    };
+    void loadLendingStatus();
+    return () => {
+      cancelled = true;
+    };
+  }, [selectedSaleId, selectedSale?.row.sync_status]);
+
   const getReturnedQtyForProduct = (productId: string): number => {
     if (!selectedSale) {
       return 0;
@@ -870,6 +868,10 @@ export function SalesScreen({
     cylinderFlow?: 'REFILL_EXCHANGE' | 'NON_REFILL' | null;
   }): Promise<void> => {
     if (!selectedSale) {
+      return;
+    }
+    if (selectedSale.row.sync_status !== 'synced') {
+      toastInfo('Lending', 'Sync this sale first before marking an item as lent.');
       return;
     }
     if (!selectedSale.payload.customer_id?.trim()) {
@@ -1673,6 +1675,7 @@ export function SalesScreen({
                         disabled={
                           syncBusy ||
                           lendingLoading ||
+                          selectedSale.row.sync_status !== 'synced' ||
                           !selectedSale.payload.customer_id ||
                           !selectedSaleIsActive ||
                           rawFlow !== 'NON_REFILL' ||
@@ -1685,6 +1688,7 @@ export function SalesScreen({
                             backgroundColor:
                               syncBusy ||
                               lendingLoading ||
+                              selectedSale.row.sync_status !== 'synced' ||
                               !selectedSale.payload.customer_id ||
                               !selectedSaleIsActive ||
                               rawFlow !== 'NON_REFILL' ||
@@ -1697,6 +1701,8 @@ export function SalesScreen({
                         <Text style={[styles.inlineActionText, { color: theme.pillText }]}>
                           {!selectedSale.payload.customer_id
                             ? 'Customer Required'
+                            : selectedSale.row.sync_status !== 'synced'
+                              ? 'Sync First'
                             : rawFlow === 'REFILL_EXCHANGE'
                               ? 'Refill Only'
                               : lendingStatus !== null && lendingStatus.remaining_lendable_qty <= 0

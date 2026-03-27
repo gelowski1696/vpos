@@ -231,7 +231,8 @@ export class LendingService {
         sale.id,
         sale.lines.map((line) => ({
           id: line.id,
-          productId: line.productId
+          productId: line.productId,
+          quantity: this.toNumber(line.quantity)
         }))
       );
       const sourceSaleLineIds = normalized.lines
@@ -633,7 +634,8 @@ export class LendingService {
       sale.id,
       sale.lines.map((line) => ({
         id: line.id,
-        productId: line.productId
+        productId: line.productId,
+        quantity: this.toNumber(line.quantity)
       }))
     );
     const sourceLendingRows = await db.lendingLine.findMany({
@@ -1074,7 +1076,7 @@ export class LendingService {
     db: DbReadClient,
     companyId: string,
     saleId: string,
-    saleLines: Array<{ id: string; productId: string }>
+    saleLines: Array<{ id: string; productId: string; quantity: number }>
   ): Promise<Map<string, SaleLineFlowMeta>> {
     const saleEvent = await db.eventSales.findFirst({
       where: {
@@ -1099,53 +1101,49 @@ export class LendingService {
           )
           .filter((entry): entry is Record<string, unknown> => Boolean(entry))
       : [];
-    const usedIndices = new Set<number>();
     const flowBySaleLineId = new Map<string, SaleLineFlowMeta>();
+    const unusedSaleLines = [...saleLines];
 
-    const resolveFlowForLine = (lineIndex: number, productId: string): SaleLineFlowMeta => {
-      const byIndex = payloadLines[lineIndex];
-      if (byIndex) {
-        const byIndexProductId =
-          this.optionalText(byIndex.product_id) ?? this.optionalText(byIndex.productId);
-        if (!byIndexProductId || byIndexProductId === productId) {
-          usedIndices.add(lineIndex);
-          return {
-            sale_line_id: saleLines[lineIndex]?.id ?? '',
-            line_index: lineIndex,
-            cylinder_flow: this.normalizeCylinderFlow(byIndex.cylinder_flow ?? byIndex.cylinderFlow)
-          };
+    const quantitiesMatch = (left: number, right: number): boolean =>
+      Math.abs(left - right) <= 0.0001;
+
+    payloadLines.forEach((payloadLine, payloadIndex) => {
+      const payloadProductId =
+        this.optionalText(payloadLine.product_id) ?? this.optionalText(payloadLine.productId);
+      const payloadQty = Number(payloadLine.quantity ?? payloadLine.qty ?? 0);
+      let matchedIndex = -1;
+      if (payloadProductId) {
+        matchedIndex = unusedSaleLines.findIndex(
+          (line) =>
+            line.productId === payloadProductId &&
+            quantitiesMatch(line.quantity, Number.isFinite(payloadQty) ? payloadQty : line.quantity)
+        );
+        if (matchedIndex < 0) {
+          matchedIndex = unusedSaleLines.findIndex((line) => line.productId === payloadProductId);
         }
       }
-
-      for (let i = 0; i < payloadLines.length; i += 1) {
-        if (usedIndices.has(i)) {
-          continue;
-        }
-        const candidate = payloadLines[i];
-        const candidateProductId =
-          this.optionalText(candidate.product_id) ?? this.optionalText(candidate.productId);
-        if (candidateProductId && candidateProductId !== productId) {
-          continue;
-        }
-        usedIndices.add(i);
-        return {
-          sale_line_id: saleLines[lineIndex]?.id ?? '',
-          line_index: i,
-          cylinder_flow: this.normalizeCylinderFlow(
-            candidate.cylinder_flow ?? candidate.cylinderFlow
-          )
-        };
+      if (matchedIndex < 0) {
+        matchedIndex = 0;
       }
+      const matched = unusedSaleLines.splice(matchedIndex, 1)[0];
+      if (!matched) {
+        return;
+      }
+      flowBySaleLineId.set(matched.id, {
+        sale_line_id: matched.id,
+        line_index: payloadIndex,
+        cylinder_flow: this.normalizeCylinderFlow(
+          payloadLine.cylinder_flow ?? payloadLine.cylinderFlow
+        )
+      });
+    });
 
-      return {
-        sale_line_id: saleLines[lineIndex]?.id ?? '',
-        line_index: lineIndex,
+    unusedSaleLines.forEach((line, index) => {
+      flowBySaleLineId.set(line.id, {
+        sale_line_id: line.id,
+        line_index: payloadLines.length + index,
         cylinder_flow: null
-      };
-    };
-
-    saleLines.forEach((line, index) => {
-      flowBySaleLineId.set(line.id, resolveFlowForLine(index, line.productId));
+      });
     });
     return flowBySaleLineId;
   }
