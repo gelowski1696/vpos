@@ -303,34 +303,6 @@ export const TUTORIAL_DEFINITIONS: Record<TutorialScope, TutorialDefinition> = {
       },
     ],
   },
-  CYLINDERS: {
-    title: 'Cylinder Service Guide',
-    steps: [
-      {
-        title: 'Search Serial Assets',
-        target: 'Cylinders > Search and status filters',
-        description: 'Filter the list first so you only open the cylinder serials you are ready to service.',
-        icon: '\uD83D\uDD0D',
-        targetKey: 'cylinders-search',
-        screen: 'CYLINDERS',
-      },
-      {
-        title: 'Open Cylinder Detail',
-        target: 'Cylinders > First cylinder card',
-        description: 'Open a serial to review its status, location, and recent service activity before acting.',
-        icon: '\u26FD',
-        targetKey: 'cylinders-first-card',
-        screen: 'CYLINDERS',
-      },
-      {
-        title: 'Queue Service Action',
-        target: 'Cylinders > Junk, Dispose, or Replace buttons',
-        description: 'Actions save locally first, so field staff can keep working even offline and sync later.',
-        icon: '\u2699',
-        screen: 'CYLINDERS',
-      },
-    ],
-  },
   EXPENSE: {
     title: 'Expense Guide',
     steps: [

@@ -314,26 +314,26 @@ const ROUTE_SPECIFIC_WALKTHROUGHS: Record<string, AdminTourStep[]> = {
   ],
   '/product-categories': buildEntityRouteSteps('/product-categories', 'product-categories', 'Product Categories'),
   '/product-brands': buildEntityRouteSteps('/product-brands', 'product-brands', 'Product Brands'),
-  '/cylinders': [
+  '/lpg-item-actions': [
     {
-      id: 'cylinders-overview',
-      title: 'Cylinder service workspace',
-      description: 'Review serial cylinders here, then open the detail panel to junk, dispose, or replace assets safely.',
-      selectors: ['[data-tour="cylinders-root"]', '[data-tour="header-page-title"]'],
+      id: 'lpg-item-actions-overview',
+      title: 'LPG item service workspace',
+      description: 'Use this page to record LPG item dispose, replace, and junk actions against empty stock at a selected location.',
+      selectors: ['[data-tour="lpg-item-actions-root"]', '[data-tour="header-page-title"]'],
       placement: 'bottom'
     },
     {
-      id: 'cylinders-search',
-      title: 'Search and filter serial assets',
-      description: 'Use branch, status, and search together so the team only sees the cylinders they need to act on.',
-      selectors: ['[data-tour="cylinders-search"]', '[data-tour="cylinders-branch-filter"]'],
+      id: 'lpg-item-actions-filters',
+      title: 'Choose branch and location first',
+      description: 'Location matters because dispose and replace adjust the empty qty for that LPG item at that exact site.',
+      selectors: ['[data-tour="lpg-item-actions-filters"]'],
       placement: 'bottom'
     },
     {
-      id: 'cylinders-list',
-      title: 'Open cylinder details',
-      description: 'Select a cylinder card to review recent service actions and perform junk, dispose, or replace flows.',
-      selectors: ['[data-tour="cylinders-list"]'],
+      id: 'lpg-item-actions-list',
+      title: 'Select the LPG item to service',
+      description: 'Open an LPG item card to review current empty qty, view history, and record dispose, replace, or junk activity.',
+      selectors: ['[data-tour="lpg-item-actions-list"]'],
       placement: 'top'
     }
   ],
@@ -367,7 +367,7 @@ const NAV_SECTIONS: Array<{ title: string; items: NavItem[] }> = [
       { href: '/products', label: 'Products', icon: 'product' },
       { href: '/product-categories' as Route, label: 'Product Categories', icon: 'product' },
       { href: '/product-brands' as Route, label: 'Product Brands', icon: 'product' },
-      { href: '/cylinders' as Route, label: 'Cylinders', icon: 'cylinder' },
+      { href: '/lpg-item-actions' as Route, label: 'LPG Item Service', icon: 'cylinder' },
       { href: '/cylinder-types', label: 'Cylinder Types', icon: 'cylinder' },
       { href: '/inventory-opening' as Route, label: 'Opening Stock', icon: 'product' },
       { href: '/price-lists', label: 'Price Lists', icon: 'pricing' },

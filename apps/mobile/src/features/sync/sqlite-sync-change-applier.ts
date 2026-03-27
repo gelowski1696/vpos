@@ -13,8 +13,7 @@ const TRANSACTION_TABLE_BY_ENTITY: Record<string, string> = {
   delivery_order: 'delivery_orders_local',
   shift: 'shifts_local',
   shift_cash_entry: 'shift_cash_entries_local',
-  cylinder_event: 'cylinder_events_local',
-  cylinder_service_action: 'cylinder_service_actions_local'
+  cylinder_event: 'cylinder_events_local'
 };
 
 function resolveLocalRecordId(item: { id: string; entity: string; payload: Record<string, unknown> }): string | undefined {

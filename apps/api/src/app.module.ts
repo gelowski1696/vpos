@@ -21,6 +21,7 @@ import { MobileEnrollmentModule } from './modules/mobile-enrollment/mobile-enrol
 import { NfcModule } from './modules/nfc/nfc.module';
 import { LendingModule } from './modules/lending/lending.module';
 import { VcardModule } from './modules/vcard/vcard.module';
+import { LpgItemActionsModule } from './modules/lpg-item-actions/lpg-item-actions.module';
 
 @Module({
   imports: [
@@ -43,6 +44,7 @@ import { VcardModule } from './modules/vcard/vcard.module';
     MobileEnrollmentModule,
     NfcModule,
     VcardModule,
+    LpgItemActionsModule,
     ReportsModule,
     AiExportModule
   ],

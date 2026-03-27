@@ -200,11 +200,9 @@ type CylinderRow = {
   updatedAt: string;
 };
 
-type CylinderServiceActionRow = {
-  id: string;
-  actionType: 'JUNK' | 'DISPOSE' | 'REPLACE';
-  createdAt: string;
-  branchId: string;
+type LpgItemActionSummary = {
+  counts: { dispose: number; replace: number; junk: number };
+  qty: { disposed: number; replaced: number; junked: number };
 };
 
 type SyncReviewRow = {
@@ -275,7 +273,7 @@ type ReportsState = {
   transfers: TransferRow[];
   deliveryOrders: DeliveryOrderRow[];
   cylinders: CylinderRow[];
-  cylinderServiceActions: CylinderServiceActionRow[];
+  lpgItemActionSummary: LpgItemActionSummary;
   syncReviews: SyncReviewRow[];
   auditLogs: AuditRow[];
   products: ProductRow[];
@@ -299,7 +297,10 @@ const INITIAL_STATE: ReportsState = {
   transfers: [],
   deliveryOrders: [],
   cylinders: [],
-  cylinderServiceActions: [],
+  lpgItemActionSummary: {
+    counts: { dispose: 0, replace: 0, junk: 0 },
+    qty: { disposed: 0, replaced: 0, junked: 0 }
+  },
   syncReviews: [],
   auditLogs: [],
   products: [],
@@ -529,9 +530,7 @@ export default function ReportsPage(): JSX.Element {
         safeRequest<TransferRow[]>('/transfers'),
         safeRequest<DeliveryOrderRow[]>('/delivery/orders'),
         safeRequest<CylinderRow[]>('/cylinders'),
-        safeRequest<CylinderServiceActionRow[]>(
-          `/cylinders/service-actions?${baseParams.toString()}&limit=500`
-        ),
+        safeRequest<LpgItemActionSummary>(`/lpg-item-actions/summary?${baseParams.toString()}`),
         safeRequest<{ rows: SyncReviewRow[] }>(`/reviews?${reviewParams.toString()}`),
         safeRequest<{ rows: AuditRow[] }>(`/reports/audit-logs?${baseParams.toString()}&limit=500`),
         safeRequest<ProductRow[]>('/master-data/products'),
@@ -556,7 +555,7 @@ export default function ReportsPage(): JSX.Element {
         transfersRes,
         deliveryOrdersRes,
         cylindersRes,
-        cylinderServiceActionsRes,
+        lpgItemActionSummaryRes,
         syncReviewsRes,
         auditLogsRes,
         productsRes,
@@ -586,7 +585,10 @@ export default function ReportsPage(): JSX.Element {
         transfers: transfersRes.data ?? [],
         deliveryOrders: deliveryOrdersRes.data ?? [],
         cylinders: cylindersRes.data ?? [],
-        cylinderServiceActions: cylinderServiceActionsRes.data ?? [],
+        lpgItemActionSummary: lpgItemActionSummaryRes.data ?? {
+          counts: { dispose: 0, replace: 0, junk: 0 },
+          qty: { disposed: 0, replaced: 0, junked: 0 }
+        },
         syncReviews: syncReviewsRes.data?.rows ?? [],
         auditLogs: auditLogsRes.data?.rows ?? [],
         products: productsRes.data ?? [],
@@ -648,14 +650,6 @@ export default function ReportsPage(): JSX.Element {
     }
     return [...counts.entries()].map(([status, count]) => ({ status, count })).sort((a, b) => b.count - a.count);
   }, [data.cylinders]);
-
-  const cylinderServiceActionCounts = useMemo(() => {
-    const counts = new Map<string, number>();
-    for (const row of data.cylinderServiceActions) {
-      counts.set(row.actionType, (counts.get(row.actionType) ?? 0) + 1);
-    }
-    return counts;
-  }, [data.cylinderServiceActions]);
 
   const cylinderAuditRows = useMemo(
     () => data.auditLogs.filter((row) => row.action.toUpperCase().startsWith('CYLINDER_')).slice(0, 40),
@@ -1241,9 +1235,9 @@ export default function ReportsPage(): JSX.Element {
             <ReportCard title="16. Cylinder Service Status Snapshot" subtitle="Current damage/service counts and replacement activity" status="DERIVED">
               <div className="space-y-2 text-xs">
                 <p>Damaged: <span className="font-semibold">{cylinderStatusCounts.find((row) => row.status === 'DAMAGED')?.count ?? 0}</span></p>
-                <p>Junked: <span className="font-semibold">{cylinderStatusCounts.find((row) => row.status === 'JUNKED')?.count ?? 0}</span></p>
-                <p>Disposed: <span className="font-semibold">{cylinderStatusCounts.find((row) => row.status === 'DISPOSED')?.count ?? 0}</span></p>
-                <p>Replaced actions: <span className="font-semibold">{cylinderServiceActionCounts.get('REPLACE') ?? 0}</span></p>
+                <p>Junked actions: <span className="font-semibold">{data.lpgItemActionSummary.counts.junk}</span></p>
+                <p>Disposed actions: <span className="font-semibold">{data.lpgItemActionSummary.counts.dispose}</span></p>
+                <p>Replaced actions: <span className="font-semibold">{data.lpgItemActionSummary.counts.replace}</span></p>
                 <p>Lost: <span className="font-semibold">{cylinderStatusCounts.find((row) => row.status === 'LOST')?.count ?? 0}</span></p>
                 <p>Adjustment movements: <span className="font-semibold">{data.inventoryMovements.filter((row) => row.movement_type.toUpperCase().includes('ADJUST')).length}</span></p>
               </div>

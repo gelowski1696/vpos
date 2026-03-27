@@ -127,15 +127,6 @@ export const MOBILE_SQL_SCHEMA = {
     );
     CREATE INDEX IF NOT EXISTS idx_cylinder_events_local_sync_status ON cylinder_events_local(sync_status, created_at);
 
-    CREATE TABLE IF NOT EXISTS cylinder_service_actions_local (
-      id TEXT PRIMARY KEY,
-      payload TEXT NOT NULL,
-      sync_status TEXT NOT NULL,
-      created_at TEXT NOT NULL,
-      updated_at TEXT NOT NULL
-    );
-    CREATE INDEX IF NOT EXISTS idx_cylinder_service_actions_local_sync_status ON cylinder_service_actions_local(sync_status, created_at);
-
     CREATE TABLE IF NOT EXISTS master_data_local (
       entity TEXT NOT NULL,
       record_id TEXT NOT NULL,

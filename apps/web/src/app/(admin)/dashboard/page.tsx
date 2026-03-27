@@ -23,12 +23,10 @@ type Payment = Array<{ payment_id: string; amount: number; posted_at: string }>;
 type Opening = { rows: Array<{ locationId: string; productId: string; productSku: string; qtyFull: number; qtyEmpty: number; qtyOnHand: number }> };
 type Product = { id: string; isLpg: boolean; lowStockAlertQty: number | null; isActive: boolean };
 type Cylinder = Array<{ status: 'FULL' | 'EMPTY' | 'DAMAGED' | 'JUNKED' | 'DISPOSED' | 'LOST'; updatedAt: string }>;
-type CylinderServiceAction = Array<{
-  id: string;
-  actionType: 'JUNK' | 'DISPOSE' | 'REPLACE';
-  createdAt: string;
-  branchId: string;
-}>;
+type LpgItemActionSummary = {
+  counts: { dispose: number; replace: number; junk: number };
+  qty: { disposed: number; replaced: number; junked: number };
+};
 type TransferStale = Array<{ id: string }>;
 const STALE_TRANSFER_MINUTES = 120;
 
@@ -139,7 +137,10 @@ export default function DashboardPage(): JSX.Element {
   const [openingRows, setOpeningRows] = useState<Opening['rows']>([]);
   const [products, setProducts] = useState<Product[]>([]);
   const [cylinders, setCylinders] = useState<Cylinder>([]);
-  const [cylinderServiceActions, setCylinderServiceActions] = useState<CylinderServiceAction>([]);
+  const [lpgItemActionSummary, setLpgItemActionSummary] = useState<LpgItemActionSummary>({
+    counts: { dispose: 0, replace: 0, junk: 0 },
+    qty: { disposed: 0, replaced: 0, junked: 0 }
+  });
   const [staleCreatedTransfers, setStaleCreatedTransfers] = useState<TransferStale>([]);
   const [staleApprovedTransfers, setStaleApprovedTransfers] = useState<TransferStale>([]);
 
@@ -163,7 +164,7 @@ export default function DashboardPage(): JSX.Element {
     p.set('until', new Date(`${until}T23:59:59.999`).toISOString());
     if (branchFilter !== 'ALL') p.set('branch_id', branchFilter);
 
-    const [b, l, s, sl, m, fe, mv, x, c, r, a, cp, os, pr, cy, csa, sc, sa] = await Promise.all([
+    const [b, l, s, sl, m, fe, mv, x, c, r, a, cp, os, pr, cy, lpgSummary, sc, sa] = await Promise.all([
       safeRequest<Branch[]>('/master-data/branches'),
       safeRequest<Location[]>('/master-data/locations'),
       safeRequest<SalesSummary>(`/reports/sales/summary?${p.toString()}`),
@@ -179,13 +180,13 @@ export default function DashboardPage(): JSX.Element {
       safeRequest<Opening>('/master-data/inventory/opening-stock'),
       safeRequest<Product[]>('/master-data/products'),
       safeRequest<Cylinder>('/cylinders'),
-      safeRequest<CylinderServiceAction>(`/cylinders/service-actions?${p.toString()}&limit=300`),
+      safeRequest<LpgItemActionSummary>(`/lpg-item-actions/summary?${p.toString()}`),
       safeRequest<TransferStale>(`/transfers?status=CREATED&min_age_minutes=${STALE_TRANSFER_MINUTES}&age_basis=CREATED_AT&limit=500`),
       safeRequest<TransferStale>(`/transfers?status=APPROVED&min_age_minutes=${STALE_TRANSFER_MINUTES}&age_basis=UPDATED_AT&limit=500`)
     ]);
 
     const ignoredErrorPattern = 'Admin account is not linked to a branch';
-    const errs = [b, l, s, sl, m, fe, mv, x, c, r, a, cp, os, pr, cy, csa, sc, sa]
+    const errs = [b, l, s, sl, m, fe, mv, x, c, r, a, cp, os, pr, cy, lpgSummary, sc, sa]
       .map((x1) => x1.error)
       .filter((message): message is string => Boolean(message))
       .filter((message) => !message.includes(ignoredErrorPattern));
@@ -206,7 +207,12 @@ export default function DashboardPage(): JSX.Element {
     setOpeningRows(os.data?.rows ?? []);
     setProducts((pr.data ?? []).filter((row) => row.isActive));
     setCylinders(cy.data ?? []);
-    setCylinderServiceActions(csa.data ?? []);
+    setLpgItemActionSummary(
+      lpgSummary.data ?? {
+        counts: { dispose: 0, replace: 0, junk: 0 },
+        qty: { disposed: 0, replaced: 0, junked: 0 }
+      }
+    );
     setStaleCreatedTransfers(sc.data ?? []);
     setStaleApprovedTransfers(sa.data ?? []);
     setLoading(false);
@@ -332,10 +338,10 @@ export default function DashboardPage(): JSX.Element {
     const sale = moveRows.filter((m) => m.movement_type === 'SALE').length;
     const conversion = moveRows.reduce((sum, m) => (m.qty_full_delta < 0 && m.qty_empty_delta > 0 ? sum + Math.min(Math.abs(m.qty_full_delta), m.qty_empty_delta) : sum), 0);
     const damaged = cylinders.filter((c) => c.status === 'DAMAGED').length;
-    const junked = cylinders.filter((c) => c.status === 'JUNKED').length;
-    const disposed = cylinders.filter((c) => c.status === 'DISPOSED').length;
+    const junked = lpgItemActionSummary.counts.junk;
+    const disposed = lpgItemActionSummary.counts.dispose;
     const lost = cylinders.filter((c) => c.status === 'LOST').length;
-    const replaced = cylinderServiceActions.filter((row) => row.actionType === 'REPLACE').length;
+    const replaced = lpgItemActionSummary.counts.replace;
     return {
       refill,
       sale,
@@ -347,7 +353,7 @@ export default function DashboardPage(): JSX.Element {
       replaced,
       lost
     };
-  }, [moveRows, cylinders, cylinderServiceActions]);
+  }, [moveRows, cylinders, lpgItemActionSummary]);
 
   const heatmap = useMemo(() => {
     return fullEmptyRows

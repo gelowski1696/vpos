@@ -96,10 +96,10 @@ enum CylinderEventType {
   REPLACE
 }
 
-enum CylinderServiceActionType {
-  JUNK
+enum LpgItemServiceActionType {
   DISPOSE
   REPLACE
+  JUNK
 }
 
 enum SaleType {
@@ -318,7 +318,7 @@ model Company {
   vcardPointsPolicy         VcardPointsPolicy?
   cylinders                 Cylinder[]
   cylinderEvents            CylinderEvent[]
-  cylinderServiceActions    CylinderServiceAction[]
+  lpgItemServiceActions     LpgItemServiceAction[]
   cylinderBalances          CylinderBalance[]
   shifts                    Shift[]
   sales                     Sale[]
@@ -513,7 +513,7 @@ model Branch {
   rewardScopes           RedeemableRewardScope[]
   lendingTransactions    LendingTransaction[]
   saleReturns            SaleReturn[]
-  cylinderServiceActions CylinderServiceAction[]
+  lpgItemServiceActions  LpgItemServiceAction[]
 
   @@unique([companyId, code])
   @@index([companyId, updatedAt])
@@ -586,7 +586,7 @@ model Location {
   rewardScopes           RedeemableRewardScope[]
   lendingTransactions    LendingTransaction[]
   saleReturns            SaleReturn[]
-  cylinderServiceActions CylinderServiceAction[]
+  lpgItemServiceActions  LpgItemServiceAction[]
 
   @@unique([companyId, code])
   @@index([companyId, updatedAt])
@@ -631,6 +631,7 @@ model User {
   voidedSales                   Sale[]                     @relation("SaleVoidedBy")
   createdSaleReturns            SaleReturn[]               @relation("SaleReturnCreatedBy")
   voidedSaleReturns             SaleReturn[]               @relation("SaleReturnVoidedBy")
+  createdLpgItemServiceActions  LpgItemServiceAction[]     @relation("LpgItemServiceActionCreatedBy")
 
   @@unique([companyId, email])
   @@index([companyId, updatedAt])
@@ -968,6 +969,7 @@ model Product {
   priceRules        PriceRule[]
   inventoryBalances InventoryBalance[]
   inventoryLedgers  InventoryLedger[]
+  lpgItemServiceActions LpgItemServiceAction[]
   transferLines     StockTransferLine[]
   saleLines         SaleLine[]
   saleReturnLines   SaleReturnLine[]
@@ -1273,8 +1275,6 @@ model Cylinder {
   cylinderType              CylinderType            @relation(fields: [cylinderTypeId], references: [id], onDelete: Restrict)
   currentLocation           Location                @relation(fields: [currentLocationId], references: [id], onDelete: Restrict)
   events                    CylinderEvent[]
-  sourceServiceActions      CylinderServiceAction[] @relation("CylinderServiceSource")
-  replacementServiceActions CylinderServiceAction[] @relation("CylinderServiceReplacement")
 
   @@index([companyId, updatedAt])
   @@index([currentLocationId, status])
@@ -1299,33 +1299,34 @@ model CylinderEvent {
   @@index([companyId, createdAt])
 }
 
-model CylinderServiceAction {
-  id                    String                    @id @default(uuid())
-  companyId             String
-  branchId              String
-  locationId            String
-  actionType            CylinderServiceActionType
-  sourceCylinderId      String?
-  replacementCylinderId String?
-  customerId            String?
-  saleId                String?
-  reason                String
-  notes                 String?                   @db.Text
-  createdByUserId       String?
-  approvedByUserId      String?
-  createdAt             DateTime                  @default(now())
-  updatedAt             DateTime                  @updatedAt
+model LpgItemServiceAction {
+  id                String                  @id @default(uuid())
+  companyId         String
+  branchId          String
+  locationId        String
+  productId         String
+  actionType        LpgItemServiceActionType
+  qty               Int
+  reason            String
+  notes             String?                 @db.Text
+  referenceActionId String?
+  createdByUserId   String?
+  createdAt         DateTime                @default(now())
+  updatedAt         DateTime                @updatedAt
 
-  company             Company   @relation(fields: [companyId], references: [id], onDelete: Cascade)
-  branch              Branch    @relation(fields: [branchId], references: [id], onDelete: Restrict)
-  location            Location  @relation(fields: [locationId], references: [id], onDelete: Restrict)
-  sourceCylinder      Cylinder? @relation("CylinderServiceSource", fields: [sourceCylinderId], references: [id], onDelete: SetNull)
-  replacementCylinder Cylinder? @relation("CylinderServiceReplacement", fields: [replacementCylinderId], references: [id], onDelete: SetNull)
+  company        Company              @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  branch         Branch               @relation(fields: [branchId], references: [id], onDelete: Restrict)
+  location       Location             @relation(fields: [locationId], references: [id], onDelete: Restrict)
+  product        Product              @relation(fields: [productId], references: [id], onDelete: Restrict)
+  createdBy      User?                @relation("LpgItemServiceActionCreatedBy", fields: [createdByUserId], references: [id], onDelete: SetNull)
+  referenceAction LpgItemServiceAction?  @relation("LpgItemServiceActionReference", fields: [referenceActionId], references: [id], onDelete: SetNull)
+  followUpActions LpgItemServiceAction[] @relation("LpgItemServiceActionReference")
 
-  @@index([companyId, actionType, createdAt])
+  @@index([companyId, createdAt])
   @@index([companyId, branchId, createdAt])
-  @@index([companyId, sourceCylinderId, createdAt])
-  @@index([companyId, replacementCylinderId, createdAt])
+  @@index([companyId, locationId, createdAt])
+  @@index([companyId, productId, createdAt])
+  @@index([companyId, actionType, createdAt])
 }
 
 model CylinderBalance {

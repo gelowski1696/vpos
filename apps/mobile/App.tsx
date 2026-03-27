@@ -62,7 +62,6 @@ import { ExpenseScreen } from "./src/app/screens/ExpenseScreen";
 import { ItemsViewScreen } from "./src/app/screens/ItemsViewScreen";
 import { CustomersViewScreen } from "./src/app/screens/CustomersViewScreen";
 import { LendingScreen } from "./src/app/screens/LendingScreen";
-import { CylindersScreen } from "./src/app/screens/CylindersScreen";
 import { ShiftScreen } from "./src/app/screens/ShiftScreen";
 import { SettingsScreen } from "./src/app/screens/SettingsScreen";
 import { MasterDataSelect } from "./src/app/components/MasterDataSelect";
@@ -113,7 +112,6 @@ const APP_LOGO = require("./assests/vpos_logo.png");
 const PRIMARY_TABS = ["HOME", "POS", "SALES", "TRANSFER", "TRANSFER_LIST"] as const;
 const SIDE_MENU_MODULES = [
   "LENDING",
-  "CYLINDERS",
   "EXPENSE",
   "ITEMS",
   "CUSTOMERS",
@@ -163,7 +161,6 @@ const READY_VIEW_META: Record<ReadyView, { label: string; hint: string }> = {
   TRANSFER: { label: "Transfer", hint: "Create" },
   TRANSFER_LIST: { label: "Transfers", hint: "History" },
   LENDING: { label: "Lending", hint: "Returns" },
-  CYLINDERS: { label: "Cylinders", hint: "Service" },
   EXPENSE: { label: "Expense", hint: "Petty Cash" },
   ITEMS: { label: "Items", hint: "Read Only" },
   CUSTOMERS: { label: "Customers", hint: "Credit" },
@@ -177,7 +174,6 @@ const READY_VIEW_ICONS: Record<ReadyView, string> = {
   TRANSFER: "\u2194",
   TRANSFER_LIST: "\u2630",
   LENDING: "\u27F2",
-  CYLINDERS: "\u26FD",
   EXPENSE: "\u20B1",
   ITEMS: "\u25A6",
   CUSTOMERS: "\u263A",
@@ -3482,19 +3478,6 @@ function AppShell(): JSX.Element {
           db={db}
           theme={activeTheme}
           preferredBranchId={selectedBranchId}
-          onDataChanged={handleLocalDataChanged}
-          syncBusy={syncBusy}
-        />
-      );
-    }
-    if (currentReadyView === "CYLINDERS") {
-      return (
-        <CylindersScreen
-          key={`cylinders-${masterDataVersion}`}
-          db={db}
-          theme={activeTheme}
-          preferredBranchId={selectedBranchId}
-          preferredLocationId={selectedLocationId}
           onDataChanged={handleLocalDataChanged}
           syncBusy={syncBusy}
         />
