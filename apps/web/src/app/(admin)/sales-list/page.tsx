@@ -173,6 +173,23 @@ function saleReturnStatusClasses(status: 'POSTED' | 'VOIDED'): string {
   return 'bg-sky-100 text-sky-700 dark:bg-sky-950/40 dark:text-sky-200';
 }
 
+function saleStatusLabel(status: 'ACTIVE' | 'CANCELLED' | 'VOIDED'): string {
+  if (status === 'CANCELLED') {
+    return 'Cancelled Sale';
+  }
+  if (status === 'VOIDED') {
+    return 'Voided Sale';
+  }
+  return 'Active Sale';
+}
+
+function saleReturnStatusLabel(status: 'POSTED' | 'VOIDED'): string {
+  if (status === 'VOIDED') {
+    return 'Return Reversed';
+  }
+  return 'Return Posted';
+}
+
 function assignmentNamesByRole(
   assignments: Array<{ role: string; full_name: string }>,
   role: 'DRIVER' | 'HELPER' | 'PERSONNEL'
@@ -380,7 +397,7 @@ export default function SalesListPage(): JSX.Element {
         method: 'POST',
         body: { reason }
       });
-      setActionMessage(`Sale return ${selectedReturnToVoid.sale_return_id} was voided.`);
+      setActionMessage(`Return ${selectedReturnToVoid.sale_return_id} was reversed.`);
       setVoidReturnOpen(false);
       setSelectedReturnToVoid(null);
       setVoidReturnReason('');
@@ -507,7 +524,7 @@ export default function SalesListPage(): JSX.Element {
                 <th className="px-3 py-2">Customer</th>
                 <th className="px-3 py-2">Type</th>
                 <th className="px-3 py-2 text-right">Total</th>
-                <th className="px-3 py-2 text-right">Returned</th>
+                <th className="px-3 py-2 text-right">Items Returned</th>
                 <th className="px-3 py-2 text-right">Paid</th>
                 <th className="px-3 py-2 text-right">COGS</th>
                 <th className="px-3 py-2 text-right">Gross</th>
@@ -528,7 +545,7 @@ export default function SalesListPage(): JSX.Element {
                     <td className="px-3 py-2 text-slate-700 dark:text-slate-200">{fmtDateTime(row.posted_at)}</td>
                     <td className="px-3 py-2">
                       <span className={`inline-flex rounded-full px-2 py-1 text-[11px] font-semibold ${saleStatusClasses(row.status)}`}>
-                        {row.status}
+                        {saleStatusLabel(row.status)}
                       </span>
                     </td>
                     <td className="px-3 py-2 text-slate-700 dark:text-slate-200">{row.receipt_number ?? 'N/A'}</td>
@@ -573,7 +590,7 @@ export default function SalesListPage(): JSX.Element {
           <div>
             <h2 className="text-sm font-semibold text-slate-800 dark:text-slate-100">Return History</h2>
             <p className="text-xs text-slate-500 dark:text-slate-400">
-              Posted and voided sale returns for the same branch/date filter above.
+              Track item returns and any reversed return postings for the branch and date range above.
             </p>
           </div>
           <span className="rounded-full bg-slate-100 px-2 py-1 text-xs text-slate-700 dark:bg-slate-800 dark:text-slate-200">
@@ -610,13 +627,15 @@ export default function SalesListPage(): JSX.Element {
                     <td className="px-3 py-2 text-slate-700 dark:text-slate-200">{fmtDateTime(row.created_at)}</td>
                     <td className="px-3 py-2">
                       <span className={`inline-flex rounded-full px-2 py-1 text-[11px] font-semibold ${saleReturnStatusClasses(row.status)}`}>
-                        {row.status}
+                        {saleReturnStatusLabel(row.status)}
                       </span>
                     </td>
                     <td className="px-3 py-2 text-slate-700 dark:text-slate-200">{row.sale_return_id}</td>
                     <td className="px-3 py-2 text-slate-700 dark:text-slate-200">
                       {row.receipt_number ?? row.sale_id}
-                      <div className="mt-1 text-xs text-slate-500 dark:text-slate-400">Sale status: {row.sale_status}</div>
+                      <div className="mt-1 text-xs text-slate-500 dark:text-slate-400">
+                        Sale: {saleStatusLabel(row.sale_status)}
+                      </div>
                     </td>
                     <td className="px-3 py-2 text-slate-700 dark:text-slate-200">
                       {row.customer_name ? `${row.customer_name}${row.customer_code ? ` (${row.customer_code})` : ''}` : 'Walk-in / N/A'}
@@ -629,7 +648,7 @@ export default function SalesListPage(): JSX.Element {
                     <td className="px-3 py-2 text-slate-700 dark:text-slate-200">
                       {row.reason}
                       {row.status === 'VOIDED' && row.void_reason ? (
-                        <div className="mt-1 text-xs text-slate-500 dark:text-slate-400">Void: {row.void_reason}</div>
+                        <div className="mt-1 text-xs text-slate-500 dark:text-slate-400">Reversal note: {row.void_reason}</div>
                       ) : null}
                     </td>
                   </tr>
@@ -655,7 +674,7 @@ export default function SalesListPage(): JSX.Element {
               <div className="flex items-center gap-2">
                 {selectedDetails ? (
                   <span className={`inline-flex rounded-full px-2 py-1 text-[11px] font-semibold ${saleStatusClasses(selectedDetails.sale.status)}`}>
-                    {selectedDetails.sale.status}
+                    {saleStatusLabel(selectedDetails.sale.status)}
                   </span>
                 ) : null}
                 <button
@@ -718,7 +737,7 @@ export default function SalesListPage(): JSX.Element {
                       </p>
                     </article>
                     <article className="rounded-xl border border-slate-200 bg-slate-50 p-3 dark:border-slate-700 dark:bg-slate-800/50">
-                      <p className="text-xs uppercase tracking-wide text-slate-500 dark:text-slate-400">Returned</p>
+                      <p className="text-xs uppercase tracking-wide text-slate-500 dark:text-slate-400">Items Returned</p>
                       <p className="mt-1 text-lg font-semibold text-slate-900 dark:text-slate-100">
                         {fmtMoney(selectedDetails.sale.returned_total)}
                       </p>
@@ -728,8 +747,8 @@ export default function SalesListPage(): JSX.Element {
                   {selectedDetails.sale.status !== 'ACTIVE' ? (
                     <div className="rounded-xl border border-rose-300 bg-rose-50 p-3 text-sm text-rose-700 dark:border-rose-700 dark:bg-rose-950/40 dark:text-rose-200">
                       {selectedDetails.sale.status === 'CANCELLED'
-                        ? `Sale cancelled${selectedDetails.sale.cancelled_at ? ` on ${fmtDateTime(selectedDetails.sale.cancelled_at)}` : ''}${selectedDetails.sale.cancel_reason ? `: ${selectedDetails.sale.cancel_reason}` : '.'}`
-                        : `Sale voided${selectedDetails.sale.voided_at ? ` on ${fmtDateTime(selectedDetails.sale.voided_at)}` : ''}${selectedDetails.sale.void_reason ? `: ${selectedDetails.sale.void_reason}` : '.'}`}
+                        ? `This sale was cancelled${selectedDetails.sale.cancelled_at ? ` on ${fmtDateTime(selectedDetails.sale.cancelled_at)}` : ''}${selectedDetails.sale.cancel_reason ? `. Reason: ${selectedDetails.sale.cancel_reason}` : '.'}`
+                        : `This sale was voided${selectedDetails.sale.voided_at ? ` on ${fmtDateTime(selectedDetails.sale.voided_at)}` : ''}${selectedDetails.sale.void_reason ? `. Reason: ${selectedDetails.sale.void_reason}` : '.'}`}
                     </div>
                   ) : null}
 
@@ -912,7 +931,7 @@ export default function SalesListPage(): JSX.Element {
                                 <td className="px-2 py-1.5 text-slate-700 dark:text-slate-200">{fmtDateTime(saleReturn.created_at)}</td>
                                 <td className="px-2 py-1.5">
                                   <span className={`inline-flex rounded-full px-2 py-1 text-[11px] font-semibold ${saleReturnStatusClasses(saleReturn.status)}`}>
-                                    {saleReturn.status}
+                                    {saleReturnStatusLabel(saleReturn.status)}
                                   </span>
                                 </td>
                                 <td className="px-2 py-1.5 text-slate-700 dark:text-slate-200">{saleReturn.sale_return_id}</td>
@@ -922,7 +941,7 @@ export default function SalesListPage(): JSX.Element {
                                   {saleReturn.reason}
                                   {saleReturn.status === 'VOIDED' && saleReturn.void_reason ? (
                                     <div className="mt-1 text-xs text-slate-500 dark:text-slate-400">
-                                      Void: {saleReturn.void_reason}
+                                      Reversal note: {saleReturn.void_reason}
                                     </div>
                                   ) : null}
                                 </td>
@@ -936,7 +955,7 @@ export default function SalesListPage(): JSX.Element {
                                       onClick={() => openVoidReturnDialog(saleReturn)}
                                       type="button"
                                     >
-                                      Void Return
+                                      Reverse Return
                                     </button>
                                   ) : (
                                     <span className="text-xs text-slate-400 dark:text-slate-500">-</span>
@@ -1110,7 +1129,7 @@ export default function SalesListPage(): JSX.Element {
           <section className="w-full max-w-lg rounded-2xl border border-slate-200 bg-white shadow-xl dark:border-slate-700 dark:bg-slate-900">
             <header className="flex items-center justify-between border-b border-slate-200 px-4 py-3 dark:border-slate-700">
               <div>
-                <h2 className="text-lg font-semibold text-slate-900 dark:text-slate-100">Void Sale Return</h2>
+                <h2 className="text-lg font-semibold text-slate-900 dark:text-slate-100">Reverse Sale Return</h2>
                 <p className="text-xs text-slate-500 dark:text-slate-400">
                   Return {selectedReturnToVoid.sale_return_id} | {fmtMoney(selectedReturnToVoid.total_amount)}
                 </p>
@@ -1126,10 +1145,10 @@ export default function SalesListPage(): JSX.Element {
             </header>
             <div className="space-y-3 p-4">
               <div className="rounded-xl border border-amber-300 bg-amber-50 p-3 text-sm text-amber-700 dark:border-amber-700 dark:bg-amber-950/40 dark:text-amber-200">
-                Voiding this return will remove the restored stock and add back any points that were reversed when the return was posted.
+                Reversing this return will remove the restored stock and add back any points that were reversed when the return was posted.
               </div>
               <label className="block text-sm">
-                <span className="mb-1 block font-medium text-slate-700 dark:text-slate-200">Void Reason</span>
+                <span className="mb-1 block font-medium text-slate-700 dark:text-slate-200">Reversal Reason</span>
                 <textarea
                   className="min-h-[110px] w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-slate-900 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-100"
                   onChange={(event) => setVoidReturnReason(event.target.value)}
@@ -1151,7 +1170,7 @@ export default function SalesListPage(): JSX.Element {
                   type="button"
                   disabled={voidReturnSaving}
                 >
-                  {voidReturnSaving ? 'Voiding...' : 'Confirm Void Return'}
+                  {voidReturnSaving ? 'Reversing...' : 'Confirm Reverse Return'}
                 </button>
               </div>
             </div>

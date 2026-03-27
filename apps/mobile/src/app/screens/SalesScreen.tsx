@@ -151,10 +151,16 @@ type LocalCustomerPaymentView = {
 };
 
 type LendingEligibleProductRecord = {
+  sale_line_id: string;
+  line_index: number;
   product_id: string;
   sku: string;
   name: string;
   unit: string;
+  cylinder_flow: 'REFILL_EXCHANGE' | 'NON_REFILL' | null;
+  sold_qty: number;
+  already_lent_qty: number;
+  remaining_lendable_qty: number;
   available_qty: number;
   requires_deposit: boolean;
   default_deposit_amount: number | null;
@@ -371,10 +377,13 @@ export function SalesScreen({
   const [lendingLoading, setLendingLoading] = useState(false);
   const [lendingSaving, setLendingSaving] = useState(false);
   const [lendingProducts, setLendingProducts] = useState<LendingEligibleProductRecord[]>([]);
-  const [lendingQtyByProduct, setLendingQtyByProduct] = useState<Record<string, string>>({});
-  const [lendingDepositByProduct, setLendingDepositByProduct] = useState<Record<string, string>>({});
+  const [lendingStatusByLineIndex, setLendingStatusByLineIndex] = useState<
+    Map<number, LendingEligibleProductRecord>
+  >(new Map());
+  const [lendingQtyByLine, setLendingQtyByLine] = useState<Record<string, string>>({});
+  const [lendingDepositByLine, setLendingDepositByLine] = useState<Record<string, string>>({});
   const [lendingRemarks, setLendingRemarks] = useState('');
-  const [lendingFocusedProductId, setLendingFocusedProductId] = useState<string | null>(null);
+  const [lendingFocusedSaleLineId, setLendingFocusedSaleLineId] = useState<string | null>(null);
   const [cancelModalOpen, setCancelModalOpen] = useState(false);
   const [cancelSaving, setCancelSaving] = useState(false);
   const [cancelReason, setCancelReason] = useState('');
@@ -603,6 +612,35 @@ export function SalesScreen({
     prevSyncBusyRef.current = syncBusy;
   }, [syncBusy]);
 
+  useEffect(() => {
+    if (!selectedSaleId) {
+      setLendingStatusByLineIndex(new Map());
+      return;
+    }
+    let cancelled = false;
+    const loadLendingStatus = async (): Promise<void> => {
+      try {
+        const rows = await apiRequest<LendingEligibleProductRecord[]>(
+          `/lending/eligible-products/by-sale/${encodeURIComponent(selectedSaleId)}`
+        );
+        if (cancelled) {
+          return;
+        }
+        setLendingStatusByLineIndex(
+          new Map(rows.map((row) => [row.line_index, row]))
+        );
+      } catch {
+        if (!cancelled) {
+          setLendingStatusByLineIndex(new Map());
+        }
+      }
+    };
+    void loadLendingStatus();
+    return () => {
+      cancelled = true;
+    };
+  }, [selectedSaleId]);
+
   const parsedRows = useMemo<ParsedSale[]>(() => {
     const byBranch = rows
       .map((row) => {
@@ -758,10 +796,10 @@ export function SalesScreen({
     setPaymentModalOpen(false);
     setLendingModalOpen(false);
     setLendingProducts([]);
-    setLendingQtyByProduct({});
-    setLendingDepositByProduct({});
+    setLendingQtyByLine({});
+    setLendingDepositByLine({});
     setLendingRemarks('');
-    setLendingFocusedProductId(null);
+    setLendingFocusedSaleLineId(null);
     setCancelModalOpen(false);
     setCancelReason('');
     setReturnModalOpen(false);
@@ -784,10 +822,10 @@ export function SalesScreen({
     }
     setLendingModalOpen(false);
     setLendingProducts([]);
-    setLendingQtyByProduct({});
-    setLendingDepositByProduct({});
+    setLendingQtyByLine({});
+    setLendingDepositByLine({});
     setLendingRemarks('');
-    setLendingFocusedProductId(null);
+    setLendingFocusedSaleLineId(null);
   };
 
   const openReturnModal = (productId: string): void => {
@@ -827,7 +865,10 @@ export function SalesScreen({
     setReturnProductId(null);
   };
 
-  const openLendingModal = async (productId?: string | null): Promise<void> => {
+  const openLendingModal = async (input?: {
+    productId?: string | null;
+    cylinderFlow?: 'REFILL_EXCHANGE' | 'NON_REFILL' | null;
+  }): Promise<void> => {
     if (!selectedSale) {
       return;
     }
@@ -835,32 +876,44 @@ export function SalesScreen({
       toastError('Lending', 'A customer-linked sale is required before lending.');
       return;
     }
+    if (input?.cylinderFlow === 'REFILL_EXCHANGE') {
+      toastInfo(
+        'Lending',
+        'Refill lines are already handled as exchange movement and cannot be marked as lent.'
+      );
+      return;
+    }
     setLendingLoading(true);
     try {
       const allProducts = await apiRequest<LendingEligibleProductRecord[]>(
         `/lending/eligible-products/by-sale/${encodeURIComponent(selectedSale.row.id)}`
       );
-      const products =
-        productId?.trim()
-          ? allProducts.filter((product) => product.product_id === productId.trim())
+      const matchingProducts =
+        input?.productId?.trim()
+          ? allProducts.filter((product) => product.product_id === input.productId?.trim())
           : allProducts;
-      if (!products.length) {
+      if (!matchingProducts.length) {
         toastInfo(
           'Lending',
-          productId?.trim()
-            ? 'This sale item is not configured as lendable for this sale location.'
+          input?.productId?.trim()
+            ? 'This sale line is not eligible for lending. Only non-refill lendable lines can be marked as lent.'
             : 'No lendable items are available for this sale location.'
         );
         return;
       }
+      const products = matchingProducts.filter((product) => product.remaining_lendable_qty > 0);
+      if (!products.length) {
+        toastInfo('Lending', 'This non-refill sale line is already fully marked as lent.');
+        return;
+      }
       setLendingProducts(products);
       setLendingRemarks('');
-      setLendingFocusedProductId(productId?.trim() || null);
-      setLendingQtyByProduct(Object.fromEntries(products.map((product) => [product.product_id, ''])));
-      setLendingDepositByProduct(
+      setLendingFocusedSaleLineId(products[0]?.sale_line_id ?? null);
+      setLendingQtyByLine(Object.fromEntries(products.map((product) => [product.sale_line_id, ''])));
+      setLendingDepositByLine(
         Object.fromEntries(
           products.map((product) => [
-            product.product_id,
+            product.sale_line_id,
             product.default_deposit_amount !== null ? product.default_deposit_amount.toFixed(2) : ''
           ])
         )
@@ -879,8 +932,8 @@ export function SalesScreen({
     }
     const lines = lendingProducts
       .map((product) => {
-        const qty = Number(lendingQtyByProduct[product.product_id] || '0');
-        const depositRaw = lendingDepositByProduct[product.product_id];
+        const qty = Number(lendingQtyByLine[product.sale_line_id] || '0');
+        const depositRaw = lendingDepositByLine[product.sale_line_id];
         const deposit = depositRaw?.trim().length ? Number(depositRaw) : null;
         return { product, qty, deposit };
       })
@@ -921,6 +974,7 @@ export function SalesScreen({
           remarks: lendingRemarks.trim() || null,
           lines: lines.map((entry) => ({
             product_id: entry.product.product_id,
+            source_sale_line_id: entry.product.sale_line_id,
             quantity: entry.qty,
             deposit_amount: entry.deposit
           }))
@@ -1539,13 +1593,14 @@ export function SalesScreen({
             showsVerticalScrollIndicator
             nestedScrollEnabled
             keyboardShouldPersistTaps="handled"
-            renderItem={({ item: line }) => {
+                renderItem={({ item: line, index }) => {
               const productId = line.productId ?? line.product_id ?? '-';
               const qty = toAmount(line.quantity ?? line.qty);
               const unitPrice = toAmount(line.unitPrice ?? line.unit_price);
               const lineTotal = qty * unitPrice;
               const returnedQty = getReturnedQtyForProduct(productId);
               const remainingQty = Math.max(0, Number((qty - returnedQty).toFixed(4)));
+              const lendingStatus = lendingStatusByLineIndex.get(index) ?? null;
               const productLabel = productMap.get(productId)?.label ?? productId;
               const rawFlow = String(line.cylinderFlow ?? line.cylinder_flow ?? '').trim().toUpperCase();
               const flowLabel =
@@ -1564,6 +1619,39 @@ export function SalesScreen({
                     {flowLabel ? (
                       <Text style={[styles.itemMeta, { color: theme.subtext }]}>Flow: {flowLabel}</Text>
                     ) : null}
+                    {rawFlow === 'NON_REFILL' ? (
+                      <View style={styles.itemBadgeRow}>
+                        <View
+                          style={[
+                            styles.itemStatusBadge,
+                            {
+                              backgroundColor:
+                                lendingStatus && lendingStatus.remaining_lendable_qty <= 0
+                                  ? '#DCFCE7'
+                                  : theme.pillBg
+                            }
+                          ]}
+                        >
+                          <Text
+                            style={[
+                              styles.itemStatusBadgeText,
+                              {
+                                color:
+                                  lendingStatus && lendingStatus.remaining_lendable_qty <= 0
+                                    ? '#166534'
+                                    : theme.pillText
+                              }
+                            ]}
+                          >
+                            {lendingStatus
+                              ? lendingStatus.remaining_lendable_qty <= 0
+                                ? 'Fully Lent'
+                                : `Lent ${lendingStatus.already_lent_qty.toFixed(4)} / ${lendingStatus.sold_qty.toFixed(4)}`
+                              : 'Ready To Lend'}
+                          </Text>
+                        </View>
+                      </View>
+                    ) : null}
                     {returnedQty > 0 ? (
                       <Text style={[styles.itemMeta, { color: theme.subtext }]}>
                         Returned {returnedQty.toFixed(4)} | Remaining {remainingQty.toFixed(4)}
@@ -1571,12 +1659,24 @@ export function SalesScreen({
                     ) : null}
                     <View style={styles.itemActionRow}>
                       <Pressable
-                        onPress={() => void openLendingModal(productId)}
+                        onPress={() =>
+                          void openLendingModal({
+                            productId,
+                            cylinderFlow:
+                              rawFlow === 'REFILL_EXCHANGE'
+                                ? 'REFILL_EXCHANGE'
+                                : rawFlow === 'NON_REFILL'
+                                  ? 'NON_REFILL'
+                                  : null
+                          })
+                        }
                         disabled={
                           syncBusy ||
                           lendingLoading ||
                           !selectedSale.payload.customer_id ||
-                          !selectedSaleIsActive
+                          !selectedSaleIsActive ||
+                          rawFlow !== 'NON_REFILL' ||
+                          (lendingStatus !== null && lendingStatus.remaining_lendable_qty <= 0)
                         }
                         style={[
                           styles.inlineActionBtn,
@@ -1586,14 +1686,24 @@ export function SalesScreen({
                               syncBusy ||
                               lendingLoading ||
                               !selectedSale.payload.customer_id ||
-                              !selectedSaleIsActive
+                              !selectedSaleIsActive ||
+                              rawFlow !== 'NON_REFILL' ||
+                              (lendingStatus !== null && lendingStatus.remaining_lendable_qty <= 0)
                                 ? theme.pillBg
                                 : theme.card
                           }
                         ]}
                       >
                         <Text style={[styles.inlineActionText, { color: theme.pillText }]}>
-                          {!selectedSale.payload.customer_id ? 'Customer Required' : 'Lend'}
+                          {!selectedSale.payload.customer_id
+                            ? 'Customer Required'
+                            : rawFlow === 'REFILL_EXCHANGE'
+                              ? 'Refill Only'
+                              : lendingStatus !== null && lendingStatus.remaining_lendable_qty <= 0
+                                ? 'Fully Lent'
+                              : rawFlow === 'NON_REFILL'
+                                ? 'Lend'
+                                : 'Not Eligible'}
                         </Text>
                       </Pressable>
                       <Pressable
@@ -1975,7 +2085,7 @@ export function SalesScreen({
             >
               <View style={styles.paymentModalHead}>
                 <Text style={[styles.blockTitle, { color: theme.heading }]}>
-                  {lendingFocusedProductId ? 'Lend Sale Item' : 'Create Lending'}
+                  {lendingFocusedSaleLineId ? 'Lend Sale Item' : 'Create Lending'}
                 </Text>
                 <Pressable
                   style={[styles.closeBtn, { borderColor: theme.cardBorder, backgroundColor: theme.inputBg }]}
@@ -1990,6 +2100,13 @@ export function SalesScreen({
                 Sale {selectedSale.row.id} | {selectedCustomerLabel}
               </Text>
 
+              <View style={[styles.lendingHelperCard, { borderColor: theme.cardBorder, backgroundColor: theme.inputBg }]}>
+                <Text style={[styles.infoValue, { color: theme.heading }]}>Tap-friendly lending</Text>
+                <Text style={[styles.itemMeta, { color: theme.subtext }]}>
+                  Only non-refill sale lines can be marked as lent. Enter the quantity, review any deposit, then save.
+                </Text>
+              </View>
+
               <View style={[styles.outstandingCard, { borderColor: theme.cardBorder, backgroundColor: theme.inputBg }]}>
                 <Text style={[styles.infoLabel, { color: theme.subtext }]}>Location</Text>
                 <Text style={[styles.infoValue, { color: theme.heading }]}>
@@ -1997,15 +2114,23 @@ export function SalesScreen({
                 </Text>
               </View>
 
-              <ScrollView style={styles.lendingScroll} contentContainerStyle={styles.modalBody} keyboardShouldPersistTaps="handled">
+              <ScrollView
+                style={styles.lendingScroll}
+                contentContainerStyle={styles.lendingScrollContent}
+                keyboardShouldPersistTaps="handled"
+                showsVerticalScrollIndicator
+              >
                 {lendingProducts.map((product) => (
                   <View
-                    key={product.product_id}
+                    key={product.sale_line_id}
                     style={[styles.lendingProductCard, { borderColor: theme.cardBorder, backgroundColor: theme.inputBg }]}
                   >
                     <Text style={[styles.tableCellName, { color: theme.heading }]}>{product.name}</Text>
                     <Text style={[styles.itemMeta, { color: theme.subtext }]}>
-                      {product.sku} | Available {product.available_qty.toFixed(4)} {product.lending_unit_type ?? product.unit}
+                      {product.sku} | Sold {product.sold_qty.toFixed(4)} | Ready to lend {product.remaining_lendable_qty.toFixed(4)} {product.lending_unit_type ?? product.unit}
+                    </Text>
+                    <Text style={[styles.itemMeta, { color: theme.subtext }]}>
+                      Sale line #{product.line_index + 1} | Flow: {product.cylinder_flow === 'NON_REFILL' ? 'Non-Refill' : product.cylinder_flow === 'REFILL_EXCHANGE' ? 'Refill' : 'N/A'}
                     </Text>
                     {product.requires_deposit || product.default_deposit_amount !== null ? (
                       <Text style={[styles.itemMeta, { color: theme.subtext }]}>
@@ -2015,9 +2140,9 @@ export function SalesScreen({
 
                     <Text style={[styles.infoLabel, { color: theme.subtext }]}>Quantity To Lend</Text>
                     <TextInput
-                      value={lendingQtyByProduct[product.product_id] ?? ''}
+                      value={lendingQtyByLine[product.sale_line_id] ?? ''}
                       onChangeText={(value) =>
-                        setLendingQtyByProduct((prev) => ({ ...prev, [product.product_id]: value }))
+                        setLendingQtyByLine((prev) => ({ ...prev, [product.sale_line_id]: value }))
                       }
                       keyboardType="numeric"
                       placeholder="0"
@@ -2029,9 +2154,9 @@ export function SalesScreen({
                       <>
                         <Text style={[styles.infoLabel, { color: theme.subtext }]}>Deposit Amount</Text>
                         <TextInput
-                          value={lendingDepositByProduct[product.product_id] ?? ''}
+                          value={lendingDepositByLine[product.sale_line_id] ?? ''}
                           onChangeText={(value) =>
-                            setLendingDepositByProduct((prev) => ({ ...prev, [product.product_id]: value }))
+                            setLendingDepositByLine((prev) => ({ ...prev, [product.sale_line_id]: value }))
                           }
                           keyboardType="numeric"
                           placeholder="0.00"
@@ -2300,12 +2425,12 @@ const styles = StyleSheet.create({
   lendingModalCard: {
     marginHorizontal: 16,
     marginBottom: 20,
-    maxHeight: '88%',
+    maxHeight: '92%',
     borderRadius: 14,
     borderWidth: 1,
-    paddingHorizontal: 12,
-    paddingVertical: 12,
-    gap: 8
+    paddingHorizontal: 14,
+    paddingVertical: 14,
+    gap: 10
   },
   breakdownModalCard: {
     marginHorizontal: 16,
@@ -2322,6 +2447,10 @@ const styles = StyleSheet.create({
   },
   lendingScroll: {
     flexGrow: 0
+  },
+  lendingScrollContent: {
+    gap: 10,
+    paddingBottom: 12
   },
   paymentModalHead: {
     flexDirection: 'row',
@@ -2483,11 +2612,24 @@ const styles = StyleSheet.create({
     gap: 8,
     marginTop: 8
   },
+  itemBadgeRow: {
+    flexDirection: 'row',
+    marginTop: 6
+  },
+  itemStatusBadge: {
+    borderRadius: 999,
+    paddingHorizontal: 10,
+    paddingVertical: 4
+  },
+  itemStatusBadgeText: {
+    fontSize: 10,
+    fontWeight: '800'
+  },
   inlineActionBtn: {
-    minHeight: 34,
+    minHeight: 38,
     borderWidth: 1,
     borderRadius: 8,
-    paddingHorizontal: 10,
+    paddingHorizontal: 12,
     alignItems: 'center',
     justifyContent: 'center'
   },
@@ -2507,11 +2649,17 @@ const styles = StyleSheet.create({
   },
   lendingProductCard: {
     borderWidth: 1,
-    borderRadius: 10,
-    paddingHorizontal: 10,
-    paddingVertical: 8,
-    gap: 6,
+    borderRadius: 12,
+    paddingHorizontal: 12,
+    paddingVertical: 12,
+    gap: 8,
     marginBottom: 6
+  },
+  lendingHelperCard: {
+    borderWidth: 1,
+    borderRadius: 12,
+    paddingHorizontal: 12,
+    paddingVertical: 10
   },
   tableCellName: {
     flex: 1,

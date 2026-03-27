@@ -1147,6 +1147,7 @@ model LendingLine {
   lendingTransactionId String
   companyId            String
   productId            String
+  sourceSaleLineId     String?
   quantityLent         Decimal  @db.Decimal(14, 3)
   quantityReturned     Decimal  @default(0) @db.Decimal(14, 3)
   depositAmount        Decimal? @db.Decimal(12, 2)
@@ -1157,10 +1158,12 @@ model LendingLine {
   lendingTransaction LendingTransaction @relation(fields: [lendingTransactionId], references: [id], onDelete: Cascade)
   company            Company            @relation(fields: [companyId], references: [id], onDelete: Cascade)
   product            Product            @relation(fields: [productId], references: [id], onDelete: Restrict)
+  sourceSaleLine     SaleLine?          @relation(fields: [sourceSaleLineId], references: [id], onDelete: SetNull)
   returns            LendingReturn[]
 
   @@index([companyId, productId])
   @@index([lendingTransactionId])
+  @@index([sourceSaleLineId])
 }
 
 model LendingReturn {
@@ -1395,6 +1398,7 @@ model SaleLine {
 
   sale    Sale    @relation(fields: [saleId], references: [id], onDelete: Cascade)
   product Product @relation(fields: [productId], references: [id], onDelete: Restrict)
+  lendingLines LendingLine[]
   returnLines SaleReturnLine[]
 }
 

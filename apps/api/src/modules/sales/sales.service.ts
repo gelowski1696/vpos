@@ -1972,7 +1972,8 @@ export class SalesService {
       where: {
         companyId,
         branchId,
-        isActive: true
+        isActive: true,
+        code: { not: 'LOC-CUST-OUT' }
       },
       orderBy: { createdAt: 'asc' },
       select: { id: true, code: true }
@@ -1982,7 +1983,7 @@ export class SalesService {
     }
 
     const fallback = await tx.location.findFirst({
-      where: { companyId, isActive: true },
+      where: { companyId, isActive: true, code: { not: 'LOC-CUST-OUT' } },
       orderBy: { createdAt: 'asc' },
       select: { id: true, code: true }
     });
@@ -2909,6 +2910,15 @@ export class SalesService {
       select: { id: true, code: true }
     });
     if (existing) {
+      await tx.location.update({
+        where: { id: existing.id },
+        data: {
+          branchId,
+          name: 'System Customer Cylinder Outbound',
+          type: LocationType.PERSONNEL,
+          isActive: true
+        }
+      });
       return existing;
     }
 
@@ -2918,7 +2928,7 @@ export class SalesService {
           companyId,
           branchId,
           code,
-          name: 'Customer Outbound Cylinders',
+          name: 'System Customer Cylinder Outbound',
           type: LocationType.PERSONNEL,
           isActive: true
         },

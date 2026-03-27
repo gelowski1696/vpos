@@ -195,6 +195,9 @@ export async function loadLocationOptions(db: SQLiteDatabase): Promise<MasterDat
     }
     const id = resolveId(payload, row.record_id);
     const code = asString(payload.code);
+    if ((code ?? '').trim().toUpperCase() === 'LOC-CUST-OUT') {
+      continue;
+    }
     const name = asString(payload.name);
     const type = asString(payload.type);
     const branchId = asString(payload.branchId) ?? asString(payload.branch_id);

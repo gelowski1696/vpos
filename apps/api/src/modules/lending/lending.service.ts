@@ -17,6 +17,7 @@ import { TenantDatasourceRouterService } from '../../common/tenant-datasource-ro
 
 type DbClient = PrismaService | PrismaClient;
 type DbTransaction = Prisma.TransactionClient;
+type DbReadClient = DbClient | DbTransaction;
 
 export type CreateLendingInput = {
   sale_id: string;
@@ -27,6 +28,7 @@ export type CreateLendingInput = {
   approved_by_user_id?: string | null;
   lines: Array<{
     product_id: string;
+    source_sale_line_id?: string | null;
     quantity: number;
     deposit_amount?: number | null;
     remarks?: string | null;
@@ -43,10 +45,16 @@ export type LendingListQuery = {
 };
 
 export type LendingEligibleProductRecord = {
+  sale_line_id: string;
+  line_index: number;
   product_id: string;
   sku: string;
   name: string;
   unit: string;
+  cylinder_flow: 'REFILL_EXCHANGE' | 'NON_REFILL' | null;
+  sold_qty: number;
+  already_lent_qty: number;
+  remaining_lendable_qty: number;
   available_qty: number;
   requires_deposit: boolean;
   default_deposit_amount: number | null;
@@ -55,6 +63,7 @@ export type LendingEligibleProductRecord = {
 
 export type LendingLineRecord = {
   lending_line_id: string;
+  source_sale_line_id: string | null;
   product_id: string;
   product_sku: string | null;
   product_name: string | null;
@@ -123,12 +132,21 @@ type NormalizedCreateLendingInput = {
   approved_by_user_id: string | null;
   lines: Array<{
     product_id: string;
+    source_sale_line_id: string | null;
     quantity: Prisma.Decimal;
     quantity_number: number;
     deposit_amount: Prisma.Decimal | null;
     deposit_amount_number: number | null;
     remarks: string | null;
   }>;
+};
+
+type SaleLineFlow = 'REFILL_EXCHANGE' | 'NON_REFILL';
+
+type SaleLineFlowMeta = {
+  sale_line_id: string;
+  line_index: number;
+  cylinder_flow: SaleLineFlow | null;
 };
 
 export type LendingReturnInput = {
@@ -175,7 +193,15 @@ export class LendingService {
         include: {
           branch: { select: { id: true, name: true } },
           location: { select: { id: true, name: true } },
-          customer: { select: { id: true, code: true, name: true, isActive: true } }
+          customer: { select: { id: true, code: true, name: true, isActive: true } },
+          lines: {
+            orderBy: { id: 'asc' },
+            select: {
+              id: true,
+              productId: true,
+              quantity: true
+            }
+          }
         }
       });
       if (!sale) {
@@ -196,6 +222,50 @@ export class LendingService {
       );
       if (normalized.approved_by_user_id && !approvedBy) {
         throw new NotFoundException('Approved by user not found');
+      }
+
+      const saleLinesById = new Map(sale.lines.map((line) => [line.id, line]));
+      const saleLineFlowMeta = await this.resolveSaleLineFlowMeta(
+        tx,
+        companyId,
+        sale.id,
+        sale.lines.map((line) => ({
+          id: line.id,
+          productId: line.productId
+        }))
+      );
+      const sourceSaleLineIds = normalized.lines
+        .map((line) => line.source_sale_line_id)
+        .filter((value): value is string => Boolean(value));
+      const sourceLendingRows =
+        sourceSaleLineIds.length > 0
+          ? await tx.lendingLine.findMany({
+              where: {
+                companyId,
+                sourceSaleLineId: { in: sourceSaleLineIds },
+                lendingTransaction: {
+                  status: {
+                    not: LendingStatus.CANCELLED
+                  }
+                }
+              },
+              select: {
+                sourceSaleLineId: true,
+                quantityLent: true
+              }
+            })
+          : [];
+      const lentBySaleLineId = new Map<string, number>();
+      for (const row of sourceLendingRows) {
+        if (!row.sourceSaleLineId) {
+          continue;
+        }
+        lentBySaleLineId.set(
+          row.sourceSaleLineId,
+          this.roundQty(
+            (lentBySaleLineId.get(row.sourceSaleLineId) ?? 0) + this.toNumber(row.quantityLent)
+          )
+        );
       }
 
       const productIds = normalized.lines.map((line) => line.product_id);
@@ -220,11 +290,39 @@ export class LendingService {
         if (!product.isLendable) {
           throw new BadRequestException(`Product ${product.name} is not marked as lendable`);
         }
-        const availableQty = this.toNumber(product.inventoryBalances[0]?.qtyOnHand ?? 0);
-        if (availableQty < line.quantity_number) {
-          throw new BadRequestException(
-            `Insufficient stock for ${product.name}. Available ${availableQty}, requested ${line.quantity_number}.`
-          );
+        if (line.source_sale_line_id) {
+          const saleLine = saleLinesById.get(line.source_sale_line_id);
+          if (!saleLine) {
+            throw new BadRequestException(
+              `Sale line ${line.source_sale_line_id} does not belong to this sale`
+            );
+          }
+          if (saleLine.productId !== product.id) {
+            throw new BadRequestException(
+              `Sale line ${line.source_sale_line_id} does not match ${product.name}`
+            );
+          }
+          const flow = saleLineFlowMeta.get(line.source_sale_line_id)?.cylinder_flow ?? null;
+          if (flow !== 'NON_REFILL') {
+            throw new BadRequestException(
+              `${product.name} can only be lent from a non-refill sale line`
+            );
+          }
+          const soldQty = this.toNumber(saleLine.quantity);
+          const alreadyLentQty = lentBySaleLineId.get(saleLine.id) ?? 0;
+          const remainingQty = this.roundQty(soldQty - alreadyLentQty);
+          if (remainingQty < line.quantity_number) {
+            throw new BadRequestException(
+              `${product.name} only has ${remainingQty.toFixed(4)} left that can be marked as lent from this sale line.`
+            );
+          }
+        } else {
+          const availableQty = this.toNumber(product.inventoryBalances[0]?.qtyOnHand ?? 0);
+          if (availableQty < line.quantity_number) {
+            throw new BadRequestException(
+              `Insufficient stock for ${product.name}. Available ${availableQty}, requested ${line.quantity_number}.`
+            );
+          }
         }
         if (
           product.requiresDeposit &&
@@ -262,6 +360,7 @@ export class LendingService {
             lendingTransactionId: lending.id,
             companyId,
             productId: product.id,
+            sourceSaleLineId: line.source_sale_line_id,
             quantityLent: line.quantity,
             quantityReturned: new Prisma.Decimal(0),
             depositAmount,
@@ -269,16 +368,18 @@ export class LendingService {
           }
         });
 
-        await this.applyInventoryMovement(tx, {
-          companyId,
-          locationId: sale.locationId,
-          productId: product.id,
-          qtyDelta: -line.quantity_number,
-          movementType: 'LENDING_OUT' as InventoryMovementType,
-          referenceType: 'LENDING',
-          referenceId: `${lending.id}::${product.id}`,
-          unitCost: this.toNumber(product.inventoryBalances[0]?.avgCost ?? 0)
-        });
+        if (!line.source_sale_line_id) {
+          await this.applyInventoryMovement(tx, {
+            companyId,
+            locationId: sale.locationId,
+            productId: product.id,
+            qtyDelta: -line.quantity_number,
+            movementType: 'LENDING_OUT' as InventoryMovementType,
+            referenceType: 'LENDING',
+            referenceId: `${lending.id}::${product.id}`,
+            unitCost: this.toNumber(product.inventoryBalances[0]?.avgCost ?? 0)
+          });
+        }
       }
 
       return lending.id;
@@ -357,6 +458,7 @@ export class LendingService {
       ...base,
       lines: row.lines.map((line) => ({
         lending_line_id: line.id,
+        source_sale_line_id: line.sourceSaleLineId ?? null,
         product_id: line.productId,
         product_sku: line.product?.sku ?? null,
         product_name: line.product?.name ?? null,
@@ -501,33 +603,102 @@ export class LendingService {
     const db = await this.getDb(companyId);
     const sale = await db.sale.findFirst({
       where: { id, companyId },
-      select: { locationId: true }
+      include: {
+        lines: {
+          orderBy: { id: 'asc' },
+          include: {
+            product: {
+              select: {
+                id: true,
+                sku: true,
+                name: true,
+                unit: true,
+                isActive: true,
+                isLendable: true,
+                requiresDeposit: true,
+                defaultDepositAmount: true,
+                lendingUnitType: true
+              }
+            }
+          }
+        }
+      }
     });
     if (!sale) {
       throw new NotFoundException('Sale not found');
     }
-    const rows = await db.product.findMany({
-      where: { companyId, isActive: true, isLendable: true },
-      orderBy: { name: 'asc' },
-      include: {
-        inventoryBalances: {
-          where: { locationId: sale.locationId },
-          select: { qtyOnHand: true }
+    const flowMetaBySaleLineId = await this.resolveSaleLineFlowMeta(
+      db,
+      companyId,
+      sale.id,
+      sale.lines.map((line) => ({
+        id: line.id,
+        productId: line.productId
+      }))
+    );
+    const sourceLendingRows = await db.lendingLine.findMany({
+      where: {
+        companyId,
+        sourceSaleLineId: {
+          in: sale.lines.map((line) => line.id)
+        },
+        lendingTransaction: {
+          status: {
+            not: LendingStatus.CANCELLED
+          }
         }
+      },
+      select: {
+        sourceSaleLineId: true,
+        quantityLent: true
       }
     });
-    return rows
-      .map((row) => ({
-        product_id: row.id,
-        sku: row.sku,
-        name: row.name,
-        unit: row.unit,
-        available_qty: this.toNumber(row.inventoryBalances[0]?.qtyOnHand ?? 0),
-        requires_deposit: row.requiresDeposit,
-        default_deposit_amount: this.toNullableNumber(row.defaultDepositAmount),
-        lending_unit_type: row.lendingUnitType ?? null
-      }))
-      .filter((row) => row.available_qty > 0);
+    const lentBySaleLineId = new Map<string, number>();
+    for (const row of sourceLendingRows) {
+      if (!row.sourceSaleLineId) {
+        continue;
+      }
+      lentBySaleLineId.set(
+        row.sourceSaleLineId,
+        this.roundQty(
+          (lentBySaleLineId.get(row.sourceSaleLineId) ?? 0) + this.toNumber(row.quantityLent)
+        )
+      );
+    }
+
+    return sale.lines
+      .map((line) => {
+        const flowMeta = flowMetaBySaleLineId.get(line.id);
+        const soldQty = this.toNumber(line.quantity);
+        const alreadyLentQty = lentBySaleLineId.get(line.id) ?? 0;
+        const remainingLendableQty = this.roundQty(soldQty - alreadyLentQty);
+        return {
+          sale_line_id: line.id,
+          line_index: flowMeta?.line_index ?? 0,
+          product_id: line.productId,
+          sku: line.product.sku,
+          name: line.product.name,
+          unit: line.product.unit,
+          cylinder_flow: flowMeta?.cylinder_flow ?? null,
+          sold_qty: soldQty,
+          already_lent_qty: alreadyLentQty,
+          remaining_lendable_qty: remainingLendableQty,
+          available_qty: remainingLendableQty,
+          requires_deposit: line.product.requiresDeposit,
+          default_deposit_amount: this.toNullableNumber(line.product.defaultDepositAmount),
+          lending_unit_type: line.product.lendingUnitType ?? null,
+          is_product_active: line.product.isActive,
+          is_product_lendable: line.product.isLendable
+        };
+      })
+      .filter(
+        (line) =>
+          line.is_product_active &&
+          line.is_product_lendable &&
+          line.cylinder_flow === 'NON_REFILL'
+      )
+      .sort((a, b) => a.line_index - b.line_index)
+      .map(({ is_product_active: _active, is_product_lendable: _lendable, ...line }) => line);
   }
 
   private normalizeCreateInput(input: CreateLendingInput): NormalizedCreateLendingInput {
@@ -537,13 +708,15 @@ export class LendingService {
       throw new BadRequestException('At least one lending line is required');
     }
 
-    const seenProductIds = new Set<string>();
+    const seenKeys = new Set<string>();
     const normalizedLines = lines.map((line, index) => {
       const productId = this.requireId(line.product_id, `lines[${index}].product_id`);
-      if (seenProductIds.has(productId)) {
-        throw new BadRequestException(`Duplicate lending product ${productId} is not allowed`);
+      const sourceSaleLineId = this.optionalId(line.source_sale_line_id);
+      const seenKey = sourceSaleLineId ? `sale-line:${sourceSaleLineId}` : `product:${productId}`;
+      if (seenKeys.has(seenKey)) {
+        throw new BadRequestException(`Duplicate lending line ${seenKey} is not allowed`);
       }
-      seenProductIds.add(productId);
+      seenKeys.add(seenKey);
 
       const quantityNumber = this.requirePositiveNumber(line.quantity, `lines[${index}].quantity`);
       const depositAmountNumber = this.optionalNonNegativeNumber(
@@ -553,6 +726,7 @@ export class LendingService {
 
       return {
         product_id: productId,
+        source_sale_line_id: sourceSaleLineId,
         quantity: new Prisma.Decimal(quantityNumber),
         quantity_number: quantityNumber,
         deposit_amount:
@@ -894,6 +1068,97 @@ export class LendingService {
       throw new BadRequestException(`${fieldName} is invalid`);
     }
     return value as T;
+  }
+
+  private async resolveSaleLineFlowMeta(
+    db: DbReadClient,
+    companyId: string,
+    saleId: string,
+    saleLines: Array<{ id: string; productId: string }>
+  ): Promise<Map<string, SaleLineFlowMeta>> {
+    const saleEvent = await db.eventSales.findFirst({
+      where: {
+        companyId,
+        saleId
+      },
+      select: {
+        payload: true
+      },
+      orderBy: { happenedAt: 'desc' }
+    });
+    const payloadRoot =
+      saleEvent?.payload && typeof saleEvent.payload === 'object' && !Array.isArray(saleEvent.payload)
+        ? (saleEvent.payload as Record<string, unknown>)
+        : null;
+    const payloadLines = Array.isArray(payloadRoot?.lines)
+      ? payloadRoot.lines
+          .map((entry) =>
+            entry && typeof entry === 'object' && !Array.isArray(entry)
+              ? (entry as Record<string, unknown>)
+              : null
+          )
+          .filter((entry): entry is Record<string, unknown> => Boolean(entry))
+      : [];
+    const usedIndices = new Set<number>();
+    const flowBySaleLineId = new Map<string, SaleLineFlowMeta>();
+
+    const resolveFlowForLine = (lineIndex: number, productId: string): SaleLineFlowMeta => {
+      const byIndex = payloadLines[lineIndex];
+      if (byIndex) {
+        const byIndexProductId =
+          this.optionalText(byIndex.product_id) ?? this.optionalText(byIndex.productId);
+        if (!byIndexProductId || byIndexProductId === productId) {
+          usedIndices.add(lineIndex);
+          return {
+            sale_line_id: saleLines[lineIndex]?.id ?? '',
+            line_index: lineIndex,
+            cylinder_flow: this.normalizeCylinderFlow(byIndex.cylinder_flow ?? byIndex.cylinderFlow)
+          };
+        }
+      }
+
+      for (let i = 0; i < payloadLines.length; i += 1) {
+        if (usedIndices.has(i)) {
+          continue;
+        }
+        const candidate = payloadLines[i];
+        const candidateProductId =
+          this.optionalText(candidate.product_id) ?? this.optionalText(candidate.productId);
+        if (candidateProductId && candidateProductId !== productId) {
+          continue;
+        }
+        usedIndices.add(i);
+        return {
+          sale_line_id: saleLines[lineIndex]?.id ?? '',
+          line_index: i,
+          cylinder_flow: this.normalizeCylinderFlow(
+            candidate.cylinder_flow ?? candidate.cylinderFlow
+          )
+        };
+      }
+
+      return {
+        sale_line_id: saleLines[lineIndex]?.id ?? '',
+        line_index: lineIndex,
+        cylinder_flow: null
+      };
+    };
+
+    saleLines.forEach((line, index) => {
+      flowBySaleLineId.set(line.id, resolveFlowForLine(index, line.productId));
+    });
+    return flowBySaleLineId;
+  }
+
+  private normalizeCylinderFlow(value: unknown): SaleLineFlow | null {
+    const normalized = this.optionalText(value)?.toUpperCase().replace(/[\s-]+/g, '_');
+    if (normalized === 'REFILL_EXCHANGE') {
+      return 'REFILL_EXCHANGE';
+    }
+    if (normalized === 'NON_REFILL') {
+      return 'NON_REFILL';
+    }
+    return null;
   }
 
   private toNumber(value: Prisma.Decimal | number | string): number {

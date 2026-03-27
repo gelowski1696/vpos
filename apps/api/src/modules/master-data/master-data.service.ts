@@ -774,7 +774,9 @@ export class MasterDataService {
         where: { companyId },
         orderBy: { code: 'asc' }
       });
-      return rows.map((row) => this.mapLocationFromPrisma(row));
+      return rows
+        .filter((row) => !this.isSystemOnlyLocationCode(row.code))
+        .map((row) => this.mapLocationFromPrisma(row));
     } catch (error) {
       if (binding.mode === TenancyDatastoreMode.DEDICATED_DB) {
         throw error;
@@ -6163,6 +6165,10 @@ export class MasterDataService {
       createdAt: row.createdAt.toISOString(),
       updatedAt: row.updatedAt.toISOString()
     };
+  }
+
+  private isSystemOnlyLocationCode(code: string | null | undefined): boolean {
+    return (code ?? '').trim().toUpperCase() === 'LOC-CUST-OUT';
   }
 
   private mapUserFromPrisma(row: {
