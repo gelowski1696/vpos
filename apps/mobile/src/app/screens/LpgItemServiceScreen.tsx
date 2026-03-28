@@ -52,6 +52,9 @@ type LpgItemActionType = 'DISPOSE' | 'REPLACE' | 'JUNK';
 
 type LpgItemActionRow = {
   id: string;
+  productId: string;
+  productSku: string | null;
+  productName: string | null;
   actionType: LpgItemActionType;
   qty: number;
   reason: string;
@@ -200,6 +203,9 @@ function toLocalServiceActionRow(row: LocalLpgItemActionDbRow): LpgItemActionRow
   }
   return {
     id: row.id,
+    productId: asString(payload.product_id ?? payload.productId),
+    productSku: asString(payload.product_sku ?? payload.productSku) || null,
+    productName: asString(payload.product_name ?? payload.productName) || null,
     actionType: actionTypeRaw,
     qty,
     reason,
@@ -252,6 +258,7 @@ export function LpgItemServiceScreen({
   const [composerOpen, setComposerOpen] = useState(false);
   const [composerType, setComposerType] = useState<LpgItemActionType>('DISPOSE');
   const [referenceDisposeId, setReferenceDisposeId] = useState<string | null>(null);
+  const [modalProductQuery, setModalProductQuery] = useState('');
   const [qty, setQty] = useState('1');
   const [reason, setReason] = useState('');
   const [notes, setNotes] = useState('');
@@ -342,7 +349,7 @@ export function LpgItemServiceScreen({
         if (current && nextProducts.some((row) => row.id === current)) {
           return current;
         }
-        return nextProducts[0]?.id ?? null;
+        return null;
       });
     } finally {
       setLoading(false);
@@ -370,6 +377,24 @@ export function LpgItemServiceScreen({
     });
   }, [products, query]);
 
+  const productMap = useMemo(() => {
+    const next = new Map<string, ProductRecord>();
+    for (const row of products) {
+      next.set(row.id, row);
+    }
+    return next;
+  }, [products]);
+
+  const modalVisibleProducts = useMemo(() => {
+    const search = modalProductQuery.trim().toLowerCase();
+    return products.filter((row) => {
+      if (!search) {
+        return true;
+      }
+      return `${row.itemCode} ${row.name}`.toLowerCase().includes(search);
+    });
+  }, [modalProductQuery, products]);
+
   const selectedProduct = useMemo(
     () =>
       visibleProducts.find((row) => row.id === selectedProductId) ??
@@ -380,7 +405,7 @@ export function LpgItemServiceScreen({
 
   useEffect(() => {
     const loadActions = async (): Promise<void> => {
-      if (!selectedProduct?.id || !selectedLocationId) {
+      if (!selectedLocationId) {
         setActions([]);
         return;
       }
@@ -391,7 +416,6 @@ export function LpgItemServiceScreen({
           SELECT id, payload, sync_status, created_at, updated_at
           FROM lpg_item_actions_local
           WHERE sync_status IN (?, ?, ?, ?)
-            AND json_extract(payload, '$.product_id') = ?
             AND json_extract(payload, '$.location_id') = ?
           ORDER BY created_at DESC
           `,
@@ -399,7 +423,6 @@ export function LpgItemServiceScreen({
           'processing',
           'failed',
           'FAILED',
-          selectedProduct.id,
           selectedLocationId
         );
         const localActions = localPendingRows
@@ -408,9 +431,8 @@ export function LpgItemServiceScreen({
         let serverActions: LpgItemActionRow[] = [];
         try {
           const params = new URLSearchParams();
-          params.set('product_id', selectedProduct.id);
           params.set('location_id', selectedLocationId);
-          params.set('limit', '50');
+          params.set('limit', '150');
           serverActions = (await apiRequest<LpgItemActionRow[]>(
             `/lpg-item-actions?${params.toString()}`
           )).map((row) => ({ ...row, source: 'server', syncStatus: 'synced' }));
@@ -424,13 +446,10 @@ export function LpgItemServiceScreen({
       }
     };
     void loadActions();
-  }, [db, selectedLocationId, selectedProduct?.id, syncBusy]);
-
-  const selectedStock = selectedProduct
-    ? stockByProduct[selectedProduct.id] ?? { qtyFull: 0, qtyEmpty: 0, qtyOnHand: 0 }
-    : { qtyFull: 0, qtyEmpty: 0, qtyOnHand: 0 };
+  }, [db, selectedLocationId, syncBusy]);
 
   const disposedEntries = useMemo<DisposedEntryRow[]>(() => {
+    const search = query.trim().toLowerCase();
     const usedByReference = new Map<string, number>();
     for (const row of actions) {
       if (!row.referenceActionId) {
@@ -443,22 +462,47 @@ export function LpgItemServiceScreen({
     }
     return actions
       .filter((row) => row.actionType === 'DISPOSE')
+      .filter((row) => {
+        if (!search) {
+          return true;
+        }
+        const product = productMap.get(row.productId);
+        return `${row.productSku ?? product?.itemCode ?? ''} ${row.productName ?? product?.name ?? ''} ${row.reason} ${row.notes ?? ''}`
+          .toLowerCase()
+          .includes(search);
+      })
       .map((row) => ({
         ...row,
         usedQty: usedByReference.get(row.id) ?? 0,
         availableQty: Math.max(0, row.qty - (usedByReference.get(row.id) ?? 0))
       }))
       .sort((a, b) => b.createdAt.localeCompare(a.createdAt));
-  }, [actions]);
+  }, [actions, productMap, query]);
 
-  const historyRows = useMemo(
-    () => [...actions].sort((a, b) => b.createdAt.localeCompare(a.createdAt)),
-    [actions]
-  );
+  const historyRows = useMemo(() => {
+    const search = query.trim().toLowerCase();
+    return [...actions]
+      .filter((row) => {
+        if (!search) {
+          return true;
+        }
+        const product = productMap.get(row.productId);
+        return `${row.productSku ?? product?.itemCode ?? ''} ${row.productName ?? product?.name ?? ''} ${row.reason} ${row.notes ?? ''} ${row.actionType}`
+          .toLowerCase()
+          .includes(search);
+      })
+      .sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+  }, [actions, productMap, query]);
 
-  const openComposer = (type: LpgItemActionType, referenceActionId?: string | null): void => {
+  const openComposer = (
+    type: LpgItemActionType,
+    referenceActionId?: string | null,
+    productId?: string | null
+  ): void => {
     setComposerType(type);
     setReferenceDisposeId(referenceActionId ?? null);
+    setSelectedProductId(productId ?? null);
+    setModalProductQuery('');
     setQty('1');
     setReason('');
     setNotes('');
@@ -471,6 +515,8 @@ export function LpgItemServiceScreen({
     setReason('');
     setNotes('');
     setReferenceDisposeId(null);
+    setSelectedProductId(null);
+    setModalProductQuery('');
     setComposerType('DISPOSE');
   };
 
@@ -489,6 +535,10 @@ export function LpgItemServiceScreen({
     }
     if (composerType !== 'DISPOSE' && !referenceDisposeId) {
       toastError('LPG Item Service', 'Choose a disposed entry first.');
+      return;
+    }
+    if (composerType === 'DISPOSE' && !selectedProduct) {
+      toastError('LPG Item Service', 'Select an LPG item first.');
       return;
     }
 
@@ -538,6 +588,9 @@ export function LpgItemServiceScreen({
         });
         created = {
           id: actionId,
+          productId: selectedProduct.id,
+          productSku: selectedProduct.itemCode,
+          productName: selectedProduct.name,
           actionType: composerType,
           qty: parsedQty,
           reason: reason.trim(),
@@ -615,81 +668,46 @@ export function LpgItemServiceScreen({
       <TextInput
         value={query}
         onChangeText={setQuery}
-        placeholder="Search LPG items by code or name"
+        placeholder="Search records by item, reason, or action"
         placeholderTextColor={theme.inputPlaceholder}
         style={[styles.input, { backgroundColor: theme.inputBg, color: theme.inputText }]}
       />
 
-      <ScrollView style={styles.list} contentContainerStyle={styles.listContent}>
-        {loading ? (
-          <Text style={[styles.detailLine, { color: theme.subtext }]}>Loading LPG items...</Text>
-        ) : visibleProducts.length === 0 ? (
-          <Text style={[styles.detailLine, { color: theme.subtext }]}>No LPG items found.</Text>
+      <Pressable
+        onPress={() => openComposer('DISPOSE')}
+        disabled={!selectedLocationId}
+        style={[
+          styles.primaryButton,
+          { backgroundColor: selectedLocationId ? theme.primary : theme.primaryMuted }
+        ]}
+      >
+        <Text style={styles.primaryButtonText}>Record Dispose</Text>
+      </Pressable>
+
+      <View style={[styles.detailBlock, { borderColor: theme.cardBorder, backgroundColor: theme.inputBg }]}>
+        <Text style={[styles.blockTitle, { color: theme.heading }]}>Disposed Entries</Text>
+        {!selectedLocationId ? (
+          <Text style={[styles.detailLine, { color: theme.subtext }]}>Select a location in app setup first.</Text>
+        ) : disposedEntries.length === 0 ? (
+          <Text style={[styles.detailLine, { color: theme.subtext }]}>No disposed entries found for this location.</Text>
         ) : (
-          visibleProducts.map((row) => {
-            const active = selectedProductId === row.id;
-            const stock = stockByProduct[row.id] ?? { qtyFull: 0, qtyEmpty: 0, qtyOnHand: 0 };
+          disposedEntries.map((row) => {
+            const product = productMap.get(row.productId);
+            const stock = stockByProduct[row.productId] ?? { qtyFull: 0, qtyEmpty: 0, qtyOnHand: 0 };
             return (
-              <Pressable
-                key={row.id}
-                onPress={() => setSelectedProductId(row.id)}
-                style={[
-                  styles.itemCard,
-                  {
-                    borderColor: active ? theme.primary : theme.cardBorder,
-                    backgroundColor: active ? theme.pillBg : theme.inputBg
-                  }
-                ]}
-              >
-                <View style={{ flex: 1 }}>
-                  <Text style={[styles.itemName, { color: theme.heading }]}>{row.name}</Text>
-                  <Text style={[styles.itemMeta, { color: theme.subtext }]}>{row.itemCode}</Text>
-                </View>
-                <View style={styles.itemRight}>
-                  <Text style={[styles.itemMeta, { color: theme.subtext }]}>FULL {formatQty(stock.qtyFull)}</Text>
-                  <Text style={[styles.itemMeta, { color: theme.heading }]}>EMPTY {formatQty(stock.qtyEmpty)}</Text>
-                </View>
-              </Pressable>
-            );
-          })
-        )}
-      </ScrollView>
-
-      {selectedProduct ? (
-        <View style={[styles.detailBlock, { borderColor: theme.cardBorder, backgroundColor: theme.inputBg }]}>
-          <View style={styles.detailHeader}>
-            <View style={{ flex: 1 }}>
-              <Text style={[styles.blockTitle, { color: theme.heading }]}>{selectedProduct.name}</Text>
-              <Text style={[styles.detailLine, { color: theme.subtext }]}>{selectedProduct.itemCode}</Text>
-            </View>
-            <View style={[styles.emptyQtyCard, { borderColor: theme.cardBorder, backgroundColor: theme.card }]}>
-              <Text style={[styles.summaryLabel, { color: theme.subtext }]}>Current Empty</Text>
-              <Text style={[styles.summaryValue, { color: theme.heading }]}>{formatQty(selectedStock.qtyEmpty)}</Text>
-            </View>
-          </View>
-          <Pressable
-            onPress={() => openComposer('DISPOSE')}
-            disabled={!selectedLocationId}
-            style={[
-              styles.primaryButton,
-              { backgroundColor: selectedLocationId ? theme.primary : theme.primaryMuted }
-            ]}
-          >
-            <Text style={styles.primaryButtonText}>Record Dispose</Text>
-          </Pressable>
-
-          <Text style={[styles.blockTitle, { color: theme.heading }]}>Disposed Entries</Text>
-          {!selectedLocationId ? (
-            <Text style={[styles.detailLine, { color: theme.subtext }]}>Select a location in app setup first.</Text>
-          ) : disposedEntries.length === 0 ? (
-            <Text style={[styles.detailLine, { color: theme.subtext }]}>No disposed entries yet for this LPG item and location.</Text>
-          ) : (
-            disposedEntries.map((row) => (
               <View key={row.id} style={[styles.ruleCard, { borderColor: theme.cardBorder, backgroundColor: theme.card }]}>
-                <Text style={[styles.ruleTitle, { color: theme.heading }]}>Disposed x {row.qty}</Text>
+                <Text style={[styles.ruleTitle, { color: theme.heading }]}>
+                  {row.productName ?? product?.name ?? row.productId}
+                </Text>
+                <Text style={[styles.ruleLine, { color: theme.subtext }]}>
+                  {(row.productSku ?? product?.itemCode ?? '-')} | EMPTY {formatQty(stock.qtyEmpty)}
+                </Text>
+                <Text style={[styles.ruleLine, { color: theme.subtext }]}>Disposed x {row.qty}</Text>
                 <Text style={[styles.ruleLine, { color: theme.subtext }]}>{fmtDate(row.createdAt)}</Text>
                 <Text style={[styles.ruleLine, { color: theme.subtext }]}>Reason: {row.reason}</Text>
-                <Text style={[styles.ruleLine, { color: theme.subtext }]}>Used: {formatQty(row.usedQty)} | Available: {formatQty(row.availableQty)}</Text>
+                <Text style={[styles.ruleLine, { color: theme.subtext }]}>
+                  Used: {formatQty(row.usedQty)} | Available: {formatQty(row.availableQty)}
+                </Text>
                 {row.source === 'local' && row.syncStatus && row.syncStatus !== 'synced' ? (
                   <Text style={[styles.ruleLine, { color: theme.subtext }]}>Pending Sync: {row.syncStatus.toUpperCase()}</Text>
                 ) : null}
@@ -698,7 +716,7 @@ export function LpgItemServiceScreen({
                 ) : null}
                 <View style={styles.entryActions}>
                   <Pressable
-                    onPress={() => openComposer('REPLACE', row.id)}
+                    onPress={() => openComposer('REPLACE', row.id, row.productId)}
                     disabled={row.availableQty <= 0}
                     style={[
                       styles.entryActionBtn,
@@ -708,7 +726,7 @@ export function LpgItemServiceScreen({
                     <Text style={styles.entryActionText}>Replace</Text>
                   </Pressable>
                   <Pressable
-                    onPress={() => openComposer('JUNK', row.id)}
+                    onPress={() => openComposer('JUNK', row.id, row.productId)}
                     disabled={row.availableQty <= 0}
                     style={[
                       styles.entryActionBtn,
@@ -719,19 +737,26 @@ export function LpgItemServiceScreen({
                   </Pressable>
                 </View>
               </View>
-            ))
-          )}
+            );
+          })
+        )}
 
-          <Text style={[styles.blockTitle, { color: theme.heading }]}>Action History</Text>
-          {actionLoading ? (
-            <Text style={[styles.detailLine, { color: theme.subtext }]}>Loading history...</Text>
-          ) : historyRows.length === 0 ? (
-            <Text style={[styles.detailLine, { color: theme.subtext }]}>No action history yet for this LPG item.</Text>
-          ) : (
-            historyRows.map((row) => (
+        <Text style={[styles.blockTitle, { color: theme.heading }]}>Action History</Text>
+        {actionLoading ? (
+          <Text style={[styles.detailLine, { color: theme.subtext }]}>Loading history...</Text>
+        ) : historyRows.length === 0 ? (
+          <Text style={[styles.detailLine, { color: theme.subtext }]}>No action history found for this location.</Text>
+        ) : (
+          historyRows.map((row) => {
+            const product = productMap.get(row.productId);
+            return (
               <View key={`history-${row.id}`} style={[styles.ruleCard, { borderColor: theme.cardBorder, backgroundColor: theme.card }]}>
-                <Text style={[styles.ruleTitle, { color: theme.heading }]}>{row.actionType} x {row.qty}</Text>
-                <Text style={[styles.ruleLine, { color: theme.subtext }]}>{fmtDate(row.createdAt)}</Text>
+                <Text style={[styles.ruleTitle, { color: theme.heading }]}>
+                  {row.productName ?? product?.name ?? row.productId} | {row.actionType} x {row.qty}
+                </Text>
+                <Text style={[styles.ruleLine, { color: theme.subtext }]}>
+                  {(row.productSku ?? product?.itemCode ?? '-')} | {fmtDate(row.createdAt)}
+                </Text>
                 {row.referenceActionId ? (
                   <Text style={[styles.ruleLine, { color: theme.subtext }]}>From Dispose: {row.referenceActionId}</Text>
                 ) : null}
@@ -743,10 +768,10 @@ export function LpgItemServiceScreen({
                   <Text style={[styles.ruleLine, { color: theme.subtext }]}>Notes: {row.notes}</Text>
                 ) : null}
               </View>
-            ))
-          )}
-        </View>
-      ) : null}
+            );
+          })
+        )}
+      </View>
       <Modal visible={composerOpen} transparent animationType="fade" onRequestClose={closeComposer}>
         <View style={styles.modalOverlay}>
           <Pressable style={styles.modalBackdrop} onPress={closeComposer} />
@@ -760,13 +785,56 @@ export function LpgItemServiceScreen({
             </Text>
             <Text style={[styles.modalSub, { color: theme.subtext }]}> 
               {composerType === 'DISPOSE'
-                ? 'Dispose deducts from empty qty.'
+                ? 'Choose the LPG item here, then save the dispose record.'
                 : composerType === 'REPLACE'
                   ? 'Replace adds back to empty qty from this disposed entry.'
                   : 'Junk records history against this disposed entry only.'}
             </Text>
             {referenceDisposeId ? (
               <Text style={[styles.ruleLine, { color: theme.subtext }]}>Disposed Reference: {referenceDisposeId}</Text>
+            ) : null}
+            {composerType === 'DISPOSE' ? (
+              <>
+                <TextInput
+                  value={modalProductQuery}
+                  onChangeText={setModalProductQuery}
+                  placeholder="Search LPG item"
+                  placeholderTextColor={theme.inputPlaceholder}
+                  style={[styles.input, { backgroundColor: theme.inputBg, color: theme.inputText }]}
+                />
+                <ScrollView style={styles.modalProductList} contentContainerStyle={styles.modalProductListContent}>
+                  {modalVisibleProducts.map((row) => {
+                    const active = selectedProductId === row.id;
+                    const stock = stockByProduct[row.id] ?? { qtyFull: 0, qtyEmpty: 0, qtyOnHand: 0 };
+                    return (
+                      <Pressable
+                        key={row.id}
+                        onPress={() => setSelectedProductId(row.id)}
+                        style={[
+                          styles.modalProductCard,
+                          {
+                            borderColor: active ? theme.primary : theme.cardBorder,
+                            backgroundColor: active ? theme.pillBg : theme.inputBg
+                          }
+                        ]}
+                      >
+                        <View style={{ flex: 1 }}>
+                          <Text style={[styles.itemName, { color: theme.heading }]}>{row.name}</Text>
+                          <Text style={[styles.itemMeta, { color: theme.subtext }]}>{row.itemCode}</Text>
+                        </View>
+                        <Text style={[styles.itemMeta, { color: theme.heading }]}>
+                          EMPTY {formatQty(stock.qtyEmpty)}
+                        </Text>
+                      </Pressable>
+                    );
+                  })}
+                </ScrollView>
+              </>
+            ) : selectedProduct ? (
+              <View style={[styles.composerProductCard, { borderColor: theme.cardBorder, backgroundColor: theme.inputBg }]}>
+                <Text style={[styles.itemName, { color: theme.heading }]}>{selectedProduct.name}</Text>
+                <Text style={[styles.itemMeta, { color: theme.subtext }]}>{selectedProduct.itemCode}</Text>
+              </View>
             ) : null}
             <TextInput
               value={qty}
@@ -881,6 +949,22 @@ const styles = StyleSheet.create({
   itemRight: {
     alignItems: 'flex-end'
   },
+  modalProductList: {
+    maxHeight: 180
+  },
+  modalProductListContent: {
+    gap: 8,
+    paddingBottom: 4
+  },
+  modalProductCard: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    borderWidth: 1,
+    borderRadius: 12,
+    paddingHorizontal: 10,
+    paddingVertical: 10
+  },
   detailBlock: {
     borderWidth: 1,
     borderRadius: 12,
@@ -985,6 +1069,13 @@ const styles = StyleSheet.create({
   },
   modalSub: {
     fontSize: 12
+  },
+  composerProductCard: {
+    borderWidth: 1,
+    borderRadius: 12,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    gap: 2
   },
   notesInput: {
     borderRadius: 12,
