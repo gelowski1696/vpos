@@ -347,10 +347,10 @@ export default function LpgItemActionsPage(): JSX.Element {
                         {row.productName ?? productMap.get(row.productId)?.name ?? row.productId}
                       </p>
                       <p className="mt-1 text-xs text-slate-500">
-                        {(row.productSku ?? productMap.get(row.productId)?.sku ?? '-')} • EMPTY {stock?.qty_empty ?? 0}
+                        {(row.productSku ?? productMap.get(row.productId)?.sku ?? '-')} - EMPTY {stock?.qty_empty ?? 0}
                       </p>
                       <p className="mt-1 text-xs text-slate-500">
-                        {dt(row.createdAt)} • Used {row.usedQty} • Available {row.availableQty}
+                        {dt(row.createdAt)} - Used {row.usedQty} - Available {row.availableQty}
                       </p>
                       <p className="mt-2 text-sm text-slate-700 dark:text-slate-300">{row.reason}</p>
                       {row.notes ? (
@@ -383,10 +383,10 @@ export default function LpgItemActionsPage(): JSX.Element {
                     <div className="flex items-start justify-between gap-3">
                       <div>
                         <p className="font-semibold text-slate-900 dark:text-slate-100">
-                          {row.productName ?? productMap.get(row.productId)?.name ?? row.productId} • {actionLabel(row.actionType)} x {row.qty}
+                          {row.productName ?? productMap.get(row.productId)?.name ?? row.productId} - {actionLabel(row.actionType)} x {row.qty}
                         </p>
                         <p className="text-xs text-slate-500">
-                          {(row.productSku ?? productMap.get(row.productId)?.sku ?? '-')} • {row.locationName ?? row.locationCode ?? row.locationId} • {dt(row.createdAt)}
+                          {(row.productSku ?? productMap.get(row.productId)?.sku ?? '-')} - {row.locationName ?? row.locationCode ?? row.locationId} - {dt(row.createdAt)}
                         </p>
                       </div>
                     </div>

@@ -146,9 +146,9 @@ function formatQty(value: number | null | undefined): string {
 }
 
 function actionLabel(value: LpgItemActionType): string {
-  if (value === 'DISPOSE') return 'Deduct Empty Stock';
-  if (value === 'REPLACE') return 'Add Back Empty Stock';
-  return 'Record Junk Note';
+  if (value === 'DISPOSE') return 'Disposed';
+  if (value === 'REPLACE') return 'Replaced';
+  return 'Junked';
 }
 
 function actionFilterLabel(value: 'ALL' | LpgItemActionType): string {
@@ -665,7 +665,7 @@ export function LpgItemServiceScreen({
     <View style={[styles.card, { backgroundColor: theme.card, borderColor: theme.cardBorder }]}>
       <Text style={[styles.title, { color: theme.heading }]}>LPG Service Records</Text>
       <Text style={[styles.sub, { color: theme.subtext }]}>
-        Record empty-stock deductions here. Add-back and junk notes must come from an existing disposed record.
+        Record disposed items here. Junked and replaced entries must come from an existing disposed record.
       </Text>
 
       <View style={styles.summaryRow}>
@@ -712,9 +712,9 @@ export function LpgItemServiceScreen({
       <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.filterRow}>
         {([
           { key: 'ALL', label: 'All Records' },
-          { key: 'DISPOSE', label: 'Deducted Empty' },
-          { key: 'JUNK', label: 'Junk Notes' },
-          { key: 'REPLACE', label: 'Added Back Empty' }
+          { key: 'DISPOSE', label: 'Disposed' },
+          { key: 'JUNK', label: 'Junked' },
+          { key: 'REPLACE', label: 'Replaced' }
         ] as const).map((chip) => {
           const active = actionTypeFilter === chip.key;
           return (
@@ -752,7 +752,7 @@ export function LpgItemServiceScreen({
                 <Text style={[styles.ruleLine, { color: theme.subtext }]}>
                   {(row.productSku ?? product?.itemCode ?? '-')} | EMPTY {formatQty(stock.qtyEmpty)}
                 </Text>
-                <Text style={[styles.ruleLine, { color: theme.subtext }]}>Deducted x {row.qty}</Text>
+                <Text style={[styles.ruleLine, { color: theme.subtext }]}>Disposed x {row.qty}</Text>
                 <Text style={[styles.ruleLine, { color: theme.subtext }]}>{fmtDate(row.createdAt)}</Text>
                 <Text style={[styles.ruleLine, { color: theme.subtext }]}>Reason: {row.reason}</Text>
                 <Text style={[styles.ruleLine, { color: theme.subtext }]}>
@@ -773,7 +773,7 @@ export function LpgItemServiceScreen({
                       { backgroundColor: row.availableQty > 0 ? '#0f766e' : '#94a3b8' }
                     ]}
                   >
-                    <Text style={styles.entryActionText}>Add Back</Text>
+                    <Text style={styles.entryActionText}>Replace</Text>
                   </Pressable>
                   <Pressable
                     onPress={() => openComposer('JUNK', row.id, row.productId)}
@@ -783,7 +783,7 @@ export function LpgItemServiceScreen({
                       { backgroundColor: row.availableQty > 0 ? '#475569' : '#94a3b8' }
                     ]}
                   >
-                    <Text style={styles.entryActionText}>Junk Note</Text>
+                    <Text style={styles.entryActionText}>Junk</Text>
                   </Pressable>
                 </View>
               </View>
@@ -800,10 +800,10 @@ export function LpgItemServiceScreen({
             </Text>
             <Text style={[styles.modalSub, { color: theme.subtext }]}> 
               {composerType === 'DISPOSE'
-                ? 'Choose the LPG item here, then save the empty-stock deduction.'
+                ? 'Choose the LPG item here, then save the disposed record.'
                 : composerType === 'REPLACE'
-                  ? 'This adds empty stock back from the selected disposed record.'
-                  : 'This saves a junk note against the selected disposed record only.'}
+                  ? 'This records a replacement from the selected disposed record.'
+                  : 'This records junk against the selected disposed record only.'}
             </Text>
             {referenceDisposeId ? (
               <Text style={[styles.ruleLine, { color: theme.subtext }]}>Disposed Record: {referenceDisposeId}</Text>
