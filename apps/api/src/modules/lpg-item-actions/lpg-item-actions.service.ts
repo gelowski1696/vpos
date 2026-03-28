@@ -28,7 +28,7 @@ type LpgItemActionRowShape = {
 type LpgItemActionDelegate = {
   findMany(args: Record<string, unknown>): Promise<LpgItemActionRowShape[]>;
   create(args: Record<string, unknown>): Promise<LpgItemActionRowShape>;
-  findFirst(args: Record<string, unknown>): Promise<{ id: string } | null>;
+  findFirst(args: Record<string, unknown>): Promise<Record<string, unknown> | null>;
 };
 
 export type LpgItemServiceActionRecord = {
@@ -76,6 +76,7 @@ type ListFilter = {
 };
 
 type CreateInput = {
+  action_id?: string | null;
   product_id: string;
   location_id: string;
   branch_id?: string;
@@ -155,6 +156,9 @@ export class LpgItemActionsService {
     const binding = await this.requireBinding(companyId);
     return binding.client.$transaction(async (tx) => {
       const ctx = await this.resolveContext(tx, binding.companyId, input);
+      if (ctx.referenceActionId) {
+        throw new BadRequestException('Dispose actions cannot reference a previous disposed item action');
+      }
       const balance = await this.requireCylinderBalance(tx, binding.companyId, ctx.locationId, ctx.cylinderTypeId);
       if (balance.qtyEmpty < ctx.qty) {
         throw new BadRequestException(
@@ -170,6 +174,7 @@ export class LpgItemActionsService {
       const actionTx = tx as unknown as { lpgItemServiceAction: LpgItemActionDelegate };
       const created = await actionTx.lpgItemServiceAction.create({
         data: {
+          ...(ctx.actionId ? { id: ctx.actionId } : {}),
           companyId: binding.companyId,
           branchId: ctx.branchId,
           locationId: ctx.locationId,
@@ -216,6 +221,7 @@ export class LpgItemActionsService {
     const binding = await this.requireBinding(companyId);
     return binding.client.$transaction(async (tx) => {
       const ctx = await this.resolveContext(tx, binding.companyId, input);
+      await this.requireAvailableDisposedQty(tx, binding.companyId, ctx, 'REPLACE');
       const balance = await tx.cylinderBalance.findUnique({
         where: {
           locationId_cylinderTypeId: {
@@ -246,6 +252,7 @@ export class LpgItemActionsService {
       const actionTx = tx as unknown as { lpgItemServiceAction: LpgItemActionDelegate };
       const created = await actionTx.lpgItemServiceAction.create({
         data: {
+          ...(ctx.actionId ? { id: ctx.actionId } : {}),
           companyId: binding.companyId,
           branchId: ctx.branchId,
           locationId: ctx.locationId,
@@ -292,9 +299,11 @@ export class LpgItemActionsService {
     const binding = await this.requireBinding(companyId);
     return binding.client.$transaction(async (tx) => {
       const ctx = await this.resolveContext(tx, binding.companyId, input);
+      await this.requireAvailableDisposedQty(tx, binding.companyId, ctx, 'JUNK');
       const actionTx = tx as unknown as { lpgItemServiceAction: LpgItemActionDelegate };
       const created = await actionTx.lpgItemServiceAction.create({
         data: {
+          ...(ctx.actionId ? { id: ctx.actionId } : {}),
           companyId: binding.companyId,
           branchId: ctx.branchId,
           locationId: ctx.locationId,
@@ -373,6 +382,7 @@ export class LpgItemActionsService {
     companyId: string,
     input: CreateInput
   ): Promise<{
+    actionId: string | null;
     branchId: string;
     locationId: string;
     productId: string;
@@ -450,11 +460,78 @@ export class LpgItemActionsService {
       productSku: product.sku,
       productName: product.name,
       cylinderTypeId: product.cylinderTypeId,
+      actionId: input.action_id?.trim() || null,
       qty,
       reason,
       notes: input.notes?.trim() || null,
       referenceActionId
     };
+  }
+
+  private async requireAvailableDisposedQty(
+    tx: any,
+    companyId: string,
+    ctx: {
+      referenceActionId: string | null;
+      productId: string;
+      locationId: string;
+      qty: number;
+    },
+    actionType: 'REPLACE' | 'JUNK'
+  ): Promise<void> {
+    if (!ctx.referenceActionId) {
+      throw new BadRequestException(`${actionType} requires a disposed item reference`);
+    }
+    const actionTx = tx as unknown as { lpgItemServiceAction: LpgItemActionDelegate };
+    const referenceRaw = await actionTx.lpgItemServiceAction.findFirst({
+      where: {
+        companyId,
+        id: ctx.referenceActionId,
+        actionType: 'DISPOSE'
+      },
+      select: {
+        id: true,
+        productId: true,
+        locationId: true,
+        qty: true
+      }
+    });
+    if (!referenceRaw) {
+      throw new BadRequestException('The referenced disposed item action was not found');
+    }
+    const reference = referenceRaw as {
+      id: string;
+      productId: string;
+      locationId: string;
+      qty: number;
+    };
+    if (reference.productId !== ctx.productId || reference.locationId !== ctx.locationId) {
+      throw new BadRequestException(
+        'Replace or junk must use a disposed item reference from the same LPG item and location'
+      );
+    }
+
+    const childRows = await actionTx.lpgItemServiceAction.findMany({
+      where: {
+        companyId,
+        referenceActionId: ctx.referenceActionId,
+        actionType: { in: ['REPLACE', 'JUNK'] }
+      },
+      select: { qty: true }
+    });
+    const usedQty = childRows.reduce((sum, row) => {
+      const qty = Number((row as { qty?: unknown }).qty ?? 0);
+      return sum + (Number.isFinite(qty) ? qty : 0);
+    }, 0);
+    const availableQty = reference.qty - usedQty;
+    if (availableQty <= 0) {
+      throw new BadRequestException('This disposed item entry is already fully consumed');
+    }
+    if (ctx.qty > availableQty) {
+      throw new BadRequestException(
+        `Only ${availableQty} disposed item(s) are still available for replace or junk.`
+      );
+    }
   }
 
   private async requireCylinderBalance(

@@ -60,6 +60,7 @@ import { TransfersScreen } from "./src/app/screens/TransfersScreen";
 import { TransferListScreen } from "./src/app/screens/TransferListScreen";
 import { ExpenseScreen } from "./src/app/screens/ExpenseScreen";
 import { ItemsViewScreen } from "./src/app/screens/ItemsViewScreen";
+import { LpgItemServiceScreen } from "./src/app/screens/LpgItemServiceScreen";
 import { CustomersViewScreen } from "./src/app/screens/CustomersViewScreen";
 import { LendingScreen } from "./src/app/screens/LendingScreen";
 import { ShiftScreen } from "./src/app/screens/ShiftScreen";
@@ -112,6 +113,7 @@ const APP_LOGO = require("./assests/vpos_logo.png");
 const PRIMARY_TABS = ["HOME", "POS", "SALES", "TRANSFER", "TRANSFER_LIST"] as const;
 const SIDE_MENU_MODULES = [
   "LENDING",
+  "LPG_ITEM_SERVICE",
   "EXPENSE",
   "ITEMS",
   "CUSTOMERS",
@@ -161,6 +163,7 @@ const READY_VIEW_META: Record<ReadyView, { label: string; hint: string }> = {
   TRANSFER: { label: "Transfer", hint: "Create" },
   TRANSFER_LIST: { label: "Transfers", hint: "History" },
   LENDING: { label: "Lending", hint: "Returns" },
+  LPG_ITEM_SERVICE: { label: "LPG Service", hint: "Dispose" },
   EXPENSE: { label: "Expense", hint: "Petty Cash" },
   ITEMS: { label: "Items", hint: "Read Only" },
   CUSTOMERS: { label: "Customers", hint: "Credit" },
@@ -174,6 +177,7 @@ const READY_VIEW_ICONS: Record<ReadyView, string> = {
   TRANSFER: "\u2194",
   TRANSFER_LIST: "\u2630",
   LENDING: "\u27F2",
+  LPG_ITEM_SERVICE: "\u267A",
   EXPENSE: "\u20B1",
   ITEMS: "\u25A6",
   CUSTOMERS: "\u263A",
@@ -831,7 +835,11 @@ function AppShell(): JSX.Element {
   const moduleHelpTarget = useTutorialTarget("module-help");
   const currentReadyView: ReadyView = activeSideModule ?? activePrimaryTab;
   const tutorialScopeForReadyView: TutorialScope =
-    currentReadyView === "TRANSFER_LIST" ? "TRANSFER" : currentReadyView;
+    currentReadyView === "TRANSFER_LIST"
+      ? "TRANSFER"
+      : currentReadyView === "LPG_ITEM_SERVICE"
+        ? "ITEMS"
+        : currentReadyView;
   const tutorialScope = tutorialState.scope;
   const isTutorialTargetActive = tutorialActions.isTargetActive;
   const androidStatusInset =
@@ -3479,6 +3487,17 @@ function AppShell(): JSX.Element {
           theme={activeTheme}
           preferredBranchId={selectedBranchId}
           onDataChanged={handleLocalDataChanged}
+          syncBusy={syncBusy}
+        />
+      );
+    }
+    if (currentReadyView === "LPG_ITEM_SERVICE") {
+      return (
+        <LpgItemServiceScreen
+          key={`lpg-item-service-${masterDataVersion}`}
+          db={db}
+          theme={activeTheme}
+          inventoryProjectionVersion={inventoryProjectionVersion}
           syncBusy={syncBusy}
         />
       );

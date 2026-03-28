@@ -3,13 +3,10 @@ import { Modal, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 
 import type { SQLiteDatabase } from 'expo-sqlite';
 import type { AppTheme } from '../theme';
 import { useTutorialTarget } from '../tutorial/tutorial-provider';
-import { LocalSessionService } from '../../features/auth/local-session.service';
-import { normalizeApiBaseUrl } from '../api-base-url';
 import {
   loadPendingInventoryDeltaByProductForLocation,
   mergeInventoryWithDeltas
 } from '../local-stock-projection';
-import { toastError, toastSuccess } from '../goey-toast';
 
 type Props = {
   db: SQLiteDatabase;
@@ -116,24 +113,6 @@ type InventoryBalanceRow = {
   qtyFull: number;
   qtyEmpty: number;
 };
-
-type LpgItemActionRow = {
-  id: string;
-  actionType: 'DISPOSE' | 'REPLACE' | 'JUNK';
-  qty: number;
-  reason: string;
-  notes: string | null;
-  locationName: string | null;
-  locationCode: string | null;
-  createdAt: string;
-};
-
-const env = (
-  globalThis as { process?: { env?: Record<string, string | undefined> } }
-).process?.env;
-const API_BASE_URL = normalizeApiBaseUrl(
-  env?.EXPO_PUBLIC_API_BASE_URL ?? 'https://vmjamtech.com/api'
-);
 
 function parsePayload(value: string): Record<string, unknown> {
   try {
@@ -391,40 +370,6 @@ export function ItemsViewScreen({
   const [categoryFilter, setCategoryFilter] = useState<string>('ALL');
   const [selectedItemId, setSelectedItemId] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
-  const [serviceActions, setServiceActions] = useState<LpgItemActionRow[]>([]);
-  const [serviceLoading, setServiceLoading] = useState(false);
-  const [serviceActionType, setServiceActionType] = useState<'DISPOSE' | 'REPLACE' | 'JUNK' | null>(null);
-  const [serviceQty, setServiceQty] = useState('1');
-  const [serviceReason, setServiceReason] = useState('');
-  const [serviceNotes, setServiceNotes] = useState('');
-  const [serviceSaving, setServiceSaving] = useState(false);
-
-  const apiRequest = async <T,>(path: string, init?: RequestInit): Promise<T> => {
-    const session = new LocalSessionService(db);
-    await session.initializeFromStorage();
-    const accessToken = await session.getAccessToken();
-    if (!accessToken) {
-      throw new Error('No active access token. Please sign in again.');
-    }
-
-    const headers = new Headers(init?.headers);
-    headers.set('Authorization', `Bearer ${accessToken}`);
-    if (!(init?.body instanceof FormData)) {
-      headers.set('Content-Type', 'application/json');
-    }
-
-    const response = await fetch(`${API_BASE_URL}${path}`, {
-      ...init,
-      headers
-    });
-
-    if (!response.ok) {
-      const text = await response.text();
-      throw new Error(text || `Request failed (${response.status})`);
-    }
-
-    return (await response.json()) as T;
-  };
 
   const refresh = async (): Promise<void> => {
     setLoading(true);
@@ -682,90 +627,6 @@ export function ItemsViewScreen({
     return rules;
   }, [selectedItem, priceLists]);
 
-  useEffect(() => {
-    const loadActions = async (): Promise<void> => {
-      if (!selectedItem?.isLpg || !selectedItem.cylinderTypeId || !selectedLocationId) {
-        setServiceActions([]);
-        setServiceActionType(null);
-        return;
-      }
-      setServiceLoading(true);
-      try {
-        const params = new URLSearchParams();
-        params.set('product_id', selectedItem.id);
-        params.set('location_id', selectedLocationId);
-        params.set('limit', '20');
-        const rows = await apiRequest<LpgItemActionRow[]>(`/lpg-item-actions?${params.toString()}`);
-        setServiceActions(rows);
-      } catch {
-        setServiceActions([]);
-      } finally {
-        setServiceLoading(false);
-      }
-    };
-    void loadActions();
-  }, [selectedItem?.id, selectedItem?.isLpg, selectedItem?.cylinderTypeId, selectedLocationId]);
-
-  async function submitServiceAction(): Promise<void> {
-    if (!selectedItem || !selectedItem.isLpg || !selectedItem.cylinderTypeId || !selectedLocationId || !serviceActionType) {
-      return;
-    }
-    const qty = Math.trunc(Number(serviceQty));
-    if (!Number.isFinite(qty) || qty <= 0) {
-      toastError('LPG Item Service', 'Enter a valid quantity.');
-      return;
-    }
-    if (!serviceReason.trim()) {
-      toastError('LPG Item Service', 'Reason is required.');
-      return;
-    }
-    setServiceSaving(true);
-    try {
-      const created = await apiRequest<LpgItemActionRow>(`/lpg-item-actions/${serviceActionType.toLowerCase()}`, {
-        method: 'POST',
-        body: JSON.stringify({
-          product_id: selectedItem.id,
-          location_id: selectedLocationId,
-          qty,
-          reason: serviceReason.trim(),
-          notes: serviceNotes.trim() || undefined
-        })
-      });
-      setServiceActions((current) => [created, ...current]);
-      setStockByProduct((current) => {
-        const existing = current[selectedItem.id] ?? {
-          qtyFull: 0,
-          qtyEmpty: 0,
-          qtyOnHand: 0,
-          source: 'LPG_INVENTORY' as const
-        };
-        const emptyDelta =
-          serviceActionType === 'DISPOSE' ? -qty : serviceActionType === 'REPLACE' ? qty : 0;
-        const nextEmpty = Math.max(0, existing.qtyEmpty + emptyDelta);
-        return {
-          ...current,
-          [selectedItem.id]: {
-            ...existing,
-            qtyEmpty: nextEmpty,
-            qtyOnHand: existing.qtyFull + nextEmpty
-          }
-        };
-      });
-      setServiceActionType(null);
-      setServiceQty('1');
-      setServiceReason('');
-      setServiceNotes('');
-      toastSuccess('LPG Item Service', `${selectedItem.name} action was saved.`);
-    } catch (error) {
-      toastError(
-        'LPG Item Service',
-        error instanceof Error ? error.message : 'Unable to save item service action.'
-      );
-    } finally {
-      setServiceSaving(false);
-    }
-  }
-
   return (
     <View style={[styles.card, { backgroundColor: theme.card, borderColor: theme.cardBorder }]}>
       <Text style={[styles.title, { color: theme.heading }]}>Items</Text>
@@ -978,154 +839,6 @@ export function ItemsViewScreen({
                     Location Scope: {selectedLocationId ?? 'All downloaded locations'}
                   </Text>
                 </View>
-
-                {selectedItem.isLpg ? (
-                  <View style={[styles.detailBlock, { borderColor: theme.cardBorder, backgroundColor: theme.inputBg }]}>
-                    <Text style={[styles.blockTitle, { color: theme.heading }]}>LPG Item Service</Text>
-                    {!selectedLocationId ? (
-                      <Text style={[styles.detailLine, { color: theme.subtext }]}>
-                        Choose a location first in app setup before recording dispose, replace, or junk actions.
-                      </Text>
-                    ) : !selectedItem.cylinderTypeId ? (
-                      <Text style={[styles.detailLine, { color: theme.subtext }]}>
-                        This LPG item needs a linked cylinder type before item service actions can be recorded.
-                      </Text>
-                    ) : (
-                      <>
-                        <Text style={[styles.detailLine, { color: theme.subtext }]}>
-                          Current EMPTY Qty: {formatQty(selectedStock.qtyEmpty)}
-                        </Text>
-                        <View style={styles.serviceActionRow}>
-                          {(['DISPOSE', 'REPLACE', 'JUNK'] as const).map((value) => {
-                            const active = serviceActionType === value;
-                            return (
-                              <Pressable
-                                key={value}
-                                onPress={() => setServiceActionType(value)}
-                                style={[
-                                  styles.serviceActionChip,
-                                  {
-                                    backgroundColor: active ? theme.primary : theme.card,
-                                    borderColor: active ? theme.primary : theme.cardBorder
-                                  }
-                                ]}
-                              >
-                                <Text
-                                  style={[
-                                    styles.serviceActionChipText,
-                                    { color: active ? '#FFFFFF' : theme.pillText }
-                                  ]}
-                                >
-                                  {value}
-                                </Text>
-                              </Pressable>
-                            );
-                          })}
-                        </View>
-
-                        {serviceActionType ? (
-                          <View style={[styles.serviceComposer, { borderColor: theme.cardBorder, backgroundColor: theme.card }]}>
-                            <Text style={[styles.detailLine, { color: theme.subtext }]}>
-                              {serviceActionType === 'DISPOSE'
-                                ? 'Dispose subtracts from EMPTY qty.'
-                                : serviceActionType === 'REPLACE'
-                                  ? 'Replace adds back to EMPTY qty.'
-                                  : 'Junk keeps history only and does not change EMPTY qty.'}
-                            </Text>
-                            <TextInput
-                              value={serviceQty}
-                              onChangeText={setServiceQty}
-                              placeholder="Quantity"
-                              keyboardType="number-pad"
-                              placeholderTextColor={theme.inputPlaceholder}
-                              style={[
-                                styles.input,
-                                { backgroundColor: theme.inputBg, color: theme.inputText }
-                              ]}
-                            />
-                            <TextInput
-                              value={serviceReason}
-                              onChangeText={setServiceReason}
-                              placeholder="Reason"
-                              placeholderTextColor={theme.inputPlaceholder}
-                              style={[
-                                styles.input,
-                                { backgroundColor: theme.inputBg, color: theme.inputText }
-                              ]}
-                            />
-                            <TextInput
-                              value={serviceNotes}
-                              onChangeText={setServiceNotes}
-                              placeholder="Notes (optional)"
-                              multiline
-                              placeholderTextColor={theme.inputPlaceholder}
-                              style={[
-                                styles.serviceNotesInput,
-                                { backgroundColor: theme.inputBg, color: theme.inputText }
-                              ]}
-                            />
-                            <View style={styles.serviceActionButtons}>
-                              <Pressable
-                                onPress={() => {
-                                  setServiceActionType(null);
-                                  setServiceQty('1');
-                                  setServiceReason('');
-                                  setServiceNotes('');
-                                }}
-                                style={[styles.serviceActionBtn, { backgroundColor: theme.pillBg }]}
-                              >
-                                <Text style={[styles.serviceActionBtnText, { color: theme.pillText }]}>Cancel</Text>
-                              </Pressable>
-                              <Pressable
-                                onPress={() => void submitServiceAction()}
-                                disabled={serviceSaving}
-                                style={[
-                                  styles.serviceActionBtn,
-                                  { backgroundColor: serviceSaving ? theme.primaryMuted : theme.primary }
-                                ]}
-                              >
-                                <Text style={styles.serviceActionBtnText}>
-                                  {serviceSaving ? 'Saving...' : 'Save Action'}
-                                </Text>
-                              </Pressable>
-                            </View>
-                          </View>
-                        ) : null}
-
-                        <Text style={[styles.blockTitle, { color: theme.heading, marginTop: 4 }]}>
-                          Recent Service History
-                        </Text>
-                        {serviceLoading ? (
-                          <Text style={[styles.detailLine, { color: theme.subtext }]}>Loading history...</Text>
-                        ) : serviceActions.length === 0 ? (
-                          <Text style={[styles.detailLine, { color: theme.subtext }]}>
-                            No item service activity recorded yet for this item and location.
-                          </Text>
-                        ) : (
-                          serviceActions.map((row) => (
-                            <View key={row.id} style={[styles.ruleCard, { borderColor: theme.cardBorder, backgroundColor: theme.card }]}>
-                              <Text style={[styles.ruleTitle, { color: theme.heading }]}>
-                                {row.actionType} x {row.qty}
-                              </Text>
-                              <Text style={[styles.ruleLine, { color: theme.subtext }]}>
-                                {fmtDate(row.createdAt)}
-                              </Text>
-                              <Text style={[styles.ruleLine, { color: theme.subtext }]}>
-                                Reason: {row.reason}
-                              </Text>
-                              {row.notes ? (
-                                <Text style={[styles.ruleLine, { color: theme.subtext }]}>
-                                  Notes: {row.notes}
-                                </Text>
-                              ) : null}
-                            </View>
-                          ))
-                        )}
-                      </>
-                    )}
-                  </View>
-                ) : null}
-
                 <View style={[styles.detailBlock, { borderColor: theme.cardBorder, backgroundColor: theme.inputBg }]}>
                   <Text style={[styles.blockTitle, { color: theme.heading }]}>Linked Cylinder Type</Text>
                   {!selectedItem.cylinderTypeId ? (

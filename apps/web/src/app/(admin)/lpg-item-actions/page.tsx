@@ -78,6 +78,7 @@ export default function LpgItemActionsPage(): JSX.Element {
   });
   const [selectedProductId, setSelectedProductId] = useState<string | null>(null);
   const [actionModal, setActionModal] = useState<null | 'DISPOSE' | 'REPLACE' | 'JUNK'>(null);
+  const [referenceActionId, setReferenceActionId] = useState<string | null>(null);
   const [qty, setQty] = useState('1');
   const [reason, setReason] = useState('');
   const [notes, setNotes] = useState('');
@@ -126,6 +127,21 @@ export default function LpgItemActionsPage(): JSX.Element {
       return true;
     });
   }, [actions, locationFilter, selectedProduct]);
+
+  const disposedEntries = useMemo(() => {
+    const usedByReference = new Map<string, number>();
+    for (const row of selectedActions) {
+      if (!row.referenceActionId) continue;
+      usedByReference.set(row.referenceActionId, (usedByReference.get(row.referenceActionId) ?? 0) + row.qty);
+    }
+    return selectedActions
+      .filter((row) => row.actionType === 'DISPOSE')
+      .map((row) => ({
+        ...row,
+        usedQty: usedByReference.get(row.id) ?? 0,
+        availableQty: Math.max(0, row.qty - (usedByReference.get(row.id) ?? 0))
+      }));
+  }, [selectedActions]);
 
   async function loadAll(): Promise<void> {
     setLoading(true);
@@ -192,6 +208,12 @@ export default function LpgItemActionsPage(): JSX.Element {
       toastError('Reason required', { description: 'Please add a reason for this item service action.' });
       return;
     }
+    if (actionModal !== 'DISPOSE' && !referenceActionId) {
+      toastError('Disposed entry required', {
+        description: 'Choose a disposed entry before recording replace or junk.'
+      });
+      return;
+    }
 
     setSaving(true);
     try {
@@ -203,13 +225,15 @@ export default function LpgItemActionsPage(): JSX.Element {
           branch_id: branchFilter !== 'ALL' ? branchFilter : undefined,
           qty: parsedQty,
           reason: reason.trim(),
-          notes: notes.trim() || undefined
+          notes: notes.trim() || undefined,
+          reference_action_id: referenceActionId ?? undefined
         }
       });
       toastSuccess(`${actionLabel(actionModal)} saved`, {
         description: `${selectedProduct.name} was updated successfully.`
       });
       setActionModal(null);
+      setReferenceActionId(null);
       setQty('1');
       setReason('');
       setNotes('');
@@ -378,28 +402,77 @@ export default function LpgItemActionsPage(): JSX.Element {
               </div>
 
               <div className="grid gap-3 sm:grid-cols-3">
-                {(['DISPOSE', 'REPLACE', 'JUNK'] as const).map((value) => (
-                  <button
-                    key={value}
-                    className={`rounded-xl px-4 py-3 text-sm font-semibold text-white ${
-                      value === 'DISPOSE'
-                        ? 'bg-rose-600 hover:bg-rose-500'
-                        : value === 'REPLACE'
-                          ? 'bg-emerald-600 hover:bg-emerald-500'
-                          : 'bg-slate-700 hover:bg-slate-600'
-                    }`}
-                    disabled={!locationFilter}
-                    onClick={() => setActionModal(value)}
-                    type="button"
-                  >
-                    {actionLabel(value)}
-                  </button>
-                ))}
+                <button
+                  className="rounded-xl bg-rose-600 px-4 py-3 text-sm font-semibold text-white hover:bg-rose-500"
+                  disabled={!locationFilter}
+                  onClick={() => {
+                    setActionModal('DISPOSE');
+                    setReferenceActionId(null);
+                  }}
+                  type="button"
+                >
+                  {actionLabel('DISPOSE')}
+                </button>
               </div>
 
               <div className="rounded-xl border border-slate-200 bg-slate-50 p-4 dark:border-slate-700 dark:bg-slate-800/60">
                 <h3 className="text-sm font-semibold text-slate-900 dark:text-slate-100">
-                  Recent History
+                  Disposed Entries
+                </h3>
+                <div className="mt-3 space-y-2">
+                  {disposedEntries.length === 0 ? (
+                    <p className="text-sm text-slate-500">
+                      No disposed entries yet for this LPG item and location.
+                    </p>
+                  ) : (
+                    disposedEntries.map((row) => (
+                      <div
+                        key={`dispose-${row.id}`}
+                        className="rounded-xl border border-slate-200 bg-white p-3 text-sm dark:border-slate-700 dark:bg-slate-900"
+                      >
+                        <p className="font-semibold text-slate-900 dark:text-slate-100">
+                          Disposed x {row.qty}
+                        </p>
+                        <p className="mt-1 text-xs text-slate-500">
+                          {dt(row.createdAt)} • Used {row.usedQty} • Available {row.availableQty}
+                        </p>
+                        <p className="mt-2 text-sm text-slate-700 dark:text-slate-300">{row.reason}</p>
+                        {row.notes ? (
+                          <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">
+                            Notes: {row.notes}
+                          </p>
+                        ) : null}
+                        <div className="mt-3 flex gap-2">
+                          <button
+                            className="flex-1 rounded-xl bg-emerald-600 px-3 py-2 text-xs font-semibold text-white hover:bg-emerald-500 disabled:cursor-not-allowed disabled:bg-slate-400"
+                            disabled={row.availableQty <= 0}
+                            onClick={() => {
+                              setActionModal('REPLACE');
+                              setReferenceActionId(row.id);
+                            }}
+                            type="button"
+                          >
+                            {actionLabel('REPLACE')}
+                          </button>
+                          <button
+                            className="flex-1 rounded-xl bg-slate-700 px-3 py-2 text-xs font-semibold text-white hover:bg-slate-600 disabled:cursor-not-allowed disabled:bg-slate-400"
+                            disabled={row.availableQty <= 0}
+                            onClick={() => {
+                              setActionModal('JUNK');
+                              setReferenceActionId(row.id);
+                            }}
+                            type="button"
+                          >
+                            {actionLabel('JUNK')}
+                          </button>
+                        </div>
+                      </div>
+                    ))
+                  )}
+                </div>
+
+                <h3 className="mt-5 text-sm font-semibold text-slate-900 dark:text-slate-100">
+                  Action History
                 </h3>
                 <div className="mt-3 space-y-2">
                   {selectedActions.length === 0 ? (
@@ -430,6 +503,11 @@ export default function LpgItemActionsPage(): JSX.Element {
                             Notes: {row.notes}
                           </p>
                         ) : null}
+                        {row.referenceActionId ? (
+                          <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">
+                            From Dispose: {row.referenceActionId}
+                          </p>
+                        ) : null}
                       </div>
                     ))
                   )}
@@ -451,6 +529,9 @@ export default function LpgItemActionsPage(): JSX.Element {
                 <p className="text-sm text-slate-500">
                   {selectedProduct.name} • {selectedBalance.qty_empty} empty on hand
                 </p>
+                {referenceActionId ? (
+                  <p className="text-xs text-slate-500">Disposed Reference: {referenceActionId}</p>
+                ) : null}
               </div>
               <button
                 className="rounded-lg border border-slate-300 px-3 py-1.5 text-xs font-semibold dark:border-slate-600"

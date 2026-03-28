@@ -8,6 +8,7 @@ const TRANSACTION_TABLE_BY_ENTITY: Record<string, string> = {
   customer_payment: 'customer_payments_local',
   lending: 'lending_local',
   lending_return: 'lending_returns_local',
+  lpg_item_action: 'lpg_item_actions_local',
   transfer: 'transfers_local',
   petty_cash: 'petty_cash_local',
   delivery_order: 'delivery_orders_local',

@@ -5,6 +5,7 @@ import { EntitlementsModule } from '../entitlements/entitlements.module';
 import { SalesModule } from '../sales/sales.module';
 import { CustomerPaymentsModule } from '../customer-payments/customer-payments.module';
 import { LendingModule } from '../lending/lending.module';
+import { LpgItemActionsModule } from '../lpg-item-actions/lpg-item-actions.module';
 import { TransfersModule } from '../transfers/transfers.module';
 import { CylindersModule } from '../cylinders/cylinders.module';
 import { PrismaModule } from '../../common/prisma.module';
@@ -16,6 +17,7 @@ import { PrismaModule } from '../../common/prisma.module';
     SalesModule,
     CustomerPaymentsModule,
     LendingModule,
+    LpgItemActionsModule,
     TransfersModule,
     CylindersModule
   ],

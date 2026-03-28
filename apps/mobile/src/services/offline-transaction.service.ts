@@ -87,6 +87,22 @@ type LendingReturnInput = {
   lines: OfflineLendingReturnLineInput[];
 };
 
+type LpgItemActionInput = {
+  actionId?: string;
+  actionType: 'DISPOSE' | 'REPLACE' | 'JUNK';
+  branchId?: string | null;
+  branchName?: string | null;
+  locationId: string;
+  locationName?: string | null;
+  productId: string;
+  productSku?: string | null;
+  productName?: string | null;
+  qty: number;
+  reason: string;
+  notes?: string | null;
+  referenceActionId?: string | null;
+};
+
 type TransferInput = {
   transferId?: string;
   sourceLocationId: string;
@@ -386,6 +402,56 @@ export class OfflineTransactionService {
       action: 'create',
       payload,
       idempotencyKey: `idem-lending-return-${id}`
+    });
+
+    return id;
+  }
+
+  async createOfflineLpgItemAction(input: LpgItemActionInput): Promise<string> {
+    await this.assertCanCreate('lpg_item_action');
+    const id = input.actionId ?? this.id('lpg-item-action');
+    const now = new Date().toISOString();
+    const qty = Math.trunc(Number(input.qty));
+    if (!Number.isFinite(qty) || qty <= 0) {
+      throw new Error('LPG item action requires a positive whole quantity.');
+    }
+    const reason = input.reason.trim();
+    if (!reason) {
+      throw new Error('LPG item action requires a reason.');
+    }
+
+    const payload = {
+      id,
+      action_type: input.actionType,
+      branch_id: input.branchId ?? null,
+      branch_name: input.branchName ?? null,
+      location_id: input.locationId,
+      location_name: input.locationName ?? null,
+      product_id: input.productId,
+      product_sku: input.productSku ?? null,
+      product_name: input.productName ?? null,
+      qty,
+      reason,
+      notes: input.notes?.trim() || null,
+      reference_action_id: input.referenceActionId ?? null,
+      created_at: now
+    };
+
+    await this.db.runAsync(
+      'INSERT INTO lpg_item_actions_local(id, payload, sync_status, created_at, updated_at) VALUES (?, ?, ?, ?, ?)',
+      id,
+      JSON.stringify(payload),
+      'pending',
+      now,
+      now
+    );
+
+    await new SQLiteOutboxRepository(this.db).enqueue({
+      id,
+      entity: 'lpg_item_action',
+      action: input.actionType.toLowerCase(),
+      payload,
+      idempotencyKey: `idem-lpg-item-action-${id}`
     });
 
     return id;

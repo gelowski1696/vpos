@@ -44,6 +44,16 @@ type TransferPayload = {
   lines?: TransferLinePayload[];
 };
 
+type LpgItemActionPayload = {
+  action_type?: string;
+  actionType?: string;
+  location_id?: string;
+  locationId?: string;
+  product_id?: string;
+  productId?: string;
+  qty?: number | string;
+};
+
 const ACTIVE_LOCAL_SYNC_STATUSES = ['pending', 'processing'] as const;
 
 function parseRecord<T>(raw: string, fallback: T): T {
@@ -216,6 +226,47 @@ function applyPendingTransferDeltas(
   }
 }
 
+function normalizeActionType(value: unknown): 'DISPOSE' | 'REPLACE' | 'JUNK' | null {
+  const raw = asString(value)?.toUpperCase();
+  if (raw === 'DISPOSE' || raw === 'REPLACE' || raw === 'JUNK') {
+    return raw;
+  }
+  return null;
+}
+
+function applyPendingLpgItemActionDeltas(
+  rows: LocalRow[],
+  locationId: string,
+  deltaByProduct: Map<string, ProjectedInventoryTotals>
+): void {
+  for (const row of rows) {
+    if (!isPendingLikeStatus(row.sync_status)) {
+      continue;
+    }
+    const payload = parseRecord<LpgItemActionPayload>(row.payload, {});
+    const actionLocationId = asString(payload.location_id ?? payload.locationId);
+    if (!actionLocationId || actionLocationId !== locationId) {
+      continue;
+    }
+    const productId = asString(payload.product_id ?? payload.productId);
+    const qty = asNumber(payload.qty) ?? 0;
+    const actionType = normalizeActionType(payload.action_type ?? payload.actionType);
+    if (!productId || qty <= 0 || !actionType) {
+      continue;
+    }
+
+    const emptyDelta = actionType === 'DISPOSE' ? -qty : actionType === 'REPLACE' ? qty : 0;
+    if (emptyDelta === 0) {
+      continue;
+    }
+    applyDelta(deltaByProduct, productId, {
+      qtyOnHand: emptyDelta,
+      qtyFull: 0,
+      qtyEmpty: emptyDelta
+    });
+  }
+}
+
 export function mergeInventoryWithDeltas(
   baseByProduct: Map<string, ProjectedInventoryTotals>,
   deltaByProduct: Map<string, ProjectedInventoryTotals>
@@ -243,7 +294,7 @@ export async function loadPendingInventoryDeltaByProductForLocation(
     return new Map();
   }
 
-  const [salesRows, transferRows] = await Promise.all([
+  const [salesRows, transferRows, lpgItemActionRows] = await Promise.all([
     db.getAllAsync<LocalRow>(
       `
       SELECT payload, sync_status
@@ -267,11 +318,24 @@ export async function loadPendingInventoryDeltaByProductForLocation(
       'processing',
       'PENDING',
       'PROCESSING'
+    ),
+    db.getAllAsync<LocalRow>(
+      `
+      SELECT payload, sync_status
+      FROM lpg_item_actions_local
+      WHERE sync_status IN (?, ?, ?, ?)
+      ORDER BY created_at DESC
+      `,
+      'pending',
+      'processing',
+      'PENDING',
+      'PROCESSING'
     )
   ]);
 
   const deltaByProduct = new Map<string, ProjectedInventoryTotals>();
   applyPendingSalesDeltas(salesRows, normalizedLocationId, deltaByProduct);
   applyPendingTransferDeltas(transferRows, normalizedLocationId, deltaByProduct);
+  applyPendingLpgItemActionDeltas(lpgItemActionRows, normalizedLocationId, deltaByProduct);
   return deltaByProduct;
 }

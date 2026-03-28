@@ -67,6 +67,7 @@ export class LpgItemActionsController {
     @Req() req: Request & { user?: { sub?: string; company_id?: string } },
     @Body()
     body: {
+      action_id?: string;
       product_id: string;
       location_id: string;
       branch_id?: string;
@@ -99,6 +100,7 @@ export class LpgItemActionsController {
     @Req() req: Request & { user?: { sub?: string; company_id?: string } },
     @Body()
     body: {
+      action_id?: string;
       product_id: string;
       location_id: string;
       branch_id?: string;
@@ -131,6 +133,7 @@ export class LpgItemActionsController {
     @Req() req: Request & { user?: { sub?: string; company_id?: string } },
     @Body()
     body: {
+      action_id?: string;
       product_id: string;
       location_id: string;
       branch_id?: string;

@@ -8,6 +8,10 @@ import {
   type CustomerPaymentRecord
 } from '../customer-payments/customer-payments.service';
 import { LendingService, type LendingDetailRecord } from '../lending/lending.service';
+import {
+  LpgItemActionsService,
+  type LpgItemServiceActionRecord
+} from '../lpg-item-actions/lpg-item-actions.service';
 import { TransfersService, type TransferRecord } from '../transfers/transfers.service';
 import { TenantDatasourceRouterService } from '../../common/tenant-datasource-router.service';
 
@@ -49,6 +53,7 @@ export class SyncService {
     @Optional() private readonly salesService?: SalesService,
     @Optional() private readonly customerPaymentsService?: CustomerPaymentsService,
     @Optional() private readonly lendingService?: LendingService,
+    @Optional() private readonly lpgItemActionsService?: LpgItemActionsService,
     @Optional() private readonly transfersService?: TransfersService,
     @Optional() private readonly tenantRouter?: TenantDatasourceRouterService
   ) {}
@@ -233,6 +238,27 @@ export class SyncService {
         });
         continue;
       }
+      const lpgItemActionPosting = await this.tryPostLpgItemActionOutbox(companyId, item, actorUserId);
+      if (!lpgItemActionPosting.ok) {
+        const reviewId = this.createReview(
+          companyId,
+          item.id,
+          item.entity,
+          lpgItemActionPosting.reason,
+          item.payload
+        );
+        rejected.push({
+          id: item.id,
+          reason: lpgItemActionPosting.reason,
+          review_id: reviewId
+        });
+        await this.persistIdempotencyDecision(companyId, item.idempotency_key, requestHash, {
+          status: 'rejected',
+          reason: lpgItemActionPosting.reason,
+          review_id: reviewId
+        });
+        continue;
+      }
       const transferPostedServerSide =
         item.entity === 'transfer' &&
         item.action === 'create' &&
@@ -269,7 +295,11 @@ export class SyncService {
       await this.persistIdempotencyDecision(companyId, item.idempotency_key, requestHash, {
         status: 'accepted'
       });
-      if (item.entity !== 'sale_cancel' && item.entity !== 'sale_return') {
+      if (
+        item.entity !== 'sale_cancel' &&
+        item.entity !== 'sale_return' &&
+        item.entity !== 'lpg_item_action'
+      ) {
         const companyChanges = this.getCompanyChanges(companyId);
         companyChanges.push({
           entity: item.entity,
@@ -1041,6 +1071,66 @@ export class SyncService {
     } catch (cause) {
       const message =
         cause instanceof Error ? cause.message : 'Lending return posting failed during sync';
+      return { ok: false, reason: message };
+    }
+  }
+
+  private async tryPostLpgItemActionOutbox(
+    companyId: string,
+    item: SyncPushRequest['outbox_items'][number],
+    actorUserId?: string
+  ): Promise<{ ok: true; action?: LpgItemServiceActionRecord } | { ok: false; reason: string }> {
+    if (item.entity !== 'lpg_item_action') {
+      return { ok: true };
+    }
+    if (!this.lpgItemActionsService) {
+      return { ok: true };
+    }
+
+    const payload = item.payload ?? {};
+    const productId = this.asString(payload.product_id ?? payload.productId);
+    const locationId = this.asString(payload.location_id ?? payload.locationId);
+    const reason = this.asString(payload.reason);
+    const qty = this.asNumber(payload.qty);
+    if (!productId || !locationId || !reason || qty <= 0) {
+      return {
+        ok: false,
+        reason: 'LPG item action sync payload is missing product/location/qty/reason'
+      };
+    }
+
+    const actionName = item.action.trim().toLowerCase();
+    const input = {
+      action_id: this.asString(payload.id),
+      product_id: productId,
+      location_id: locationId,
+      branch_id: this.asString(payload.branch_id ?? payload.branchId),
+      qty,
+      reason,
+      notes: this.asString(payload.notes) ?? null,
+      reference_action_id: this.asString(
+        payload.reference_action_id ?? payload.referenceActionId
+      ) ?? null,
+      actor_user_id: this.asString(payload.user_id ?? payload.userId) ?? actorUserId ?? null
+    };
+
+    try {
+      if (actionName === 'dispose') {
+        const action = await this.lpgItemActionsService.dispose(companyId, input);
+        return { ok: true, action };
+      }
+      if (actionName === 'replace') {
+        const action = await this.lpgItemActionsService.replace(companyId, input);
+        return { ok: true, action };
+      }
+      if (actionName === 'junk') {
+        const action = await this.lpgItemActionsService.junk(companyId, input);
+        return { ok: true, action };
+      }
+      return { ok: false, reason: `Unsupported LPG item action sync action: ${item.action}` };
+    } catch (cause) {
+      const message =
+        cause instanceof Error ? cause.message : 'LPG item action posting failed during sync';
       return { ok: false, reason: message };
     }
   }
