@@ -47,16 +47,23 @@ type LpgItemActionSummary = {
   qty: { disposed: number; replaced: number; junked: number };
 };
 
-type DisposedEntryRow = LpgItemActionRow & {
-  usedQty: number;
-  availableQty: number;
-};
+const PAGE_SIZE = 15;
 
 function dt(value: string | null | undefined): string {
   if (!value) return '-';
   const parsed = new Date(value);
   if (Number.isNaN(parsed.getTime())) return value;
   return parsed.toLocaleString();
+}
+
+function toSinceValue(value: string): string | undefined {
+  if (!value.trim()) return undefined;
+  return `${value.trim()}T00:00:00.000Z`;
+}
+
+function toUntilValue(value: string): string | undefined {
+  if (!value.trim()) return undefined;
+  return `${value.trim()}T23:59:59.999Z`;
 }
 
 function actionLabel(value: LpgItemActionRow['actionType'] | null): string {
@@ -66,13 +73,15 @@ function actionLabel(value: LpgItemActionRow['actionType'] | null): string {
 }
 
 export default function LpgItemActionsPage(): JSX.Element {
-  const [activeTab, setActiveTab] = useState<'DISPOSED' | 'HISTORY'>('DISPOSED');
   const [actionTypeFilter, setActionTypeFilter] = useState<'ALL' | 'DISPOSE' | 'JUNK' | 'REPLACE'>('ALL');
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [query, setQuery] = useState('');
   const [branchFilter, setBranchFilter] = useState('ALL');
   const [locationFilter, setLocationFilter] = useState('');
+  const [dateFrom, setDateFrom] = useState('');
+  const [dateUntil, setDateUntil] = useState('');
+  const [page, setPage] = useState(1);
   const [branches, setBranches] = useState<BranchRecord[]>([]);
   const [locations, setLocations] = useState<LocationRecord[]>([]);
   const [products, setProducts] = useState<ProductRecord[]>([]);
@@ -114,33 +123,49 @@ export default function LpgItemActionsPage(): JSX.Element {
       .sort((a, b) => a.createdAt.localeCompare(b.createdAt) * -1);
   }, [actionTypeFilter, actions, locationFilter, productMap, query]);
 
-  const disposedEntries = useMemo<DisposedEntryRow[]>(() => {
-    const usedByReference = new Map<string, number>();
-    for (const row of visibleActions) {
-      if (!row.referenceActionId) continue;
-      usedByReference.set(row.referenceActionId, (usedByReference.get(row.referenceActionId) ?? 0) + row.qty);
+  const actionMap = useMemo(() => {
+    const next = new Map<string, LpgItemActionRow>();
+    for (const row of actions) {
+      next.set(row.id, row);
     }
-    return visibleActions
-      .filter((row) => row.actionType === 'DISPOSE')
-      .map((row) => ({
-        ...row,
-        usedQty: usedByReference.get(row.id) ?? 0,
-        availableQty: Math.max(0, row.qty - (usedByReference.get(row.id) ?? 0))
-      }))
-      .filter((row) => row.availableQty > 0);
-  }, [visibleActions]);
+    return next;
+  }, [actions]);
+
+  const pagedActions = useMemo(() => {
+    const start = (page - 1) * PAGE_SIZE;
+    return visibleActions.slice(start, start + PAGE_SIZE);
+  }, [page, visibleActions]);
+
+  const totalPages = Math.max(1, Math.ceil(visibleActions.length / PAGE_SIZE));
+
+  const describeReference = (referenceActionId: string | null): string | null => {
+    if (!referenceActionId) return null;
+    const reference = actionMap.get(referenceActionId);
+    if (!reference) return 'Linked to an earlier disposed record';
+    const productName =
+      reference.productName ?? productMap.get(reference.productId)?.name ?? 'Unknown item';
+    return `From ${productName} disposed on ${dt(reference.createdAt)}`;
+  };
 
   async function loadAll(): Promise<void> {
     setLoading(true);
     setError(null);
     try {
       const params = new URLSearchParams();
-      params.set('limit', '180');
+      params.set('limit', '500');
       if (branchFilter !== 'ALL') {
         params.set('branch_id', branchFilter);
       }
       if (locationFilter) {
         params.set('location_id', locationFilter);
+      }
+      const since = toSinceValue(dateFrom);
+      const until = toUntilValue(dateUntil);
+      if (since) {
+        params.set('since', since);
+      }
+      if (until) {
+        params.set('until', until);
       }
 
       const [branchRows, locationRows, productRows, stockRows, actionRows, summaryRow] =
@@ -175,7 +200,11 @@ export default function LpgItemActionsPage(): JSX.Element {
   useEffect(() => {
     void loadAll();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [branchFilter, locationFilter]);
+  }, [branchFilter, locationFilter, dateFrom, dateUntil]);
+
+  useEffect(() => {
+    setPage(1);
+  }, [actionTypeFilter, query, branchFilter, locationFilter, dateFrom, dateUntil]);
 
   return (
     <main className="space-y-5" data-tour="lpg-item-actions-root">
@@ -188,6 +217,9 @@ export default function LpgItemActionsPage(): JSX.Element {
             <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">
               Review disposed, replaced, and junked LPG item records.
             </p>
+            <p className="mt-1 text-xs text-slate-400 dark:text-slate-500">
+              Web view is records-only.
+            </p>
           </div>
           <button
             className="rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm font-semibold dark:border-slate-600 dark:bg-slate-900"
@@ -198,7 +230,7 @@ export default function LpgItemActionsPage(): JSX.Element {
           </button>
         </div>
 
-        <div className="mt-4 grid gap-3 md:grid-cols-4" data-tour="lpg-item-actions-filters">
+        <div className="mt-4 grid gap-3 md:grid-cols-6" data-tour="lpg-item-actions-filters">
           <label className="text-sm font-semibold">
             Branch
             <select
@@ -232,6 +264,26 @@ export default function LpgItemActionsPage(): JSX.Element {
                 </option>
               ))}
             </select>
+          </label>
+
+          <label className="text-sm font-semibold">
+            From Date
+            <input
+              className="mt-1 w-full rounded-xl border border-slate-300 bg-white px-3 py-2.5 text-sm dark:border-slate-600 dark:bg-slate-900"
+              type="date"
+              value={dateFrom}
+              onChange={(event) => setDateFrom(event.target.value)}
+            />
+          </label>
+
+          <label className="text-sm font-semibold">
+            To Date
+            <input
+              className="mt-1 w-full rounded-xl border border-slate-300 bg-white px-3 py-2.5 text-sm dark:border-slate-600 dark:bg-slate-900"
+              type="date"
+              value={dateUntil}
+              onChange={(event) => setDateUntil(event.target.value)}
+            />
           </label>
 
           <label className="text-sm font-semibold md:col-span-2">
@@ -273,29 +325,6 @@ export default function LpgItemActionsPage(): JSX.Element {
       <section className="space-y-4">
         <div className="flex flex-wrap items-center gap-2">
           {([
-            { key: 'DISPOSED', label: 'Disposed Records' },
-            { key: 'HISTORY', label: 'Service History' }
-          ] as const).map((tab) => {
-            const active = activeTab === tab.key;
-            return (
-              <button
-                key={tab.key}
-                className={`rounded-xl px-4 py-2 text-sm font-semibold transition ${
-                  active
-                    ? 'bg-slate-900 text-white dark:bg-slate-100 dark:text-slate-900'
-                    : 'border border-slate-300 bg-white text-slate-700 dark:border-slate-600 dark:bg-slate-900 dark:text-slate-200'
-                }`}
-                onClick={() => setActiveTab(tab.key)}
-                type="button"
-              >
-                {tab.label}
-              </button>
-            );
-          })}
-        </div>
-
-        <div className="flex flex-wrap items-center gap-2">
-          {([
             { key: 'ALL', label: 'All Records' },
             { key: 'DISPOSE', label: 'Disposed' },
             { key: 'JUNK', label: 'Junked' },
@@ -323,48 +352,6 @@ export default function LpgItemActionsPage(): JSX.Element {
           <article className="rounded-2xl border border-slate-200 bg-white p-4 text-sm text-slate-500 shadow-sm dark:border-slate-700 dark:bg-slate-900/80 dark:text-slate-400">
             Loading LPG service records...
           </article>
-        ) : activeTab === 'DISPOSED' ? (
-          <article className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm dark:border-slate-700 dark:bg-slate-900/80">
-            <h3 className="text-sm font-semibold text-slate-900 dark:text-slate-100">
-              Disposed Records
-            </h3>
-            <div className="mt-3 space-y-2">
-              {!locationFilter ? (
-                <p className="text-sm text-slate-500">Choose a location first.</p>
-              ) : disposedEntries.length === 0 ? (
-                <p className="text-sm text-slate-500">No disposed records found for this filter.</p>
-              ) : (
-                disposedEntries.map((row) => {
-                  const stock =
-                    fullEmptyRows.find(
-                      (entry) => entry.product_id === row.productId && entry.location_id === row.locationId
-                    ) ?? null;
-                  return (
-                    <div
-                      key={`dispose-${row.id}`}
-                      className="rounded-xl border border-slate-200 bg-white p-3 text-sm dark:border-slate-700 dark:bg-slate-900"
-                    >
-                      <p className="font-semibold text-slate-900 dark:text-slate-100">
-                        {row.productName ?? productMap.get(row.productId)?.name ?? row.productId}
-                      </p>
-                      <p className="mt-1 text-xs text-slate-500">
-                        {(row.productSku ?? productMap.get(row.productId)?.sku ?? '-')} - EMPTY {stock?.qty_empty ?? 0}
-                      </p>
-                      <p className="mt-1 text-xs text-slate-500">
-                        {dt(row.createdAt)} - Used {row.usedQty} - Available {row.availableQty}
-                      </p>
-                      <p className="mt-2 text-sm text-slate-700 dark:text-slate-300">{row.reason}</p>
-                      {row.notes ? (
-                        <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">
-                          Notes: {row.notes}
-                        </p>
-                      ) : null}
-                    </div>
-                  );
-                })
-              )}
-            </div>
-          </article>
         ) : (
           <article className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm dark:border-slate-700 dark:bg-slate-900/80">
             <h3 className="text-sm font-semibold text-slate-900 dark:text-slate-100">
@@ -376,7 +363,7 @@ export default function LpgItemActionsPage(): JSX.Element {
               ) : visibleActions.length === 0 ? (
                 <p className="text-sm text-slate-500">No service history found for this filter.</p>
               ) : (
-                visibleActions.map((row) => (
+                pagedActions.map((row) => (
                   <div
                     key={row.id}
                     className="rounded-xl border border-slate-200 bg-white p-3 text-sm dark:border-slate-700 dark:bg-slate-900"
@@ -397,15 +384,43 @@ export default function LpgItemActionsPage(): JSX.Element {
                         Notes: {row.notes}
                       </p>
                     ) : null}
-                    {row.referenceActionId ? (
+                    {describeReference(row.referenceActionId) ? (
                       <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">
-                        From Disposed Record: {row.referenceActionId}
+                        {describeReference(row.referenceActionId)}
                       </p>
                     ) : null}
                   </div>
                 ))
               )}
             </div>
+            {visibleActions.length > PAGE_SIZE ? (
+              <div className="mt-4 flex items-center justify-between gap-3 border-t border-slate-200 pt-4 text-sm dark:border-slate-700">
+                <p className="text-slate-500 dark:text-slate-400">
+                  Showing {(page - 1) * PAGE_SIZE + 1}-{Math.min(page * PAGE_SIZE, visibleActions.length)} of {visibleActions.length}
+                </p>
+                <div className="flex items-center gap-2">
+                  <button
+                    className="rounded-lg border border-slate-300 px-3 py-1.5 font-semibold disabled:cursor-not-allowed disabled:opacity-50 dark:border-slate-600"
+                    disabled={page <= 1}
+                    onClick={() => setPage((current) => Math.max(1, current - 1))}
+                    type="button"
+                  >
+                    Previous
+                  </button>
+                  <span className="text-slate-600 dark:text-slate-300">
+                    Page {page} of {totalPages}
+                  </span>
+                  <button
+                    className="rounded-lg border border-slate-300 px-3 py-1.5 font-semibold disabled:cursor-not-allowed disabled:opacity-50 dark:border-slate-600"
+                    disabled={page >= totalPages}
+                    onClick={() => setPage((current) => Math.min(totalPages, current + 1))}
+                    type="button"
+                  >
+                    Next
+                  </button>
+                </div>
+              </div>
+            ) : null}
           </article>
         )}
       </section>

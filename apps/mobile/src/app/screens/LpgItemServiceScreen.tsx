@@ -518,6 +518,23 @@ export function LpgItemServiceScreen({
     return 'All Records';
   }, [actionTypeFilter]);
 
+  const actionMap = useMemo(() => {
+    const next = new Map<string, LpgItemActionRow>();
+    for (const row of actions) {
+      next.set(row.id, row);
+    }
+    return next;
+  }, [actions]);
+
+  const describeReference = (referenceActionId: string | null): string | null => {
+    if (!referenceActionId) return null;
+    const reference = actionMap.get(referenceActionId);
+    if (!reference) return 'Linked to an earlier disposed record';
+    const productName =
+      reference.productName ?? productMap.get(reference.productId)?.name ?? 'Unknown item';
+    return `From ${productName} disposed on ${fmtDate(reference.createdAt)}`;
+  };
+
   const openComposer = (
     type: LpgItemActionType,
     referenceActionId?: string | null,
@@ -812,8 +829,8 @@ export function LpgItemServiceScreen({
                 <Text style={[styles.ruleLine, { color: theme.subtext }]}>
                   {(row.productSku ?? product?.itemCode ?? '-')} | {fmtDate(row.createdAt)}
                 </Text>
-                {row.referenceActionId ? (
-                  <Text style={[styles.ruleLine, { color: theme.subtext }]}>From Disposed Record: {row.referenceActionId}</Text>
+                {describeReference(row.referenceActionId) ? (
+                  <Text style={[styles.ruleLine, { color: theme.subtext }]}>{describeReference(row.referenceActionId)}</Text>
                 ) : null}
                 <Text style={[styles.ruleLine, { color: theme.subtext }]}>Reason: {row.reason}</Text>
                 {row.source === 'local' && row.syncStatus && row.syncStatus !== 'synced' ? (
@@ -961,8 +978,8 @@ export function LpgItemServiceScreen({
                       <Text style={[styles.ruleLine, { color: theme.subtext }]}>
                         {(row.productSku ?? product?.itemCode ?? '-')} | {fmtDate(row.createdAt)}
                       </Text>
-                      {row.referenceActionId ? (
-                        <Text style={[styles.ruleLine, { color: theme.subtext }]}>From Disposed Record: {row.referenceActionId}</Text>
+                      {describeReference(row.referenceActionId) ? (
+                        <Text style={[styles.ruleLine, { color: theme.subtext }]}>{describeReference(row.referenceActionId)}</Text>
                       ) : null}
                       <Text style={[styles.ruleLine, { color: theme.subtext }]}>Reason: {row.reason}</Text>
                       {row.source === 'local' && row.syncStatus && row.syncStatus !== 'synced' ? (
