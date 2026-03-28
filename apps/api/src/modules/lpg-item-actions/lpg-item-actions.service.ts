@@ -156,6 +156,11 @@ export class LpgItemActionsService {
     const binding = await this.requireBinding(companyId);
     return binding.client.$transaction(async (tx) => {
       const ctx = await this.resolveContext(tx, binding.companyId, input);
+      const effectiveActorUserId = await this.resolveActorUserIdForCompany(
+        tx,
+        binding.companyId,
+        input.actor_user_id ?? null
+      );
       if (ctx.referenceActionId) {
         throw new BadRequestException('Dispose actions cannot reference a previous disposed item action');
       }
@@ -184,7 +189,7 @@ export class LpgItemActionsService {
           reason: ctx.reason,
           notes: ctx.notes,
           referenceActionId: ctx.referenceActionId,
-          createdByUserId: input.actor_user_id ?? null
+          createdByUserId: effectiveActorUserId
         },
         include: {
           branch: { select: { code: true, name: true } },
@@ -221,6 +226,11 @@ export class LpgItemActionsService {
     const binding = await this.requireBinding(companyId);
     return binding.client.$transaction(async (tx) => {
       const ctx = await this.resolveContext(tx, binding.companyId, input);
+      const effectiveActorUserId = await this.resolveActorUserIdForCompany(
+        tx,
+        binding.companyId,
+        input.actor_user_id ?? null
+      );
       await this.requireAvailableDisposedQty(tx, binding.companyId, ctx, 'REPLACE');
       const balance = await tx.cylinderBalance.findUnique({
         where: {
@@ -262,7 +272,7 @@ export class LpgItemActionsService {
           reason: ctx.reason,
           notes: ctx.notes,
           referenceActionId: ctx.referenceActionId,
-          createdByUserId: input.actor_user_id ?? null
+          createdByUserId: effectiveActorUserId
         },
         include: {
           branch: { select: { code: true, name: true } },
@@ -299,6 +309,11 @@ export class LpgItemActionsService {
     const binding = await this.requireBinding(companyId);
     return binding.client.$transaction(async (tx) => {
       const ctx = await this.resolveContext(tx, binding.companyId, input);
+      const effectiveActorUserId = await this.resolveActorUserIdForCompany(
+        tx,
+        binding.companyId,
+        input.actor_user_id ?? null
+      );
       await this.requireAvailableDisposedQty(tx, binding.companyId, ctx, 'JUNK');
       const actionTx = tx as unknown as { lpgItemServiceAction: LpgItemActionDelegate };
       const created = await actionTx.lpgItemServiceAction.create({
@@ -313,7 +328,7 @@ export class LpgItemActionsService {
           reason: ctx.reason,
           notes: ctx.notes,
           referenceActionId: ctx.referenceActionId,
-          createdByUserId: input.actor_user_id ?? null
+          createdByUserId: effectiveActorUserId
         },
         include: {
           branch: { select: { code: true, name: true } },
@@ -595,5 +610,20 @@ export class LpgItemActionsService {
       throw new BadRequestException('Tenant datasource is unavailable for LPG item actions');
     }
     return binding;
+  }
+
+  private async resolveActorUserIdForCompany(
+    tx: any,
+    companyId: string,
+    actorUserId: string | null
+  ): Promise<string | null> {
+    if (!actorUserId) {
+      return null;
+    }
+    const actor = await tx.user.findFirst({
+      where: { id: actorUserId, companyId },
+      select: { id: true }
+    });
+    return actor?.id ?? null;
   }
 }
