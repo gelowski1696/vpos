@@ -60,9 +60,9 @@ function dt(value: string | null | undefined): string {
 }
 
 function actionLabel(value: LpgItemActionRow['actionType'] | null): string {
-  if (value === 'DISPOSE') return 'Deduct Empty Stock';
-  if (value === 'REPLACE') return 'Add Back Empty Stock';
-  return 'Record Junk Note';
+  if (value === 'DISPOSE') return 'Disposed';
+  if (value === 'REPLACE') return 'Replaced';
+  return 'Junked';
 }
 
 export default function LpgItemActionsPage(): JSX.Element {
@@ -185,7 +185,7 @@ export default function LpgItemActionsPage(): JSX.Element {
               LPG Service Records
             </h1>
             <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">
-              Review empty-stock deductions, add-backs, and junk notes for LPG items.
+              Review disposed, replaced, and junked LPG item records.
             </p>
           </div>
           <button
@@ -246,17 +246,17 @@ export default function LpgItemActionsPage(): JSX.Element {
 
         <div className="mt-4 grid gap-3 md:grid-cols-3">
           <article className="rounded-xl border border-slate-200 bg-slate-50 p-3 text-sm dark:border-slate-700 dark:bg-slate-800/60">
-            <p className="text-xs uppercase tracking-wide text-slate-500">Deducted Empty</p>
+            <p className="text-xs uppercase tracking-wide text-slate-500">Disposed</p>
             <p className="mt-1 text-xl font-bold">{summary.counts.dispose}</p>
             <p className="text-xs text-slate-500">Qty {summary.qty.disposed}</p>
           </article>
           <article className="rounded-xl border border-slate-200 bg-slate-50 p-3 text-sm dark:border-slate-700 dark:bg-slate-800/60">
-            <p className="text-xs uppercase tracking-wide text-slate-500">Added Back Empty</p>
+            <p className="text-xs uppercase tracking-wide text-slate-500">Replaced</p>
             <p className="mt-1 text-xl font-bold">{summary.counts.replace}</p>
             <p className="text-xs text-slate-500">Qty {summary.qty.replaced}</p>
           </article>
           <article className="rounded-xl border border-slate-200 bg-slate-50 p-3 text-sm dark:border-slate-700 dark:bg-slate-800/60">
-            <p className="text-xs uppercase tracking-wide text-slate-500">Junk Notes</p>
+            <p className="text-xs uppercase tracking-wide text-slate-500">Junked</p>
             <p className="mt-1 text-xl font-bold">{summary.counts.junk}</p>
             <p className="text-xs text-slate-500">Qty {summary.qty.junked}</p>
           </article>
@@ -296,9 +296,9 @@ export default function LpgItemActionsPage(): JSX.Element {
         <div className="flex flex-wrap items-center gap-2">
           {([
             { key: 'ALL', label: 'All Records' },
-            { key: 'DISPOSE', label: 'Deducted Empty' },
-            { key: 'JUNK', label: 'Junk Notes' },
-            { key: 'REPLACE', label: 'Added Back Empty' }
+            { key: 'DISPOSE', label: 'Disposed' },
+            { key: 'JUNK', label: 'Junked' },
+            { key: 'REPLACE', label: 'Replaced' }
           ] as const).map((chip) => {
             const active = actionTypeFilter === chip.key;
             return (

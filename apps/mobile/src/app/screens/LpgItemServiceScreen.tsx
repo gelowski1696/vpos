@@ -271,7 +271,7 @@ export function LpgItemServiceScreen({
   const [composerType, setComposerType] = useState<LpgItemActionType>('DISPOSE');
   const [referenceDisposeId, setReferenceDisposeId] = useState<string | null>(null);
   const [modalProductQuery, setModalProductQuery] = useState('');
-  const [actionTypeFilter, setActionTypeFilter] = useState<'ALL' | 'DISPOSE' | 'JUNK' | 'REPLACE'>('ALL');
+  const [actionTypeFilter, setActionTypeFilter] = useState<'ALL' | 'DISPOSE' | 'JUNK' | 'REPLACE'>('DISPOSE');
   const [qty, setQty] = useState('1');
   const [reason, setReason] = useState('');
   const [notes, setNotes] = useState('');
@@ -510,6 +510,13 @@ export function LpgItemServiceScreen({
       .sort((a, b) => b.createdAt.localeCompare(a.createdAt));
   }, [actionTypeFilter, actions, productMap, query]);
 
+  const mainBlockTitle = useMemo(() => {
+    if (actionTypeFilter === 'DISPOSE') return 'Disposed Records';
+    if (actionTypeFilter === 'REPLACE') return 'Replaced Records';
+    if (actionTypeFilter === 'JUNK') return 'Junked Records';
+    return 'All Records';
+  }, [actionTypeFilter]);
+
   const openComposer = (
     type: LpgItemActionType,
     referenceActionId?: string | null,
@@ -735,57 +742,85 @@ export function LpgItemServiceScreen({
       </ScrollView>
 
       <View style={[styles.detailBlock, { borderColor: theme.cardBorder, backgroundColor: theme.inputBg }]}>
-        <Text style={[styles.blockTitle, { color: theme.heading }]}>Disposed Records</Text>
+        <Text style={[styles.blockTitle, { color: theme.heading }]}>{mainBlockTitle}</Text>
         {!selectedLocationId ? (
           <Text style={[styles.detailLine, { color: theme.subtext }]}>Select a location in app setup first.</Text>
-        ) : disposedEntries.length === 0 ? (
-          <Text style={[styles.detailLine, { color: theme.subtext }]}>No disposed records found for this location.</Text>
+        ) : actionTypeFilter === 'DISPOSE' ? (
+          disposedEntries.length === 0 ? (
+            <Text style={[styles.detailLine, { color: theme.subtext }]}>No disposed records found for this location.</Text>
+          ) : (
+            disposedEntries.map((row) => {
+              const product = productMap.get(row.productId);
+              const stock = stockByProduct[row.productId] ?? { qtyFull: 0, qtyEmpty: 0, qtyOnHand: 0 };
+              return (
+                <View key={row.id} style={[styles.ruleCard, { borderColor: theme.cardBorder, backgroundColor: theme.card }]}>
+                  <Text style={[styles.ruleTitle, { color: theme.heading }]}>
+                    {row.productName ?? product?.name ?? row.productId}
+                  </Text>
+                  <Text style={[styles.ruleLine, { color: theme.subtext }]}>
+                    {(row.productSku ?? product?.itemCode ?? '-')} | EMPTY {formatQty(stock.qtyEmpty)}
+                  </Text>
+                  <Text style={[styles.ruleLine, { color: theme.subtext }]}>Disposed x {row.qty}</Text>
+                  <Text style={[styles.ruleLine, { color: theme.subtext }]}>{fmtDate(row.createdAt)}</Text>
+                  <Text style={[styles.ruleLine, { color: theme.subtext }]}>Reason: {row.reason}</Text>
+                  <Text style={[styles.ruleLine, { color: theme.subtext }]}>
+                    Used: {formatQty(row.usedQty)} | Available: {formatQty(row.availableQty)}
+                  </Text>
+                  {row.source === 'local' && row.syncStatus && row.syncStatus !== 'synced' ? (
+                    <Text style={[styles.ruleLine, { color: theme.subtext }]}>Pending Sync: {row.syncStatus.toUpperCase()}</Text>
+                  ) : null}
+                  {row.notes ? (
+                    <Text style={[styles.ruleLine, { color: theme.subtext }]}>Notes: {row.notes}</Text>
+                  ) : null}
+                  <View style={styles.entryActions}>
+                    <Pressable
+                      onPress={() => openComposer('REPLACE', row.id, row.productId)}
+                      disabled={row.availableQty <= 0}
+                      style={[
+                        styles.entryActionBtn,
+                        { backgroundColor: row.availableQty > 0 ? '#0f766e' : '#94a3b8' }
+                      ]}
+                    >
+                      <Text style={styles.entryActionText}>Replace</Text>
+                    </Pressable>
+                    <Pressable
+                      onPress={() => openComposer('JUNK', row.id, row.productId)}
+                      disabled={row.availableQty <= 0}
+                      style={[
+                        styles.entryActionBtn,
+                        { backgroundColor: row.availableQty > 0 ? '#475569' : '#94a3b8' }
+                      ]}
+                    >
+                      <Text style={styles.entryActionText}>Junk</Text>
+                    </Pressable>
+                  </View>
+                </View>
+              );
+            })
+          )
+        ) : historyRows.length === 0 ? (
+          <Text style={[styles.detailLine, { color: theme.subtext }]}>No records found for this filter.</Text>
         ) : (
-          disposedEntries.map((row) => {
+          historyRows.map((row) => {
             const product = productMap.get(row.productId);
-            const stock = stockByProduct[row.productId] ?? { qtyFull: 0, qtyEmpty: 0, qtyOnHand: 0 };
             return (
-              <View key={row.id} style={[styles.ruleCard, { borderColor: theme.cardBorder, backgroundColor: theme.card }]}>
+              <View key={`main-history-${row.id}`} style={[styles.ruleCard, { borderColor: theme.cardBorder, backgroundColor: theme.card }]}>
                 <Text style={[styles.ruleTitle, { color: theme.heading }]}>
-                  {row.productName ?? product?.name ?? row.productId}
+                  {row.productName ?? product?.name ?? row.productId} | {actionLabel(row.actionType)} x {row.qty}
                 </Text>
                 <Text style={[styles.ruleLine, { color: theme.subtext }]}>
-                  {(row.productSku ?? product?.itemCode ?? '-')} | EMPTY {formatQty(stock.qtyEmpty)}
+                  {(row.productSku ?? product?.itemCode ?? '-')} | {fmtDate(row.createdAt)}
                 </Text>
-                <Text style={[styles.ruleLine, { color: theme.subtext }]}>Disposed x {row.qty}</Text>
-                <Text style={[styles.ruleLine, { color: theme.subtext }]}>{fmtDate(row.createdAt)}</Text>
+                {row.referenceActionId ? (
+                  <Text style={[styles.ruleLine, { color: theme.subtext }]}>From Disposed Record: {row.referenceActionId}</Text>
+                ) : null}
                 <Text style={[styles.ruleLine, { color: theme.subtext }]}>Reason: {row.reason}</Text>
-                <Text style={[styles.ruleLine, { color: theme.subtext }]}>
-                  Used: {formatQty(row.usedQty)} | Available: {formatQty(row.availableQty)}
-                </Text>
                 {row.source === 'local' && row.syncStatus && row.syncStatus !== 'synced' ? (
                   <Text style={[styles.ruleLine, { color: theme.subtext }]}>Pending Sync: {row.syncStatus.toUpperCase()}</Text>
                 ) : null}
                 {row.notes ? (
                   <Text style={[styles.ruleLine, { color: theme.subtext }]}>Notes: {row.notes}</Text>
                 ) : null}
-                <View style={styles.entryActions}>
-                  <Pressable
-                    onPress={() => openComposer('REPLACE', row.id, row.productId)}
-                    disabled={row.availableQty <= 0}
-                    style={[
-                      styles.entryActionBtn,
-                      { backgroundColor: row.availableQty > 0 ? '#0f766e' : '#94a3b8' }
-                    ]}
-                  >
-                    <Text style={styles.entryActionText}>Replace</Text>
-                  </Pressable>
-                  <Pressable
-                    onPress={() => openComposer('JUNK', row.id, row.productId)}
-                    disabled={row.availableQty <= 0}
-                    style={[
-                      styles.entryActionBtn,
-                      { backgroundColor: row.availableQty > 0 ? '#475569' : '#94a3b8' }
-                    ]}
-                  >
-                    <Text style={styles.entryActionText}>Junk</Text>
-                  </Pressable>
-                </View>
               </View>
             );
           })
