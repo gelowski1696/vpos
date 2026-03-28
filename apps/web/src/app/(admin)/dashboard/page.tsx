@@ -28,6 +28,13 @@ type LpgItemActionSummary = {
   qty: { disposed: number; replaced: number; junked: number };
 };
 type TransferStale = Array<{ id: string }>;
+type DashboardAlert = {
+  id: string;
+  level: 'CRITICAL' | 'WARNING' | 'INFO';
+  title: string;
+  desc: string;
+  details?: string[];
+};
 const STALE_TRANSFER_MINUTES = 120;
 
 const PERIODS: Array<{ id: PeriodPreset; label: string }> = [
@@ -110,6 +117,47 @@ function Card(props: { title: string; children: React.ReactNode }): JSX.Element 
       </div>
       {props.children}
     </article>
+  );
+}
+
+function AlertLevelPill({ level }: { level: DashboardAlert['level'] }): JSX.Element {
+  const tone =
+    level === 'CRITICAL'
+      ? 'bg-rose-500/10 text-rose-700 ring-rose-200 dark:bg-rose-500/15 dark:text-rose-200 dark:ring-rose-900/50'
+      : level === 'WARNING'
+        ? 'bg-amber-500/10 text-amber-700 ring-amber-200 dark:bg-amber-500/15 dark:text-amber-200 dark:ring-amber-900/50'
+        : 'bg-emerald-500/10 text-emerald-700 ring-emerald-200 dark:bg-emerald-500/15 dark:text-emerald-200 dark:ring-emerald-900/50';
+  const label = level === 'CRITICAL' ? 'Urgent' : level === 'WARNING' ? 'Check Soon' : 'Info';
+  return (
+    <span className={`inline-flex items-center rounded-full px-2.5 py-1 text-[10px] font-semibold uppercase tracking-wide ring-1 ${tone}`}>
+      {label}
+    </span>
+  );
+}
+
+function AlertIcon({ alertId, level }: { alertId: string; level: DashboardAlert['level'] }): JSX.Element {
+  const palette =
+    level === 'CRITICAL'
+      ? 'bg-rose-100 text-rose-700 ring-rose-200 dark:bg-rose-500/15 dark:text-rose-200 dark:ring-rose-900/50'
+      : level === 'WARNING'
+        ? 'bg-amber-100 text-amber-700 ring-amber-200 dark:bg-amber-500/15 dark:text-amber-200 dark:ring-amber-900/50'
+        : 'bg-emerald-100 text-emerald-700 ring-emerald-200 dark:bg-emerald-500/15 dark:text-emerald-200 dark:ring-emerald-900/50';
+  const label =
+    alertId === 'low'
+      ? 'RS'
+      : alertId === 'sync-f' || alertId === 'sync-r'
+        ? 'SY'
+        : alertId === 'transfer-stale'
+          ? 'TR'
+          : alertId === 'shift'
+            ? 'CA'
+            : alertId === 'credit'
+              ? 'CB'
+              : '!';
+  return (
+    <div className={`flex h-11 w-11 items-center justify-center rounded-2xl text-xs font-bold ring-1 ${palette}`}>
+      {label}
+    </div>
   );
 }
 
@@ -367,8 +415,8 @@ export default function DashboardPage(): JSX.Element {
       .slice(0, 10);
   }, [fullEmptyRows]);
 
-  const alerts = useMemo(() => {
-    const list: Array<{ id: string; level: 'CRITICAL' | 'WARNING' | 'INFO'; title: string; desc: string; details?: string[] }> = [];
+  const alerts = useMemo<DashboardAlert[]>(() => {
+    const list: DashboardAlert[] = [];
     if (lowStock.length) {
       list.push({
         id: 'low',
@@ -377,7 +425,7 @@ export default function DashboardPage(): JSX.Element {
         desc: `${lowStock.length} items below threshold`,
         details: lowStock.slice(0, 8).map((row) => {
           const locationName = locById.get(row.locationId)?.name ?? row.locationId;
-          return `${row.productSku} @ ${locationName} | ${row.metric}: ${qty(row.current)} / Min: ${qty(row.threshold)}`;
+          return `${row.productSku} in ${locationName} is now ${qty(row.current)}. Minimum target is ${qty(row.threshold)}.`;
         })
       });
     }
@@ -397,6 +445,55 @@ export default function DashboardPage(): JSX.Element {
     if (!list.length) list.push({ id: 'ok', level: 'INFO', title: 'All Clear', desc: 'No critical alerts in selected scope' });
     return list.sort((a, b) => ({ CRITICAL: 3, WARNING: 2, INFO: 1 }[b.level] - ({ CRITICAL: 3, WARNING: 2, INFO: 1 }[a.level])));
   }, [lowStock, locById, syncStats, staleApprovedTransfers.length, staleCreatedTransfers.length, shiftStats.variance, dueSales]);
+
+  const alertCards = useMemo(() => {
+    const cards: DashboardAlert[] = [];
+    for (const alert of alerts) {
+      if (alert.id === 'low') {
+        const details = alert.details ?? [];
+        if (!details.length) {
+          cards.push({ ...alert, title: 'Restock Needed', desc: 'An item is running low and should be checked first.' });
+          continue;
+        }
+        details.forEach((detail, idx) => {
+          cards.push({
+            ...alert,
+            id: `${alert.id}-${idx}`,
+            title: 'Restock Needed',
+            desc: detail,
+            details: []
+          });
+        });
+        continue;
+      }
+      if (alert.id === 'sync-f') {
+        cards.push({ ...alert, title: 'Sync Problem', desc: 'Some updates did not finish sending and need review.' });
+        continue;
+      }
+      if (alert.id === 'sync-r') {
+        cards.push({ ...alert, title: 'Sync Review Needed', desc: 'There are pending sync records waiting for review.' });
+        continue;
+      }
+      if (alert.id === 'transfer-stale') {
+        cards.push({ ...alert, title: 'Transfer Follow-up', desc: 'Some transfers have been waiting too long and need action.' });
+        continue;
+      }
+      if (alert.id === 'shift') {
+        cards.push({ ...alert, title: 'Cash Count Check', desc: 'The counted cash does not match the expected total.' });
+        continue;
+      }
+      if (alert.id === 'credit') {
+        cards.push({ ...alert, title: 'Customer Balance Follow-up', desc: 'Some customer balances are already overdue.' });
+        continue;
+      }
+      if (alert.id === 'ok') {
+        cards.push({ ...alert, title: 'All Good', desc: 'Nothing urgent needs attention in this branch and date range.' });
+        continue;
+      }
+      cards.push(alert);
+    }
+    return cards;
+  }, [alerts]);
 
   const trendMax = useMemo(() => Math.max(...salesTrend.map((row) => row.amount), 1), [salesTrend]);
   const branchRevenueMax = useMemo(() => Math.max(...branchCompare.map((row) => row.revenue), 1), [branchCompare]);
@@ -456,27 +553,48 @@ export default function DashboardPage(): JSX.Element {
         <>
           {canView('alerts') ? (
             <Card title="Smart Alert Center">
-              <div className="grid gap-3 lg:grid-cols-2">
-                {alerts.map((a) => (
-                  <article key={a.id} className={`rounded-xl border p-3 ${a.level === 'CRITICAL' ? 'border-rose-200 bg-rose-50 dark:border-rose-900/40 dark:bg-rose-900/20' : a.level === 'WARNING' ? 'border-amber-200 bg-amber-50 dark:border-amber-900/40 dark:bg-amber-900/20' : 'border-emerald-200 bg-emerald-50 dark:border-emerald-900/40 dark:bg-emerald-900/20'}`}>
-                    <div className="flex items-start justify-between gap-2">
-                      <div>
-                        <p className="text-sm font-semibold">{a.title}</p>
-                        <p className="text-xs text-slate-600 dark:text-slate-300">{a.desc}</p>
-                        {a.details?.length ? (
-                          <ul className="mt-2 space-y-1 text-[11px] text-slate-700 dark:text-slate-200">
-                            {a.details.map((detail, idx) => (
-                              <li key={`${a.id}-detail-${idx}`} className="rounded-md bg-white/70 px-2 py-1 dark:bg-slate-900/40">
-                                {detail}
-                              </li>
-                            ))}
-                          </ul>
-                        ) : null}
+              <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+                  {alertCards.map((a) => (
+                    <article
+                      key={a.id}
+                      className={`rounded-2xl border bg-white p-4 shadow-sm ${
+                        a.level === 'CRITICAL'
+                          ? 'border-rose-200 dark:border-rose-900/40 dark:bg-slate-900'
+                          : a.level === 'WARNING'
+                            ? 'border-amber-200 dark:border-amber-900/40 dark:bg-slate-900'
+                            : 'border-emerald-200 dark:border-emerald-900/40 dark:bg-slate-900'
+                      }`}
+                    >
+                      <div className="flex items-start gap-3">
+                        <AlertIcon alertId={a.id} level={a.level} />
+                        <div className="min-w-0 flex-1">
+                          <div className="flex items-start justify-between gap-3">
+                            <div className="space-y-1">
+                              <p className="text-base font-semibold leading-tight text-slate-900 dark:text-slate-100">{a.title}</p>
+                              <p className="text-sm leading-snug text-slate-600 dark:text-slate-300">{a.desc}</p>
+                            </div>
+                            <AlertLevelPill level={a.level} />
+                          </div>
+                        </div>
                       </div>
-                      <span className="rounded-full bg-white/80 px-2 py-0.5 text-[10px] font-semibold">{a.level}</span>
-                    </div>
-                  </article>
-                ))}
+
+                      {a.details?.length ? (
+                        <div className="mt-4 rounded-xl border border-slate-200 bg-slate-50 px-3 py-3 text-xs text-slate-700 dark:border-slate-700 dark:bg-slate-950/50 dark:text-slate-200">
+                          <p className="font-semibold text-slate-900 dark:text-slate-100">Check these first</p>
+                          <div className="mt-2 space-y-2">
+                            {a.details.slice(0, 3).map((detail, idx) => (
+                              <div
+                                key={`${a.id}-detail-${idx}`}
+                                className="rounded-lg border border-slate-200 bg-white px-3 py-2 leading-relaxed dark:border-slate-700 dark:bg-slate-900/60"
+                              >
+                                {detail}
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      ) : null}
+                    </article>
+                  ))}
               </div>
             </Card>
           ) : null}
