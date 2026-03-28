@@ -489,6 +489,7 @@ export function LpgItemServiceScreen({
         usedQty: usedByReference.get(row.id) ?? 0,
         availableQty: Math.max(0, row.qty - (usedByReference.get(row.id) ?? 0))
       }))
+      .filter((row) => row.availableQty > 0)
       .sort((a, b) => b.createdAt.localeCompare(a.createdAt));
   }, [actions, productMap, query]);
 

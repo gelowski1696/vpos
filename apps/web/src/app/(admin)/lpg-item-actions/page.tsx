@@ -126,7 +126,8 @@ export default function LpgItemActionsPage(): JSX.Element {
         ...row,
         usedQty: usedByReference.get(row.id) ?? 0,
         availableQty: Math.max(0, row.qty - (usedByReference.get(row.id) ?? 0))
-      }));
+      }))
+      .filter((row) => row.availableQty > 0);
   }, [visibleActions]);
 
   async function loadAll(): Promise<void> {
