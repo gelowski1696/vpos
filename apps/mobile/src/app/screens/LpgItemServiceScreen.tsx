@@ -145,6 +145,17 @@ function formatQty(value: number | null | undefined): string {
   return Number(value).toLocaleString(undefined, { maximumFractionDigits: 4 });
 }
 
+function actionLabel(value: LpgItemActionType): string {
+  if (value === 'DISPOSE') return 'Deduct Empty Stock';
+  if (value === 'REPLACE') return 'Add Back Empty Stock';
+  return 'Record Junk Note';
+}
+
+function actionFilterLabel(value: 'ALL' | LpgItemActionType): string {
+  if (value === 'ALL') return 'All Records';
+  return actionLabel(value);
+}
+
 function shouldQueueOffline(message: string): boolean {
   const normalized = message.trim().toLowerCase();
   return (
@@ -634,7 +645,7 @@ export function LpgItemServiceScreen({
       toastSuccess(
         queuedOffline ? 'LPG item action queued offline' : 'LPG item action saved',
         composerType === 'DISPOSE'
-          ? `${selectedProduct.name} was disposed from empty stock.`
+          ? `${selectedProduct.name} was deducted from empty stock.`
           : composerType === 'REPLACE'
             ? `${selectedProduct.name} empty stock was added back.`
             : `${selectedProduct.name} junk note was recorded.`
@@ -652,9 +663,9 @@ export function LpgItemServiceScreen({
 
   return (
     <View style={[styles.card, { backgroundColor: theme.card, borderColor: theme.cardBorder }]}>
-      <Text style={[styles.title, { color: theme.heading }]}>LPG Item Service</Text>
+      <Text style={[styles.title, { color: theme.heading }]}>LPG Service Records</Text>
       <Text style={[styles.sub, { color: theme.subtext }]}>
-        Dispose from the LPG item. Replace or junk only from a prior disposed entry.
+        Record empty-stock deductions here. Add-back and junk notes must come from an existing disposed record.
       </Text>
 
       <View style={styles.summaryRow}>
@@ -686,7 +697,7 @@ export function LpgItemServiceScreen({
           { backgroundColor: selectedLocationId ? theme.primary : theme.primaryMuted }
         ]}
       >
-        <Text style={styles.primaryButtonText}>Record Dispose</Text>
+        <Text style={styles.primaryButtonText}>{actionLabel('DISPOSE')}</Text>
       </Pressable>
 
       <View style={styles.topActionRow}>
@@ -694,16 +705,16 @@ export function LpgItemServiceScreen({
           onPress={() => setHistoryOpen(true)}
           style={[styles.secondaryButton, styles.topActionBtn, { backgroundColor: theme.pillBg }]}
         >
-          <Text style={[styles.secondaryButtonText, { color: theme.pillText }]}>Action History</Text>
+          <Text style={[styles.secondaryButtonText, { color: theme.pillText }]}>Service History</Text>
         </Pressable>
       </View>
 
       <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.filterRow}>
         {([
-          { key: 'ALL', label: 'All' },
-          { key: 'DISPOSE', label: 'Disposed' },
-          { key: 'JUNK', label: 'Junked' },
-          { key: 'REPLACE', label: 'Replaced' }
+          { key: 'ALL', label: 'All Records' },
+          { key: 'DISPOSE', label: 'Deducted Empty' },
+          { key: 'JUNK', label: 'Junk Notes' },
+          { key: 'REPLACE', label: 'Added Back Empty' }
         ] as const).map((chip) => {
           const active = actionTypeFilter === chip.key;
           return (
@@ -724,11 +735,11 @@ export function LpgItemServiceScreen({
       </ScrollView>
 
       <View style={[styles.detailBlock, { borderColor: theme.cardBorder, backgroundColor: theme.inputBg }]}>
-        <Text style={[styles.blockTitle, { color: theme.heading }]}>Disposed Entries</Text>
+        <Text style={[styles.blockTitle, { color: theme.heading }]}>Disposed Records</Text>
         {!selectedLocationId ? (
           <Text style={[styles.detailLine, { color: theme.subtext }]}>Select a location in app setup first.</Text>
         ) : disposedEntries.length === 0 ? (
-          <Text style={[styles.detailLine, { color: theme.subtext }]}>No disposed entries found for this location.</Text>
+          <Text style={[styles.detailLine, { color: theme.subtext }]}>No disposed records found for this location.</Text>
         ) : (
           disposedEntries.map((row) => {
             const product = productMap.get(row.productId);
@@ -741,7 +752,7 @@ export function LpgItemServiceScreen({
                 <Text style={[styles.ruleLine, { color: theme.subtext }]}>
                   {(row.productSku ?? product?.itemCode ?? '-')} | EMPTY {formatQty(stock.qtyEmpty)}
                 </Text>
-                <Text style={[styles.ruleLine, { color: theme.subtext }]}>Disposed x {row.qty}</Text>
+                <Text style={[styles.ruleLine, { color: theme.subtext }]}>Deducted x {row.qty}</Text>
                 <Text style={[styles.ruleLine, { color: theme.subtext }]}>{fmtDate(row.createdAt)}</Text>
                 <Text style={[styles.ruleLine, { color: theme.subtext }]}>Reason: {row.reason}</Text>
                 <Text style={[styles.ruleLine, { color: theme.subtext }]}>
@@ -762,7 +773,7 @@ export function LpgItemServiceScreen({
                       { backgroundColor: row.availableQty > 0 ? '#0f766e' : '#94a3b8' }
                     ]}
                   >
-                    <Text style={styles.entryActionText}>Replace</Text>
+                    <Text style={styles.entryActionText}>Add Back</Text>
                   </Pressable>
                   <Pressable
                     onPress={() => openComposer('JUNK', row.id, row.productId)}
@@ -772,7 +783,7 @@ export function LpgItemServiceScreen({
                       { backgroundColor: row.availableQty > 0 ? '#475569' : '#94a3b8' }
                     ]}
                   >
-                    <Text style={styles.entryActionText}>Junk</Text>
+                    <Text style={styles.entryActionText}>Junk Note</Text>
                   </Pressable>
                 </View>
               </View>
@@ -785,21 +796,17 @@ export function LpgItemServiceScreen({
           <Pressable style={styles.modalBackdrop} onPress={closeComposer} />
           <View style={[styles.dialogCard, { backgroundColor: theme.card, borderColor: theme.cardBorder }]}>
             <Text style={[styles.modalTitle, { color: theme.heading }]}>
-              {composerType === 'DISPOSE'
-                ? 'Record Dispose'
-                : composerType === 'REPLACE'
-                  ? 'Record Replace'
-                  : 'Record Junk'}
+              {actionLabel(composerType)}
             </Text>
             <Text style={[styles.modalSub, { color: theme.subtext }]}> 
               {composerType === 'DISPOSE'
-                ? 'Choose the LPG item here, then save the dispose record.'
+                ? 'Choose the LPG item here, then save the empty-stock deduction.'
                 : composerType === 'REPLACE'
-                  ? 'Replace adds back to empty qty from this disposed entry.'
-                  : 'Junk records history against this disposed entry only.'}
+                  ? 'This adds empty stock back from the selected disposed record.'
+                  : 'This saves a junk note against the selected disposed record only.'}
             </Text>
             {referenceDisposeId ? (
-              <Text style={[styles.ruleLine, { color: theme.subtext }]}>Disposed Reference: {referenceDisposeId}</Text>
+              <Text style={[styles.ruleLine, { color: theme.subtext }]}>Disposed Record: {referenceDisposeId}</Text>
             ) : null}
             {composerType === 'DISPOSE' ? (
               <>
@@ -889,9 +896,9 @@ export function LpgItemServiceScreen({
           <View style={[styles.historyDialogCard, { backgroundColor: theme.card, borderColor: theme.cardBorder }]}>
             <View style={styles.historyHeader}>
               <View style={{ flex: 1 }}>
-                <Text style={[styles.modalTitle, { color: theme.heading }]}>Action History</Text>
+                <Text style={[styles.modalTitle, { color: theme.heading }]}>Service History</Text>
                 <Text style={[styles.modalSub, { color: theme.subtext }]}>
-                  Filter: {actionTypeFilter === 'ALL' ? 'All Records' : actionTypeFilter}
+                  Filter: {actionFilterLabel(actionTypeFilter)}
                 </Text>
               </View>
               <Pressable
@@ -913,13 +920,13 @@ export function LpgItemServiceScreen({
                   return (
                     <View key={`history-${row.id}`} style={[styles.ruleCard, { borderColor: theme.cardBorder, backgroundColor: theme.inputBg }]}>
                       <Text style={[styles.ruleTitle, { color: theme.heading }]}>
-                        {row.productName ?? product?.name ?? row.productId} | {row.actionType} x {row.qty}
+                        {row.productName ?? product?.name ?? row.productId} | {actionLabel(row.actionType)} x {row.qty}
                       </Text>
                       <Text style={[styles.ruleLine, { color: theme.subtext }]}>
                         {(row.productSku ?? product?.itemCode ?? '-')} | {fmtDate(row.createdAt)}
                       </Text>
                       {row.referenceActionId ? (
-                        <Text style={[styles.ruleLine, { color: theme.subtext }]}>From Dispose: {row.referenceActionId}</Text>
+                        <Text style={[styles.ruleLine, { color: theme.subtext }]}>From Disposed Record: {row.referenceActionId}</Text>
                       ) : null}
                       <Text style={[styles.ruleLine, { color: theme.subtext }]}>Reason: {row.reason}</Text>
                       {row.source === 'local' && row.syncStatus && row.syncStatus !== 'synced' ? (
