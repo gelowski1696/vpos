@@ -62,6 +62,8 @@ function actionLabel(value: LpgItemActionRow['actionType'] | null): string {
 }
 
 export default function LpgItemActionsPage(): JSX.Element {
+  const [activeTab, setActiveTab] = useState<'DISPOSED' | 'HISTORY'>('DISPOSED');
+  const [actionTypeFilter, setActionTypeFilter] = useState<'ALL' | 'DISPOSE' | 'JUNK' | 'REPLACE'>('ALL');
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [query, setQuery] = useState('');
@@ -144,6 +146,7 @@ export default function LpgItemActionsPage(): JSX.Element {
     return actions
       .filter((row) => {
         if (locationFilter && row.locationId !== locationFilter) return false;
+        if (actionTypeFilter !== 'ALL' && row.actionType !== actionTypeFilter) return false;
         if (!search) return true;
         const product = productMap.get(row.productId);
         return `${row.productSku ?? product?.sku ?? ''} ${row.productName ?? product?.name ?? ''} ${row.reason} ${row.notes ?? ''} ${row.actionType}`
@@ -151,7 +154,7 @@ export default function LpgItemActionsPage(): JSX.Element {
           .includes(search);
       })
       .sort((a, b) => a.createdAt.localeCompare(b.createdAt) * -1);
-  }, [actions, locationFilter, productMap, query]);
+  }, [actionTypeFilter, actions, locationFilter, productMap, query]);
 
   const disposedEntries = useMemo(() => {
     const usedByReference = new Map<string, number>();
@@ -386,117 +389,167 @@ export default function LpgItemActionsPage(): JSX.Element {
           </button>
         </div>
 
-        <article className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm dark:border-slate-700 dark:bg-slate-900/80">
-          <h3 className="text-sm font-semibold text-slate-900 dark:text-slate-100">
-            Disposed Entries
-          </h3>
-          <div className="mt-3 space-y-2">
-            {!locationFilter ? (
-              <p className="text-sm text-slate-500">Choose a location first.</p>
-            ) : disposedEntries.length === 0 ? (
-              <p className="text-sm text-slate-500">No disposed entries found for this location.</p>
-            ) : (
-              disposedEntries.map((row) => {
-                const stock =
-                  fullEmptyRows.find(
-                    (entry) => entry.product_id === row.productId && entry.location_id === row.locationId
-                  ) ?? null;
-                return (
+        <div className="flex flex-wrap items-center gap-2">
+          {([
+            { key: 'DISPOSED', label: 'Disposed Entries' },
+            { key: 'HISTORY', label: 'Action History' }
+          ] as const).map((tab) => {
+            const active = activeTab === tab.key;
+            return (
+              <button
+                key={tab.key}
+                className={`rounded-xl px-4 py-2 text-sm font-semibold transition ${
+                  active
+                    ? 'bg-slate-900 text-white dark:bg-slate-100 dark:text-slate-900'
+                    : 'border border-slate-300 bg-white text-slate-700 dark:border-slate-600 dark:bg-slate-900 dark:text-slate-200'
+                }`}
+                onClick={() => setActiveTab(tab.key)}
+                type="button"
+              >
+                {tab.label}
+              </button>
+            );
+          })}
+        </div>
+
+        <div className="flex flex-wrap items-center gap-2">
+          {([
+            { key: 'ALL', label: 'All' },
+            { key: 'DISPOSE', label: 'Disposed' },
+            { key: 'JUNK', label: 'Junked' },
+            { key: 'REPLACE', label: 'Replaced' }
+          ] as const).map((chip) => {
+            const active = actionTypeFilter === chip.key;
+            return (
+              <button
+                key={chip.key}
+                className={`rounded-full px-3 py-1.5 text-xs font-semibold transition ${
+                  active
+                    ? 'bg-sky-600 text-white'
+                    : 'border border-slate-300 bg-white text-slate-600 dark:border-slate-600 dark:bg-slate-900 dark:text-slate-300'
+                }`}
+                onClick={() => setActionTypeFilter(chip.key)}
+                type="button"
+              >
+                {chip.label}
+              </button>
+            );
+          })}
+        </div>
+
+        {activeTab === 'DISPOSED' ? (
+          <article className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm dark:border-slate-700 dark:bg-slate-900/80">
+            <h3 className="text-sm font-semibold text-slate-900 dark:text-slate-100">
+              Disposed Entries
+            </h3>
+            <div className="mt-3 space-y-2">
+              {!locationFilter ? (
+                <p className="text-sm text-slate-500">Choose a location first.</p>
+              ) : disposedEntries.length === 0 ? (
+                <p className="text-sm text-slate-500">No disposed entries found for this filter.</p>
+              ) : (
+                disposedEntries.map((row) => {
+                  const stock =
+                    fullEmptyRows.find(
+                      (entry) => entry.product_id === row.productId && entry.location_id === row.locationId
+                    ) ?? null;
+                  return (
+                    <div
+                      key={`dispose-${row.id}`}
+                      className="rounded-xl border border-slate-200 bg-white p-3 text-sm dark:border-slate-700 dark:bg-slate-900"
+                    >
+                      <p className="font-semibold text-slate-900 dark:text-slate-100">
+                        {row.productName ?? productMap.get(row.productId)?.name ?? row.productId}
+                      </p>
+                      <p className="mt-1 text-xs text-slate-500">
+                        {(row.productSku ?? productMap.get(row.productId)?.sku ?? '-')} • EMPTY {stock?.qty_empty ?? 0}
+                      </p>
+                      <p className="mt-1 text-xs text-slate-500">
+                        {dt(row.createdAt)} • Used {row.usedQty} • Available {row.availableQty}
+                      </p>
+                      <p className="mt-2 text-sm text-slate-700 dark:text-slate-300">{row.reason}</p>
+                      {row.notes ? (
+                        <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">
+                          Notes: {row.notes}
+                        </p>
+                      ) : null}
+                      <div className="mt-3 flex gap-2">
+                        <button
+                          className="flex-1 rounded-xl bg-emerald-600 px-3 py-2 text-xs font-semibold text-white hover:bg-emerald-500 disabled:cursor-not-allowed disabled:bg-slate-400"
+                          disabled={row.availableQty <= 0}
+                          onClick={() => {
+                            setActionModal('REPLACE');
+                            setReferenceActionId(row.id);
+                            setSelectedProductId(row.productId);
+                          }}
+                          type="button"
+                        >
+                          {actionLabel('REPLACE')}
+                        </button>
+                        <button
+                          className="flex-1 rounded-xl bg-slate-700 px-3 py-2 text-xs font-semibold text-white hover:bg-slate-600 disabled:cursor-not-allowed disabled:bg-slate-400"
+                          disabled={row.availableQty <= 0}
+                          onClick={() => {
+                            setActionModal('JUNK');
+                            setReferenceActionId(row.id);
+                            setSelectedProductId(row.productId);
+                          }}
+                          type="button"
+                        >
+                          {actionLabel('JUNK')}
+                        </button>
+                      </div>
+                    </div>
+                  );
+                })
+              )}
+            </div>
+          </article>
+        ) : (
+          <article className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm dark:border-slate-700 dark:bg-slate-900/80">
+            <h3 className="text-sm font-semibold text-slate-900 dark:text-slate-100">
+              Action History
+            </h3>
+            <div className="mt-3 space-y-2">
+              {!locationFilter ? (
+                <p className="text-sm text-slate-500">Choose a location first.</p>
+              ) : visibleActions.length === 0 ? (
+                <p className="text-sm text-slate-500">No service history found for this filter.</p>
+              ) : (
+                visibleActions.map((row) => (
                   <div
-                    key={`dispose-${row.id}`}
+                    key={row.id}
                     className="rounded-xl border border-slate-200 bg-white p-3 text-sm dark:border-slate-700 dark:bg-slate-900"
                   >
-                    <p className="font-semibold text-slate-900 dark:text-slate-100">
-                      {row.productName ?? productMap.get(row.productId)?.name ?? row.productId}
+                    <div className="flex items-start justify-between gap-3">
+                      <div>
+                        <p className="font-semibold text-slate-900 dark:text-slate-100">
+                          {row.productName ?? productMap.get(row.productId)?.name ?? row.productId} • {row.actionType} x {row.qty}
+                        </p>
+                        <p className="text-xs text-slate-500">
+                          {(row.productSku ?? productMap.get(row.productId)?.sku ?? '-')} • {row.locationName ?? row.locationCode ?? row.locationId} • {dt(row.createdAt)}
+                        </p>
+                      </div>
+                    </div>
+                    <p className="mt-2 text-sm text-slate-700 dark:text-slate-300">
+                      {row.reason}
                     </p>
-                    <p className="mt-1 text-xs text-slate-500">
-                      {(row.productSku ?? productMap.get(row.productId)?.sku ?? '-')} • EMPTY {stock?.qty_empty ?? 0}
-                    </p>
-                    <p className="mt-1 text-xs text-slate-500">
-                      {dt(row.createdAt)} • Used {row.usedQty} • Available {row.availableQty}
-                    </p>
-                    <p className="mt-2 text-sm text-slate-700 dark:text-slate-300">{row.reason}</p>
                     {row.notes ? (
                       <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">
                         Notes: {row.notes}
                       </p>
                     ) : null}
-                    <div className="mt-3 flex gap-2">
-                      <button
-                        className="flex-1 rounded-xl bg-emerald-600 px-3 py-2 text-xs font-semibold text-white hover:bg-emerald-500 disabled:cursor-not-allowed disabled:bg-slate-400"
-                        disabled={row.availableQty <= 0}
-                        onClick={() => {
-                          setActionModal('REPLACE');
-                          setReferenceActionId(row.id);
-                          setSelectedProductId(row.productId);
-                        }}
-                        type="button"
-                      >
-                        {actionLabel('REPLACE')}
-                      </button>
-                      <button
-                        className="flex-1 rounded-xl bg-slate-700 px-3 py-2 text-xs font-semibold text-white hover:bg-slate-600 disabled:cursor-not-allowed disabled:bg-slate-400"
-                        disabled={row.availableQty <= 0}
-                        onClick={() => {
-                          setActionModal('JUNK');
-                          setReferenceActionId(row.id);
-                          setSelectedProductId(row.productId);
-                        }}
-                        type="button"
-                      >
-                        {actionLabel('JUNK')}
-                      </button>
-                    </div>
-                  </div>
-                );
-              })
-            )}
-          </div>
-        </article>
-
-        <article className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm dark:border-slate-700 dark:bg-slate-900/80">
-          <h3 className="text-sm font-semibold text-slate-900 dark:text-slate-100">
-            Action History
-          </h3>
-          <div className="mt-3 space-y-2">
-            {!locationFilter ? (
-              <p className="text-sm text-slate-500">Choose a location first.</p>
-            ) : visibleActions.length === 0 ? (
-              <p className="text-sm text-slate-500">No service history found for this location.</p>
-            ) : (
-              visibleActions.map((row) => (
-                <div
-                  key={row.id}
-                  className="rounded-xl border border-slate-200 bg-white p-3 text-sm dark:border-slate-700 dark:bg-slate-900"
-                >
-                  <div className="flex items-start justify-between gap-3">
-                    <div>
-                      <p className="font-semibold text-slate-900 dark:text-slate-100">
-                        {row.productName ?? productMap.get(row.productId)?.name ?? row.productId} • {row.actionType} x {row.qty}
+                    {row.referenceActionId ? (
+                      <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">
+                        From Dispose: {row.referenceActionId}
                       </p>
-                      <p className="text-xs text-slate-500">
-                        {(row.productSku ?? productMap.get(row.productId)?.sku ?? '-')} • {row.locationName ?? row.locationCode ?? row.locationId} • {dt(row.createdAt)}
-                      </p>
-                    </div>
+                    ) : null}
                   </div>
-                  <p className="mt-2 text-sm text-slate-700 dark:text-slate-300">
-                    {row.reason}
-                  </p>
-                  {row.notes ? (
-                    <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">
-                      Notes: {row.notes}
-                    </p>
-                  ) : null}
-                  {row.referenceActionId ? (
-                    <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">
-                      From Dispose: {row.referenceActionId}
-                    </p>
-                  ) : null}
-                </div>
-              ))
-            )}
-          </div>
-        </article>
+                ))
+              )}
+            </div>
+          </article>
+        )}
       </section>
 
       {actionModal ? (

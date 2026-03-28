@@ -256,9 +256,11 @@ export function LpgItemServiceScreen({
   const [actions, setActions] = useState<LpgItemActionRow[]>([]);
   const [actionLoading, setActionLoading] = useState(false);
   const [composerOpen, setComposerOpen] = useState(false);
+  const [historyOpen, setHistoryOpen] = useState(false);
   const [composerType, setComposerType] = useState<LpgItemActionType>('DISPOSE');
   const [referenceDisposeId, setReferenceDisposeId] = useState<string | null>(null);
   const [modalProductQuery, setModalProductQuery] = useState('');
+  const [actionTypeFilter, setActionTypeFilter] = useState<'ALL' | 'DISPOSE' | 'JUNK' | 'REPLACE'>('ALL');
   const [qty, setQty] = useState('1');
   const [reason, setReason] = useState('');
   const [notes, setNotes] = useState('');
@@ -483,6 +485,9 @@ export function LpgItemServiceScreen({
     const search = query.trim().toLowerCase();
     return [...actions]
       .filter((row) => {
+        if (actionTypeFilter !== 'ALL' && row.actionType !== actionTypeFilter) {
+          return false;
+        }
         if (!search) {
           return true;
         }
@@ -492,7 +497,7 @@ export function LpgItemServiceScreen({
           .includes(search);
       })
       .sort((a, b) => b.createdAt.localeCompare(a.createdAt));
-  }, [actions, productMap, query]);
+  }, [actionTypeFilter, actions, productMap, query]);
 
   const openComposer = (
     type: LpgItemActionType,
@@ -684,6 +689,40 @@ export function LpgItemServiceScreen({
         <Text style={styles.primaryButtonText}>Record Dispose</Text>
       </Pressable>
 
+      <View style={styles.topActionRow}>
+        <Pressable
+          onPress={() => setHistoryOpen(true)}
+          style={[styles.secondaryButton, styles.topActionBtn, { backgroundColor: theme.pillBg }]}
+        >
+          <Text style={[styles.secondaryButtonText, { color: theme.pillText }]}>Action History</Text>
+        </Pressable>
+      </View>
+
+      <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.filterRow}>
+        {([
+          { key: 'ALL', label: 'All' },
+          { key: 'DISPOSE', label: 'Disposed' },
+          { key: 'JUNK', label: 'Junked' },
+          { key: 'REPLACE', label: 'Replaced' }
+        ] as const).map((chip) => {
+          const active = actionTypeFilter === chip.key;
+          return (
+            <Pressable
+              key={chip.key}
+              onPress={() => setActionTypeFilter(chip.key)}
+              style={[
+                styles.filterChip,
+                { backgroundColor: active ? theme.primary : theme.pillBg }
+              ]}
+            >
+              <Text style={[styles.filterChipText, { color: active ? '#FFFFFF' : theme.pillText }]}>
+                {chip.label}
+              </Text>
+            </Pressable>
+          );
+        })}
+      </ScrollView>
+
       <View style={[styles.detailBlock, { borderColor: theme.cardBorder, backgroundColor: theme.inputBg }]}>
         <Text style={[styles.blockTitle, { color: theme.heading }]}>Disposed Entries</Text>
         {!selectedLocationId ? (
@@ -736,37 +775,6 @@ export function LpgItemServiceScreen({
                     <Text style={styles.entryActionText}>Junk</Text>
                   </Pressable>
                 </View>
-              </View>
-            );
-          })
-        )}
-
-        <Text style={[styles.blockTitle, { color: theme.heading }]}>Action History</Text>
-        {actionLoading ? (
-          <Text style={[styles.detailLine, { color: theme.subtext }]}>Loading history...</Text>
-        ) : historyRows.length === 0 ? (
-          <Text style={[styles.detailLine, { color: theme.subtext }]}>No action history found for this location.</Text>
-        ) : (
-          historyRows.map((row) => {
-            const product = productMap.get(row.productId);
-            return (
-              <View key={`history-${row.id}`} style={[styles.ruleCard, { borderColor: theme.cardBorder, backgroundColor: theme.card }]}>
-                <Text style={[styles.ruleTitle, { color: theme.heading }]}>
-                  {row.productName ?? product?.name ?? row.productId} | {row.actionType} x {row.qty}
-                </Text>
-                <Text style={[styles.ruleLine, { color: theme.subtext }]}>
-                  {(row.productSku ?? product?.itemCode ?? '-')} | {fmtDate(row.createdAt)}
-                </Text>
-                {row.referenceActionId ? (
-                  <Text style={[styles.ruleLine, { color: theme.subtext }]}>From Dispose: {row.referenceActionId}</Text>
-                ) : null}
-                <Text style={[styles.ruleLine, { color: theme.subtext }]}>Reason: {row.reason}</Text>
-                {row.source === 'local' && row.syncStatus && row.syncStatus !== 'synced' ? (
-                  <Text style={[styles.ruleLine, { color: theme.subtext }]}>Pending Sync: {row.syncStatus.toUpperCase()}</Text>
-                ) : null}
-                {row.notes ? (
-                  <Text style={[styles.ruleLine, { color: theme.subtext }]}>Notes: {row.notes}</Text>
-                ) : null}
               </View>
             );
           })
@@ -871,6 +879,60 @@ export function LpgItemServiceScreen({
                 <Text style={styles.primaryButtonText}>{saving ? 'Saving...' : 'Save Action'}</Text>
               </Pressable>
             </View>
+          </View>
+        </View>
+      </Modal>
+
+      <Modal visible={historyOpen} transparent animationType="fade" onRequestClose={() => setHistoryOpen(false)}>
+        <View style={styles.modalOverlay}>
+          <Pressable style={styles.modalBackdrop} onPress={() => setHistoryOpen(false)} />
+          <View style={[styles.historyDialogCard, { backgroundColor: theme.card, borderColor: theme.cardBorder }]}>
+            <View style={styles.historyHeader}>
+              <View style={{ flex: 1 }}>
+                <Text style={[styles.modalTitle, { color: theme.heading }]}>Action History</Text>
+                <Text style={[styles.modalSub, { color: theme.subtext }]}>
+                  Filter: {actionTypeFilter === 'ALL' ? 'All Records' : actionTypeFilter}
+                </Text>
+              </View>
+              <Pressable
+                onPress={() => setHistoryOpen(false)}
+                style={[styles.secondaryButton, { backgroundColor: theme.pillBg }]}
+              >
+                <Text style={[styles.secondaryButtonText, { color: theme.pillText }]}>Close</Text>
+              </Pressable>
+            </View>
+
+            <ScrollView style={styles.historyList} contentContainerStyle={styles.historyListContent}>
+              {actionLoading ? (
+                <Text style={[styles.detailLine, { color: theme.subtext }]}>Loading history...</Text>
+              ) : historyRows.length === 0 ? (
+                <Text style={[styles.detailLine, { color: theme.subtext }]}>No action history found for this filter.</Text>
+              ) : (
+                historyRows.map((row) => {
+                  const product = productMap.get(row.productId);
+                  return (
+                    <View key={`history-${row.id}`} style={[styles.ruleCard, { borderColor: theme.cardBorder, backgroundColor: theme.inputBg }]}>
+                      <Text style={[styles.ruleTitle, { color: theme.heading }]}>
+                        {row.productName ?? product?.name ?? row.productId} | {row.actionType} x {row.qty}
+                      </Text>
+                      <Text style={[styles.ruleLine, { color: theme.subtext }]}>
+                        {(row.productSku ?? product?.itemCode ?? '-')} | {fmtDate(row.createdAt)}
+                      </Text>
+                      {row.referenceActionId ? (
+                        <Text style={[styles.ruleLine, { color: theme.subtext }]}>From Dispose: {row.referenceActionId}</Text>
+                      ) : null}
+                      <Text style={[styles.ruleLine, { color: theme.subtext }]}>Reason: {row.reason}</Text>
+                      {row.source === 'local' && row.syncStatus && row.syncStatus !== 'synced' ? (
+                        <Text style={[styles.ruleLine, { color: theme.subtext }]}>Pending Sync: {row.syncStatus.toUpperCase()}</Text>
+                      ) : null}
+                      {row.notes ? (
+                        <Text style={[styles.ruleLine, { color: theme.subtext }]}>Notes: {row.notes}</Text>
+                      ) : null}
+                    </View>
+                  );
+                })
+              )}
+            </ScrollView>
           </View>
         </View>
       </Modal>
@@ -1035,6 +1097,28 @@ const styles = StyleSheet.create({
     fontSize: 12,
     fontWeight: '800'
   },
+  topActionRow: {
+    flexDirection: 'row',
+    gap: 8
+  },
+  topActionBtn: {
+    flex: 1
+  },
+  filterRow: {
+    gap: 8,
+    paddingBottom: 2
+  },
+  filterChip: {
+    minHeight: 34,
+    borderRadius: 999,
+    paddingHorizontal: 12,
+    alignItems: 'center',
+    justifyContent: 'center'
+  },
+  filterChipText: {
+    fontSize: 12,
+    fontWeight: '700'
+  },
   secondaryButton: {
     minHeight: 42,
     minWidth: 108,
@@ -1067,8 +1151,29 @@ const styles = StyleSheet.create({
     fontSize: 16,
     fontWeight: '800'
   },
+  historyDialogCard: {
+    borderWidth: 1,
+    borderRadius: 18,
+    paddingHorizontal: 14,
+    paddingVertical: 14,
+    gap: 10,
+    minHeight: '72%',
+    maxHeight: '72%'
+  },
+  historyHeader: {
+    flexDirection: 'row',
+    gap: 10,
+    alignItems: 'flex-start'
+  },
   modalSub: {
     fontSize: 12
+  },
+  historyList: {
+    flex: 1
+  },
+  historyListContent: {
+    gap: 8,
+    paddingBottom: 10
   },
   composerProductCard: {
     borderWidth: 1,
