@@ -276,9 +276,12 @@ export function SettingsScreen({ state, onStateReload }: Props): JSX.Element {
           locationLabel
         },
         auth: {
+          ...state.auth,
           accessToken: session.accessToken,
           refreshToken: session.refreshToken,
-          signedInAt: session.signedInAt
+          signedInAt: session.signedInAt,
+          userEmail: form.authEmail.trim() || state.auth.userEmail,
+          userFullName: state.auth.userFullName
         },
         sync: {
           ...state.sync,

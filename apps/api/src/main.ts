@@ -7,8 +7,9 @@ function isPrivateLanWebOrigin(origin: string): boolean {
     const parsed = new URL(origin);
     const host = parsed.hostname;
     const port = parsed.port || (parsed.protocol === "https:" ? "443" : "80");
+    const allowedPorts = new Set(["3000", "1420", "1421"]);
 
-    if (port !== "3000") {
+    if (!allowedPorts.has(port)) {
       return false;
     }
 
@@ -46,6 +47,12 @@ async function bootstrap(): Promise<void> {
     configuredOrigins.add("http://localhost:3000");
     configuredOrigins.add("http://127.0.0.1:3000");
     configuredOrigins.add("http://0.0.0.0:3000");
+    configuredOrigins.add("http://localhost:1420");
+    configuredOrigins.add("http://127.0.0.1:1420");
+    configuredOrigins.add("http://0.0.0.0:1420");
+    configuredOrigins.add("http://localhost:1421");
+    configuredOrigins.add("http://127.0.0.1:1421");
+    configuredOrigins.add("http://0.0.0.0:1421");
   }
 
   const allowAllOrigins = configuredOrigins.has("*");
@@ -67,6 +74,7 @@ async function bootstrap(): Promise<void> {
     allowedHeaders: [
       "Content-Type",
       "Authorization",
+      "X-VPOS-Client",
       "X-Client-Id",
       "X-Platform-Owner-Key",
       "X-Vcard-Admin-Key"

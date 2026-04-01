@@ -9,8 +9,12 @@ import { PosScreen } from '../screens/PosScreen';
 import { SalesScreen } from '../screens/SalesScreen';
 import { CustomersScreen } from '../screens/CustomersScreen';
 import { LendingScreen } from '../screens/LendingScreen';
+import { DesktopStartupScreen } from '../screens/DesktopStartupScreen';
 import { DEFAULT_DESKTOP_APP_STATE, type DesktopAppState, type DesktopSaleRecord } from '../db/schema';
 import { desktopDb } from '../db/sqlite';
+import { desktopAuthService } from '../services/desktop-auth.service';
+import { desktopMasterDataService } from '../services/desktop-master-data.service';
+import { desktopSessionService, type DesktopStartupStage } from '../services/desktop-session.service';
 import { desktopSettingsService } from '../services/desktop-settings.service';
 import { desktopSyncService } from '../services/desktop-sync.service';
 
@@ -72,6 +76,12 @@ export function App(): JSX.Element {
   const [state, setState] = useState<DesktopAppState>(DEFAULT_DESKTOP_APP_STATE);
   const [activeRoute, setActiveRoute] = useState<DesktopRouteId>('dashboard');
   const [booting, setBooting] = useState(true);
+  const [startupStage, setStartupStage] = useState<DesktopStartupStage>('LOGIN');
+  const [startupBusy, setStartupBusy] = useState(false);
+  const [startupMessage, setStartupMessage] = useState(
+    'Sign in with password or use QR quick setup, then download branch data before opening the workstation.'
+  );
+  const [startupError, setStartupError] = useState<string | null>(null);
   const [syncBusy, setSyncBusy] = useState(false);
   const [pendingOutboxCount, setPendingOutboxCount] = useState(0);
   const [reopenSaleDraft, setReopenSaleDraft] = useState<{ sale: DesktopSaleRecord; mode: 'copy' | 'recreate' } | null>(null);
@@ -90,14 +100,24 @@ export function App(): JSX.Element {
 
   useEffect(() => {
     let active = true;
-    void Promise.all([desktopSettingsService.getState(), desktopDb.listOutboxItems()]).then(([next, outbox]) => {
+    void (async () => {
+      const [loadedState, outbox] = await Promise.all([desktopSettingsService.getState(), desktopDb.listOutboxItems()]);
+      const boot = await desktopSessionService.bootstrap(loadedState);
       if (!active) {
         return;
       }
-      setState(next);
+      setState(boot.state);
       setPendingOutboxCount(outbox.filter((row) => row.status === 'pending' || row.status === 'failed').length);
+      setStartupStage(boot.stage);
+      setStartupMessage(
+        boot.stage === 'SETUP'
+          ? 'Choose the branch and location for this desktop, then download the local branch data.'
+          : boot.stage === 'UNLOCK'
+            ? 'Enter the saved device PIN to reopen this workstation.'
+            : 'Sign in with password or use QR quick setup, then download branch data before opening the workstation.'
+      );
       setBooting(false);
-    });
+    })();
     return () => {
       active = false;
     };
@@ -158,6 +178,207 @@ export function App(): JSX.Element {
         lastSyncMessage: 'Queued a sample desktop outbox item. You can now test sync against the real local outbox table.'
       }
     }));
+  };
+
+  const handleStartupLogin = async (
+    input: DesktopAppState['setup'] & { password: string; pin: string }
+  ): Promise<void> => {
+    if (!input.apiBaseUrl.trim() || !input.clientId.trim() || !input.authEmail.trim() || !input.password.trim() || !input.deviceId.trim()) {
+      setStartupError('API URL, client ID, email, password, and device ID are required.');
+      return;
+    }
+    setStartupBusy(true);
+    setStartupError(null);
+    setStartupMessage('Signing in this desktop workstation...');
+    try {
+      const baseState: DesktopAppState = {
+        ...state,
+        setup: {
+          ...state.setup,
+          operatorName: input.operatorName,
+          clientId: input.clientId,
+          authEmail: input.authEmail,
+          deviceId: input.deviceId,
+          branchId: input.branchId,
+          branchLabel: input.branchLabel,
+          locationId: input.locationId,
+          locationLabel: input.locationLabel,
+          apiBaseUrl: input.apiBaseUrl,
+          printerMode: input.printerMode,
+          printerName: input.printerName,
+          printerHost: input.printerHost,
+          printerPort: input.printerPort
+        }
+      };
+      const session = await desktopAuthService.login(
+        input.apiBaseUrl,
+        input.authEmail,
+        input.password,
+        input.clientId,
+        input.deviceId
+      );
+      const cached = await desktopSessionService.cacheSession(baseState, {
+        accessToken: session.accessToken,
+        refreshToken: session.refreshToken,
+        userEmail: input.authEmail,
+        pin: input.pin
+      });
+      setState(cached);
+      setStartupStage('SETUP');
+      setStartupMessage('Signed in. Next step: choose branch and location, then download branch data.');
+    } catch (error) {
+      setStartupError(error instanceof Error ? error.message : 'Desktop sign-in failed.');
+    } finally {
+      setStartupBusy(false);
+    }
+  };
+
+  const handleStartupUnlock = async (pin: string): Promise<void> => {
+    if (!pin.trim()) {
+      setStartupError('PIN is required.');
+      return;
+    }
+    setStartupBusy(true);
+    setStartupError(null);
+    setStartupMessage('Unlocking this workstation...');
+    try {
+      const unlocked = await desktopSessionService.unlock(state, pin);
+      if (!unlocked) {
+        setStartupError('Invalid PIN.');
+        setStartupStage('UNLOCK');
+        return;
+      }
+      let unlockedState = state;
+      try {
+        const refreshed = await desktopAuthService.refreshSession(state);
+        setState(refreshed);
+        unlockedState = refreshed;
+      } catch {
+        // Offline unlock should still continue with the cached session.
+      }
+      setStartupStage(unlockedState.setupCompleted ? 'READY' : 'SETUP');
+      setStartupMessage(
+        unlockedState.setupCompleted
+          ? 'Workstation unlocked.'
+          : 'Unlocked. Finish branch setup and download local data before continuing.'
+      );
+    } finally {
+      setStartupBusy(false);
+    }
+  };
+
+  const handleStartupDownloadSetup = async (setup: DesktopAppState['setup']): Promise<void> => {
+    if (!setup.branchId.trim() || !setup.locationId.trim()) {
+      setStartupError('Choose both branch and location before downloading branch data.');
+      return;
+    }
+    setStartupBusy(true);
+    setStartupError(null);
+    setStartupMessage('Downloading products, customers, and lending data for this desktop...');
+    try {
+      const workingState: DesktopAppState = {
+        ...state,
+        setup: {
+          ...state.setup,
+          ...setup
+        }
+      };
+      const result = await desktopMasterDataService.syncCatalog(workingState, setup.branchId);
+      const nextState: DesktopAppState = {
+        ...result.state,
+        setupCompleted: true,
+        setup: {
+          ...result.state.setup,
+          ...setup
+        },
+        sync: {
+          lastSyncedAt: result.syncedAt,
+          lastSyncStatus: 'success',
+          lastSyncMessage: `Branch data refreshed. ${result.productCount} products, ${result.customerCount} customers, and ${result.lendingCount} lending records are cached locally.`
+        }
+      };
+      await desktopSettingsService.saveState(nextState);
+      setState(nextState);
+      setStartupStage('READY');
+      setStartupMessage('Desktop setup complete. The workstation is ready.');
+      await refreshOutboxCount();
+    } catch (error) {
+      setStartupError(error instanceof Error ? error.message : 'Unable to download branch data.');
+    } finally {
+      setStartupBusy(false);
+    }
+  };
+
+  const handleQuickSetup = async (input: {
+    token: string;
+    pin: string;
+    apiBaseUrl: string;
+    deviceId: string;
+    operatorName: string;
+  }): Promise<void> => {
+    if (!input.apiBaseUrl.trim() || !input.deviceId.trim()) {
+      setStartupError('API URL and device ID are required before QR quick setup.');
+      return;
+    }
+    setStartupBusy(true);
+    setStartupError(null);
+    setStartupMessage('Claiming setup token and downloading branch data...');
+    try {
+      const claimed = await desktopAuthService.claimEnrollment(input.apiBaseUrl, input.token, input.deviceId);
+      const baseState: DesktopAppState = {
+        ...state,
+        setup: {
+          ...state.setup,
+          apiBaseUrl: input.apiBaseUrl,
+          deviceId: input.deviceId,
+          operatorName: input.operatorName || state.setup.operatorName,
+          clientId: claimed.client_id,
+          authEmail: claimed.user_email,
+          branchId: claimed.branch_id,
+          branchLabel: claimed.branch_name,
+          locationId: claimed.location_id,
+          locationLabel: claimed.location_name
+        }
+      };
+      const cached = await desktopSessionService.cacheSession(baseState, {
+        accessToken: claimed.access_token,
+        refreshToken: claimed.refresh_token,
+        userEmail: claimed.user_email,
+        userFullName: claimed.user_full_name,
+        pin: input.pin
+      });
+      const result = await desktopMasterDataService.syncCatalog(cached, claimed.branch_id);
+      const nextState: DesktopAppState = {
+        ...result.state,
+        setupCompleted: true,
+        setup: {
+          ...result.state.setup,
+          operatorName: input.operatorName || result.state.setup.operatorName,
+          apiBaseUrl: input.apiBaseUrl,
+          deviceId: input.deviceId,
+          clientId: claimed.client_id,
+          authEmail: claimed.user_email,
+          branchId: claimed.branch_id,
+          branchLabel: claimed.branch_name,
+          locationId: claimed.location_id,
+          locationLabel: claimed.location_name
+        },
+        sync: {
+          lastSyncedAt: result.syncedAt,
+          lastSyncStatus: 'success',
+          lastSyncMessage: `Quick setup complete. ${result.productCount} products, ${result.customerCount} customers, and ${result.lendingCount} lending records are cached locally.`
+        }
+      };
+      await desktopSettingsService.saveState(nextState);
+      setState(nextState);
+      setStartupStage('READY');
+      setStartupMessage(`Quick setup complete. Signed in as ${claimed.user_full_name}.`);
+      await refreshOutboxCount();
+    } catch (error) {
+      setStartupError(error instanceof Error ? error.message : 'Desktop quick setup failed.');
+    } finally {
+      setStartupBusy(false);
+    }
   };
 
   let content: JSX.Element;
@@ -231,6 +452,33 @@ export function App(): JSX.Element {
         <h1>Loading VPOS Desktop...</h1>
         <p>Preparing the desktop shell and local device state.</p>
       </div>
+    );
+  }
+
+  if (startupStage !== 'READY') {
+    return (
+      <DesktopStartupScreen
+        state={state}
+        stage={startupStage}
+        busy={startupBusy}
+        message={startupMessage}
+        error={startupError}
+        hasPinConfigured={desktopSessionService.hasPinConfigured(state)}
+        onLogin={handleStartupLogin}
+        onUnlock={handleStartupUnlock}
+        onDownloadSetup={handleStartupDownloadSetup}
+        onQuickSetup={handleQuickSetup}
+        onSwitchToLogin={() => {
+          setStartupStage('LOGIN');
+          setStartupError(null);
+          setStartupMessage('Sign in with password or use QR quick setup, then download branch data.');
+        }}
+        onSwitchToPin={() => {
+          setStartupStage('UNLOCK');
+          setStartupError(null);
+          setStartupMessage('Enter the saved device PIN to reopen this workstation.');
+        }}
+      />
     );
   }
 

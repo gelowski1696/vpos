@@ -12,6 +12,21 @@ type RefreshResponse = {
   refresh_token: string;
 };
 
+type EnrollmentClaimResponse = {
+  access_token: string;
+  refresh_token: string;
+  client_id: string;
+  user_id: string;
+  user_email: string;
+  user_full_name: string;
+  branch_id: string;
+  branch_code: string;
+  branch_name: string;
+  location_id: string;
+  location_code: string;
+  location_name: string;
+};
+
 function normalizeBaseUrl(baseUrl: string): string {
   return baseUrl.replace(/\/$/, '');
 }
@@ -95,6 +110,7 @@ export class DesktopAuthService {
     const nextState: DesktopAppState = {
       ...state,
       auth: {
+        ...state.auth,
         accessToken: data.access_token,
         refreshToken: data.refresh_token,
         signedInAt: new Date().toISOString()
@@ -102,6 +118,31 @@ export class DesktopAuthService {
     };
     await desktopSettingsService.saveState(nextState);
     return nextState;
+  }
+
+  async claimEnrollment(
+    baseUrl: string,
+    setupToken: string,
+    deviceId: string
+  ): Promise<EnrollmentClaimResponse> {
+    const response = await fetch(`${normalizeBaseUrl(baseUrl)}/mobile-enrollment/claim`, {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        'x-vpos-client': 'desktop'
+      },
+      body: JSON.stringify({
+        setup_token: setupToken,
+        device_id: deviceId
+      })
+    });
+
+    if (!response.ok) {
+      const detail = await response.text().catch(() => '');
+      throw new Error(detail || `Desktop quick setup failed (${response.status})`);
+    }
+
+    return (await response.json()) as EnrollmentClaimResponse;
   }
 
   async authorizedFetch(

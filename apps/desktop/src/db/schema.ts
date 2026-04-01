@@ -31,6 +31,10 @@ export type DesktopAuthState = {
   accessToken: string | null;
   refreshToken: string | null;
   signedInAt: string | null;
+  userEmail: string | null;
+  userFullName: string | null;
+  pinHash: string | null;
+  pinSalt: string | null;
 };
 
 export type DesktopAppState = {
@@ -230,7 +234,11 @@ export const DEFAULT_DESKTOP_APP_STATE: DesktopAppState = {
   auth: {
     accessToken: null,
     refreshToken: null,
-    signedInAt: null
+    signedInAt: null,
+    userEmail: null,
+    userFullName: null,
+    pinHash: null,
+    pinSalt: null
   },
   printerProfiles: [],
   sync: {

@@ -56,6 +56,10 @@ function parseLocalState(raw: string | null): DesktopAppState {
         ...DEFAULT_DESKTOP_APP_STATE.setup,
         ...parsed.setup
       },
+      auth: {
+        ...DEFAULT_DESKTOP_APP_STATE.auth,
+        ...parsed.auth
+      },
       sync: {
         ...DEFAULT_DESKTOP_APP_STATE.sync,
         ...parsed.sync
