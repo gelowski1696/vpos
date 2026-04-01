@@ -7,6 +7,8 @@ import { SettingsScreen } from '../screens/SettingsScreen';
 import { ModulePlaceholderScreen } from '../screens/ModulePlaceholderScreen';
 import { PosScreen } from '../screens/PosScreen';
 import { SalesScreen } from '../screens/SalesScreen';
+import { CustomersScreen } from '../screens/CustomersScreen';
+import { LendingScreen } from '../screens/LendingScreen';
 import { DEFAULT_DESKTOP_APP_STATE, type DesktopAppState } from '../db/schema';
 import { desktopDb } from '../db/sqlite';
 import { desktopSettingsService } from '../services/desktop-settings.service';
@@ -169,8 +171,12 @@ export function App(): JSX.Element {
     );
   } else if (activeRoute === 'pos') {
     content = <PosScreen appState={state} onOutboxChanged={refreshOutboxCount} />;
+  } else if (activeRoute === 'customers') {
+    content = <CustomersScreen />;
   } else if (activeRoute === 'sales') {
     content = <SalesScreen appState={state} onOutboxChanged={refreshOutboxCount} />;
+  } else if (activeRoute === 'lending') {
+    content = <LendingScreen appState={state} onStateReload={reloadDesktopState} />;
   } else if (activeRoute === 'settings') {
     content = (
       <SettingsScreen

@@ -38,6 +38,9 @@ function parseLocalState(raw: string | null): DesktopAppState {
     return {
       ...DEFAULT_DESKTOP_APP_STATE,
       ...parsed,
+      printerProfiles: Array.isArray(parsed.printerProfiles)
+        ? parsed.printerProfiles
+        : DEFAULT_DESKTOP_APP_STATE.printerProfiles,
       setup: {
         ...DEFAULT_DESKTOP_APP_STATE.setup,
         ...parsed.setup
@@ -173,6 +176,21 @@ export class DesktopDb {
     const next = [...current.filter((row) => row.entity !== entity), ...rows];
     if (canUseStorage()) {
       window.localStorage.setItem(MASTER_DATA_KEY, JSON.stringify(next));
+    }
+  }
+
+  async upsertMasterDataRows(rows: DesktopMasterDataRow[]): Promise<void> {
+    if (isTauriRuntime()) {
+      await invoke('desktop_upsert_master_data_rows', { rows });
+      return;
+    }
+    const current = await this.listMasterData();
+    const byKey = new Map(current.map((row) => [`${row.entity}::${row.recordId}`, row] as const));
+    rows.forEach((row) => {
+      byKey.set(`${row.entity}::${row.recordId}`, row);
+    });
+    if (canUseStorage()) {
+      window.localStorage.setItem(MASTER_DATA_KEY, JSON.stringify(Array.from(byKey.values())));
     }
   }
 

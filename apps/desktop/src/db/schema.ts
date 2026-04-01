@@ -14,6 +14,15 @@ export type DesktopSetupState = {
   printerPort: string;
 };
 
+export type DesktopPrinterProfile = {
+  id: string;
+  label: string;
+  mode: 'USB' | 'LAN';
+  printerName: string;
+  printerHost: string;
+  printerPort: string;
+};
+
 export type DesktopAuthState = {
   accessToken: string | null;
   refreshToken: string | null;
@@ -25,6 +34,7 @@ export type DesktopAppState = {
   setupCompleted: boolean;
   setup: DesktopSetupState;
   auth: DesktopAuthState;
+  printerProfiles: DesktopPrinterProfile[];
   sync: {
     lastSyncedAt: string | null;
     lastSyncStatus: 'idle' | 'running' | 'success' | 'error';
@@ -97,6 +107,68 @@ export type DesktopCatalogProduct = {
   isLpg: boolean;
 };
 
+export type DesktopLendingLine = {
+  lending_line_id: string;
+  source_sale_line_id: string | null;
+  product_id: string;
+  product_sku: string | null;
+  product_name: string | null;
+  quantity_lent: number;
+  quantity_returned: number;
+  quantity_open: number;
+  deposit_amount: number | null;
+  remarks: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+export type DesktopLendingReturn = {
+  lending_return_id: string;
+  lending_line_id: string;
+  returned_qty: number;
+  condition: string;
+  remarks: string | null;
+  received_by_user_id: string | null;
+  received_by_name: string | null;
+  returned_at: string;
+  created_at: string;
+};
+
+export type DesktopLendingRecord = {
+  lending_id: string;
+  company_id: string;
+  branch_id: string;
+  branch_name: string | null;
+  location_id: string;
+  location_name: string | null;
+  customer_id: string;
+  customer_code: string | null;
+  customer_name: string | null;
+  sale_id: string;
+  status: 'OPEN' | 'PARTIALLY_RETURNED' | 'OVERDUE' | 'CLOSED' | 'CANCELLED' | 'FORCE_CLOSED';
+  due_at: string | null;
+  remarks: string | null;
+  settlement_type: string;
+  settlement_amount: number | null;
+  created_by_user_id: string | null;
+  created_by_name: string | null;
+  approved_by_user_id: string | null;
+  approved_by_name: string | null;
+  opened_at: string;
+  closed_at: string | null;
+  cancelled_at: string | null;
+  created_at: string;
+  updated_at: string;
+  line_count: number;
+  total_quantity_lent: number;
+  total_quantity_returned: number;
+};
+
+export type DesktopLendingDetail = DesktopLendingRecord & {
+  lines: DesktopLendingLine[];
+  returns: DesktopLendingReturn[];
+};
+
 export const DEFAULT_DESKTOP_APP_STATE: DesktopAppState = {
   version: 1,
   setupCompleted: false,
@@ -120,6 +192,7 @@ export const DEFAULT_DESKTOP_APP_STATE: DesktopAppState = {
     refreshToken: null,
     signedInAt: null
   },
+  printerProfiles: [],
   sync: {
     lastSyncedAt: null,
     lastSyncStatus: 'idle',

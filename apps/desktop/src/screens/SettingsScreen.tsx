@@ -1,7 +1,13 @@
 ﻿import { useEffect, useMemo, useState } from 'react';
-import type { DesktopAppState, DesktopOption, DesktopSetupState } from '../db/schema';
+import type {
+  DesktopAppState,
+  DesktopOption,
+  DesktopPrinterProfile,
+  DesktopSetupState
+} from '../db/schema';
 import { desktopAuthService } from '../services/desktop-auth.service';
 import { desktopMasterDataService } from '../services/desktop-master-data.service';
+import { listNativePrinters } from '../services/desktop-printer.bridge';
 import { desktopReceiptService } from '../services/desktop-receipt.service';
 import { desktopSettingsService } from '../services/desktop-settings.service';
 
@@ -23,6 +29,9 @@ export function SettingsScreen({ state, onStateReload }: Props): JSX.Element {
   const [saving, setSaving] = useState(false);
   const [syncingCatalog, setSyncingCatalog] = useState(false);
   const [testingPrinter, setTestingPrinter] = useState(false);
+  const [discoveringPrinters, setDiscoveringPrinters] = useState(false);
+  const [discoveredPrinters, setDiscoveredPrinters] = useState<string[]>([]);
+  const [profileLabel, setProfileLabel] = useState('');
   const [message, setMessage] = useState('Sign in once on this device, then refresh the local branch data for desktop POS.');
 
   useEffect(() => {
@@ -187,7 +196,9 @@ export function SettingsScreen({ state, onStateReload }: Props): JSX.Element {
       };
       await desktopSettingsService.saveState(nextState);
       await onStateReload();
-      setMessage(`Branch data refreshed. ${result.productCount} products and ${result.customerCount} customers are now available offline on this desktop.`);
+      setMessage(
+        `Branch data refreshed. ${result.productCount} products, ${result.customerCount} customers, and ${result.lendingCount} lending records are now available offline on this desktop.`
+      );
     } catch (error) {
       const detail = error instanceof Error ? error.message : 'Unable to refresh branch data.';
       const nextState: DesktopAppState = {
@@ -225,6 +236,88 @@ export function SettingsScreen({ state, onStateReload }: Props): JSX.Element {
     } finally {
       setTestingPrinter(false);
     }
+  };
+
+  const handleDiscoverPrinters = async (): Promise<void> => {
+    setDiscoveringPrinters(true);
+    try {
+      const printers = await listNativePrinters();
+      setDiscoveredPrinters(printers);
+      setMessage(
+        printers.length > 0
+          ? `Found ${printers.length} installed printer${printers.length === 1 ? '' : 's'} on this desktop station.`
+          : 'No installed printers were discovered on this desktop station.'
+      );
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : 'Unable to discover installed printers on this desktop.');
+    } finally {
+      setDiscoveringPrinters(false);
+    }
+  };
+
+  const applyProfile = (profile: DesktopPrinterProfile): void => {
+    setForm((prev) => ({
+      ...prev,
+      printerMode: profile.mode,
+      printerName: profile.printerName,
+      printerHost: profile.printerHost,
+      printerPort: profile.printerPort
+    }));
+    setProfileLabel(profile.label);
+    setMessage(`Applied printer profile "${profile.label}" to this desktop setup form.`);
+  };
+
+  const handleSavePrinterProfile = async (): Promise<void> => {
+    const trimmed = profileLabel.trim();
+    if (!trimmed) {
+      setMessage('Enter a printer profile name first.');
+      return;
+    }
+    if (form.printerMode === 'NONE') {
+      setMessage('Choose USB or LAN before saving a printer profile.');
+      return;
+    }
+    if (form.printerMode === 'USB' && !form.printerName.trim()) {
+      setMessage('Select or enter a USB printer name before saving this profile.');
+      return;
+    }
+    if (form.printerMode === 'LAN' && !form.printerHost.trim()) {
+      setMessage('Enter the LAN printer host before saving this profile.');
+      return;
+    }
+
+    const profile: DesktopPrinterProfile = {
+      id: `printer-profile-${Date.now()}`,
+      label: trimmed,
+      mode: form.printerMode,
+      printerName: form.printerName,
+      printerHost: form.printerHost,
+      printerPort: form.printerPort
+    };
+    const nextState: DesktopAppState = {
+      ...state,
+      setup: {
+        ...state.setup,
+        ...form,
+        branchLabel,
+        locationLabel
+      },
+      printerProfiles: [...state.printerProfiles.filter((entry) => entry.label !== profile.label), profile]
+    };
+    await desktopSettingsService.saveState(nextState);
+    await onStateReload();
+    setProfileLabel('');
+    setMessage(`Saved printer profile "${profile.label}" for this desktop station.`);
+  };
+
+  const handleDeletePrinterProfile = async (profileId: string): Promise<void> => {
+    const nextState: DesktopAppState = {
+      ...state,
+      printerProfiles: state.printerProfiles.filter((entry) => entry.id !== profileId)
+    };
+    await desktopSettingsService.saveState(nextState);
+    await onStateReload();
+    setMessage('Removed the selected printer profile from this desktop station.');
   };
 
   const handleSaveSetup = async (): Promise<void> => {
@@ -369,6 +462,20 @@ export function SettingsScreen({ state, onStateReload }: Props): JSX.Element {
             />
           </label>
           <label>
+            <span>Discovered USB printers</span>
+            <select
+              value={form.printerName}
+              onChange={(event) => setForm((prev) => ({ ...prev, printerName: event.target.value }))}
+            >
+              <option value="">Select discovered printer</option>
+              {discoveredPrinters.map((printer) => (
+                <option key={printer} value={printer}>
+                  {printer}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label>
             <span>LAN printer host</span>
             <input
               value={form.printerHost}
@@ -384,11 +491,19 @@ export function SettingsScreen({ state, onStateReload }: Props): JSX.Element {
               placeholder="9100"
             />
           </label>
+          <label>
+            <span>Printer profile name</span>
+            <input
+              value={profileLabel}
+              onChange={(event) => setProfileLabel(event.target.value)}
+              placeholder="Front Counter USB or Warehouse LAN"
+            />
+          </label>
         </div>
 
         <div className="note-panel">
           <strong>Desktop setup order</strong>
-          <p>Sign in first, then choose the branch and location, refresh branch data, run a printer test, and save this workstation.</p>
+          <p>Sign in first, then choose the branch and location, refresh branch data, discover or select a printer, run a printer test, and save this workstation.</p>
         </div>
 
         <div className="action-row desktop-settings-actions">
@@ -406,6 +521,22 @@ export function SettingsScreen({ state, onStateReload }: Props): JSX.Element {
           <button
             className="secondary-btn"
             type="button"
+            onClick={() => void handleDiscoverPrinters()}
+            disabled={discoveringPrinters}
+          >
+            {discoveringPrinters ? 'Discovering Printers...' : 'Discover USB Printers'}
+          </button>
+          <button
+            className="secondary-btn"
+            type="button"
+            onClick={() => void handleSavePrinterProfile()}
+            disabled={form.printerMode === 'NONE'}
+          >
+            Save Printer Profile
+          </button>
+          <button
+            className="secondary-btn"
+            type="button"
             onClick={() => void handleTestPrinter()}
             disabled={testingPrinter || form.printerMode === 'NONE'}
           >
@@ -415,6 +546,42 @@ export function SettingsScreen({ state, onStateReload }: Props): JSX.Element {
             {saving ? 'Saving Setup...' : 'Save Desktop Setup'}
           </button>
         </div>
+
+        <section className="panel-card embedded-panel">
+          <div className="panel-head">
+            <div>
+              <div className="eyebrow">Saved printer profiles</div>
+              <h3>Reusable desktop printer paths</h3>
+            </div>
+          </div>
+          <div className="recent-sales-list">
+            {state.printerProfiles.length === 0 ? (
+              <div className="empty-state">No saved printer profiles yet. Save one after choosing a USB or LAN printer path.</div>
+            ) : (
+              state.printerProfiles.map((profile) => (
+                <article key={profile.id} className="recent-sale-card">
+                  <div>
+                    <strong>{profile.label}</strong>
+                    <span>
+                      {profile.mode === 'USB'
+                        ? profile.printerName || 'USB printer name not set'
+                        : `${profile.printerHost || 'LAN host not set'}:${profile.printerPort || '9100'}`}
+                    </span>
+                  </div>
+                  <div className="recent-sale-actions">
+                    <div className="sync-chip synced">{profile.mode}</div>
+                    <button className="secondary-btn mini-btn" type="button" onClick={() => applyProfile(profile)}>
+                      Apply
+                    </button>
+                    <button className="secondary-btn mini-btn" type="button" onClick={() => void handleDeletePrinterProfile(profile.id)}>
+                      Delete
+                    </button>
+                  </div>
+                </article>
+              ))
+            )}
+          </div>
+        </section>
 
         <div className="message-banner">{message}</div>
       </section>

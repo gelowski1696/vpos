@@ -5,6 +5,7 @@ use std::fs;
 use std::io::Write;
 use std::net::TcpStream;
 use std::path::PathBuf;
+use std::process::Command;
 use tauri::AppHandle;
 #[cfg(target_os = "windows")]
 use windows::{
@@ -44,6 +45,17 @@ struct DesktopAuthPayload {
     signed_in_at: Option<String>,
 }
 
+#[derive(Debug, Serialize, Deserialize, Clone, Default)]
+#[serde(rename_all = "camelCase")]
+struct DesktopPrinterProfilePayload {
+    id: String,
+    label: String,
+    mode: String,
+    printer_name: String,
+    printer_host: String,
+    printer_port: String,
+}
+
 #[derive(Debug, Serialize, Deserialize, Clone)]
 #[serde(rename_all = "camelCase")]
 struct DesktopSyncPayload {
@@ -61,6 +73,8 @@ struct DesktopAppStatePayload {
     setup: DesktopSetupPayload,
     #[serde(default)]
     auth: DesktopAuthPayload,
+    #[serde(default)]
+    printer_profiles: Vec<DesktopPrinterProfilePayload>,
     sync: DesktopSyncPayload,
 }
 
@@ -179,6 +193,7 @@ fn default_state() -> DesktopAppStatePayload {
             refresh_token: None,
             signed_in_at: None,
         },
+        printer_profiles: Vec::new(),
         sync: DesktopSyncPayload {
             last_synced_at: None,
             last_sync_status: "idle".to_string(),
@@ -388,6 +403,40 @@ fn print_bytes(config: PrinterConfigPayload, bytes: &[u8]) -> Result<(), String>
     }
 }
 
+#[cfg(target_os = "windows")]
+fn list_system_printers() -> Result<Vec<String>, String> {
+    let output = Command::new("powershell")
+        .args([
+            "-NoProfile",
+            "-Command",
+            "Get-Printer | Select-Object -ExpandProperty Name",
+        ])
+        .output()
+        .map_err(|err| err.to_string())?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        return Err(if stderr.is_empty() {
+            "Unable to discover installed Windows printers.".to_string()
+        } else {
+            stderr
+        });
+    }
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    Ok(stdout
+        .lines()
+        .map(|line| line.trim())
+        .filter(|line| !line.is_empty())
+        .map(|line| line.to_string())
+        .collect())
+}
+
+#[cfg(not(target_os = "windows"))]
+fn list_system_printers() -> Result<Vec<String>, String> {
+    Ok(Vec::new())
+}
+
 #[tauri::command]
 fn desktop_ready() -> &'static str {
     "VPOS Desktop ready"
@@ -567,6 +616,35 @@ fn desktop_replace_master_data_entity(
 }
 
 #[tauri::command]
+fn desktop_upsert_master_data_rows(
+    app: AppHandle,
+    rows: Vec<DesktopMasterDataRowPayload>,
+) -> Result<(), String> {
+    let mut conn = connection(&app)?;
+    let tx = conn.transaction().map_err(|err| err.to_string())?;
+
+    {
+        let mut stmt = tx
+            .prepare(
+                "INSERT INTO master_data_local(entity, record_id, payload, updated_at)
+                 VALUES(?1, ?2, ?3, ?4)
+                 ON CONFLICT(entity, record_id) DO UPDATE SET
+                   payload = excluded.payload,
+                   updated_at = excluded.updated_at",
+            )
+            .map_err(|err| err.to_string())?;
+
+        for row in rows {
+            stmt.execute(params![row.entity, row.record_id, row.payload, row.updated_at])
+                .map_err(|err| err.to_string())?;
+        }
+    }
+
+    tx.commit().map_err(|err| err.to_string())?;
+    Ok(())
+}
+
+#[tauri::command]
 fn desktop_list_outbox(app: AppHandle) -> Result<Vec<DesktopOutboxItemPayload>, String> {
     let conn = connection(&app)?;
     let mut stmt = conn
@@ -688,6 +766,11 @@ fn desktop_print_esc_pos(lines: Vec<ReceiptLinePayload>, config: Option<PrinterC
     print_bytes(resolved, &bytes)
 }
 
+#[tauri::command]
+fn desktop_list_printers() -> Result<Vec<String>, String> {
+    list_system_printers()
+}
+
 fn main() {
     tauri::Builder::default()
         .invoke_handler(tauri::generate_handler![
@@ -699,11 +782,13 @@ fn main() {
             desktop_mark_sale_sync_status,
             desktop_list_master_data,
             desktop_replace_master_data_entity,
+            desktop_upsert_master_data_rows,
             desktop_list_outbox,
             desktop_enqueue_outbox_item,
             desktop_mark_outbox_status,
             desktop_increment_outbox_retry,
-            desktop_print_esc_pos
+            desktop_print_esc_pos,
+            desktop_list_printers
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

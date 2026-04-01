@@ -23,3 +23,10 @@ export async function printEscPosNative(lines: ReceiptLine[], config: PrinterCon
   await invoke('desktop_print_esc_pos', { lines, config });
   return true;
 }
+
+export async function listNativePrinters(): Promise<string[]> {
+  if (!isTauriRuntime()) {
+    return [];
+  }
+  return invoke<string[]>('desktop_list_printers');
+}

@@ -1,7 +1,9 @@
-import { desktopDb } from '../db/sqlite';
+﻿import { desktopDb } from '../db/sqlite';
 import type {
   DesktopAppState,
   DesktopCatalogProduct,
+  DesktopLendingDetail,
+  DesktopLendingRecord,
   DesktopMasterDataRow,
   DesktopOption
 } from '../db/schema';
@@ -183,7 +185,7 @@ export class DesktopMasterDataService {
   async syncCatalog(
     state: DesktopAppState,
     branchId: string
-  ): Promise<{ productCount: number; customerCount: number; syncedAt: string; state: DesktopAppState }> {
+  ): Promise<{ productCount: number; customerCount: number; lendingCount: number; syncedAt: string; state: DesktopAppState }> {
     const apiBase = normalizeBaseUrl(state.setup.apiBaseUrl);
     const [
       branchesResult,
@@ -191,7 +193,8 @@ export class DesktopMasterDataService {
       productsResult,
       inventoryOpeningResult,
       priceListsResult,
-      customersResult
+      customersResult,
+      lendingResult
     ] = await Promise.all([
       desktopAuthService.authorizedFetch(state, `${apiBase}/master-data/branches`),
       desktopAuthService.authorizedFetch(state, `${apiBase}/master-data/locations`),
@@ -201,10 +204,15 @@ export class DesktopMasterDataService {
       desktopAuthService.authorizedFetch(
         state,
         `${apiBase}/master-data/customers?include_balance=true&branch_id=${encodeURIComponent(branchId)}`
+      ),
+      desktopAuthService.authorizedFetch(
+        state,
+        `${apiBase}/lending?branch_id=${encodeURIComponent(branchId)}&limit=250`
       )
     ]);
 
     const nextState =
+      lendingResult.state ??
       customersResult.state ??
       priceListsResult.state ??
       inventoryOpeningResult.state ??
@@ -218,9 +226,10 @@ export class DesktopMasterDataService {
       !productsResult.response.ok ||
       !inventoryOpeningResult.response.ok ||
       !priceListsResult.response.ok ||
-      !customersResult.response.ok
+      !customersResult.response.ok ||
+      !lendingResult.response.ok
     ) {
-      throw new Error('Unable to refresh desktop product catalog from master data.');
+      throw new Error('Unable to refresh desktop branch data from the server.');
     }
 
     const branchRows = (await branchesResult.response.json()) as BranchRecord[];
@@ -229,6 +238,7 @@ export class DesktopMasterDataService {
     const inventorySnapshot = (await inventoryOpeningResult.response.json()) as InventoryOpeningSnapshot;
     const priceListRows = (await priceListsResult.response.json()) as PriceListRecord[];
     const customerRows = (await customersResult.response.json()) as Record<string, unknown>[];
+    const lendingRows = (await lendingResult.response.json()) as DesktopLendingRecord[];
 
     const scopedLocations = locationRows.filter((row) => !row.branchId || row.branchId === branchId);
     const locationIdSet = new Set(scopedLocations.map((row) => row.id));
@@ -259,10 +269,12 @@ export class DesktopMasterDataService {
       toRows('price_list', scopedPriceLists as Record<string, unknown>[])
     );
     await desktopDb.replaceMasterDataEntity('customer', toRows('customer', customerRows));
+    await desktopDb.replaceMasterDataEntity('lending', toRows('lending', lendingRows as unknown as Record<string, unknown>[]));
 
     return {
       productCount: productRows.filter((row) => row.isActive !== false).length,
       customerCount: customerRows.length,
+      lendingCount: lendingRows.length,
       syncedAt: new Date().toISOString(),
       state: nextState
     };
@@ -363,6 +375,67 @@ export class DesktopMasterDataService {
       })
       .sort((a, b) => a.name.localeCompare(b.name));
   }
+
+  async loadLendingRecords(branchId?: string, locationId?: string): Promise<DesktopLendingRecord[]> {
+    const rows = await desktopDb.listMasterData('lending');
+    return rows
+      .map((row) => safeParse(row.payload) as unknown as DesktopLendingRecord)
+      .filter((row) => !branchId || row.branch_id === branchId)
+      .filter((row) => !locationId || row.location_id === locationId)
+      .sort((a, b) => new Date(b.opened_at).getTime() - new Date(a.opened_at).getTime());
+  }
+
+  async refreshLendingRecords(
+    state: DesktopAppState,
+    branchId: string
+  ): Promise<{ count: number; state: DesktopAppState }> {
+    const { response, state: nextState } = await desktopAuthService.authorizedFetch(
+      state,
+      `${normalizeBaseUrl(state.setup.apiBaseUrl)}/lending?branch_id=${encodeURIComponent(branchId)}&limit=250`
+    );
+    if (!response.ok) {
+      throw new Error(`Unable to load lending records (${response.status})`);
+    }
+    const rows = (await response.json()) as DesktopLendingRecord[];
+    await desktopDb.replaceMasterDataEntity('lending', toRows('lending', rows as unknown as Record<string, unknown>[]));
+    return {
+      count: rows.length,
+      state: nextState
+    };
+  }
+
+  async loadCachedLendingDetail(lendingId: string): Promise<DesktopLendingDetail | null> {
+    const rows = await desktopDb.listMasterData('lending_detail');
+    const match = rows.find((row) => row.recordId === lendingId);
+    if (!match) {
+      return null;
+    }
+    return safeParse(match.payload) as unknown as DesktopLendingDetail;
+  }
+
+  async refreshLendingDetail(
+    state: DesktopAppState,
+    lendingId: string
+  ): Promise<{ detail: DesktopLendingDetail; state: DesktopAppState }> {
+    const { response, state: nextState } = await desktopAuthService.authorizedFetch(
+      state,
+      `${normalizeBaseUrl(state.setup.apiBaseUrl)}/lending/${encodeURIComponent(lendingId)}`
+    );
+    if (!response.ok) {
+      throw new Error(`Unable to load lending detail (${response.status})`);
+    }
+    const detail = (await response.json()) as DesktopLendingDetail;
+    await desktopDb.upsertMasterDataRows([
+      {
+        entity: 'lending_detail',
+        recordId: lendingId,
+        payload: JSON.stringify(detail),
+        updatedAt: new Date().toISOString()
+      }
+    ]);
+    return { detail, state: nextState };
+  }
 }
 
 export const desktopMasterDataService = new DesktopMasterDataService();
+

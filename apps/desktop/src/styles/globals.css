@@ -677,6 +677,10 @@ kbd {
   margin-bottom: 12px;
 }
 
+.embedded-panel {
+  margin-top: 18px;
+}
+
 .recent-sale-actions {
   align-items: center;
   gap: 10px;
