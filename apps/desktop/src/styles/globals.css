@@ -450,7 +450,9 @@ kbd {
 .checkout-action-row,
 .recent-sale-actions,
 .desktop-settings-actions,
-.customer-detail-grid {
+.customer-detail-grid,
+.sales-summary-strip,
+.filter-chip-row {
   display: flex;
 }
 
@@ -564,6 +566,117 @@ kbd {
   font-size: 1.1rem;
 }
 
+.sales-summary-strip {
+  gap: 14px;
+  flex-wrap: wrap;
+}
+
+.sales-summary-strip > div {
+  min-width: 148px;
+  padding: 14px 16px;
+  border-radius: 18px;
+  background: rgba(255,255,255,0.78);
+  border: 1px solid var(--border);
+  display: grid;
+  gap: 6px;
+}
+
+.sales-summary-strip span,
+.sales-list-row span {
+  color: var(--muted);
+  font-size: 0.9rem;
+}
+
+.sales-summary-strip strong {
+  font-size: 1.5rem;
+}
+
+.sales-shell {
+  display: grid;
+  grid-template-columns: 0.92fr 1.08fr;
+  gap: 18px;
+  align-items: start;
+}
+
+.filter-chip-row {
+  gap: 10px;
+  flex-wrap: wrap;
+  margin: 16px 0;
+}
+
+.filter-chip {
+  border: 1px solid var(--border);
+  background: rgba(255,255,255,0.82);
+  border-radius: 999px;
+  padding: 10px 14px;
+  color: var(--text);
+  font-weight: 700;
+}
+
+.filter-chip.active {
+  background: linear-gradient(145deg, var(--accent), var(--accent-strong));
+  border-color: transparent;
+  color: #fff;
+}
+
+.sales-list,
+.sales-detail-stack {
+  display: grid;
+  gap: 12px;
+}
+
+.sales-list {
+  max-height: 680px;
+  overflow: auto;
+}
+
+.sales-list-row {
+  width: 100%;
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  background: rgba(255,255,255,0.82);
+  padding: 14px 16px;
+  display: flex;
+  justify-content: space-between;
+  gap: 14px;
+  align-items: center;
+  text-align: left;
+}
+
+.sales-list-row.selected {
+  border-color: rgba(186, 90, 49, 0.28);
+  background: rgba(255, 244, 236, 0.95);
+  box-shadow: 0 10px 22px rgba(186, 90, 49, 0.12);
+}
+
+.sales-list-row-right {
+  display: grid;
+  gap: 8px;
+  justify-items: end;
+}
+
+.sales-detail-panel {
+  min-height: 680px;
+}
+
+.sales-detail-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.sales-line-panel,
+.sales-sync-panel {
+  padding: 16px;
+  border-radius: 18px;
+  background: rgba(255,255,255,0.72);
+  border: 1px solid var(--border);
+}
+
+.panel-head.compact {
+  margin-bottom: 12px;
+}
+
 .recent-sale-actions {
   align-items: center;
   gap: 10px;
@@ -611,7 +724,9 @@ kbd {
   .metric-grid,
   .two-col-grid,
   .form-grid,
-  .checkout-grid {
+  .checkout-grid,
+  .sales-shell,
+  .sales-detail-grid {
     grid-template-columns: 1fr;
   }
 }

@@ -6,6 +6,7 @@ import { DashboardScreen } from '../screens/DashboardScreen';
 import { SettingsScreen } from '../screens/SettingsScreen';
 import { ModulePlaceholderScreen } from '../screens/ModulePlaceholderScreen';
 import { PosScreen } from '../screens/PosScreen';
+import { SalesScreen } from '../screens/SalesScreen';
 import { DEFAULT_DESKTOP_APP_STATE, type DesktopAppState } from '../db/schema';
 import { desktopDb } from '../db/sqlite';
 import { desktopSettingsService } from '../services/desktop-settings.service';
@@ -168,6 +169,8 @@ export function App(): JSX.Element {
     );
   } else if (activeRoute === 'pos') {
     content = <PosScreen appState={state} onOutboxChanged={refreshOutboxCount} />;
+  } else if (activeRoute === 'sales') {
+    content = <SalesScreen appState={state} onOutboxChanged={refreshOutboxCount} />;
   } else if (activeRoute === 'settings') {
     content = (
       <SettingsScreen

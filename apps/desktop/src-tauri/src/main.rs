@@ -463,6 +463,21 @@ fn desktop_save_sale(app: AppHandle, sale: DesktopSaleRecordPayload) -> Result<D
 }
 
 #[tauri::command]
+fn desktop_mark_sale_sync_status(
+    app: AppHandle,
+    id: String,
+    sync_status: String,
+) -> Result<(), String> {
+    let conn = connection(&app)?;
+    conn.execute(
+        "UPDATE sales_local SET sync_status = ?2, updated_at = ?3 WHERE id = ?1",
+        params![id, sync_status, now_iso()],
+    )
+    .map_err(|err| err.to_string())?;
+    Ok(())
+}
+
+#[tauri::command]
 fn desktop_list_master_data(
     app: AppHandle,
     entity: Option<String>,
@@ -681,6 +696,7 @@ fn main() {
             desktop_save_state,
             desktop_list_sales,
             desktop_save_sale,
+            desktop_mark_sale_sync_status,
             desktop_list_master_data,
             desktop_replace_master_data_entity,
             desktop_list_outbox,

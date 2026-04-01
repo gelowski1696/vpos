@@ -130,6 +130,26 @@ export class DesktopDb {
     return sale;
   }
 
+  async markSaleSyncStatus(id: string, syncStatus: DesktopSaleRecord['syncStatus']): Promise<void> {
+    if (isTauriRuntime()) {
+      await invoke('desktop_mark_sale_sync_status', { id, syncStatus });
+      return;
+    }
+    const rows = await this.listSales();
+    const next = rows.map((row) =>
+      row.id === id
+        ? {
+            ...row,
+            syncStatus,
+            updatedAt: new Date().toISOString()
+          }
+        : row
+    );
+    if (canUseStorage()) {
+      window.localStorage.setItem(SALES_KEY, JSON.stringify(next));
+    }
+  }
+
   async listMasterData(entity?: string): Promise<DesktopMasterDataRow[]> {
     if (isTauriRuntime()) {
       return invoke<DesktopMasterDataRow[]>('desktop_list_master_data', { entity: entity ?? null });

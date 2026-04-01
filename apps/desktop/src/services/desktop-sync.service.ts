@@ -63,9 +63,25 @@ export class DesktopSyncService {
         const pushResult = await transport.push(pushRequest);
         for (const acceptedId of pushResult.accepted) {
           await desktopDb.markOutboxStatus(acceptedId, 'synced' as Parameters<typeof desktopDb.markOutboxStatus>[1]);
+          const acceptedRow = pending.find((row) => row.id === acceptedId);
+          if (acceptedRow?.entity === 'sale' && acceptedRow.action === 'create') {
+            const saleId =
+              typeof acceptedRow.payload?.id === 'string'
+                ? acceptedRow.payload.id
+                : acceptedRow.id.replace(/^outbox-/, '');
+            await desktopDb.markSaleSyncStatus(saleId, 'synced');
+          }
         }
         for (const rejected of pushResult.rejected) {
           await desktopDb.incrementOutboxRetry(rejected.id, rejected.reason);
+          const rejectedRow = pending.find((row) => row.id === rejected.id);
+          if (rejectedRow?.entity === 'sale' && rejectedRow.action === 'create') {
+            const saleId =
+              typeof rejectedRow.payload?.id === 'string'
+                ? rejectedRow.payload.id
+                : rejectedRow.id.replace(/^outbox-/, '');
+            await desktopDb.markSaleSyncStatus(saleId, 'failed');
+          }
         }
       }
       await transport.pull(deviceId);
