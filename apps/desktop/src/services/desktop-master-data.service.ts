@@ -3,6 +3,7 @@ import type {
   DesktopAppState,
   DesktopCatalogProduct,
   DesktopLendingDetail,
+  DesktopLendingReturnDraft,
   DesktopLendingRecord,
   DesktopMasterDataRow,
   DesktopOption
@@ -431,6 +432,51 @@ export class DesktopMasterDataService {
         recordId: lendingId,
         payload: JSON.stringify(detail),
         updatedAt: new Date().toISOString()
+      }
+    ]);
+    return { detail, state: nextState };
+  }
+
+  async recordLendingReturn(
+    state: DesktopAppState,
+    lendingId: string,
+    draft: DesktopLendingReturnDraft
+  ): Promise<{ detail: DesktopLendingDetail; state: DesktopAppState }> {
+    const { response, state: nextState } = await desktopAuthService.authorizedFetch(
+      state,
+      `${normalizeBaseUrl(state.setup.apiBaseUrl)}/lending/${encodeURIComponent(lendingId)}/return`,
+      {
+        method: 'POST',
+        body: JSON.stringify({
+          remarks: draft.remarks ?? null,
+          received_by_user_id: draft.received_by_user_id ?? null,
+          lines: draft.lines.map((line) => ({
+            lending_line_id: line.lending_line_id,
+            returned_qty: line.returned_qty,
+            condition: line.condition,
+            remarks: line.remarks ?? null
+          }))
+        })
+      }
+    );
+    if (!response.ok) {
+      const detail = await response.text().catch(() => '');
+      throw new Error(detail || `Unable to record lending return (${response.status})`);
+    }
+    const detail = (await response.json()) as DesktopLendingDetail;
+    const now = new Date().toISOString();
+    await desktopDb.upsertMasterDataRows([
+      {
+        entity: 'lending_detail',
+        recordId: lendingId,
+        payload: JSON.stringify(detail),
+        updatedAt: now
+      },
+      {
+        entity: 'lending',
+        recordId: lendingId,
+        payload: JSON.stringify(detail),
+        updatedAt: now
       }
     ]);
     return { detail, state: nextState };

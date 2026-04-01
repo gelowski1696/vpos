@@ -1,5 +1,5 @@
 import type { SyncPushRequest } from '@vpos/shared-types';
-import type { DesktopAppState } from '../db/schema';
+import type { DesktopAppState, DesktopSaleRecord } from '../db/schema';
 import { desktopDb } from '../db/sqlite';
 import { desktopAuthService } from './desktop-auth.service';
 
@@ -39,6 +39,48 @@ class HttpSyncTransport {
 }
 
 export class DesktopSyncService {
+  private async updateLinkedSaleStatus(
+    row: { entity: string; action: string; payload?: Record<string, unknown> | null; id: string },
+    syncStatus: DesktopSaleRecord['syncStatus']
+  ): Promise<void> {
+    const saleId =
+      row.entity === 'sale'
+        ? typeof row.payload?.id === 'string'
+          ? row.payload.id
+          : row.id.replace(/^outbox-/, '')
+        : typeof row.payload?.sale_id === 'string'
+          ? row.payload.sale_id
+          : typeof row.payload?.saleId === 'string'
+            ? row.payload.saleId
+            : null;
+
+    if (!saleId) {
+      return;
+    }
+
+    const rows = await desktopDb.listSales();
+    const sale = rows.find((entry) => entry.id === saleId);
+    if (!sale) {
+      return;
+    }
+
+    const nextSale: DesktopSaleRecord = {
+      ...sale,
+      syncStatus,
+      updatedAt: new Date().toISOString(),
+      returns:
+        row.entity === 'sale_return'
+          ? (sale.returns ?? []).map((entry, index, list) =>
+              index === list.length - 1 && entry.status === 'pending'
+                ? { ...entry, status: syncStatus }
+                : entry
+            )
+          : sale.returns
+    };
+
+    await desktopDb.saveSale(nextSale);
+  }
+
   async runSync(
     state: DesktopAppState,
     deviceId: string
@@ -46,7 +88,9 @@ export class DesktopSyncService {
     try {
       const transport = new HttpSyncTransport(state);
       const rows = await desktopDb.listOutboxItems();
-      const pending = rows.filter((row) => row.status === 'pending' || row.status === 'failed');
+      const pending = rows
+        .filter((row) => row.status === 'pending' || row.status === 'failed')
+        .sort((a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime());
       if (pending.length > 0) {
         const pushRequest: SyncPushRequest = {
           device_id: deviceId,
@@ -64,23 +108,29 @@ export class DesktopSyncService {
         for (const acceptedId of pushResult.accepted) {
           await desktopDb.markOutboxStatus(acceptedId, 'synced' as Parameters<typeof desktopDb.markOutboxStatus>[1]);
           const acceptedRow = pending.find((row) => row.id === acceptedId);
-          if (acceptedRow?.entity === 'sale' && acceptedRow.action === 'create') {
-            const saleId =
-              typeof acceptedRow.payload?.id === 'string'
-                ? acceptedRow.payload.id
-                : acceptedRow.id.replace(/^outbox-/, '');
-            await desktopDb.markSaleSyncStatus(saleId, 'synced');
+          if (
+            acceptedRow &&
+            (
+              (acceptedRow.entity === 'sale' && acceptedRow.action === 'create') ||
+              (acceptedRow.entity === 'sale_cancel' && acceptedRow.action === 'create') ||
+              (acceptedRow.entity === 'sale_return' && acceptedRow.action === 'create')
+            )
+          ) {
+            await this.updateLinkedSaleStatus(acceptedRow, 'synced');
           }
         }
         for (const rejected of pushResult.rejected) {
           await desktopDb.incrementOutboxRetry(rejected.id, rejected.reason);
           const rejectedRow = pending.find((row) => row.id === rejected.id);
-          if (rejectedRow?.entity === 'sale' && rejectedRow.action === 'create') {
-            const saleId =
-              typeof rejectedRow.payload?.id === 'string'
-                ? rejectedRow.payload.id
-                : rejectedRow.id.replace(/^outbox-/, '');
-            await desktopDb.markSaleSyncStatus(saleId, 'failed');
+          if (
+            rejectedRow &&
+            (
+              (rejectedRow.entity === 'sale' && rejectedRow.action === 'create') ||
+              (rejectedRow.entity === 'sale_cancel' && rejectedRow.action === 'create') ||
+              (rejectedRow.entity === 'sale_return' && rejectedRow.action === 'create')
+            )
+          ) {
+            await this.updateLinkedSaleStatus(rejectedRow, 'failed');
           }
         }
       }

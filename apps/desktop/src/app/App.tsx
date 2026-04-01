@@ -9,7 +9,7 @@ import { PosScreen } from '../screens/PosScreen';
 import { SalesScreen } from '../screens/SalesScreen';
 import { CustomersScreen } from '../screens/CustomersScreen';
 import { LendingScreen } from '../screens/LendingScreen';
-import { DEFAULT_DESKTOP_APP_STATE, type DesktopAppState } from '../db/schema';
+import { DEFAULT_DESKTOP_APP_STATE, type DesktopAppState, type DesktopSaleRecord } from '../db/schema';
 import { desktopDb } from '../db/sqlite';
 import { desktopSettingsService } from '../services/desktop-settings.service';
 import { desktopSyncService } from '../services/desktop-sync.service';
@@ -74,6 +74,8 @@ export function App(): JSX.Element {
   const [booting, setBooting] = useState(true);
   const [syncBusy, setSyncBusy] = useState(false);
   const [pendingOutboxCount, setPendingOutboxCount] = useState(0);
+  const [reopenSaleDraft, setReopenSaleDraft] = useState<{ sale: DesktopSaleRecord; mode: 'copy' | 'recreate' } | null>(null);
+  const [reopenSaleNonce, setReopenSaleNonce] = useState(0);
 
   const reloadDesktopState = async (): Promise<void> => {
     const [next, outbox] = await Promise.all([desktopSettingsService.getState(), desktopDb.listOutboxItems()]);
@@ -170,11 +172,37 @@ export function App(): JSX.Element {
       />
     );
   } else if (activeRoute === 'pos') {
-    content = <PosScreen appState={state} onOutboxChanged={refreshOutboxCount} />;
+    content = (
+      <PosScreen
+        appState={state}
+        onOutboxChanged={refreshOutboxCount}
+        reopenedSale={reopenSaleDraft?.sale ?? null}
+        reopenedSaleMode={reopenSaleDraft?.mode ?? 'copy'}
+        reopenedSaleNonce={reopenSaleNonce}
+      />
+    );
   } else if (activeRoute === 'customers') {
-    content = <CustomersScreen />;
+    content = (
+      <CustomersScreen
+        onReopenSale={(sale) => {
+          setReopenSaleDraft({ sale, mode: 'copy' });
+          setReopenSaleNonce((value) => value + 1);
+          setActiveRoute('pos');
+        }}
+      />
+    );
   } else if (activeRoute === 'sales') {
-    content = <SalesScreen appState={state} onOutboxChanged={refreshOutboxCount} />;
+    content = (
+      <SalesScreen
+        appState={state}
+        onOutboxChanged={refreshOutboxCount}
+        onReopenSale={(sale, mode) => {
+          setReopenSaleDraft({ sale, mode });
+          setReopenSaleNonce((value) => value + 1);
+          setActiveRoute('pos');
+        }}
+      />
+    );
   } else if (activeRoute === 'lending') {
     content = <LendingScreen appState={state} onStateReload={reloadDesktopState} />;
   } else if (activeRoute === 'settings') {

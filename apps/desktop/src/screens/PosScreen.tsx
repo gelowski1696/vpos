@@ -20,6 +20,9 @@ type CartLine = DesktopCatalogProduct & {
 type Props = {
   appState: DesktopAppState;
   onOutboxChanged?: () => Promise<void> | void;
+  reopenedSale?: DesktopSaleRecord | null;
+  reopenedSaleMode?: 'copy' | 'recreate';
+  reopenedSaleNonce?: number;
 };
 
 function fmtMoney(value: number): string {
@@ -34,7 +37,13 @@ function makeReceiptNumber(branchLabel: string, saleId: string): string {
   return `${prefix}-${saleId.slice(-6).toUpperCase()}`;
 }
 
-export function PosScreen({ appState, onOutboxChanged }: Props): JSX.Element {
+export function PosScreen({
+  appState,
+  onOutboxChanged,
+  reopenedSale = null,
+  reopenedSaleMode = 'copy',
+  reopenedSaleNonce = 0
+}: Props): JSX.Element {
   const [search, setSearch] = useState('');
   const [customerSearch, setCustomerSearch] = useState('');
   const [selectedCustomerId, setSelectedCustomerId] = useState('');
@@ -46,6 +55,7 @@ export function PosScreen({ appState, onOutboxChanged }: Props): JSX.Element {
   const [catalog, setCatalog] = useState<DesktopCatalogProduct[]>([]);
   const [customers, setCustomers] = useState<DesktopOption[]>([]);
   const [recentSales, setRecentSales] = useState<DesktopSaleRecord[]>([]);
+  const [recreatedFromSaleId, setRecreatedFromSaleId] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [loadingCatalog, setLoadingCatalog] = useState(false);
   const [message, setMessage] = useState('Sync branch data in Settings once, then this desktop POS will use the cached product and customer records.');
@@ -122,6 +132,53 @@ export function PosScreen({ appState, onOutboxChanged }: Props): JSX.Element {
     void refreshCatalog();
   }, [appState.setup.locationId]);
 
+  useEffect(() => {
+    if (!reopenedSale) {
+      return;
+    }
+    const cartLines: CartLine[] = reopenedSale.payload.lines.map((line) => {
+      const match = catalog.find((product) => product.id === line.productId);
+      return {
+        ...(match ?? {
+          id: line.productId,
+          sku: line.productId,
+          name: line.productName,
+          category: 'Reopened Sale',
+          unit: 'unit',
+          unitPrice: line.unitPrice,
+          qtyOnHand: 0,
+          qtyFull: 0,
+          qtyEmpty: 0,
+          isLpg: false
+        }),
+        quantity: line.quantity,
+        unitPrice: line.unitPrice
+      };
+    });
+    setCart(cartLines);
+    setSelectedCustomerId(reopenedSale.payload.customerId ?? '');
+    setCustomerSearch(reopenedSale.payload.customerName ?? '');
+    setSaleType(reopenedSale.payload.saleType);
+    setPaymentMethod(reopenedSale.payload.paymentMethod);
+    setRecreatedFromSaleId(reopenedSaleMode === 'recreate' ? reopenedSale.id : reopenedSale.payload.recreatedFromSaleId ?? null);
+    setDiscountAmount(String(reopenedSale.payload.discountAmount ?? 0));
+    setNotes(
+      [
+        reopenedSale.payload.notes,
+        reopenedSaleMode === 'recreate'
+          ? `Recreated from ${reopenedSale.receiptNumber}`
+          : `Reopened from ${reopenedSale.receiptNumber}`
+      ]
+        .filter(Boolean)
+        .join(' | ')
+    );
+    setMessage(
+      reopenedSaleMode === 'recreate'
+        ? `Loaded ${reopenedSale.receiptNumber} back into POS as a replacement sale. Review the cart, then save the new desktop sale when ready.`
+        : `Loaded ${reopenedSale.receiptNumber} back into POS. Review the cart, then save as a new desktop sale when ready.`
+    );
+  }, [reopenedSaleNonce, reopenedSale, reopenedSaleMode]);
+
   const addToCart = (product: DesktopCatalogProduct): void => {
     setCart((prev) => {
       const existing = prev.find((line) => line.id === product.id);
@@ -174,6 +231,7 @@ export function PosScreen({ appState, onOutboxChanged }: Props): JSX.Element {
       id: saleId,
       customerId: selectedCustomer?.id ?? null,
       customerName: selectedCustomer?.label ?? null,
+      recreatedFromSaleId,
       saleType,
       paymentMethod,
       branchLabel: appState.setup.branchLabel,
@@ -212,6 +270,7 @@ export function PosScreen({ appState, onOutboxChanged }: Props): JSX.Element {
     setSelectedCustomerId('');
     setNotes('');
     setDiscountAmount('0');
+    setRecreatedFromSaleId(null);
     return saleRecord;
   };
 

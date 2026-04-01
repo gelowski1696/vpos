@@ -39,7 +39,18 @@ function parseLocalState(raw: string | null): DesktopAppState {
       ...DEFAULT_DESKTOP_APP_STATE,
       ...parsed,
       printerProfiles: Array.isArray(parsed.printerProfiles)
-        ? parsed.printerProfiles
+        ? parsed.printerProfiles.map((profile) => ({
+            id: profile.id,
+            label: profile.label,
+            mode: profile.mode,
+            printerName: profile.printerName,
+            printerHost: profile.printerHost,
+            printerPort: profile.printerPort,
+            lastTestedAt: profile.lastTestedAt ?? null,
+            lastSuccessAt: profile.lastSuccessAt ?? null,
+            lastTestStatus: profile.lastTestStatus ?? 'idle',
+            lastTestMessage: profile.lastTestMessage ?? null
+          }))
         : DEFAULT_DESKTOP_APP_STATE.printerProfiles,
       setup: {
         ...DEFAULT_DESKTOP_APP_STATE.setup,

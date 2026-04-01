@@ -14,11 +14,20 @@ function customerSales(sales: DesktopSaleRecord[], customerId: string | null): D
   return sales.filter((sale) => sale.payload.customerId === customerId);
 }
 
-export function CustomersScreen(): JSX.Element {
+function saleMetaText(sale: DesktopSaleRecord): string {
+  return [sale.payload.saleType, sale.payload.paymentMethod, sale.syncStatus].join(' · ');
+}
+
+type Props = {
+  onReopenSale?: (sale: DesktopSaleRecord) => void;
+};
+
+export function CustomersScreen({ onReopenSale }: Props): JSX.Element {
   const [customers, setCustomers] = useState<DesktopOption[]>([]);
   const [sales, setSales] = useState<DesktopSaleRecord[]>([]);
   const [search, setSearch] = useState('');
   const [selectedCustomerId, setSelectedCustomerId] = useState('');
+  const [selectedSaleId, setSelectedSaleId] = useState('');
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
@@ -26,10 +35,7 @@ export function CustomersScreen(): JSX.Element {
     async function load(): Promise<void> {
       setLoading(true);
       try {
-        const [customerRows, saleRows] = await Promise.all([
-          desktopMasterDataService.loadCustomers(),
-          desktopDb.listSales()
-        ]);
+        const [customerRows, saleRows] = await Promise.all([desktopMasterDataService.loadCustomers(), desktopDb.listSales()]);
         if (!active) {
           return;
         }
@@ -55,9 +61,7 @@ export function CustomersScreen(): JSX.Element {
     if (!term) {
       return customers;
     }
-    return customers.filter((customer) =>
-      [customer.label, customer.subtitle ?? ''].join(' ').toLowerCase().includes(term)
-    );
+    return customers.filter((customer) => [customer.label, customer.subtitle ?? ''].join(' ').toLowerCase().includes(term));
   }, [customers, search]);
 
   const selectedCustomer =
@@ -70,6 +74,8 @@ export function CustomersScreen(): JSX.Element {
     () => customerSales(sales, selectedCustomer?.id ?? null).slice(0, 8),
     [sales, selectedCustomer]
   );
+
+  const selectedSale = selectedSales.find((sale) => sale.id === selectedSaleId) ?? selectedSales[0] ?? null;
 
   const summary = useMemo(() => {
     const totalBalance = customers.reduce((sum, customer) => sum + (customer.balance ?? 0), 0);
@@ -138,7 +144,10 @@ export function CustomersScreen(): JSX.Element {
                   key={customer.id}
                   type="button"
                   className={`sales-list-row ${selectedCustomer?.id === customer.id ? 'selected' : ''}`}
-                  onClick={() => setSelectedCustomerId(customer.id)}
+                  onClick={() => {
+                    setSelectedCustomerId(customer.id);
+                    setSelectedSaleId('');
+                  }}
                 >
                   <div>
                     <strong>{customer.label}</strong>
@@ -208,20 +217,76 @@ export function CustomersScreen(): JSX.Element {
                     <div className="empty-state">No local desktop sales have been recorded for this customer yet.</div>
                   ) : (
                     selectedSales.map((sale) => (
-                      <article key={sale.id} className="recent-sale-card">
-                        <div>
-                          <strong>{sale.receiptNumber}</strong>
-                          <span>{sale.payload.saleType} · {sale.payload.paymentMethod}</span>
+                      <article key={sale.id} className={`recent-sale-card ${selectedSale?.id === sale.id ? 'selected-card' : ''}`}>
+                        <button type="button" className="card-fill-button" onClick={() => setSelectedSaleId(sale.id)}>
+                          <div>
+                            <strong>{sale.receiptNumber}</strong>
+                            <span>{saleMetaText(sale)}</span>
+                          </div>
+                          <div>
+                            <strong>{fmtMoney(sale.payload.totalAmount)}</strong>
+                            <span>{new Date(sale.createdAt).toLocaleString()}</span>
+                          </div>
+                          <div className={`sync-chip ${sale.syncStatus}`}>{sale.syncStatus}</div>
+                        </button>
+                        <div className="recent-sale-actions">
+                          <button className="secondary-btn mini-btn" type="button" onClick={() => setSelectedSaleId(sale.id)}>
+                            View Sale
+                          </button>
+                          <button className="secondary-btn mini-btn" type="button" onClick={() => onReopenSale?.(sale)}>
+                            Reopen in POS
+                          </button>
                         </div>
-                        <div>
-                          <strong>{fmtMoney(sale.payload.totalAmount)}</strong>
-                          <span>{new Date(sale.createdAt).toLocaleString()}</span>
-                        </div>
-                        <div className={`sync-chip ${sale.syncStatus}`}>{sale.syncStatus}</div>
                       </article>
                     ))
                   )}
                 </div>
+              </section>
+
+              <section className="sales-sync-panel">
+                <div className="panel-head compact">
+                  <div>
+                    <div className="eyebrow">Selected sale detail</div>
+                    <h3>{selectedSale ? selectedSale.receiptNumber : 'Choose a sale above'}</h3>
+                  </div>
+                  {selectedSale ? (
+                    <button className="secondary-btn mini-btn" type="button" onClick={() => onReopenSale?.(selectedSale)}>
+                      Reopen in POS
+                    </button>
+                  ) : null}
+                </div>
+                {!selectedSale ? (
+                  <div className="empty-state">Choose one of the recent desktop sales above to review its items and totals.</div>
+                ) : (
+                  <div className="sales-detail-stack">
+                    <dl className="detail-list">
+                      <div>
+                        <dt>Sale Meta</dt>
+                        <dd>{saleMetaText(selectedSale)}</dd>
+                      </div>
+                      <div>
+                        <dt>Created</dt>
+                        <dd>{new Date(selectedSale.createdAt).toLocaleString()}</dd>
+                      </div>
+                      <div>
+                        <dt>Notes</dt>
+                        <dd>{selectedSale.payload.notes || 'No cashier note recorded.'}</dd>
+                      </div>
+                    </dl>
+                    <div className="cart-list">
+                      {selectedSale.payload.lines.map((line) => (
+                        <div key={`${selectedSale.id}-${line.productId}-${line.productName}`} className="cart-row">
+                          <div>
+                            <strong>{line.productName}</strong>
+                            <span>Qty {line.quantity}</span>
+                          </div>
+                          <strong>{fmtMoney(line.unitPrice)}</strong>
+                          <strong>{fmtMoney(line.lineTotal)}</strong>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
               </section>
             </div>
           )}

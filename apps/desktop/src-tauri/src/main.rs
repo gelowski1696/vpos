@@ -54,6 +54,14 @@ struct DesktopPrinterProfilePayload {
     printer_name: String,
     printer_host: String,
     printer_port: String,
+    #[serde(default)]
+    last_tested_at: Option<String>,
+    #[serde(default)]
+    last_success_at: Option<String>,
+    #[serde(default = "default_last_test_status")]
+    last_test_status: String,
+    #[serde(default)]
+    last_test_message: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -200,6 +208,10 @@ fn default_state() -> DesktopAppStatePayload {
             last_sync_message: "Desktop setup has not been completed yet.".to_string(),
         },
     }
+}
+
+fn default_last_test_status() -> String {
+    "idle".to_string()
 }
 
 fn now_iso() -> String {

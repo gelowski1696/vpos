@@ -21,6 +21,10 @@ export type DesktopPrinterProfile = {
   printerName: string;
   printerHost: string;
   printerPort: string;
+  lastTestedAt: string | null;
+  lastSuccessAt: string | null;
+  lastTestStatus: 'idle' | 'success' | 'error';
+  lastTestMessage: string | null;
 };
 
 export type DesktopAuthState = {
@@ -57,6 +61,7 @@ export type DesktopSalePayload = {
   id: string;
   customerId: string | null;
   customerName: string | null;
+  recreatedFromSaleId?: string | null;
   saleType: DesktopSaleType;
   paymentMethod: DesktopPaymentMethod;
   branchLabel: string;
@@ -69,9 +74,31 @@ export type DesktopSalePayload = {
   createdAt: string;
 };
 
+export type DesktopSaleReturnLine = {
+  saleLineId: string | null;
+  productId: string;
+  productName: string;
+  quantity: number;
+  unitPrice: number;
+  lineTotal: number;
+};
+
+export type DesktopSaleReturnRecord = {
+  id: string;
+  reason: string;
+  status: 'pending' | 'synced' | 'failed';
+  createdAt: string;
+  lines: DesktopSaleReturnLine[];
+};
+
 export type DesktopSaleRecord = {
   id: string;
   payload: DesktopSalePayload;
+  saleStatus?: 'ACTIVE' | 'CANCELLED';
+  cancelReason?: string | null;
+  cancelledAt?: string | null;
+  replacementSaleId?: string | null;
+  returns?: DesktopSaleReturnRecord[];
   syncStatus: 'pending' | 'failed' | 'synced';
   receiptNumber: string;
   createdAt: string;
@@ -167,6 +194,19 @@ export type DesktopLendingRecord = {
 export type DesktopLendingDetail = DesktopLendingRecord & {
   lines: DesktopLendingLine[];
   returns: DesktopLendingReturn[];
+};
+
+export type DesktopLendingReturnDraftLine = {
+  lending_line_id: string;
+  returned_qty: number;
+  condition: 'GOOD' | 'DAMAGED' | 'LOST';
+  remarks?: string | null;
+};
+
+export type DesktopLendingReturnDraft = {
+  remarks?: string | null;
+  received_by_user_id?: string | null;
+  lines: DesktopLendingReturnDraftLine[];
 };
 
 export const DEFAULT_DESKTOP_APP_STATE: DesktopAppState = {
