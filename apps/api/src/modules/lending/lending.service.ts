@@ -319,9 +319,9 @@ export class LendingService {
             );
           }
           const flow = saleLineFlowMeta.get(saleLine.id)?.cylinder_flow ?? null;
-          if (flow !== 'NON_REFILL') {
+          if (flow !== 'REFILL_EXCHANGE') {
             throw new BadRequestException(
-              `${product.name} can only be lent from a non-refill sale line`
+              `${product.name} can only be lent from a refill sale line`
             );
           }
           const canLendFromSaleLine = product.isLendable || Boolean(product.cylinderType);
@@ -728,7 +728,7 @@ export class LendingService {
         (line) =>
           line.is_product_active &&
           line.is_sale_link_lendable &&
-          line.cylinder_flow === 'NON_REFILL'
+          line.cylinder_flow === 'REFILL_EXCHANGE'
       )
       .sort((a, b) => a.line_index - b.line_index)
       .map(

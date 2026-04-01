@@ -770,7 +770,7 @@ export function SalesScreen({
         if (input?.productId?.trim() && product.product_id !== input.productId.trim()) {
           return false;
         }
-        return product.cylinder_flow === 'NON_REFILL';
+        return product.cylinder_flow === 'REFILL_EXCHANGE';
       });
   };
 
@@ -1119,10 +1119,10 @@ export function SalesScreen({
       toastError('Lending', 'A customer-linked sale is required before lending.');
       return;
     }
-    if (input?.cylinderFlow === 'REFILL_EXCHANGE') {
+    if (input?.cylinderFlow === 'NON_REFILL') {
       toastInfo(
         'Lending',
-        'Refill lines are already handled as exchange movement and cannot be marked as lent.'
+        'Non-refill lines cannot be marked as lent. Use a refill line for lending.'
       );
       return;
     }
@@ -1160,14 +1160,14 @@ export function SalesScreen({
         toastInfo(
           'Lending',
           input?.productId?.trim()
-            ? 'This sale line is not eligible for lending. Only non-refill lendable lines can be marked as lent.'
+            ? 'This sale line is not eligible for lending. Only refill lendable lines can be marked as lent.'
             : 'No lendable items are available for this sale location.'
         );
         return;
       }
       const products = matchingProducts.filter((product) => product.remaining_lendable_qty > 0);
       if (!products.length) {
-        toastInfo('Lending', 'This non-refill sale line is already fully marked as lent.');
+        toastInfo('Lending', 'This refill sale line is already fully marked as lent.');
         return;
       }
       setLendingProducts(products);
@@ -2128,7 +2128,7 @@ export function SalesScreen({
                     {flowLabel ? (
                       <Text style={[styles.itemMeta, { color: theme.subtext }]}>Flow: {flowLabel}</Text>
                     ) : null}
-                    {rawFlow === 'NON_REFILL' ? (
+                    {rawFlow === 'REFILL_EXCHANGE' ? (
                       <View style={styles.itemBadgeRow}>
                         <View
                           style={[
@@ -2168,9 +2168,9 @@ export function SalesScreen({
                     ) : null}
                     <View style={styles.itemActionRow}>
                       <Pressable
-                        onPress={() =>
-                          void openLendingModal({
-                            productId,
+                          onPress={() =>
+                            void openLendingModal({
+                              productId,
                             cylinderFlow:
                               rawFlow === 'REFILL_EXCHANGE'
                                 ? 'REFILL_EXCHANGE'
@@ -2184,7 +2184,7 @@ export function SalesScreen({
                           lendingLoading ||
                           !selectedSale.payload.customer_id ||
                           !selectedSaleIsActive ||
-                          rawFlow !== 'NON_REFILL' ||
+                          rawFlow !== 'REFILL_EXCHANGE' ||
                           remainingLendableQty <= 0
                         }
                         style={[
@@ -2196,7 +2196,7 @@ export function SalesScreen({
                               lendingLoading ||
                               !selectedSale.payload.customer_id ||
                               !selectedSaleIsActive ||
-                              rawFlow !== 'NON_REFILL' ||
+                              rawFlow !== 'REFILL_EXCHANGE' ||
                               remainingLendableQty <= 0
                                 ? theme.pillBg
                                 : theme.card
@@ -2206,11 +2206,11 @@ export function SalesScreen({
                         <Text style={[styles.inlineActionText, { color: theme.pillText }]}>
                           {!selectedSale.payload.customer_id
                             ? 'Customer Required'
-                            : rawFlow === 'REFILL_EXCHANGE'
-                              ? 'Refill Only'
+                            : rawFlow === 'NON_REFILL'
+                              ? 'Non-Refill'
                               : remainingLendableQty <= 0
                                 ? 'Fully Lent'
-                              : rawFlow === 'NON_REFILL'
+                              : rawFlow === 'REFILL_EXCHANGE'
                                 ? 'Lend'
                                 : 'Not Eligible'}
                         </Text>
@@ -2735,7 +2735,7 @@ export function SalesScreen({
               <View style={[styles.lendingHelperCard, { borderColor: theme.cardBorder, backgroundColor: theme.inputBg }]}>
                 <Text style={[styles.infoValue, { color: theme.heading }]}>Tap-friendly lending</Text>
                 <Text style={[styles.itemMeta, { color: theme.subtext }]}>
-                  Only non-refill sale lines can be marked as lent. Enter the quantity, review any deposit, then save.
+                  Only refill sale lines can be marked as lent. Enter the quantity, review any deposit, then save.
                 </Text>
               </View>
 
