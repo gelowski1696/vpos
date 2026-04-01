@@ -1,0 +1,10 @@
+D:\vpos\apps\desktop\src-tauri\target\debug\deps\libwindows_future-aa55ae6f7fbf6c84.rmeta: C:\Users\User\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\windows-future-0.2.1\src\lib.rs C:\Users\User\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\windows-future-0.2.1\src\bindings.rs C:\Users\User\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\windows-future-0.2.1\src\bindings_impl.rs C:\Users\User\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\windows-future-0.2.1\src\get.rs C:\Users\User\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\windows-future-0.2.1\src\waiter.rs C:\Users\User\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\windows-future-0.2.1\src\../readme.md
+
+D:\vpos\apps\desktop\src-tauri\target\debug\deps\windows_future-aa55ae6f7fbf6c84.d: C:\Users\User\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\windows-future-0.2.1\src\lib.rs C:\Users\User\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\windows-future-0.2.1\src\bindings.rs C:\Users\User\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\windows-future-0.2.1\src\bindings_impl.rs C:\Users\User\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\windows-future-0.2.1\src\get.rs C:\Users\User\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\windows-future-0.2.1\src\waiter.rs C:\Users\User\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\windows-future-0.2.1\src\../readme.md
+
+C:\Users\User\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\windows-future-0.2.1\src\lib.rs:
+C:\Users\User\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\windows-future-0.2.1\src\bindings.rs:
+C:\Users\User\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\windows-future-0.2.1\src\bindings_impl.rs:
+C:\Users\User\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\windows-future-0.2.1\src\get.rs:
+C:\Users\User\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\windows-future-0.2.1\src\waiter.rs:
+C:\Users\User\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\windows-future-0.2.1\src\../readme.md:

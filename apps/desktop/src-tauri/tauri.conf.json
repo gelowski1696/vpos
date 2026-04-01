@@ -1,0 +1,32 @@
+{
+  "$schema": "../node_modules/@tauri-apps/cli/schema.json",
+  "build": {
+    "beforeBuildCommand": "pnpm build",
+    "beforeDevCommand": "pnpm dev",
+    "devPath": "http://localhost:1420",
+    "distDir": "../dist"
+  },
+  "package": {
+    "productName": "VPOS Desktop",
+    "version": "0.1.0"
+  },
+  "tauri": {
+    "allowlist": {
+      "all": false,
+      "shell": {
+        "all": false,
+        "open": false
+      }
+    },
+    "windows": [
+      {
+        "title": "VPOS Desktop",
+        "width": 1440,
+        "height": 920,
+        "minWidth": 1180,
+        "minHeight": 760,
+        "resizable": true
+      }
+    ]
+  }
+}
