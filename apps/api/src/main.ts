@@ -55,6 +55,13 @@ async function bootstrap(): Promise<void> {
     configuredOrigins.add("http://0.0.0.0:1421");
   }
 
+  configuredOrigins.add("tauri://localhost");
+  configuredOrigins.add("https://tauri.localhost");
+  configuredOrigins.add("http://tauri.localhost");
+  configuredOrigins.add("app://localhost");
+  configuredOrigins.add("https://app.localhost");
+  configuredOrigins.add("http://app.localhost");
+
   const allowAllOrigins = configuredOrigins.has("*");
 
   app.enableCors({
