@@ -18,6 +18,7 @@ import { EntitlementsModule } from './modules/entitlements/entitlements.module';
 import { AuditModule } from './modules/audit/audit.module';
 import { CustomerPaymentsModule } from './modules/customer-payments/customer-payments.module';
 import { MobileEnrollmentModule } from './modules/mobile-enrollment/mobile-enrollment.module';
+import { MobileUpdatesModule } from './modules/mobile-updates/mobile-updates.module';
 import { NfcModule } from './modules/nfc/nfc.module';
 import { LendingModule } from './modules/lending/lending.module';
 import { VcardModule } from './modules/vcard/vcard.module';
@@ -42,6 +43,7 @@ import { LpgItemActionsModule } from './modules/lpg-item-actions/lpg-item-action
     CustomerPaymentsModule,
     LendingModule,
     MobileEnrollmentModule,
+    MobileUpdatesModule,
     NfcModule,
     VcardModule,
     LpgItemActionsModule,
