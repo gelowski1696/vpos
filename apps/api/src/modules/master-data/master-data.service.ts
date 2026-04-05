@@ -3874,9 +3874,7 @@ export class MasterDataService {
           const cylinder = product.isLpg ? cylinderByLocation.get(balance.locationId) : undefined;
           const qtyFull = product.isLpg ? this.round(Number(cylinder?.qtyFull ?? 0), 4) : 0;
           const qtyEmpty = product.isLpg ? this.round(Number(cylinder?.qtyEmpty ?? 0), 4) : 0;
-          const qtyOnHand = product.isLpg
-            ? this.round(qtyFull + qtyEmpty, 4)
-            : this.round(Number(balance.qtyOnHand), 4);
+          const qtyOnHand = this.round(Number(balance.qtyOnHand), 4);
           const avgCost = this.round(Number(balance.avgCost), 4);
           const inventoryValue = this.round(qtyOnHand * avgCost, 2);
           const latestLedger = latestLedgerByLocation.get(balance.locationId);
@@ -4006,9 +4004,7 @@ export class MasterDataService {
           : null;
         const qtyFull = row.product.isLpg ? Number(cylinder?.qtyFull ?? 0) : 0;
         const qtyEmpty = row.product.isLpg ? Number(cylinder?.qtyEmpty ?? 0) : 0;
-        const qtyOnHand = row.product.isLpg
-          ? this.round(qtyFull + qtyEmpty, 4)
-          : this.round(Number(row.qtyOnHand), 4);
+        const qtyOnHand = this.round(Number(row.qtyOnHand), 4);
         const avgCost = this.round(Number(row.avgCost), 4);
         return {
           locationId: row.locationId,

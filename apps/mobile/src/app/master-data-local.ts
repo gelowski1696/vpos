@@ -18,6 +18,8 @@ export type MasterDataOption = {
   type?: string;
   code?: string;
   locationId?: string;
+  isLpg?: boolean;
+  cylinderTypeId?: string;
 };
 
 function parsePayload(value: string): Record<string, unknown> {
@@ -118,6 +120,8 @@ function buildOption(args: {
   type?: string;
   code?: string;
   locationId?: string;
+  isLpg?: boolean;
+  cylinderTypeId?: string;
 }): MasterDataOption {
   const option: MasterDataOption = {
     id: args.id,
@@ -140,6 +144,12 @@ function buildOption(args: {
   }
   if (args.locationId) {
     option.locationId = args.locationId;
+  }
+  if (typeof args.isLpg === 'boolean') {
+    option.isLpg = args.isLpg;
+  }
+  if (args.cylinderTypeId) {
+    option.cylinderTypeId = args.cylinderTypeId;
   }
   return option;
 }
@@ -341,12 +351,16 @@ export async function loadProductOptions(db: SQLiteDatabase): Promise<MasterData
     const code = asString(payload.itemCode) ?? asString(payload.item_code) ?? asString(payload.sku);
     const name = asString(payload.name);
     const category = asString(payload.category) ?? asString(payload.category_code) ?? 'Uncategorized';
+    const cylinderTypeId = asString(payload.cylinderTypeId) ?? asString(payload.cylinder_type_id);
+    const isLpg = (asBoolean(payload.isLpg) ?? asBoolean(payload.is_lpg) ?? false) || Boolean(cylinderTypeId);
     options.push(
       buildOption({
         id,
         label: name ?? code ?? id,
         subtitle: code && name ? code : undefined,
-        group: category
+        group: category,
+        isLpg,
+        cylinderTypeId: cylinderTypeId ?? undefined
       })
     );
   }

@@ -4,7 +4,6 @@ import type { SQLiteDatabase } from 'expo-sqlite';
 import { OfflineTransactionService } from '../../services/offline-transaction.service';
 import { toastError, toastSuccess } from '../goey-toast';
 import type { AppTheme } from '../theme';
-import { SyncStatusBadge } from '../components/SyncStatusBadge';
 import { SwipeToDeleteRow } from '../components/SwipeToDeleteRow';
 import {
   loadPendingInventoryDeltaByProductForLocation,
@@ -70,6 +69,7 @@ type InventoryBalanceSnapshot = {
 type Props = {
   db: SQLiteDatabase;
   theme: AppTheme;
+  preferredLocationId?: string;
   inventoryProjectionVersion?: number;
   onDataChanged?: () => Promise<void> | void;
   syncBusy?: boolean;
@@ -193,20 +193,21 @@ function PickerModal(props: PickerModalProps): JSX.Element {
 
   return (
     <Modal visible={props.visible} transparent animationType="fade" onRequestClose={props.onClose}>
-      <View style={styles.modalBackdrop}>
+      <View className="flex-1 justify-end bg-[rgba(2,8,23,0.55)] pt-3">
         <Pressable style={StyleSheet.absoluteFillObject} onPress={props.onClose} />
-        <View style={[styles.modalCard, { backgroundColor: props.theme.card, borderColor: props.theme.cardBorder }]}>
-          <Text style={[styles.modalTitle, { color: props.theme.heading }]}>{props.title}</Text>
+        <View className="min-h-[72%] max-h-[90%] w-full gap-2.5 rounded-t-[18px] border px-3 py-3" style={{ backgroundColor: props.theme.card, borderColor: props.theme.cardBorder }}>
+          <Text className="text-base font-extrabold" style={{ color: props.theme.heading }}>{props.title}</Text>
           <TextInput
             value={props.search}
             onChangeText={props.onSearch}
             placeholder="Search..."
             placeholderTextColor={props.theme.inputPlaceholder}
-            style={[styles.modalSearch, { backgroundColor: props.theme.inputBg, color: props.theme.inputText }]}
+            className="rounded-xl px-3 py-2.5 text-sm"
+            style={{ backgroundColor: props.theme.inputBg, color: props.theme.inputText }}
           />
-          <ScrollView style={styles.modalList} contentContainerStyle={{ gap: 6 }} keyboardShouldPersistTaps="handled">
+          <ScrollView className="min-h-0 flex-1" contentContainerStyle={{ gap: 6 }} keyboardShouldPersistTaps="handled">
             {filtered.length === 0 ? (
-              <Text style={[styles.modalEmpty, { color: props.theme.subtext }]}>No records found.</Text>
+              <Text className="mt-3 text-center text-xs" style={{ color: props.theme.subtext }}>No records found.</Text>
             ) : (
               filtered.map((option) => {
                 const active = option.id === props.value;
@@ -217,25 +218,20 @@ function PickerModal(props: PickerModalProps): JSX.Element {
                       props.onSelect(option.id);
                       props.onClose();
                     }}
-                    style={[
-                      styles.modalRow,
-                      {
-                        borderColor: props.theme.cardBorder,
-                        backgroundColor: active ? props.theme.pillBg : 'transparent'
-                      }
-                    ]}
+                    className="gap-px rounded-xl border px-2.5 py-[9px]"
+                    style={{ borderColor: props.theme.cardBorder, backgroundColor: active ? props.theme.pillBg : 'transparent' }}
                   >
-                    <Text style={[styles.modalRowTitle, { color: props.theme.heading }]}>{option.label}</Text>
+                    <Text className="text-[13px] font-bold" style={{ color: props.theme.heading }}>{option.label}</Text>
                     {option.subtitle ? (
-                      <Text style={[styles.modalRowSub, { color: props.theme.subtext }]}>{option.subtitle}</Text>
+                      <Text className="text-[11px]" style={{ color: props.theme.subtext }}>{option.subtitle}</Text>
                     ) : null}
                   </Pressable>
                 );
               })
             )}
           </ScrollView>
-          <Pressable onPress={props.onClose} style={[styles.modalClose, { backgroundColor: props.theme.pillBg }]}>
-            <Text style={[styles.modalCloseText, { color: props.theme.pillText }]}>Close</Text>
+          <Pressable onPress={props.onClose} className="min-h-10 items-center justify-center rounded-[10px]" style={{ backgroundColor: props.theme.pillBg }}>
+            <Text className="text-[13px] font-bold" style={{ color: props.theme.pillText }}>Close</Text>
           </Pressable>
         </View>
       </View>
@@ -246,6 +242,7 @@ function PickerModal(props: PickerModalProps): JSX.Element {
 export function TransfersScreen({
   db,
   theme,
+  preferredLocationId,
   inventoryProjectionVersion = 0,
   onDataChanged,
   syncBusy = false
@@ -257,12 +254,12 @@ export function TransfersScreen({
   const tutorialSource = useTutorialTarget('transfer-source');
   const tutorialProduct = useTutorialTarget('transfer-product');
   const tutorialQueue = useTutorialTarget('transfer-queue');
-  const [transferMode, setTransferMode] = useState<TransferMode>('SUPPLIER_RESTOCK_IN');
+  const [transferMode, setTransferMode] = useState<TransferMode | ''>('');
   const [supplierId, setSupplierId] = useState('');
   const [sourceLocationId, setSourceLocationId] = useState('');
   const [destinationLocationId, setDestinationLocationId] = useState('');
-  const [fullLines, setFullLines] = useState<LineInput[]>([{ key: 'full-1', productId: '', qty: '' }]);
-  const [emptyLines, setEmptyLines] = useState<LineInput[]>([{ key: 'empty-1', productId: '', qty: '' }]);
+  const [fullLines, setFullLines] = useState<LineInput[]>([]);
+  const [emptyLines, setEmptyLines] = useState<LineInput[]>([]);
   const [rows, setRows] = useState<TransferRow[]>([]);
   const [locations, setLocations] = useState<MasterDataOption[]>(FALLBACK_LOCATIONS);
   const [products, setProducts] = useState<MasterDataOption[]>(FALLBACK_PRODUCTS);
@@ -294,11 +291,11 @@ export function TransfersScreen({
   const selectedSupplier = supplierId ? supplierById.get(supplierId) ?? null : null;
   const selectedSourceLocation = sourceLocationId ? locationById.get(sourceLocationId) ?? null : null;
   const selectedDestinationLocation = destinationLocationId ? locationById.get(destinationLocationId) ?? null : null;
-  const selectedSupplierLocationId = selectedSupplier?.locationId ?? null;
   const selectedMode = useMemo(
     () => TRANSFER_MODE_OPTIONS.find((option) => option.value === transferMode) ?? null,
     [transferMode]
   );
+  const hasSelectedTransferMode = transferMode.length > 0;
 
   const storeLocations = useMemo(
     () => locations.filter((location) => (location.type ?? '').toUpperCase() === 'BRANCH_STORE'),
@@ -308,8 +305,37 @@ export function TransfersScreen({
     () => locations.filter((location) => (location.type ?? '').toUpperCase() === 'BRANCH_WAREHOUSE'),
     [locations]
   );
+  const selectableAdjustmentLocations = useMemo(
+    () => [...storeLocations, ...warehouseLocations],
+    [storeLocations, warehouseLocations]
+  );
+  const preferredAdjustmentLocationId = useMemo(() => {
+    const preferred = preferredLocationId?.trim();
+    if (preferred && locationById.has(preferred)) {
+      return preferred;
+    }
+    if (destinationLocationId.trim() && locationById.has(destinationLocationId.trim())) {
+      return destinationLocationId.trim();
+    }
+    if (sourceLocationId.trim() && locationById.has(sourceLocationId.trim())) {
+      return sourceLocationId.trim();
+    }
+    return selectableAdjustmentLocations[0]?.id ?? '';
+  }, [
+    destinationLocationId,
+    locationById,
+    preferredLocationId,
+    selectableAdjustmentLocations,
+    sourceLocationId
+  ]);
+  const selectedAdjustmentLocation = preferredAdjustmentLocationId
+    ? locationById.get(preferredAdjustmentLocationId) ?? null
+    : null;
 
   const selectableSourceLocations = useMemo(() => {
+    if (!transferMode) {
+      return [];
+    }
     switch (transferMode) {
       case 'SUPPLIER_RESTOCK_IN':
         return [];
@@ -327,6 +353,9 @@ export function TransfersScreen({
   }, [locations, storeLocations, transferMode, warehouseLocations]);
 
   const selectableDestinationLocations = useMemo(() => {
+    if (!transferMode) {
+      return [];
+    }
     switch (transferMode) {
       case 'SUPPLIER_RESTOCK_IN':
         return [...storeLocations, ...warehouseLocations];
@@ -344,18 +373,13 @@ export function TransfersScreen({
   }, [locations, sourceLocationId, storeLocations, transferMode, warehouseLocations]);
 
   useEffect(() => {
+    if (!transferMode) {
+      return;
+    }
     if (transferMode === 'SUPPLIER_RESTOCK_IN') {
-      if (
-        !selectableDestinationLocations.some((location) => location.id === destinationLocationId)
-      ) {
-        setDestinationLocationId(selectableDestinationLocations[0]?.id ?? '');
-      }
       return;
     }
     if (transferMode === 'SUPPLIER_RESTOCK_OUT') {
-      if (!selectableSourceLocations.some((location) => location.id === sourceLocationId)) {
-        setSourceLocationId(selectableSourceLocations[0]?.id ?? '');
-      }
       return;
     }
     if (!selectableSourceLocations.some((location) => location.id === sourceLocationId)) {
@@ -398,13 +422,6 @@ export function TransfersScreen({
     }
     prevSyncBusyRef.current = syncBusy;
   }, [syncBusy]);
-
-  const transferStats = useMemo(() => {
-    const pending = rows.filter((row) => row.sync_status === 'pending').length;
-    const synced = rows.filter((row) => row.sync_status === 'synced').length;
-    const needsReview = rows.filter((row) => row.sync_status === 'needs_review').length;
-    return { pending, synced, needsReview };
-  }, [rows]);
 
   const totalFullQty = useMemo(
     () =>
@@ -459,8 +476,8 @@ export function TransfersScreen({
   };
 
   const resetTransferLines = (): void => {
-    setFullLines([{ key: createLineKey('full'), productId: '', qty: '' }]);
-    setEmptyLines([{ key: createLineKey('empty'), productId: '', qty: '' }]);
+    setFullLines([]);
+    setEmptyLines([]);
   };
 
   const refreshMasterData = async (): Promise<void> => {
@@ -579,10 +596,10 @@ export function TransfersScreen({
 
   const removeLine = (bucket: 'full' | 'empty', key: string): void => {
     if (bucket === 'full') {
-      setFullLines((current) => (current.length > 1 ? current.filter((line) => line.key !== key) : current));
+      setFullLines((current) => current.filter((line) => line.key !== key));
       return;
     }
-    setEmptyLines((current) => (current.length > 1 ? current.filter((line) => line.key !== key) : current));
+    setEmptyLines((current) => current.filter((line) => line.key !== key));
   };
 
   const updateLine = (
@@ -619,15 +636,21 @@ export function TransfersScreen({
     setEmptyLines((current) => current.map((line) => (line.key === key ? applyStep(line) : line)));
   };
 
-  const requiresSourceStockCheck = (mode: TransferMode): boolean => mode !== 'SUPPLIER_RESTOCK_IN';
+  const requiresSourceStockCheck = (mode: TransferMode | ''): boolean =>
+    mode.length > 0 && mode !== 'SUPPLIER_RESTOCK_IN';
 
   const activeSourceLocationId = useMemo(() => {
-    if (!requiresSourceStockCheck(transferMode)) {
+    if (!transferMode) {
       return null;
     }
-    const id = sourceLocationId.trim();
+    const id =
+      transferMode === 'SUPPLIER_RESTOCK_IN' || transferMode === 'SUPPLIER_RESTOCK_OUT'
+        ? preferredAdjustmentLocationId
+        : requiresSourceStockCheck(transferMode)
+          ? sourceLocationId.trim()
+          : '';
     return id.length ? id : null;
-  }, [sourceLocationId, transferMode]);
+  }, [preferredAdjustmentLocationId, sourceLocationId, transferMode]);
 
   const buildInventoryByProductForLocation = async (
     locationId: string
@@ -681,6 +704,10 @@ export function TransfersScreen({
 
   const resolveAvailableQtyForBucket = (productId: string, bucket: 'full' | 'empty'): number => {
     const stock = sourceInventoryByProduct.get(productId) ?? { qtyOnHand: 0, qtyFull: 0, qtyEmpty: 0 };
+    const product = productById.get(productId);
+    if (product?.isLpg) {
+      return Math.max(0, Number(stock.qtyOnHand || 0));
+    }
     let available = bucket === 'full' ? stock.qtyFull : stock.qtyEmpty;
     if (available <= 0.0001 && stock.qtyFull <= 0.0001 && stock.qtyEmpty <= 0.0001) {
       available = stock.qtyOnHand;
@@ -704,33 +731,6 @@ export function TransfersScreen({
       return sum + parseLineQty(line.qty);
     }, 0);
     return Math.max(0, Number((available - usedByOthers).toFixed(4)));
-  };
-
-  const handleLineQtyChange = (bucket: 'full' | 'empty', key: string, value: string): void => {
-    const lines = bucket === 'full' ? fullLines : emptyLines;
-    const line = lines.find((entry) => entry.key === key);
-    if (!line) {
-      return;
-    }
-    const normalized = value.trim();
-    if (normalized.length === 0) {
-      updateLine(bucket, key, { qty: '' });
-      return;
-    }
-    const parsed = Number(normalized);
-    if (!Number.isFinite(parsed) || parsed < 0) {
-      updateLine(bucket, key, { qty: value });
-      return;
-    }
-    if (line.productId && requiresSourceStockCheck(transferMode)) {
-      const allowed = resolveRemainingQtyForLine(bucket, key, line.productId);
-      if (parsed > allowed + 0.0001) {
-        const productLabel = productById.get(line.productId)?.label ?? 'Item';
-        toastError('Transfer qty', `${productLabel}: max ${allowed.toFixed(2)} for ${bucket.toUpperCase()} at source.`);
-        return;
-      }
-    }
-    updateLine(bucket, key, { qty: value });
   };
 
   const stepLineQtyChecked = (bucket: 'full' | 'empty', key: string, delta: number): void => {
@@ -775,11 +775,20 @@ export function TransfersScreen({
       const stock = inventoryByProduct.get(line.productId) ?? { qtyOnHand: 0, qtyFull: 0, qtyEmpty: 0 };
       const requiredFull = Number(line.qtyFull || 0);
       const requiredEmpty = Number(line.qtyEmpty || 0);
+      const requiredTotal = Number((requiredFull + requiredEmpty).toFixed(4));
+
+      if (product?.isLpg) {
+        if (requiredTotal > 0 && stock.qtyOnHand + 0.0001 < requiredTotal) {
+          errors.push(
+            `${productLabel}: insufficient stock at ${sourceLabel} (avail ${stock.qtyOnHand.toFixed(2)}, need ${requiredTotal.toFixed(2)}).`
+          );
+        }
+        continue;
+      }
 
       // For non-cylinder products, FULL/EMPTY buckets may be zero in local snapshot;
       // use qty_on_hand as fallback validation for total movement.
       if (stock.qtyFull <= 0.0001 && stock.qtyEmpty <= 0.0001) {
-        const requiredTotal = Number((requiredFull + requiredEmpty).toFixed(4));
         if (requiredTotal > 0 && stock.qtyOnHand + 0.0001 < requiredTotal) {
           errors.push(
             `${productLabel}: insufficient stock at ${sourceLabel} (avail ${stock.qtyOnHand.toFixed(2)}, need ${requiredTotal.toFixed(2)}).`
@@ -806,6 +815,10 @@ export function TransfersScreen({
     if (saving || syncBusy) {
       return;
     }
+    if (!transferMode) {
+      toastError('Transfer', 'Select transfer type first.');
+      return;
+    }
     setItemPickerTarget({ bucket, key });
     setItemSearch('');
     setItemCategoryFilter('ALL');
@@ -828,38 +841,42 @@ export function TransfersScreen({
     destinationLabel: string;
     supplierName: string | null;
   } | null => {
+    if (!transferMode) {
+      toastError('Transfer', 'Please select transfer type.');
+      return null;
+    }
     const supplierName = selectedSupplier?.label ?? null;
     if (transferMode === 'SUPPLIER_RESTOCK_IN') {
-      if (!selectedSupplierLocationId) {
-        toastError('Transfer', 'Selected supplier is not linked to any location.');
+      if (!supplierId.trim()) {
+        toastError('Transfer', 'Please select supplier.');
         return null;
       }
-      if (!destinationLocationId) {
-        toastError('Transfer', 'Please select destination location.');
+      if (!preferredAdjustmentLocationId) {
+        toastError('Transfer', 'Current branch location is missing. Reopen branch setup.');
         return null;
       }
       return {
-        sourceId: selectedSupplierLocationId,
-        destinationId: destinationLocationId,
-        sourceLabel: supplierName ? `${supplierName} (Supplier)` : selectedSupplierLocationId,
-        destinationLabel: locationById.get(destinationLocationId)?.label ?? destinationLocationId,
+        sourceId: preferredAdjustmentLocationId,
+        destinationId: preferredAdjustmentLocationId,
+        sourceLabel: supplierName ? `${supplierName} (Supplier)` : 'Supplier',
+        destinationLabel: selectedAdjustmentLocation?.label ?? preferredAdjustmentLocationId,
         supplierName
       };
     }
     if (transferMode === 'SUPPLIER_RESTOCK_OUT') {
-      if (!selectedSupplierLocationId) {
-        toastError('Transfer', 'Selected supplier is not linked to any location.');
+      if (!supplierId.trim()) {
+        toastError('Transfer', 'Please select supplier.');
         return null;
       }
-      if (!sourceLocationId) {
-        toastError('Transfer', 'Please select source location.');
+      if (!preferredAdjustmentLocationId) {
+        toastError('Transfer', 'Current branch location is missing. Reopen branch setup.');
         return null;
       }
       return {
-        sourceId: sourceLocationId,
-        destinationId: selectedSupplierLocationId,
-        sourceLabel: locationById.get(sourceLocationId)?.label ?? sourceLocationId,
-        destinationLabel: supplierName ? `${supplierName} (Supplier)` : selectedSupplierLocationId,
+        sourceId: preferredAdjustmentLocationId,
+        destinationId: preferredAdjustmentLocationId,
+        sourceLabel: selectedAdjustmentLocation?.label ?? preferredAdjustmentLocationId,
+        destinationLabel: supplierName ? `${supplierName} (Supplier)` : 'Supplier',
         supplierName
       };
     }
@@ -878,11 +895,19 @@ export function TransfersScreen({
   };
 
   const createTransfer = async (): Promise<void> => {
+    if (!transferMode) {
+      toastError('Transfer', 'Please select transfer type.');
+      return;
+    }
     const endpoints = resolveEndpoints();
     if (!endpoints) {
       return;
     }
-    if (endpoints.sourceId === endpoints.destinationId) {
+    if (
+      endpoints.sourceId === endpoints.destinationId &&
+      transferMode !== 'SUPPLIER_RESTOCK_IN' &&
+      transferMode !== 'SUPPLIER_RESTOCK_OUT'
+    ) {
       toastError('Transfer', 'Source and destination must be different.');
       return;
     }
@@ -974,137 +999,182 @@ export function TransfersScreen({
   };
 
   const modeSubtitle = selectedMode?.subtitle ?? '';
-  const endpointSourceLabel =
-    transferMode === 'SUPPLIER_RESTOCK_IN'
-      ? selectedSupplier
-        ? `${selectedSupplier.label} (Supplier)`
-        : 'Select supplier'
-      : locationById.get(sourceLocationId)?.label ?? 'Select source';
-  const endpointDestinationLabel =
-    transferMode === 'SUPPLIER_RESTOCK_OUT'
-      ? selectedSupplier
-        ? `${selectedSupplier.label} (Supplier)`
-        : 'Select supplier'
-      : locationById.get(destinationLocationId)?.label ?? 'Select destination';
 
   const renderLineTable = (bucket: 'full' | 'empty', lines: LineInput[]): JSX.Element => (
     <View
+      className="gap-2 rounded-2xl border px-3 py-3"
       style={[
-        styles.block,
         isCompactLayout ? { paddingHorizontal: 8, paddingVertical: 8, gap: 6 } : null,
         { borderColor: theme.cardBorder, backgroundColor: theme.inputBg }
       ]}
     >
-      <View style={styles.blockHeader}>
-        <Text style={[styles.blockTitle, { color: theme.heading }]}>
+      <View className="flex-row items-center justify-between gap-2">
+        <Text className="text-[13px] font-bold" style={{ color: theme.heading }}>
           {bucket === 'full' ? 'FULL Items' : 'EMPTY Items'}
         </Text>
         <Pressable
-          style={[styles.smallBtn, { borderColor: theme.cardBorder, backgroundColor: theme.card }]}
+          className="min-h-9 items-center justify-center rounded-xl border px-3"
+          style={{ borderColor: theme.cardBorder, backgroundColor: theme.card }}
           onPress={() => appendLine(bucket)}
           disabled={saving || syncBusy}
         >
-          <Text style={[styles.smallBtnText, { color: theme.heading }]}>+ Add</Text>
+          <Text className="text-[12px] font-bold" style={{ color: theme.heading }}>+ Add</Text>
         </Pressable>
       </View>
-      {lines.map((line, index) => (
-        <SwipeToDeleteRow
-          key={line.key}
-          theme={theme}
-          onDelete={() => removeLine(bucket, line.key)}
-          disabled={saving || syncBusy || lines.length <= 1}
-          deleteLabel="Remove"
+      {lines.length === 0 ? (
+        <View
+          style={[
+            styles.transferEmptyCard,
+            isCompactLayout ? { paddingHorizontal: 8, paddingVertical: 8, gap: 6 } : null,
+            { borderColor: theme.cardBorder, backgroundColor: theme.card }
+          ]}
         >
-          <View
-            style={[
-              styles.lineItemCard,
-              isCompactLayout ? { paddingHorizontal: 8, paddingVertical: 8, gap: 6 } : null,
-              { borderColor: theme.cardBorder, backgroundColor: theme.card }
-            ]}
+          <Text style={[styles.transferEmptyTitle, { color: theme.heading }]}>
+            No {bucket === 'full' ? 'FULL' : 'EMPTY'} items yet.
+          </Text>
+          <Text style={[styles.transferEmptyCopy, { color: theme.subtext }]}>
+            Tap + Add to choose the first {bucket === 'full' ? 'FULL' : 'EMPTY'} item for this transfer.
+          </Text>
+        </View>
+      ) : (
+        lines.map((line, index) => (
+          <SwipeToDeleteRow
+            key={line.key}
+            theme={theme}
+            onDelete={() => removeLine(bucket, line.key)}
+            disabled={saving || syncBusy}
+            deleteLabel="Remove"
           >
-            <View style={styles.lineItemHead}>
-              <Text style={[styles.lineItemLabel, { color: theme.subtext }]}>
-                {bucket === 'full' ? 'FULL' : 'EMPTY'} Line {index + 1}
-              </Text>
-            </View>
-
-            <View style={[styles.lineRow, isCompactLayout ? { flexDirection: 'column', alignItems: 'stretch', gap: 6 } : null]}>
-              <Pressable
-                onPress={() => openItemPicker(bucket, line.key)}
-                style={[
-                  styles.selectorButton,
-                  styles.selectorHalf,
-                  isCompactLayout ? { paddingHorizontal: 10, paddingVertical: 9 } : null,
-                  { borderColor: theme.cardBorder, backgroundColor: theme.inputBg }
-                ]}
-                disabled={saving || syncBusy}
+            <View
+              className="gap-2 rounded-xl border px-3 py-3"
+              style={[
+                isCompactLayout ? { paddingHorizontal: 8, paddingVertical: 8, gap: 6 } : null,
+                { borderColor: theme.cardBorder, backgroundColor: theme.card }
+              ]}
+            >
+              <View
+                className="flex-row items-start gap-2"
+                style={isCompactLayout ? { gap: 8 } : null}
               >
-                <Text style={[styles.selectorLabel, { color: theme.subtext }]}>Item</Text>
-                <Text style={[styles.selectorValue, isCompactLayout ? { fontSize: 13 } : null, { color: theme.inputText }]} numberOfLines={1}>
-                  {productById.get(line.productId)?.label ?? 'Select item'}
-                </Text>
-                {(productById.get(line.productId)?.subtitle ?? productById.get(line.productId)?.group) ? (
-                  <Text style={[styles.selectorSubValue, { color: theme.subtext }]}>
-                    {productById.get(line.productId)?.subtitle ?? productById.get(line.productId)?.group}
+                <Pressable
+                  onPress={() => openItemPicker(bucket, line.key)}
+                  className="min-w-0 flex-1 rounded-xl border px-3 py-2.5"
+                  style={[
+                    isCompactLayout ? { paddingHorizontal: 10, paddingVertical: 9 } : null,
+                    { borderColor: theme.cardBorder, backgroundColor: theme.inputBg }
+                  ]}
+                  disabled={saving || syncBusy}
+                >
+                  <Text
+                    className="text-[14px] font-bold"
+                    style={[isCompactLayout ? { fontSize: 13 } : null, { color: theme.inputText }]}
+                    numberOfLines={1}
+                  >
+                    {productById.get(line.productId)?.label ?? 'Select item'}
                   </Text>
-                ) : null}
-              </Pressable>
-              <View style={[styles.qtyWrap, isCompactLayout ? { alignItems: 'flex-start' } : null]}>
-                <Text style={[styles.qtyLabel, { color: theme.subtext }]}>Qty</Text>
-                <View style={[styles.qtyStepper, isCompactLayout ? { gap: 4 } : null]}>
-                  <Pressable
-                    onPress={() => stepLineQtyChecked(bucket, line.key, -1)}
-                    style={[styles.qtyBtn, isCompactLayout ? { width: 30, height: 30 } : null, { backgroundColor: theme.pillBg }]}
-                    disabled={saving || syncBusy}
+                  {(productById.get(line.productId)?.subtitle ?? productById.get(line.productId)?.group) ? (
+                    <Text className="text-[11px]" style={{ color: theme.subtext }}>
+                      {productById.get(line.productId)?.subtitle ?? productById.get(line.productId)?.group}
+                    </Text>
+                  ) : null}
+                  {line.productId ? (
+                    <View className="mt-2 flex-row flex-wrap gap-1.5">
+                      <View
+                        className="min-h-7 justify-center rounded-full border px-2.5"
+                        style={{ backgroundColor: theme.card, borderColor: theme.cardBorder }}
+                      >
+                        <Text className="text-[11px] font-bold" style={{ color: theme.pillText }}>
+                          Available {resolveAvailableQtyForBucket(line.productId, bucket).toFixed(2)}
+                        </Text>
+                      </View>
+                      {requiresSourceStockCheck(transferMode) ? (
+                        <View
+                          className="min-h-7 justify-center rounded-full border px-2.5"
+                          style={{ backgroundColor: theme.card, borderColor: theme.cardBorder }}
+                        >
+                          <Text className="text-[11px] font-bold" style={{ color: theme.pillText }}>
+                            Remaining {resolveRemainingQtyForLine(bucket, line.key, line.productId).toFixed(2)}
+                          </Text>
+                        </View>
+                      ) : null}
+                    </View>
+                  ) : (
+                    <Text className="mt-1.5 text-[11px]" style={{ color: theme.subtext }}>
+                      Tap to choose the transfer item.
+                    </Text>
+                  )}
+                </Pressable>
+
+                <View
+                  className="gap-1.5"
+                  style={isCompactLayout ? { minWidth: 94, alignItems: 'flex-end' } : { minWidth: 112, alignItems: 'flex-end' }}
+                >
+                  <Text
+                    className="text-[11px] font-semibold"
+                    style={{ textAlign: 'right', color: theme.subtext }}
                   >
-                    <Text style={[styles.qtyBtnText, { color: theme.pillText }]}>-</Text>
-                  </Pressable>
-                  <TextInput
-                    value={line.qty}
-                    onChangeText={(value) => handleLineQtyChange(bucket, line.key, value)}
-                    keyboardType="numeric"
-                    placeholder="0"
-                    placeholderTextColor={theme.inputPlaceholder}
-                    style={[
-                      styles.qtyInput,
-                      isCompactLayout ? { width: 68, paddingHorizontal: 8, paddingVertical: 8 } : null,
-                      { backgroundColor: theme.inputBg, color: theme.inputText, borderColor: theme.cardBorder }
-                    ]}
-                  />
-                  <Pressable
-                    onPress={() => stepLineQtyChecked(bucket, line.key, 1)}
-                    style={[styles.qtyBtn, isCompactLayout ? { width: 30, height: 30 } : null, { backgroundColor: theme.pillBg }]}
-                    disabled={saving || syncBusy}
+                    Qty
+                  </Text>
+                  <Text
+                    className="text-[15px] font-extrabold"
+                    style={{ textAlign: 'right', color: theme.heading }}
                   >
-                    <Text style={[styles.qtyBtnText, { color: theme.pillText }]}>+</Text>
-                  </Pressable>
+                    {parseLineQty(line.qty).toFixed(0)}
+                  </Text>
+                  <View className="flex-row items-center gap-2" style={isCompactLayout ? { gap: 4 } : null}>
+                    <Pressable
+                      onPress={() => stepLineQtyChecked(bucket, line.key, -1)}
+                      className="items-center justify-center rounded-full"
+                      style={[{ width: isCompactLayout ? 30 : 32, height: isCompactLayout ? 30 : 32, backgroundColor: theme.pillBg }]}
+                      disabled={saving || syncBusy}
+                    >
+                      <Text className="text-[13px] font-bold" style={{ color: theme.pillText }}>-</Text>
+                    </Pressable>
+                    <View
+                      className="items-center justify-center rounded-xl border"
+                      style={[
+                        isCompactLayout ? { width: 56, paddingHorizontal: 6, paddingVertical: 7 } : { width: 72, paddingHorizontal: 10, paddingVertical: 9 },
+                        { backgroundColor: theme.inputBg, borderColor: theme.cardBorder }
+                      ]}
+                    >
+                      <Text className="text-[13px] font-bold" style={{ color: theme.inputText }}>{parseLineQty(line.qty).toFixed(0)}</Text>
+                    </View>
+                    <Pressable
+                      onPress={() => stepLineQtyChecked(bucket, line.key, 1)}
+                      className="items-center justify-center rounded-full"
+                      style={[{ width: isCompactLayout ? 30 : 32, height: isCompactLayout ? 30 : 32, backgroundColor: theme.pillBg }]}
+                      disabled={saving || syncBusy}
+                    >
+                      <Text className="text-[13px] font-bold" style={{ color: theme.pillText }}>+</Text>
+                    </Pressable>
+                  </View>
                 </View>
               </View>
             </View>
-          </View>
-        </SwipeToDeleteRow>
-      ))}
+          </SwipeToDeleteRow>
+        ))
+      )}
     </View>
   );
 
   return (
     <View
+      className="gap-2.5 rounded-2xl border px-3.5 py-3.5"
       style={[
-        styles.card,
         isCompactLayout ? { paddingHorizontal: 10, paddingVertical: 10, gap: 8, borderRadius: 14 } : null,
         { backgroundColor: theme.card, borderColor: theme.cardBorder }
       ]}
     >
-      <View style={[styles.header, isCompactLayout ? { flexDirection: 'column', gap: 8 } : null]}>
-        <View style={{ flex: 1 }}>
-          <Text style={[styles.title, isCompactLayout ? { fontSize: 16 } : null, { color: theme.heading }]}>Advanced Transfers</Text>
-          <Text style={[styles.sub, isCompactLayout ? { fontSize: 12 } : null, { color: theme.subtext }]}>
+      <View className="flex-row items-start gap-2.5" style={isCompactLayout ? { flexDirection: 'column', gap: 8 } : null}>
+        <View className="flex-1">
+          <Text className="text-lg font-bold" style={[isCompactLayout ? { fontSize: 16 } : null, { color: theme.heading }]}>Advanced Transfers</Text>
+          <Text className="text-[13px]" style={[isCompactLayout ? { fontSize: 12 } : null, { color: theme.subtext }]}>
             Supplier, store, and warehouse stock movements with FULL/EMPTY control.
           </Text>
         </View>
         <Pressable
+          className="min-h-11 items-center justify-center rounded-xl px-4"
           style={[
-            styles.refreshBtn,
             isCompactLayout ? { alignSelf: 'stretch' } : null,
             { backgroundColor: saving || syncBusy ? theme.primaryMuted : theme.primary }
           ]}
@@ -1114,45 +1184,8 @@ export function TransfersScreen({
           }}
           disabled={saving || syncBusy}
         >
-          <Text style={styles.refreshText}>Refresh</Text>
+          <Text className="text-[13px] font-bold text-white">Refresh</Text>
         </Pressable>
-      </View>
-
-      <View style={[styles.kpiRow, isCompactLayout ? { flexWrap: 'wrap', gap: 6 } : null]}>
-        <View
-          style={[
-            styles.kpiCard,
-            isCompactLayout ? { minWidth: '48%', flexBasis: '48%', paddingHorizontal: 8, paddingVertical: 6 } : null,
-            { borderColor: theme.cardBorder, backgroundColor: theme.inputBg }
-          ]}
-        >
-          <Text style={[styles.kpiLabel, { color: theme.subtext }]}>Pending</Text>
-          <Text style={[styles.kpiValue, { color: transferStats.pending > 0 ? theme.danger : theme.heading }]}>
-            {transferStats.pending}
-          </Text>
-        </View>
-        <View
-          style={[
-            styles.kpiCard,
-            isCompactLayout ? { minWidth: '48%', flexBasis: '48%', paddingHorizontal: 8, paddingVertical: 6 } : null,
-            { borderColor: theme.cardBorder, backgroundColor: theme.inputBg }
-          ]}
-        >
-          <Text style={[styles.kpiLabel, { color: theme.subtext }]}>Needs Review</Text>
-          <Text style={[styles.kpiValue, { color: transferStats.needsReview > 0 ? theme.danger : theme.heading }]}>
-            {transferStats.needsReview}
-          </Text>
-        </View>
-        <View
-          style={[
-            styles.kpiCard,
-            isCompactLayout ? { minWidth: '48%', flexBasis: '48%', paddingHorizontal: 8, paddingVertical: 6 } : null,
-            { borderColor: theme.cardBorder, backgroundColor: theme.inputBg }
-          ]}
-        >
-          <Text style={[styles.kpiLabel, { color: theme.subtext }]}>Synced</Text>
-          <Text style={[styles.kpiValue, { color: theme.heading }]}>{transferStats.synced}</Text>
-        </View>
       </View>
 
       <ScrollView
@@ -1169,45 +1202,70 @@ export function TransfersScreen({
               setTransferTypeSearch('');
               setTransferTypeModalOpen(true);
             }}
+            className="rounded-xl border px-3 py-2.5"
             style={[
-              styles.selectorButton,
               isCompactLayout ? { paddingHorizontal: 10, paddingVertical: 9 } : null,
               { borderColor: theme.cardBorder, backgroundColor: theme.inputBg }
             ]}
             disabled={saving || syncBusy}
           >
-            <Text style={[styles.selectorLabel, { color: theme.subtext }]}>Transfer Type</Text>
-            <Text style={[styles.selectorValue, isCompactLayout ? { fontSize: 13 } : null, { color: theme.inputText }]} numberOfLines={1}>
+            <Text className="text-[11px] font-semibold" style={{ color: theme.subtext }}>Transfer Type</Text>
+            <Text className="text-[14px] font-bold" style={[isCompactLayout ? { fontSize: 13 } : null, { color: theme.inputText }]} numberOfLines={1}>
               {selectedMode?.label ?? 'Select transfer type'}
             </Text>
           </Pressable>
           <Text style={[styles.helper, { color: theme.subtext }]}>{modeSubtitle}</Text>
         </View>
 
-        {transferMode === 'SUPPLIER_RESTOCK_IN' || transferMode === 'SUPPLIER_RESTOCK_OUT' ? (
-          <Pressable
-            onPress={() => {
-              if (saving || syncBusy) {
-                return;
-              }
-              setSupplierSearch('');
-              setSupplierModalOpen(true);
-            }}
-            style={[
-              styles.selectorButton,
-              isCompactLayout ? { paddingHorizontal: 10, paddingVertical: 9 } : null,
-              { borderColor: theme.cardBorder, backgroundColor: theme.inputBg }
-            ]}
-            disabled={saving || syncBusy}
-          >
-            <Text style={[styles.selectorLabel, { color: theme.subtext }]}>Supplier</Text>
-            <Text style={[styles.selectorValue, isCompactLayout ? { fontSize: 13 } : null, { color: theme.inputText }]} numberOfLines={1}>
-              {selectedSupplier?.label ?? 'Select supplier'}
-            </Text>
-          </Pressable>
+        {hasSelectedTransferMode && (transferMode === 'SUPPLIER_RESTOCK_IN' || transferMode === 'SUPPLIER_RESTOCK_OUT') ? (
+          <View className="gap-2">
+            <Pressable
+              onPress={() => {
+                if (saving || syncBusy) {
+                  return;
+                }
+                setSupplierSearch('');
+                setSupplierModalOpen(true);
+              }}
+              className="rounded-xl border px-3 py-2.5"
+              style={[
+                isCompactLayout ? { paddingHorizontal: 10, paddingVertical: 9 } : null,
+                { borderColor: theme.cardBorder, backgroundColor: theme.inputBg }
+              ]}
+              disabled={saving || syncBusy}
+            >
+              <Text className="text-[11px] font-semibold" style={{ color: theme.subtext }}>Supplier</Text>
+              <Text className="text-[14px] font-bold" style={[isCompactLayout ? { fontSize: 13 } : null, { color: theme.inputText }]} numberOfLines={1}>
+                {selectedSupplier?.label ?? 'Select supplier'}
+              </Text>
+            </Pressable>
+            <View
+              className="rounded-xl border px-3 py-2.5"
+              style={[
+                isCompactLayout ? { paddingHorizontal: 10, paddingVertical: 9 } : null,
+                { borderColor: theme.cardBorder, backgroundColor: theme.inputBg }
+              ]}
+            >
+              <Text className="text-[11px] font-semibold" style={{ color: theme.subtext }}>
+                {transferMode === 'SUPPLIER_RESTOCK_IN' ? 'Restock Destination' : 'Restock Source'}
+              </Text>
+              <Text
+                className="text-[14px] font-bold"
+                style={[isCompactLayout ? { fontSize: 13 } : null, { color: theme.inputText }]}
+                numberOfLines={1}
+              >
+                {selectedAdjustmentLocation?.label ?? 'No active branch location'}
+              </Text>
+              <Text className="mt-1 text-[11px]" style={{ color: theme.subtext }}>
+                Supplier restocks use the current branch/store location automatically.
+              </Text>
+            </View>
+          </View>
         ) : null}
 
-        {transferMode !== 'SUPPLIER_RESTOCK_IN' ? (
+        {hasSelectedTransferMode &&
+        transferMode !== 'SUPPLIER_RESTOCK_IN' &&
+        transferMode !== 'SUPPLIER_RESTOCK_OUT' ? (
           <Pressable
             onPress={() => {
               if (saving || syncBusy) {
@@ -1216,21 +1274,23 @@ export function TransfersScreen({
               setSourceSearch('');
               setSourceModalOpen(true);
             }}
+            className="rounded-xl border px-3 py-2.5"
             style={[
-              styles.selectorButton,
               isCompactLayout ? { paddingHorizontal: 10, paddingVertical: 9 } : null,
               { borderColor: theme.cardBorder, backgroundColor: theme.inputBg }
             ]}
             disabled={saving || syncBusy}
           >
-            <Text style={[styles.selectorLabel, { color: theme.subtext }]}>Source Location</Text>
-            <Text style={[styles.selectorValue, isCompactLayout ? { fontSize: 13 } : null, { color: theme.inputText }]} numberOfLines={1}>
+            <Text className="text-[11px] font-semibold" style={{ color: theme.subtext }}>Source Location</Text>
+            <Text className="text-[14px] font-bold" style={[isCompactLayout ? { fontSize: 13 } : null, { color: theme.inputText }]} numberOfLines={1}>
               {selectedSourceLocation?.label ?? 'Select source'}
             </Text>
           </Pressable>
         ) : null}
 
-        {transferMode !== 'SUPPLIER_RESTOCK_OUT' ? (
+        {hasSelectedTransferMode &&
+        transferMode !== 'SUPPLIER_RESTOCK_IN' &&
+        transferMode !== 'SUPPLIER_RESTOCK_OUT' ? (
           <Pressable
             onPress={() => {
               if (saving || syncBusy) {
@@ -1239,52 +1299,55 @@ export function TransfersScreen({
               setDestinationSearch('');
               setDestinationModalOpen(true);
             }}
+            className="rounded-xl border px-3 py-2.5"
             style={[
-              styles.selectorButton,
               isCompactLayout ? { paddingHorizontal: 10, paddingVertical: 9 } : null,
               { borderColor: theme.cardBorder, backgroundColor: theme.inputBg }
             ]}
             disabled={saving || syncBusy}
           >
-            <Text style={[styles.selectorLabel, { color: theme.subtext }]}>Destination Location</Text>
-            <Text style={[styles.selectorValue, isCompactLayout ? { fontSize: 13 } : null, { color: theme.inputText }]} numberOfLines={1}>
+            <Text className="text-[11px] font-semibold" style={{ color: theme.subtext }}>Destination Location</Text>
+            <Text className="text-[14px] font-bold" style={[isCompactLayout ? { fontSize: 13 } : null, { color: theme.inputText }]} numberOfLines={1}>
               {selectedDestinationLocation?.label ?? 'Select destination'}
             </Text>
           </Pressable>
         ) : null}
+        {hasSelectedTransferMode ? (
+          <View ref={tutorialProduct.ref} onLayout={tutorialProduct.onLayout}>
+            {renderLineTable('full', fullLines)}
+            {renderLineTable('empty', emptyLines)}
+          </View>
+        ) : (
+          <View
+            className="gap-1.5 rounded-xl border px-3 py-3"
+            style={[
+              isCompactLayout ? { paddingHorizontal: 10, paddingVertical: 9 } : null,
+              { borderColor: theme.cardBorder, backgroundColor: theme.inputBg }
+            ]}
+          >
+            <Text className="text-[13px] font-bold" style={{ color: theme.heading }}>
+              Select transfer type first
+            </Text>
+            <Text className="text-[12px]" style={{ color: theme.subtext }}>
+              Choose the transfer type before selecting supplier, locations, and FULL or EMPTY items.
+            </Text>
+          </View>
+        )}
 
         <View
+          className="gap-1.5 rounded-xl border px-3 py-3"
           style={[
-            styles.endpointCard,
-            isCompactLayout ? { paddingHorizontal: 10, paddingVertical: 8 } : null,
-            { borderColor: theme.cardBorder, backgroundColor: theme.pillBg }
-          ]}
-        >
-          <Text style={[styles.endpointTitle, { color: theme.pillText }]}>Transfer Route</Text>
-          <Text style={[styles.endpointText, { color: theme.pillText }]}>{endpointSourceLabel}</Text>
-          <Text style={[styles.endpointArrow, { color: theme.pillText }]}>→</Text>
-          <Text style={[styles.endpointText, { color: theme.pillText }]}>{endpointDestinationLabel}</Text>
-        </View>
-
-        <View ref={tutorialProduct.ref} onLayout={tutorialProduct.onLayout}>
-          {renderLineTable('full', fullLines)}
-          {renderLineTable('empty', emptyLines)}
-        </View>
-
-        <View
-          style={[
-            styles.summaryCard,
             isCompactLayout ? { paddingHorizontal: 8, paddingVertical: 8 } : null,
             { borderColor: theme.cardBorder, backgroundColor: theme.inputBg }
           ]}
         >
-          <Text style={[styles.summaryText, { color: theme.subtext }]}>
+          <Text className="text-[12px]" style={{ color: theme.subtext }}>
             Active Shift: {activeShiftId ?? 'No active shift'}
           </Text>
-          <Text style={[styles.summaryText, { color: theme.subtext }]}>Line Items: {fullLines.length + emptyLines.length}</Text>
-          <Text style={[styles.summaryText, { color: theme.subtext }]}>FULL Qty Total: {totalFullQty.toFixed(2)}</Text>
-          <Text style={[styles.summaryText, { color: theme.subtext }]}>EMPTY Qty Total: {totalEmptyQty.toFixed(2)}</Text>
-          <Text style={[styles.summaryHint, { color: theme.subtext }]}>
+          <Text className="text-[12px]" style={{ color: theme.subtext }}>Line Items: {fullLines.length + emptyLines.length}</Text>
+          <Text className="text-[12px]" style={{ color: theme.subtext }}>FULL Qty Total: {totalFullQty.toFixed(2)}</Text>
+          <Text className="text-[12px]" style={{ color: theme.subtext }}>EMPTY Qty Total: {totalEmptyQty.toFixed(2)}</Text>
+          <Text className="text-[12px]" style={{ color: theme.subtext }}>
             FULL and EMPTY quantities are posted separately for server-authoritative stock.
           </Text>
         </View>
@@ -1295,12 +1358,12 @@ export function TransfersScreen({
               styles.primaryBtn,
               {
                 backgroundColor:
-                  saving || !activeShiftId ? theme.primaryMuted : theme.primary
+                  saving || !activeShiftId || !hasSelectedTransferMode ? theme.primaryMuted : theme.primary
               },
               tutorialQueue.active ? styles.tutorialTargetFocus : null
             ]}
             onPress={() => void createTransfer()}
-            disabled={saving || syncBusy || !activeShiftId}
+            disabled={saving || syncBusy || !activeShiftId || !hasSelectedTransferMode}
           >
             <Text style={styles.primaryText}>{saving ? 'Queueing...' : 'Queue Transfer'}</Text>
           </Pressable>
@@ -1364,7 +1427,7 @@ export function TransfersScreen({
           setItemPickerTarget(null);
         }}
       >
-        <View style={styles.modalBackdrop}>
+        <View className="flex-1 justify-end bg-[rgba(2,8,23,0.55)] pt-3">
           <Pressable
             style={StyleSheet.absoluteFillObject}
             onPress={() => {
@@ -1373,19 +1436,38 @@ export function TransfersScreen({
             }}
           />
           <View
+            className="min-h-[82%] max-h-[94%] w-full gap-2.5 rounded-t-[20px] border px-3 py-3"
             style={[
-              styles.itemSelectModalCard,
               isCompactLayout ? { minHeight: '86%', maxHeight: '96%', paddingHorizontal: 10, paddingVertical: 10, gap: 8 } : null,
               { backgroundColor: theme.card, borderColor: theme.cardBorder }
             ]}
           >
-            <Text style={[styles.modalTitle, { color: theme.heading }]}>Select Item</Text>
+            <View className="gap-1">
+              <View className="flex-row items-center gap-2">
+                <Text className="text-base font-extrabold" style={{ color: theme.heading }}>Select Item</Text>
+                <View
+                  className="rounded-full px-3 py-1"
+                  style={{ backgroundColor: (itemPickerTarget?.bucket ?? 'full') === 'full' ? theme.primary : theme.pillBg }}
+                >
+                  <Text
+                    className="text-[11px] font-semibold"
+                    style={{ color: (itemPickerTarget?.bucket ?? 'full') === 'full' ? '#FFFFFF' : theme.pillText }}
+                  >
+                    {(itemPickerTarget?.bucket ?? 'full') === 'full' ? 'FULL' : 'EMPTY'}
+                  </Text>
+                </View>
+              </View>
+              <Text className="text-[12px]" style={{ color: theme.subtext }}>
+                Pick the transfer item and review source stock before adding quantity.
+              </Text>
+            </View>
             <TextInput
               value={itemSearch}
               onChangeText={setItemSearch}
               placeholder="Search item code or name"
               placeholderTextColor={theme.inputPlaceholder}
-              style={[styles.modalSearch, { backgroundColor: theme.inputBg, color: theme.inputText }]}
+              className="rounded-xl px-3 py-[11px] text-[13px]"
+              style={{ backgroundColor: theme.inputBg, color: theme.inputText }}
             />
             <View style={[styles.itemCategoryWrap, isCompactLayout ? { height: 38 } : null]}>
               <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.itemCategoryRow}>
@@ -1437,7 +1519,7 @@ export function TransfersScreen({
                 })}
               </ScrollView>
             </View>
-            <ScrollView style={styles.itemSelectList} contentContainerStyle={styles.itemSelectListContent} keyboardShouldPersistTaps="handled">
+            <ScrollView className="min-h-0 flex-1" contentContainerStyle={{ gap: 10, paddingBottom: 8 }} keyboardShouldPersistTaps="handled">
               {requiresSourceStockCheck(transferMode) && !activeSourceLocationId ? (
                 <Text style={[styles.modalEmpty, { color: theme.subtext }]}>Select source location first to enable item selection.</Text>
               ) : null}
@@ -1447,8 +1529,13 @@ export function TransfersScreen({
                 filteredProducts.map((product) => {
                   const bucket = itemPickerTarget?.bucket ?? 'full';
                   const disabled = isProductDisabledForPicker(product.id, bucket);
+                  const canShowSourceStock = Boolean(activeSourceLocationId);
+                  const stock = canShowSourceStock
+                    ? sourceInventoryByProduct.get(product.id) ?? { qtyOnHand: 0, qtyFull: 0, qtyEmpty: 0 }
+                    : null;
+                  const showProductBasedStock = Boolean(product.isLpg);
                   const availableQty =
-                    requiresSourceStockCheck(transferMode) && activeSourceLocationId
+                    activeSourceLocationId
                       ? resolveAvailableQtyForBucket(product.id, bucket)
                       : null;
                   return (
@@ -1465,8 +1552,8 @@ export function TransfersScreen({
                         selectItemFromModal(product.id);
                       }}
                       disabled={disabled}
+                      className="gap-2 rounded-xl border px-3 py-3"
                       style={[
-                        styles.itemSelectCard,
                         isCompactLayout ? { paddingHorizontal: 10, paddingVertical: 10, gap: 6 } : null,
                         disabled ? styles.itemSelectCardDisabled : null,
                         { borderColor: theme.cardBorder, backgroundColor: theme.inputBg }
@@ -1480,19 +1567,78 @@ export function TransfersScreen({
                           <Text style={styles.noStockWatermark}>NO STOCK</Text>
                         </>
                       ) : null}
-                      <View style={styles.itemSelectCardHead}>
-                        <View style={styles.itemSelectCardTitleWrap}>
-                          <Text style={[styles.itemSelectCardTitle, { color: theme.heading }]}>{product.label}</Text>
-                          <Text style={[styles.itemSelectCardSub, { color: theme.subtext }]}>{product.subtitle ?? product.id}</Text>
+                      <View className="flex-row items-start justify-between gap-3">
+                        <View className="min-w-0 flex-1 gap-0.5">
+                          <Text className="text-[14px] font-bold" style={{ color: theme.heading }}>{product.label}</Text>
+                          <Text className="text-[12px]" style={{ color: theme.subtext }}>{product.subtitle ?? product.id}</Text>
                         </View>
-                        <View style={[styles.itemSelectPricePill, isCompactLayout ? { paddingHorizontal: 8, paddingVertical: 4 } : null, { backgroundColor: theme.pillBg }]}>
-                          <Text style={[styles.itemSelectPriceText, { color: theme.pillText }]}>{product.group ?? 'General'}</Text>
+                        <View
+                          className="rounded-full px-3 py-1"
+                          style={[
+                            isCompactLayout ? { paddingHorizontal: 8, paddingVertical: 4 } : null,
+                            { backgroundColor: theme.pillBg }
+                          ]}
+                        >
+                          <Text className="text-[11px] font-semibold" style={{ color: theme.pillText }}>{product.group ?? 'General'}</Text>
                         </View>
                       </View>
-                      {availableQty !== null ? (
-                        <Text style={[styles.itemAvailableText, { color: theme.subtext }]}>
-                          Available {bucket.toUpperCase()}: {availableQty.toFixed(2)}
+                      {stock && showProductBasedStock ? (
+                        <View className="gap-2">
+                          <View
+                            className="rounded-xl px-3 py-2"
+                            style={{ backgroundColor: theme.pillBg }}
+                          >
+                            <Text className="text-[10px] font-semibold uppercase" style={{ color: theme.subtext }}>Product Stock</Text>
+                            <Text className="text-[13px] font-bold" style={{ color: theme.heading }}>{stock.qtyOnHand.toFixed(2)}</Text>
+                          </View>
+                          <Text className="text-[11px]" style={{ color: theme.subtext }}>
+                            {transferMode === 'SUPPLIER_RESTOCK_IN' || transferMode === 'SUPPLIER_RESTOCK_OUT'
+                              ? 'Current branch/store quantity for this item.'
+                              : 'Transfer stock checks use this item&apos;s product quantity, not shared cylinder-type totals.'}
+                          </Text>
+                        </View>
+                      ) : stock ? (
+                        <View className="flex-row flex-wrap gap-2" style={isCompactLayout ? { gap: 6 } : null}>
+                          <View
+                            className="min-w-[31%] flex-1 rounded-xl px-3 py-2"
+                            style={[isCompactLayout ? { minWidth: '31%', flexBasis: '31%' } : null, { backgroundColor: theme.pillBg }]}
+                          >
+                            <Text className="text-[10px] font-semibold uppercase" style={{ color: theme.subtext }}>FULL</Text>
+                            <Text className="text-[13px] font-bold" style={{ color: theme.heading }}>{stock.qtyFull.toFixed(2)}</Text>
+                          </View>
+                          <View
+                            className="min-w-[31%] flex-1 rounded-xl px-3 py-2"
+                            style={[isCompactLayout ? { minWidth: '31%', flexBasis: '31%' } : null, { backgroundColor: theme.pillBg }]}
+                          >
+                            <Text className="text-[10px] font-semibold uppercase" style={{ color: theme.subtext }}>EMPTY</Text>
+                            <Text className="text-[13px] font-bold" style={{ color: theme.heading }}>{stock.qtyEmpty.toFixed(2)}</Text>
+                          </View>
+                          <View
+                            className="min-w-[31%] flex-1 rounded-xl px-3 py-2"
+                            style={[isCompactLayout ? { minWidth: '31%', flexBasis: '31%' } : null, { backgroundColor: theme.pillBg }]}
+                          >
+                            <Text className="text-[10px] font-semibold uppercase" style={{ color: theme.subtext }}>QOH</Text>
+                            <Text className="text-[13px] font-bold" style={{ color: theme.heading }}>{stock.qtyOnHand.toFixed(2)}</Text>
+                          </View>
+                        </View>
+                      ) : (
+                        <Text className="text-[12px]" style={{ color: theme.subtext }}>
+                          {transferMode === 'SUPPLIER_RESTOCK_IN'
+                            ? 'Supplier stock is not tracked locally for restock-in transfers.'
+                            : 'Source stock appears after you select a source location.'}
                         </Text>
+                      )}
+                      {availableQty !== null ? (
+                        <View
+                          className="self-start rounded-full px-3 py-1"
+                          style={{ backgroundColor: theme.pillBg }}
+                        >
+                          <Text className="text-[11px] font-semibold" style={{ color: theme.pillText }}>
+                            {transferMode === 'SUPPLIER_RESTOCK_IN' || transferMode === 'SUPPLIER_RESTOCK_OUT'
+                              ? `Store Qty: ${availableQty.toFixed(2)}`
+                              : `Available ${bucket.toUpperCase()}: ${availableQty.toFixed(2)}`}
+                          </Text>
+                        </View>
                       ) : null}
                     </Pressable>
                   );
@@ -1504,49 +1650,18 @@ export function TransfersScreen({
                 setItemModalOpen(false);
                 setItemPickerTarget(null);
               }}
-              style={[styles.modalClose, { backgroundColor: theme.pillBg }]}
+              className="min-h-10 items-center justify-center rounded-xl px-3"
+              style={{ backgroundColor: theme.pillBg }}
             >
-              <Text style={[styles.modalCloseText, { color: theme.pillText }]}>Close</Text>
+              <Text className="text-[13px] font-bold" style={{ color: theme.pillText }}>Close</Text>
             </Pressable>
           </View>
         </View>
       </Modal>
 
-      <View style={[styles.block, { borderColor: theme.cardBorder }]}>
-        <Text style={[styles.blockTitle, { color: theme.heading }]}>Recent Local Transfers</Text>
-        {rows.length === 0 ? (
-          <Text style={[styles.sub, { color: theme.subtext }]}>No local transfers yet.</Text>
-        ) : (
-          rows.slice(0, 8).map((row) => {
-            const payload = parsePayload(row.payload);
-            const transferLines = Array.isArray(payload.lines) ? payload.lines : [];
-            const totalFull = transferLines.reduce((sum, line) => sum + Number(line.qty_full ?? line.qtyFull ?? 0), 0);
-            const totalEmpty = transferLines.reduce((sum, line) => sum + Number(line.qty_empty ?? line.qtyEmpty ?? 0), 0);
-            return (
-              <View key={row.id} style={[styles.transferCard, { borderColor: theme.cardBorder, backgroundColor: theme.inputBg }]}>
-                <View style={{ flex: 1 }}>
-                  <Text style={[styles.itemId, { color: theme.heading }]}>{row.id}</Text>
-                  <Text style={[styles.itemMeta, { color: theme.subtext }]}>
-                    {(payload.transfer_mode ?? 'GENERAL').replace(/_/g, ' ')}
-                    {' • '}
-                    {payload.source_location_label ?? payload.source_location_id ?? '-'}
-                    {' → '}
-                    {payload.destination_location_label ?? payload.destination_location_id ?? '-'}
-                  </Text>
-                  <Text style={[styles.itemMeta, { color: theme.subtext }]}>
-                    FULL {Number.isFinite(totalFull) ? totalFull.toFixed(2) : '0.00'} • EMPTY {Number.isFinite(totalEmpty) ? totalEmpty.toFixed(2) : '0.00'}
-                  </Text>
-                </View>
-                <SyncStatusBadge status={row.sync_status} />
-              </View>
-            );
-          })
-        )}
-      </View>
     </View>
   );
 }
-
 const styles = StyleSheet.create({
   card: {
     borderWidth: 1,
@@ -1674,6 +1789,21 @@ const styles = StyleSheet.create({
     paddingVertical: 8,
     gap: 8
   },
+  transferEmptyCard: {
+    borderWidth: 1,
+    borderRadius: 12,
+    paddingHorizontal: 10,
+    paddingVertical: 12,
+    gap: 4
+  },
+  transferEmptyTitle: {
+    fontSize: 13,
+    fontWeight: '700'
+  },
+  transferEmptyCopy: {
+    fontSize: 12,
+    lineHeight: 18
+  },
   lineItemHead: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -1692,13 +1822,19 @@ const styles = StyleSheet.create({
     fontSize: 12,
     marginTop: -2
   },
-  qtyInput: {
+  qtyValueBox: {
     width: 74,
     borderRadius: 10,
+    minHeight: 40,
     paddingHorizontal: 10,
-    paddingVertical: 10,
-    fontSize: 13,
+    paddingVertical: 8,
     borderWidth: 1,
+    alignItems: 'center',
+    justifyContent: 'center'
+  },
+  qtyValueText: {
+    fontSize: 13,
+    fontWeight: '700',
     textAlign: 'center'
   },
   qtyWrap: {
@@ -1973,3 +2109,5 @@ const styles = StyleSheet.create({
     elevation: 6
   }
 });
+
+

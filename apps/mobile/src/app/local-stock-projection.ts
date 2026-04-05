@@ -37,6 +37,8 @@ type TransferLinePayload = {
 };
 
 type TransferPayload = {
+  transfer_mode?: string;
+  transferMode?: string;
   source_location_id?: string;
   sourceLocationId?: string;
   destination_location_id?: string;
@@ -130,6 +132,16 @@ function normalizeFlow(value: unknown): 'REFILL_EXCHANGE' | 'NON_REFILL' | null 
   return null;
 }
 
+function normalizeTransferMode(
+  value: unknown
+): 'SUPPLIER_RESTOCK_IN' | 'SUPPLIER_RESTOCK_OUT' | null {
+  const raw = asString(value)?.toUpperCase();
+  if (raw === 'SUPPLIER_RESTOCK_IN' || raw === 'SUPPLIER_RESTOCK_OUT') {
+    return raw;
+  }
+  return null;
+}
+
 function applyPendingSalesDeltas(
   rows: LocalRow[],
   locationId: string,
@@ -190,10 +202,21 @@ function applyPendingTransferDeltas(
       continue;
     }
     const payload = parseRecord<TransferPayload>(row.payload, {});
+    const transferMode = normalizeTransferMode(payload.transfer_mode ?? payload.transferMode);
     const sourceLocationId = asString(payload.source_location_id ?? payload.sourceLocationId);
     const destinationLocationId = asString(payload.destination_location_id ?? payload.destinationLocationId);
-    const affectsAsSource = sourceLocationId === locationId;
-    const affectsAsDestination = destinationLocationId === locationId;
+    const affectsAsSource =
+      transferMode === 'SUPPLIER_RESTOCK_IN'
+        ? false
+        : transferMode === 'SUPPLIER_RESTOCK_OUT'
+          ? destinationLocationId === locationId
+          : sourceLocationId === locationId;
+    const affectsAsDestination =
+      transferMode === 'SUPPLIER_RESTOCK_IN'
+        ? destinationLocationId === locationId
+        : transferMode === 'SUPPLIER_RESTOCK_OUT'
+          ? false
+          : destinationLocationId === locationId;
     if (!affectsAsSource && !affectsAsDestination) {
       continue;
     }
