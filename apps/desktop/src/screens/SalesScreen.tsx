@@ -5,6 +5,9 @@ import type { DesktopAppState, DesktopSaleRecord } from '../db/schema';
 import { desktopMasterDataService } from '../services/desktop-master-data.service';
 import { desktopReceiptService } from '../services/desktop-receipt.service';
 import { desktopSalesService } from '../services/desktop-sales.service';
+import { SearchField } from '../components/inputs/SearchField';
+import { ScreenHeader } from '../components/layout/ScreenHeader';
+import { useDesktopUi } from '../components/feedback/DesktopUiFeedback';
 
 type Props = {
   appState: DesktopAppState;
@@ -13,13 +16,71 @@ type Props = {
 };
 
 type SalesFilter = 'all' | 'pending' | 'failed' | 'synced';
+const HISTORY_PAGE_SIZE = 20;
+const screenStackClass = 'flex flex-col gap-5';
+const shellCardClass =
+  'rounded-[28px] border border-[var(--border-soft)] bg-[rgba(255,255,255,0.95)] p-5 shadow-[0_18px_44px_rgba(17,40,58,0.08)] backdrop-blur';
+const summaryStripClass = 'grid gap-3 sm:grid-cols-2 xl:grid-cols-4';
+const summaryTileClass =
+  'rounded-[20px] border border-[var(--border-soft)] bg-[rgba(255,255,255,0.94)] px-4 py-3 shadow-[0_10px_24px_rgba(17,40,58,0.05)]';
+const summaryLabelClass = 'block text-[0.78rem] font-semibold uppercase tracking-[0.08em] text-[var(--muted)]';
+const summaryValueClass = 'mt-1 block text-[1rem] font-extrabold text-[var(--text-strong)]';
+const toolbarGridClass = 'grid gap-3 xl:grid-cols-[minmax(0,1fr)_180px_180px]';
+const salesModalBackdropClass = 'fixed inset-0 z-50 flex items-center justify-center bg-slate-950/45 p-4 backdrop-blur-sm';
+const salesModalCardClass =
+  'flex max-h-[min(90vh,920px)] w-full max-w-6xl flex-col overflow-hidden rounded-[30px] border border-[var(--border-soft)] bg-[rgba(255,255,255,0.97)] shadow-[var(--shadow-strong)]';
+const salesModalToolbarClass =
+  'flex shrink-0 flex-col gap-4 border-b border-[var(--border-soft)] bg-[rgba(248,251,255,0.98)] px-5 py-4';
 
 function fmtMoney(value: number): string {
   return `PHP ${value.toFixed(2)}`;
 }
 
+function parseDateInput(value: string, endOfDay = false): number | null {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) {
+    return null;
+  }
+  const parsed = new Date(`${value}T${endOfDay ? '23:59:59.999' : '00:00:00.000'}`).getTime();
+  return Number.isNaN(parsed) ? null : parsed;
+}
+
+function matchesDateRange(value: string, fromDate: string, toDate: string): boolean {
+  const target = new Date(value).getTime();
+  if (Number.isNaN(target)) {
+    return false;
+  }
+  const from = parseDateInput(fromDate, false);
+  const to = parseDateInput(toDate, true);
+  if (from !== null && target < from) {
+    return false;
+  }
+  if (to !== null && target > to) {
+    return false;
+  }
+  return true;
+}
+
+function resolveFlowLabel(value: string | null | undefined): string | null {
+  const normalized = String(value ?? '')
+    .trim()
+    .toUpperCase();
+  if (normalized === 'REFILL_EXCHANGE') {
+    return 'Refill';
+  }
+  if (normalized === 'NON_REFILL') {
+    return 'Non-Refill';
+  }
+  return null;
+}
+
 function saleMetaText(sale: DesktopSaleRecord): string {
-  return [sale.payload.customerName || 'Walk-in customer', sale.payload.saleType, sale.payload.paymentMethod]
+  return [
+    sale.payload.customerName || 'Walk-in customer',
+    sale.payload.saleType,
+    sale.payload.paymentMethod,
+    sale.payload.personnelName ? `Personnel ${sale.payload.personnelName}` : null,
+    sale.payload.helperName ? `Helper ${sale.payload.helperName}` : null
+  ]
     .filter(Boolean)
     .join(' · ');
 }
@@ -40,14 +101,17 @@ function withDefaults(sale: DesktopSaleRecord): DesktopSaleRecord {
 }
 
 export function SalesScreen({ appState, onOutboxChanged, onReopenSale }: Props): JSX.Element {
+  const desktopUi = useDesktopUi();
   const [sales, setSales] = useState<DesktopSaleRecord[]>([]);
   const [outbox, setOutbox] = useState<OutboxItem[]>([]);
   const [lpgProductIds, setLpgProductIds] = useState<Set<string>>(new Set());
   const [search, setSearch] = useState('');
   const [activeFilter, setActiveFilter] = useState<SalesFilter>('all');
+  const [fromDate, setFromDate] = useState('');
+  const [toDate, setToDate] = useState('');
+  const [currentPage, setCurrentPage] = useState(1);
   const [selectedSaleId, setSelectedSaleId] = useState('');
   const [loading, setLoading] = useState(true);
-  const [message, setMessage] = useState('Desktop sales saved from POS appear here right away, even before sync finishes.');
   const [cancelModalOpen, setCancelModalOpen] = useState(false);
   const [returnModalOpen, setReturnModalOpen] = useState(false);
   const [cancelReason, setCancelReason] = useState('');
@@ -55,21 +119,35 @@ export function SalesScreen({ appState, onOutboxChanged, onReopenSale }: Props):
   const [returnQtyByKey, setReturnQtyByKey] = useState<Record<string, string>>({});
   const [submitting, setSubmitting] = useState(false);
 
+  const announce = (message: string, tone: 'info' | 'success' | 'warning' | 'error' = 'info'): void => {
+    desktopUi.showToast({ message, tone });
+  };
+
   const refresh = async (): Promise<void> => {
     setLoading(true);
     try {
-      const [saleRows, outboxRows, catalogRows] = await Promise.all([
+      const [saleRows, outboxRows, catalogRows, cachedSales] = await Promise.all([
         desktopDb.listSales(),
         desktopDb.listOutboxItems(),
-        appState.setup.locationId ? desktopMasterDataService.loadCatalog(appState.setup.locationId) : Promise.resolve([])
+        appState.setup.locationId ? desktopMasterDataService.loadCatalog(appState.setup.locationId) : Promise.resolve([]),
+        appState.setup.branchId
+          ? desktopMasterDataService.loadCachedSales(appState.setup.branchId, appState.setup.locationId)
+          : Promise.resolve([])
       ]);
-      const normalized = saleRows.map(withDefaults);
+      const normalizedLocal = saleRows.map(withDefaults);
+      const merged = new Map<string, DesktopSaleRecord>();
+      normalizedLocal.forEach((sale) => merged.set(sale.id, sale));
+      cachedSales.forEach((sale) => {
+        if (!merged.has(sale.id)) {
+          merged.set(sale.id, withDefaults(sale));
+        }
+      });
+      const normalized = Array.from(merged.values()).sort(
+        (a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
+      );
       setSales(normalized);
       setOutbox(outboxRows);
       setLpgProductIds(new Set(catalogRows.filter((row) => row.isLpg).map((row) => row.id)));
-      if (!selectedSaleId && normalized.length > 0) {
-        setSelectedSaleId(normalized[0].id);
-      }
     } finally {
       setLoading(false);
     }
@@ -79,10 +157,25 @@ export function SalesScreen({ appState, onOutboxChanged, onReopenSale }: Props):
     void refresh();
   }, [appState.setup.locationId]);
 
+  useEffect(() => {
+    if (submitting) {
+      desktopUi.setLoading({ visible: true, label: 'Saving sale update...' });
+      return;
+    }
+    if (loading) {
+      desktopUi.setLoading({ visible: true, label: 'Loading sales...' });
+      return;
+    }
+    desktopUi.clearLoading();
+  }, [desktopUi, loading, submitting]);
+
   const filteredSales = useMemo(() => {
     const term = search.trim().toLowerCase();
     return sales.filter((sale) => {
       if (activeFilter !== 'all' && sale.syncStatus !== activeFilter) {
+        return false;
+      }
+      if (!matchesDateRange(sale.createdAt, fromDate, toDate)) {
         return false;
       }
       if (!term) {
@@ -101,12 +194,28 @@ export function SalesScreen({ appState, onOutboxChanged, onReopenSale }: Props):
         .toLowerCase();
       return haystack.includes(term);
     });
-  }, [activeFilter, sales, search]);
+  }, [activeFilter, fromDate, sales, search, toDate]);
+
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [activeFilter, fromDate, search, toDate]);
+
+  const totalPages = Math.max(1, Math.ceil(filteredSales.length / HISTORY_PAGE_SIZE));
+
+  useEffect(() => {
+    if (currentPage > totalPages) {
+      setCurrentPage(totalPages);
+    }
+  }, [currentPage, totalPages]);
+
+  const pagedSales = useMemo(() => {
+    const start = (currentPage - 1) * HISTORY_PAGE_SIZE;
+    return filteredSales.slice(start, start + HISTORY_PAGE_SIZE);
+  }, [currentPage, filteredSales]);
 
   const selectedSale =
     filteredSales.find((sale) => sale.id === selectedSaleId) ??
     sales.find((sale) => sale.id === selectedSaleId) ??
-    filteredSales[0] ??
     null;
 
   const selectedOutbox = useMemo(() => {
@@ -152,16 +261,19 @@ export function SalesScreen({ appState, onOutboxChanged, onReopenSale }: Props):
   const handleReprint = async (sale: DesktopSaleRecord): Promise<void> => {
     try {
       await desktopReceiptService.printSaleReceipt(sale, appState);
-      setMessage(`Receipt ${sale.receiptNumber} was sent to the desktop printer flow again.`);
+      announce(`Receipt ${sale.receiptNumber} was sent to the desktop printer flow again.`, 'success');
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : 'Unable to reprint this receipt right now.');
+      announce(error instanceof Error ? error.message : 'Unable to reprint this receipt right now.', 'error');
     }
   };
 
-  const handleRefresh = async (): Promise<void> => {
+  const handleRefresh = async (notify = false): Promise<void> => {
     await refresh();
     if (onOutboxChanged) {
       await onOutboxChanged();
+    }
+    if (notify) {
+      announce('Desktop sales list refreshed.', 'success');
     }
   };
 
@@ -174,13 +286,13 @@ export function SalesScreen({ appState, onOutboxChanged, onReopenSale }: Props):
       const result = await desktopSalesService.cancelSale(appState, selectedSale, cancelReason);
       setCancelModalOpen(false);
       setCancelReason('');
-      setMessage(result.message);
+      announce(result.message, 'success');
       await handleRefresh();
       if (recreateAfterCancel) {
         onReopenSale?.(result.sale, 'recreate');
       }
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : 'Unable to cancel this sale right now.');
+      announce(error instanceof Error ? error.message : 'Unable to cancel this sale right now.', 'error');
     } finally {
       setSubmitting(false);
     }
@@ -218,116 +330,140 @@ export function SalesScreen({ appState, onOutboxChanged, onReopenSale }: Props):
       setReturnModalOpen(false);
       setReturnReason('');
       setReturnQtyByKey({});
-      setMessage(result.message);
+      announce(result.message, 'success');
       await handleRefresh();
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : 'Unable to save this sale return right now.');
+      announce(error instanceof Error ? error.message : 'Unable to save this sale return right now.', 'error');
     } finally {
       setSubmitting(false);
     }
   };
 
   return (
-    <div className="screen-stack">
-      <section className="hero-panel">
-        <div>
-          <div className="eyebrow">Desktop Sales</div>
-          <h2>Review cashier sales, sync state, and correction flows from this workstation.</h2>
-          <p>
-            This screen is built on the same local desktop sale and outbox data the POS uses, so staff can cancel,
-            return, and recreate sales without leaving the workstation flow.
-          </p>
-        </div>
-        <div className="sales-summary-strip">
-          <div>
-            <span>All Sales</span>
-            <strong>{counts.all}</strong>
+    <div className={screenStackClass}>
+      <ScreenHeader
+        routeId="sales"
+        title="Sales history"
+        description="Review local sales, sync state, and correction actions from this workstation."
+      />
+
+      <section className={summaryStripClass}>
+          <div className={summaryTileClass}>
+            <span className={summaryLabelClass}>All Sales</span>
+            <strong className={summaryValueClass}>{counts.all}</strong>
           </div>
-          <div>
-            <span>Pending Sync</span>
-            <strong>{counts.pending}</strong>
+          <div className={summaryTileClass}>
+            <span className={summaryLabelClass}>Pending Sync</span>
+            <strong className={summaryValueClass}>{counts.pending}</strong>
           </div>
-          <div>
-            <span>Needs Retry</span>
-            <strong>{counts.failed}</strong>
+          <div className={summaryTileClass}>
+            <span className={summaryLabelClass}>Needs Retry</span>
+            <strong className={summaryValueClass}>{counts.failed}</strong>
           </div>
-          <div>
-            <span>Synced</span>
-            <strong>{counts.synced}</strong>
+          <div className={summaryTileClass}>
+            <span className={summaryLabelClass}>Synced</span>
+            <strong className={summaryValueClass}>{counts.synced}</strong>
           </div>
-        </div>
       </section>
 
-      <section className="sales-shell">
-        <div className="panel-card">
-          <div className="panel-head">
-            <div>
-              <div className="eyebrow">Sales list</div>
-              <h3>Local cashier history</h3>
-            </div>
-            <button className="secondary-btn" type="button" onClick={() => void handleRefresh()} disabled={loading}>
-              {loading ? 'Refreshing...' : 'Refresh'}
-            </button>
+      <section className={`${shellCardClass} flex flex-col gap-5`}>
+        <div className="panel-head">
+          <div>
+            <div className="eyebrow">Sales list</div>
+            <h3>Local cashier history</h3>
           </div>
-
-          <input
-            className="desktop-search"
-            value={search}
-            onChange={(event) => setSearch(event.target.value)}
-            placeholder="Search receipt, customer, payment, note, or item"
-          />
-
-          <div className="filter-chip-row">
-            {([
-              ['all', `All (${counts.all})`],
-              ['pending', `Pending (${counts.pending})`],
-              ['failed', `Needs Retry (${counts.failed})`],
-              ['synced', `Synced (${counts.synced})`]
-            ] as Array<[SalesFilter, string]>).map(([filter, label]) => (
-              <button
-                key={filter}
-                type="button"
-                className={`filter-chip ${activeFilter === filter ? 'active' : ''}`}
-                onClick={() => setActiveFilter(filter)}
-              >
-                {label}
-              </button>
-            ))}
-          </div>
-
-          <div className="sales-list">
-            {filteredSales.length === 0 ? (
-              <div className="empty-state">No desktop sales match this filter yet.</div>
-            ) : (
-              filteredSales.map((sale) => (
-                <button
-                  key={sale.id}
-                  type="button"
-                  className={`sales-list-row ${selectedSale?.id === sale.id ? 'selected' : ''}`}
-                  onClick={() => setSelectedSaleId(sale.id)}
-                >
-                  <div>
-                    <strong>{sale.receiptNumber}</strong>
-                    <span>{saleMetaText(sale)}</span>
-                    <span>{new Date(sale.createdAt).toLocaleString()}</span>
-                  </div>
-                  <div className="sales-list-row-right">
-                    <strong>{fmtMoney(sale.payload.totalAmount)}</strong>
-                    <div className={`sync-chip ${sale.saleStatus === 'CANCELLED' ? 'failed' : sale.syncStatus}`}>{sale.saleStatus === 'CANCELLED' ? 'cancelled' : sale.syncStatus}</div>
-                  </div>
-                </button>
-              ))
-            )}
-          </div>
+          <button className="secondary-btn" type="button" onClick={() => void handleRefresh(true)} disabled={loading}>
+            {loading ? 'Refreshing...' : 'Refresh'}
+          </button>
         </div>
 
-        <div className="panel-card sales-detail-panel">
-          <div className="panel-head">
-            <div>
-              <div className="eyebrow">Sale detail</div>
-              <h3>{selectedSale ? selectedSale.receiptNumber : 'Choose a sale'}</h3>
+        <div className={toolbarGridClass}>
+          <SearchField
+            className="w-full"
+            value={search}
+            onChange={setSearch}
+            placeholder="Search receipt, customer, payment, note, or item"
+          />
+          <label className="full-width-field history-date-field">
+            <span>From</span>
+            <input type="date" value={fromDate} onChange={(event) => setFromDate(event.target.value)} />
+          </label>
+          <label className="full-width-field history-date-field">
+            <span>To</span>
+            <input type="date" value={toDate} onChange={(event) => setToDate(event.target.value)} />
+          </label>
+        </div>
+
+        <div className="flex flex-wrap gap-2">
+          {([
+            ['all', `All (${counts.all})`],
+            ['pending', `Pending (${counts.pending})`],
+            ['failed', `Needs Retry (${counts.failed})`],
+            ['synced', `Synced (${counts.synced})`]
+          ] as Array<[SalesFilter, string]>).map(([filter, label]) => (
+            <button
+              key={filter}
+              type="button"
+              className={`filter-chip ${activeFilter === filter ? 'active' : ''}`}
+              onClick={() => setActiveFilter(filter)}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
+
+        <div className="flex flex-col gap-3">
+          {filteredSales.length === 0 ? (
+            <div className="empty-state">No desktop sales match this filter yet.</div>
+          ) : (
+            pagedSales.map((sale) => (
+              <button
+                key={sale.id}
+                type="button"
+                className={`sales-list-row ${selectedSale?.id === sale.id ? 'selected' : ''}`}
+                onClick={() => setSelectedSaleId(sale.id)}
+              >
+                <div>
+                  <strong>{sale.receiptNumber}</strong>
+                  <span>{saleMetaText(sale)}</span>
+                  <span>{new Date(sale.createdAt).toLocaleString()}</span>
+                </div>
+                <div className="sales-list-row-right">
+                  <strong>{fmtMoney(sale.payload.totalAmount)}</strong>
+                  <div className={`sync-chip ${sale.saleStatus === 'CANCELLED' ? 'failed' : sale.syncStatus}`}>{sale.saleStatus === 'CANCELLED' ? 'cancelled' : sale.syncStatus}</div>
+                </div>
+              </button>
+            ))
+          )}
+        </div>
+
+        {filteredSales.length > 0 ? (
+          <div className="flex flex-col gap-3 border-t border-[var(--border-soft)] pt-4 md:flex-row md:items-center md:justify-between">
+            <div className="text-sm font-medium text-[var(--muted)]">
+              Showing {(currentPage - 1) * HISTORY_PAGE_SIZE + 1}-{Math.min(currentPage * HISTORY_PAGE_SIZE, filteredSales.length)} of {filteredSales.length}
             </div>
-            {selectedSale ? (
+            <div className="flex flex-wrap items-center gap-2">
+              <button className="secondary-btn mini-btn" type="button" onClick={() => setCurrentPage((page) => Math.max(1, page - 1))} disabled={currentPage === 1}>
+                Previous
+              </button>
+              <span className="rounded-full border border-[var(--border-soft)] bg-[rgba(248,251,255,0.96)] px-3 py-1 text-sm font-semibold text-[var(--muted-strong)]">Page {currentPage} of {totalPages}</span>
+              <button className="secondary-btn mini-btn" type="button" onClick={() => setCurrentPage((page) => Math.min(totalPages, page + 1))} disabled={currentPage === totalPages}>
+                Next
+              </button>
+            </div>
+          </div>
+        ) : null}
+      </section>
+
+      {selectedSale ? (
+        <div className={salesModalBackdropClass} role="presentation">
+          <div className={salesModalCardClass}>
+            <div className="desktop-sheet-handle" aria-hidden="true" />
+            <div className={`${salesModalToolbarClass} panel-head desktop-sheet-head`}>
+              <div>
+                <div className="eyebrow">Sale detail</div>
+                <h3>{selectedSale.receiptNumber}</h3>
+              </div>
               <div className="desktop-settings-actions">
                 <button className="secondary-btn mini-btn" type="button" onClick={() => void handleReprint(selectedSale)}>
                   Reprint Receipt
@@ -366,14 +502,13 @@ export function SalesScreen({ appState, onOutboxChanged, onReopenSale }: Props):
                 >
                   Cancel & Recreate
                 </button>
+                <button className="secondary-btn mini-btn" type="button" onClick={() => setSelectedSaleId('')}>
+                  Close
+                </button>
               </div>
-            ) : null}
-          </div>
+            </div>
 
-          {!selectedSale ? (
-            <div className="empty-state">Choose a desktop sale from the left to inspect the details.</div>
-          ) : (
-            <div className="sales-detail-stack">
+            <div className="flex min-h-0 flex-1 flex-col gap-5 overflow-y-auto px-5 py-5">
               <div className="sales-detail-grid">
                 <div className="customer-detail-card">
                   <span>Customer</span>
@@ -393,6 +528,39 @@ export function SalesScreen({ appState, onOutboxChanged, onReopenSale }: Props):
                 </div>
               </div>
 
+              <div className="customer-detail-drawer">
+                <div>
+                  <strong>{selectedSale.payload.saleType === 'DELIVERY' ? 'Delivery assignment' : 'Sale assignment'}</strong>
+                  <p>
+                    {selectedSale.payload.saleType === 'DELIVERY'
+                      ? 'This sale keeps the assigned delivery team together with the receipt.'
+                      : 'Pickup sale assignment is still shown here for branch follow-up and cashier review.'}
+                  </p>
+                </div>
+                <div className="customer-detail-grid">
+                  <div className="customer-detail-card">
+                    <span>Personnel</span>
+                    <strong>{selectedSale.payload.personnelName || '-'}</strong>
+                  </div>
+                  <div className="customer-detail-card">
+                    <span>Helper</span>
+                    <strong>{selectedSale.payload.helperName || '-'}</strong>
+                  </div>
+                <div className="customer-detail-card">
+                  <span>Payment Mode</span>
+                  <strong>{selectedSale.payload.paymentMode ?? 'FULL'}</strong>
+                </div>
+                <div className="customer-detail-card">
+                  <span>Reward</span>
+                  <strong>{selectedSale.payload.rewardName || '-'}</strong>
+                </div>
+                <div className="customer-detail-card">
+                  <span>Credit Due</span>
+                  <strong>{fmtMoney(selectedSale.payload.creditBalance ?? 0)}</strong>
+                </div>
+                </div>
+              </div>
+
               <dl className="detail-list">
                 <div>
                   <dt>Sale Type</dt>
@@ -400,11 +568,23 @@ export function SalesScreen({ appState, onOutboxChanged, onReopenSale }: Props):
                 </div>
                 <div>
                   <dt>Branch / Location</dt>
-                  <dd>{selectedSale.payload.branchLabel} · {selectedSale.payload.locationLabel}</dd>
+                  <dd>{selectedSale.payload.branchLabel} {'\u00b7'} {selectedSale.payload.locationLabel}</dd>
                 </div>
                 <div>
                   <dt>Created</dt>
                   <dd>{new Date(selectedSale.createdAt).toLocaleString()}</dd>
+                </div>
+                <div>
+                  <dt>Paid</dt>
+                  <dd>{fmtMoney(selectedSale.payload.paidAmount ?? selectedSale.payload.totalAmount)}</dd>
+                </div>
+                <div>
+                  <dt>Change</dt>
+                  <dd>{fmtMoney(selectedSale.payload.changeAmount ?? 0)}</dd>
+                </div>
+                <div>
+                  <dt>Delivery Fee</dt>
+                  <dd>{fmtMoney(selectedSale.payload.deliveryFee ?? 0)}</dd>
                 </div>
                 <div>
                   <dt>Notes</dt>
@@ -438,18 +618,33 @@ export function SalesScreen({ appState, onOutboxChanged, onReopenSale }: Props):
                     Reopen in POS
                   </button>
                 </div>
-                <div className="cart-list">
-                  {selectedSale.payload.lines.map((line, index) => (
-                    <div key={`${selectedSale.id}-${line.productId}-${line.productName}-${index}`} className="cart-row">
-                      <div>
-                        <strong>{line.productName}</strong>
-                        <span>{lpgProductIds.has(line.productId) ? 'LPG item' : `Qty ${line.quantity}`}</span>
-                      </div>
-                      <strong>{fmtMoney(line.unitPrice)}</strong>
-                      <strong>{fmtMoney(line.lineTotal)}</strong>
-                    </div>
-                  ))}
-                </div>
+                {selectedSale.payload.lines.length === 0 ? (
+                  <div className="empty-state">No sale lines were recorded for this receipt.</div>
+                ) : (
+                  <div className="cart-list">
+                    {selectedSale.payload.lines.map((line, index) => {
+                      const flowLabel = resolveFlowLabel(line.cylinderFlow ?? null);
+                      return (
+                        <div key={`${selectedSale.id}-${line.productId}-${line.productName}-${index}`} className="cart-row pos-cart-card cart-row-stack">
+                          <div className="pos-cart-main">
+                            <strong>{line.productName}</strong>
+                            <span className="pos-cart-code">
+                              {lpgProductIds.has(line.productId) ? 'LPG Item' : 'Regular Item'}
+                            </span>
+                            <span className="pos-cart-price">
+                              Qty {line.quantity.toFixed(4)} x {fmtMoney(line.unitPrice)}
+                            </span>
+                            {flowLabel ? <span className="pos-cart-stock">Flow: {flowLabel}</span> : null}
+                          </div>
+                          <div className="pos-cart-side">
+                            <span className="stock-pill good">{fmtMoney(line.lineTotal)}</span>
+                            <span className="pos-cart-code">Line Total</span>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
               </section>
 
               <section className="sales-sync-panel">
@@ -517,13 +712,13 @@ export function SalesScreen({ appState, onOutboxChanged, onReopenSale }: Props):
                 )}
               </section>
             </div>
-          )}
+          </div>
         </div>
-      </section>
+      ) : null}
 
       {cancelModalOpen && selectedSale ? (
-        <div className="desktop-modal-backdrop" role="presentation">
-          <div className="desktop-modal-card">
+        <div className={salesModalBackdropClass} role="presentation">
+          <div className="w-full max-w-2xl rounded-[28px] border border-[var(--border-soft)] bg-[rgba(255,255,255,0.97)] p-5 shadow-[var(--shadow-strong)]">
             <div className="panel-head">
               <div>
                 <div className="eyebrow">Sale correction</div>
@@ -550,8 +745,8 @@ export function SalesScreen({ appState, onOutboxChanged, onReopenSale }: Props):
       ) : null}
 
       {returnModalOpen && selectedSale ? (
-        <div className="desktop-modal-backdrop" role="presentation">
-          <div className="desktop-modal-card wide-modal">
+        <div className={salesModalBackdropClass} role="presentation">
+          <div className="flex max-h-[min(88vh,860px)] w-full max-w-5xl flex-col overflow-hidden rounded-[28px] border border-[var(--border-soft)] bg-[rgba(255,255,255,0.97)] p-5 shadow-[var(--shadow-strong)]">
             <div className="panel-head">
               <div>
                 <div className="eyebrow">Sale return</div>
@@ -604,8 +799,6 @@ export function SalesScreen({ appState, onOutboxChanged, onReopenSale }: Props):
           </div>
         </div>
       ) : null}
-
-      <div className="message-banner">{message}</div>
     </div>
   );
 }

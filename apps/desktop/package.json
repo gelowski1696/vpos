@@ -1,7 +1,9 @@
 {
   "name": "@vpos/desktop",
-  "version": "0.1.0",
+  "version": "0.1.2",
   "private": true,
+  "description": "VPOS Desktop cashier workstation application",
+  "author": "VPOS Team",
   "type": "module",
   "scripts": {
     "dev": "vite",
@@ -9,7 +11,10 @@
     "preview": "vite preview",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "tauri:dev": "tauri dev",
-    "tauri:build": "tauri build"
+    "tauri:build": "tauri build",
+    "tauri:build:signed": "tauri build --config src-tauri/tauri.sign.conf.json",
+    "tauri:build:ota": "tauri build --bundles msi updater",
+    "ota:manifest": "node scripts/create-update-manifest.mjs"
   },
   "dependencies": {
     "@tauri-apps/api": "1.6.0",
@@ -18,13 +23,17 @@
     "@vpos/shared-types": "workspace:*",
     "@zxing/browser": "^0.1.5",
     "react": "18.3.1",
-    "react-dom": "18.3.1"
+    "react-dom": "18.3.1",
+    "sileo": "^0.1.5"
   },
   "devDependencies": {
     "@tauri-apps/cli": "1.6.0",
     "@types/react": "^18.3.19",
     "@types/react-dom": "^18.3.5",
     "@vitejs/plugin-react": "^4.3.4",
+    "autoprefixer": "^10.4.24",
+    "postcss": "^8.5.6",
+    "tailwindcss": "^3.4.19",
     "typescript": "^5.7.3",
     "vite": "^5.4.19"
   }
