@@ -842,59 +842,14 @@ export class SyncService {
         ])
       );
 
-      const lpgTypeIds = [
-        ...new Set(
-          products
-            .filter((row) => row.isLpg && row.cylinderTypeId)
-            .map((row) => row.cylinderTypeId as string)
-        )
-      ];
-      const cylinderByType = new Map<
-        string,
-        { qtyFull: number; qtyEmpty: number; updatedAt: Date }
-      >();
-      if (
-        lpgTypeIds.length > 0 &&
-        client.cylinderBalance &&
-        typeof client.cylinderBalance.findMany === 'function'
-      ) {
-        const rows = await client.cylinderBalance.findMany({
-          where: {
-            companyId,
-            locationId,
-            cylinderTypeId: { in: lpgTypeIds }
-          },
-          select: {
-            cylinderTypeId: true,
-            qtyFull: true,
-            qtyEmpty: true,
-            updatedAt: true
-          }
-        });
-        for (const row of rows) {
-          cylinderByType.set(row.cylinderTypeId, {
-            qtyFull: this.toNumeric(row.qtyFull),
-            qtyEmpty: this.toNumeric(row.qtyEmpty),
-            updatedAt: row.updatedAt
-          });
-        }
-      }
-
       const nowIso = new Date().toISOString();
       return products.map((product) => {
         const base = balanceByProduct.get(product.id);
-        const cylinder =
-          product.isLpg && product.cylinderTypeId
-            ? cylinderByType.get(product.cylinderTypeId)
-            : undefined;
-        const qtyFull = cylinder ? Number(cylinder.qtyFull.toFixed(4)) : 0;
-        const qtyEmpty = cylinder ? Number(cylinder.qtyEmpty.toFixed(4)) : 0;
-        const qtyOnHand = product.isLpg
-          ? Number((qtyFull + qtyEmpty).toFixed(4))
-          : Number((base?.qtyOnHand ?? 0).toFixed(4));
+        const qtyFull = 0;
+        const qtyEmpty = 0;
+        const qtyOnHand = Number((base?.qtyOnHand ?? 0).toFixed(4));
         const avgCost = Number((base?.avgCost ?? 0).toFixed(4));
-        const updatedAt =
-          cylinder?.updatedAt?.toISOString() ?? base?.updatedAt?.toISOString() ?? nowIso;
+        const updatedAt = base?.updatedAt?.toISOString() ?? nowIso;
         return {
           entity: 'inventory_balance',
           action: 'upsert',

@@ -838,18 +838,6 @@ export class TransfersService {
               }
             });
 
-            if (isLpgCylinderLine && line.product.cylinderTypeId) {
-              await this.applyCylinderBalanceDelta(
-                tx,
-                companyId,
-                adjustmentLocationId,
-                line.product.cylinderTypeId,
-                isRestockIn ? qtyFull : -qtyFull,
-                isRestockIn ? qtyEmpty : -qtyEmpty,
-                `Insufficient FULL/EMPTY cylinders at ${adjustmentLocationId} for ${line.product.sku}`
-              );
-            }
-
             const referenceId = `${transfer.id}::${line.id}::${isRestockIn ? 'RESTOCK_IN' : 'RESTOCK_OUT'}`;
             const qtyDelta = this.roundQty(isRestockIn ? inventoryMoveQty : -inventoryMoveQty);
             const fullDelta = this.roundQty(isRestockIn ? qtyFull : -qtyFull);
@@ -969,26 +957,6 @@ export class TransfersService {
               avgCost: nextDestinationAvg
             }
           });
-
-          if (isLpgCylinderLine && line.product.cylinderTypeId) {
-            await this.applyCylinderBalanceDelta(
-              tx,
-              companyId,
-              transfer.sourceLocationId,
-              line.product.cylinderTypeId,
-              -qtyFull,
-              -qtyEmpty,
-              `Insufficient FULL/EMPTY cylinders at source for ${line.product.sku}`
-            );
-            await this.applyCylinderBalanceDelta(
-              tx,
-              companyId,
-              transfer.destinationLocationId,
-              line.product.cylinderTypeId,
-              qtyFull,
-              qtyEmpty
-            );
-          }
 
           const outReferenceId = `${transfer.id}::${line.id}::OUT`;
           const inReferenceId = `${transfer.id}::${line.id}::IN`;
@@ -1190,18 +1158,6 @@ export class TransfersService {
               }
             });
 
-            if (isLpgCylinderLine && line.product.cylinderTypeId) {
-              await this.applyCylinderBalanceDelta(
-                tx,
-                companyId,
-                adjustmentLocationId,
-                line.product.cylinderTypeId,
-                isRestockIn ? -qtyFull : qtyFull,
-                isRestockIn ? -qtyEmpty : qtyEmpty,
-                `Cannot reverse transfer: destination FULL/EMPTY is insufficient for ${line.product.sku}`
-              );
-            }
-
             const referenceId = `${transfer.id}::${line.id}::${isRestockIn ? 'REV_RESTOCK_IN' : 'REV_RESTOCK_OUT'}`;
             const qtyDelta = this.roundQty(isRestockIn ? -inventoryMoveQty : inventoryMoveQty);
             const fullDelta = this.roundQty(isRestockIn ? -qtyFull : qtyFull);
@@ -1321,26 +1277,6 @@ export class TransfersService {
             }
           });
 
-          if (isLpgCylinderLine && line.product.cylinderTypeId) {
-            await this.applyCylinderBalanceDelta(
-              tx,
-              companyId,
-              transfer.destinationLocationId,
-              line.product.cylinderTypeId,
-              -qtyFull,
-              -qtyEmpty,
-              `Cannot reverse transfer: destination FULL/EMPTY is insufficient for ${line.product.sku}`
-            );
-            await this.applyCylinderBalanceDelta(
-              tx,
-              companyId,
-              transfer.sourceLocationId,
-              line.product.cylinderTypeId,
-              qtyFull,
-              qtyEmpty
-            );
-          }
-
           const outReferenceId = `${transfer.id}::${line.id}::REV_OUT`;
           const inReferenceId = `${transfer.id}::${line.id}::REV_IN`;
           const outLedger = await tx.inventoryLedger.create({
@@ -1457,32 +1393,16 @@ export class TransfersService {
         }
       }
     });
-    const cylinderBalance =
-      product.isLpg && product.cylinderTypeId
-        ? await db.cylinderBalance.findUnique({
-            where: {
-              locationId_cylinderTypeId: {
-                locationId: location.id,
-                cylinderTypeId: product.cylinderTypeId
-              }
-            }
-          })
-        : null;
-    const qtyFull =
-      product.isLpg && product.cylinderTypeId
-        ? this.roundQty(Number(cylinderBalance?.qtyFull ?? 0))
-        : this.roundQty(Number(balance?.qtyOnHand ?? 0));
-    const qtyEmpty =
-      product.isLpg && product.cylinderTypeId
-        ? this.roundQty(Number(cylinderBalance?.qtyEmpty ?? 0))
-        : 0;
+    const qtyOnHand = this.roundQty(Number(balance?.qtyOnHand ?? 0));
+    const qtyFull = qtyOnHand;
+    const qtyEmpty = 0;
     return {
       company_id: companyId,
       location_id: locationRef,
       product_id: productRef,
       qty_full: qtyFull,
       qty_empty: qtyEmpty,
-      updated_at: (cylinderBalance?.updatedAt ?? balance?.updatedAt ?? new Date()).toISOString()
+      updated_at: (balance?.updatedAt ?? new Date()).toISOString()
     };
   }
 

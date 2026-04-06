@@ -3812,7 +3812,7 @@ export class MasterDataService {
         throw new NotFoundException('Product not found');
       }
 
-      const [balances, ledgers, cylinderBalances] = await Promise.all([
+      const [balances, ledgers] = await Promise.all([
         binding.client.inventoryBalance.findMany({
           where: { companyId, productId: id },
           include: {
@@ -3831,29 +3831,8 @@ export class MasterDataService {
             unitCost: true
           },
           orderBy: { createdAt: 'desc' }
-        }),
-        product.isLpg && product.cylinderTypeId
-          ? binding.client.cylinderBalance.findMany({
-              where: {
-                companyId,
-                cylinderTypeId: product.cylinderTypeId
-              },
-              select: {
-                locationId: true,
-                qtyFull: true,
-                qtyEmpty: true
-              }
-            })
-          : Promise.resolve([])
+        })
       ]);
-
-      const cylinderByLocation = new Map<string, { qtyFull: number; qtyEmpty: number }>();
-      for (const row of cylinderBalances) {
-        cylinderByLocation.set(row.locationId, {
-          qtyFull: Number(row.qtyFull ?? 0),
-          qtyEmpty: Number(row.qtyEmpty ?? 0)
-        });
-      }
 
       const latestLedgerByLocation = new Map<
         string,
@@ -3871,9 +3850,8 @@ export class MasterDataService {
 
       const locations = balances
         .map((balance) => {
-          const cylinder = product.isLpg ? cylinderByLocation.get(balance.locationId) : undefined;
-          const qtyFull = product.isLpg ? this.round(Number(cylinder?.qtyFull ?? 0), 4) : 0;
-          const qtyEmpty = product.isLpg ? this.round(Number(cylinder?.qtyEmpty ?? 0), 4) : 0;
+          const qtyFull = 0;
+          const qtyEmpty = 0;
           const qtyOnHand = this.round(Number(balance.qtyOnHand), 4);
           const avgCost = this.round(Number(balance.avgCost), 4);
           const inventoryValue = this.round(qtyOnHand * avgCost, 2);
@@ -3939,7 +3917,7 @@ export class MasterDataService {
 
     try {
       await this.ensurePrismaBranchLocationSeed(companyId, binding.client);
-      const [balances, cylinderBalances, ledgers] = await Promise.all([
+      const [balances, ledgers] = await Promise.all([
         binding.client.inventoryBalance.findMany({
           where: { companyId },
           include: {
@@ -3947,15 +3925,6 @@ export class MasterDataService {
             product: { select: { id: true, sku: true, name: true, isLpg: true, cylinderTypeId: true } }
           },
           orderBy: [{ location: { code: 'asc' } }, { product: { sku: 'asc' } }]
-        }),
-        binding.client.cylinderBalance.findMany({
-          where: { companyId },
-          select: {
-            locationId: true,
-            cylinderTypeId: true,
-            qtyFull: true,
-            qtyEmpty: true
-          }
         }),
         binding.client.inventoryLedger.findMany({
           where: { companyId },
@@ -3972,15 +3941,6 @@ export class MasterDataService {
       const openingKeys = new Set<string>();
       const nonOpeningKeys = new Set<string>();
       const lastMovementByKey = new Map<string, string>();
-      const cylinderBalanceByKey = new Map<string, { qtyFull: number; qtyEmpty: number }>();
-
-      for (const row of cylinderBalances) {
-        const key = `${row.locationId}::${row.cylinderTypeId}`;
-        cylinderBalanceByKey.set(key, {
-          qtyFull: Number(row.qtyFull ?? 0),
-          qtyEmpty: Number(row.qtyEmpty ?? 0)
-        });
-      }
 
       for (const ledger of ledgers) {
         const key = `${ledger.locationId}::${ledger.productId}`;
@@ -3996,14 +3956,8 @@ export class MasterDataService {
 
       const rows: InventoryOpeningSnapshotRow[] = balances.map((row) => {
         const key = `${row.locationId}::${row.productId}`;
-        const cylinderKey = row.product.cylinderTypeId
-          ? `${row.locationId}::${row.product.cylinderTypeId}`
-          : '';
-        const cylinder = row.product.isLpg && cylinderKey
-          ? cylinderBalanceByKey.get(cylinderKey)
-          : null;
-        const qtyFull = row.product.isLpg ? Number(cylinder?.qtyFull ?? 0) : 0;
-        const qtyEmpty = row.product.isLpg ? Number(cylinder?.qtyEmpty ?? 0) : 0;
+        const qtyFull = 0;
+        const qtyEmpty = 0;
         const qtyOnHand = this.round(Number(row.qtyOnHand), 4);
         const avgCost = this.round(Number(row.avgCost), 4);
         return {
