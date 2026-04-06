@@ -3850,8 +3850,8 @@ export class MasterDataService {
 
       const locations = balances
         .map((balance) => {
-          const qtyFull = 0;
-          const qtyEmpty = 0;
+          const qtyFull = this.round(Number(balance.qtyFull ?? 0), 4);
+          const qtyEmpty = this.round(Number(balance.qtyEmpty ?? 0), 4);
           const qtyOnHand = this.round(Number(balance.qtyOnHand), 4);
           const avgCost = this.round(Number(balance.avgCost), 4);
           const inventoryValue = this.round(qtyOnHand * avgCost, 2);
@@ -3956,8 +3956,8 @@ export class MasterDataService {
 
       const rows: InventoryOpeningSnapshotRow[] = balances.map((row) => {
         const key = `${row.locationId}::${row.productId}`;
-        const qtyFull = 0;
-        const qtyEmpty = 0;
+        const qtyFull = this.round(Number(row.qtyFull ?? 0), 4);
+        const qtyEmpty = this.round(Number(row.qtyEmpty ?? 0), 4);
         const qtyOnHand = this.round(Number(row.qtyOnHand), 4);
         const avgCost = this.round(Number(row.avgCost), 4);
         return {
@@ -4080,6 +4080,9 @@ export class MasterDataService {
           openingQtyFull = inputQtyFull;
           openingQtyEmpty = inputQtyEmpty;
           targetQty = this.round(openingQtyFull + openingQtyEmpty, 4);
+        } else {
+          openingQtyFull = targetQty;
+          openingQtyEmpty = 0;
         }
 
         const [existingBalance, openingCount, transactionalCount] = await Promise.all([
@@ -4139,6 +4142,8 @@ export class MasterDataService {
           },
           update: {
             qtyOnHand: targetQty,
+            qtyFull: openingQtyFull,
+            qtyEmpty: openingQtyEmpty,
             avgCost: nextAvgCost
           },
           create: {
@@ -4146,6 +4151,8 @@ export class MasterDataService {
             locationId: location.id,
             productId: product.id,
             qtyOnHand: targetQty,
+            qtyFull: openingQtyFull,
+            qtyEmpty: openingQtyEmpty,
             avgCost: nextAvgCost
           }
         });

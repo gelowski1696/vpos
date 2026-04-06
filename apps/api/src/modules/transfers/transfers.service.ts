@@ -807,15 +807,31 @@ export class TransfersService {
               }
             });
             const currentQty = Number(balance?.qtyOnHand ?? 0);
+            const currentFull = Number(balance?.qtyFull ?? balance?.qtyOnHand ?? 0);
+            const currentEmpty = Number(balance?.qtyEmpty ?? 0);
             const currentAvg = Number(balance?.avgCost ?? 0);
-            if (isRestockOut && currentQty < inventoryMoveQty) {
-              throw new BadRequestException(
-                `Insufficient stock for ${line.product.sku} at ${adjustmentLocationId}`
-              );
+            if (isRestockOut) {
+              if (isLpgCylinderLine) {
+                if (currentFull < qtyFull || currentEmpty < qtyEmpty || currentQty < inventoryMoveQty) {
+                  throw new BadRequestException(
+                    `Insufficient stock for ${line.product.sku} at ${adjustmentLocationId}`
+                  );
+                }
+              } else if (currentQty < inventoryMoveQty) {
+                throw new BadRequestException(
+                  `Insufficient stock for ${line.product.sku} at ${adjustmentLocationId}`
+                );
+              }
             }
 
             const nextQty = this.roundQty(
               currentQty + (isRestockIn ? inventoryMoveQty : -inventoryMoveQty)
+            );
+            const nextFull = this.roundQty(
+              currentFull + (isRestockIn ? qtyFull : -qtyFull)
+            );
+            const nextEmpty = this.roundQty(
+              currentEmpty + (isRestockIn ? qtyEmpty : -qtyEmpty)
             );
 
             await tx.inventoryBalance.upsert({
@@ -827,6 +843,8 @@ export class TransfersService {
               },
               update: {
                 qtyOnHand: nextQty,
+                qtyFull: nextFull,
+                qtyEmpty: nextEmpty,
                 avgCost: this.roundQty(currentAvg)
               },
               create: {
@@ -834,6 +852,8 @@ export class TransfersService {
                 locationId: adjustmentLocationId,
                 productId: line.productId,
                 qtyOnHand: nextQty,
+                qtyFull: nextFull,
+                qtyEmpty: nextEmpty,
                 avgCost: this.roundQty(currentAvg)
               }
             });
@@ -890,8 +910,16 @@ export class TransfersService {
             }
           });
           const sourceQty = Number(sourceBalance?.qtyOnHand ?? 0);
+          const sourceFull = Number(sourceBalance?.qtyFull ?? sourceBalance?.qtyOnHand ?? 0);
+          const sourceEmpty = Number(sourceBalance?.qtyEmpty ?? 0);
           const sourceAvg = Number(sourceBalance?.avgCost ?? 0);
-          if (sourceQty < inventoryMoveQty) {
+          if (isLpgCylinderLine) {
+            if (sourceFull < qtyFull || sourceEmpty < qtyEmpty || sourceQty < inventoryMoveQty) {
+              throw new BadRequestException(
+                `Insufficient stock for ${line.product.sku} at ${transfer.sourceLocationId}`
+              );
+            }
+          } else if (sourceQty < inventoryMoveQty) {
             throw new BadRequestException(
               `Insufficient stock for ${line.product.sku} at ${transfer.sourceLocationId}`
             );
@@ -906,10 +934,16 @@ export class TransfersService {
             }
           });
           const destinationQty = Number(destinationBalance?.qtyOnHand ?? 0);
+          const destinationFull = Number(destinationBalance?.qtyFull ?? destinationBalance?.qtyOnHand ?? 0);
+          const destinationEmpty = Number(destinationBalance?.qtyEmpty ?? 0);
           const destinationAvg = Number(destinationBalance?.avgCost ?? sourceAvg);
 
           const nextSourceQty = this.roundQty(sourceQty - inventoryMoveQty);
           const nextDestinationQty = this.roundQty(destinationQty + inventoryMoveQty);
+          const nextSourceFull = this.roundQty(sourceFull - qtyFull);
+          const nextSourceEmpty = this.roundQty(sourceEmpty - qtyEmpty);
+          const nextDestinationFull = this.roundQty(destinationFull + qtyFull);
+          const nextDestinationEmpty = this.roundQty(destinationEmpty + qtyEmpty);
           const nextDestinationAvg =
             nextDestinationQty <= 0
               ? this.roundQty(destinationAvg)
@@ -927,6 +961,8 @@ export class TransfersService {
             },
             update: {
               qtyOnHand: nextSourceQty,
+              qtyFull: nextSourceFull,
+              qtyEmpty: nextSourceEmpty,
               avgCost: this.roundQty(sourceAvg)
             },
             create: {
@@ -934,6 +970,8 @@ export class TransfersService {
               locationId: transfer.sourceLocationId,
               productId: line.productId,
               qtyOnHand: nextSourceQty,
+              qtyFull: nextSourceFull,
+              qtyEmpty: nextSourceEmpty,
               avgCost: this.roundQty(sourceAvg)
             }
           });
@@ -947,6 +985,8 @@ export class TransfersService {
             },
             update: {
               qtyOnHand: nextDestinationQty,
+              qtyFull: nextDestinationFull,
+              qtyEmpty: nextDestinationEmpty,
               avgCost: nextDestinationAvg
             },
             create: {
@@ -954,6 +994,8 @@ export class TransfersService {
               locationId: transfer.destinationLocationId,
               productId: line.productId,
               qtyOnHand: nextDestinationQty,
+              qtyFull: nextDestinationFull,
+              qtyEmpty: nextDestinationEmpty,
               avgCost: nextDestinationAvg
             }
           });
@@ -1127,15 +1169,31 @@ export class TransfersService {
               }
             });
             const currentQty = Number(balance?.qtyOnHand ?? 0);
+            const currentFull = Number(balance?.qtyFull ?? balance?.qtyOnHand ?? 0);
+            const currentEmpty = Number(balance?.qtyEmpty ?? 0);
             const currentAvg = Number(balance?.avgCost ?? 0);
-            if (isRestockIn && currentQty < inventoryMoveQty) {
-              throw new BadRequestException(
-                `Cannot reverse transfer: destination stock is insufficient for ${line.product.sku}`
-              );
+            if (isRestockIn) {
+              if (isLpgCylinderLine) {
+                if (currentFull < qtyFull || currentEmpty < qtyEmpty || currentQty < inventoryMoveQty) {
+                  throw new BadRequestException(
+                    `Cannot reverse transfer: destination stock is insufficient for ${line.product.sku}`
+                  );
+                }
+              } else if (currentQty < inventoryMoveQty) {
+                throw new BadRequestException(
+                  `Cannot reverse transfer: destination stock is insufficient for ${line.product.sku}`
+                );
+              }
             }
 
             const nextQty = this.roundQty(
               currentQty + (isRestockIn ? -inventoryMoveQty : inventoryMoveQty)
+            );
+            const nextFull = this.roundQty(
+              currentFull + (isRestockIn ? -qtyFull : qtyFull)
+            );
+            const nextEmpty = this.roundQty(
+              currentEmpty + (isRestockIn ? -qtyEmpty : qtyEmpty)
             );
 
             await tx.inventoryBalance.upsert({
@@ -1147,6 +1205,8 @@ export class TransfersService {
               },
               update: {
                 qtyOnHand: nextQty,
+                qtyFull: nextFull,
+                qtyEmpty: nextEmpty,
                 avgCost: this.roundQty(currentAvg)
               },
               create: {
@@ -1154,6 +1214,8 @@ export class TransfersService {
                 locationId: adjustmentLocationId,
                 productId: line.productId,
                 qtyOnHand: nextQty,
+                qtyFull: nextFull,
+                qtyEmpty: nextEmpty,
                 avgCost: this.roundQty(currentAvg)
               }
             });
@@ -1210,8 +1272,16 @@ export class TransfersService {
             }
           });
           const destinationQty = Number(destinationBalance?.qtyOnHand ?? 0);
+          const destinationFull = Number(destinationBalance?.qtyFull ?? destinationBalance?.qtyOnHand ?? 0);
+          const destinationEmpty = Number(destinationBalance?.qtyEmpty ?? 0);
           const destinationAvg = Number(destinationBalance?.avgCost ?? 0);
-          if (destinationQty < inventoryMoveQty) {
+          if (isLpgCylinderLine) {
+            if (destinationFull < qtyFull || destinationEmpty < qtyEmpty || destinationQty < inventoryMoveQty) {
+              throw new BadRequestException(
+                `Cannot reverse transfer: destination stock is insufficient for ${line.product.sku}`
+              );
+            }
+          } else if (destinationQty < inventoryMoveQty) {
             throw new BadRequestException(
               `Cannot reverse transfer: destination stock is insufficient for ${line.product.sku}`
             );
@@ -1226,10 +1296,16 @@ export class TransfersService {
             }
           });
           const sourceQty = Number(sourceBalance?.qtyOnHand ?? 0);
+          const sourceFull = Number(sourceBalance?.qtyFull ?? sourceBalance?.qtyOnHand ?? 0);
+          const sourceEmpty = Number(sourceBalance?.qtyEmpty ?? 0);
           const sourceAvg = Number(sourceBalance?.avgCost ?? destinationAvg);
 
           const nextDestinationQty = this.roundQty(destinationQty - inventoryMoveQty);
           const nextSourceQty = this.roundQty(sourceQty + inventoryMoveQty);
+          const nextDestinationFull = this.roundQty(destinationFull - qtyFull);
+          const nextDestinationEmpty = this.roundQty(destinationEmpty - qtyEmpty);
+          const nextSourceFull = this.roundQty(sourceFull + qtyFull);
+          const nextSourceEmpty = this.roundQty(sourceEmpty + qtyEmpty);
           const nextSourceAvg =
             nextSourceQty <= 0
               ? this.roundQty(sourceAvg)
@@ -1246,6 +1322,8 @@ export class TransfersService {
             },
             update: {
               qtyOnHand: nextDestinationQty,
+              qtyFull: nextDestinationFull,
+              qtyEmpty: nextDestinationEmpty,
               avgCost: this.roundQty(destinationAvg)
             },
             create: {
@@ -1253,6 +1331,8 @@ export class TransfersService {
               locationId: transfer.destinationLocationId,
               productId: line.productId,
               qtyOnHand: nextDestinationQty,
+              qtyFull: nextDestinationFull,
+              qtyEmpty: nextDestinationEmpty,
               avgCost: this.roundQty(destinationAvg)
             }
           });
@@ -1266,6 +1346,8 @@ export class TransfersService {
             },
             update: {
               qtyOnHand: nextSourceQty,
+              qtyFull: nextSourceFull,
+              qtyEmpty: nextSourceEmpty,
               avgCost: nextSourceAvg
             },
             create: {
@@ -1273,6 +1355,8 @@ export class TransfersService {
               locationId: transfer.sourceLocationId,
               productId: line.productId,
               qtyOnHand: nextSourceQty,
+              qtyFull: nextSourceFull,
+              qtyEmpty: nextSourceEmpty,
               avgCost: nextSourceAvg
             }
           });
@@ -1394,8 +1478,8 @@ export class TransfersService {
       }
     });
     const qtyOnHand = this.roundQty(Number(balance?.qtyOnHand ?? 0));
-    const qtyFull = qtyOnHand;
-    const qtyEmpty = 0;
+    const qtyFull = this.roundQty(Number(balance?.qtyFull ?? balance?.qtyOnHand ?? 0));
+    const qtyEmpty = this.roundQty(Number(balance?.qtyEmpty ?? 0));
     return {
       company_id: companyId,
       location_id: locationRef,

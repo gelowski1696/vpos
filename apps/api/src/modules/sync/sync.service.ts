@@ -781,16 +781,8 @@ export class SyncService {
         inventoryBalance?: {
           findMany: (args: {
             where: { companyId: string; locationId: string; productId: { in: string[] } };
-            select: { productId: true; qtyOnHand: true; avgCost: true; updatedAt: true };
-          }) => Promise<Array<{ productId: string; qtyOnHand: unknown; avgCost: unknown; updatedAt: Date }>>;
-        };
-        cylinderBalance?: {
-          findMany: (args: {
-            where: { companyId: string; locationId: string; cylinderTypeId: { in: string[] } };
-            select: { cylinderTypeId: true; qtyFull: true; qtyEmpty: true; updatedAt: true };
-          }) => Promise<
-            Array<{ cylinderTypeId: string; qtyFull: unknown; qtyEmpty: unknown; updatedAt: Date }>
-          >;
+            select: { productId: true; qtyOnHand: true; qtyFull: true; qtyEmpty: true; avgCost: true; updatedAt: true };
+          }) => Promise<Array<{ productId: string; qtyOnHand: unknown; qtyFull: unknown; qtyEmpty: unknown; avgCost: unknown; updatedAt: Date }>>;
         };
       };
 
@@ -827,6 +819,8 @@ export class SyncService {
         select: {
           productId: true,
           qtyOnHand: true,
+          qtyFull: true,
+          qtyEmpty: true,
           avgCost: true,
           updatedAt: true
         }
@@ -836,6 +830,8 @@ export class SyncService {
           row.productId,
           {
             qtyOnHand: this.toNumeric(row.qtyOnHand),
+            qtyFull: this.toNumeric(row.qtyFull),
+            qtyEmpty: this.toNumeric(row.qtyEmpty),
             avgCost: this.toNumeric(row.avgCost),
             updatedAt: row.updatedAt
           }
@@ -845,8 +841,8 @@ export class SyncService {
       const nowIso = new Date().toISOString();
       return products.map((product) => {
         const base = balanceByProduct.get(product.id);
-        const qtyFull = 0;
-        const qtyEmpty = 0;
+        const qtyFull = Number((base?.qtyFull ?? 0).toFixed(4));
+        const qtyEmpty = Number((base?.qtyEmpty ?? 0).toFixed(4));
         const qtyOnHand = Number((base?.qtyOnHand ?? 0).toFixed(4));
         const avgCost = Number((base?.avgCost ?? 0).toFixed(4));
         const updatedAt = base?.updatedAt?.toISOString() ?? nowIso;

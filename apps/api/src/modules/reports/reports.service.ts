@@ -674,6 +674,7 @@ export class ReportsService {
       location_code: string;
       cashier_name: string;
       cashier_email: string;
+      customer_id: string | null;
       customer_name: string | null;
       customer_code: string | null;
       sale_type: string;
@@ -729,6 +730,7 @@ export class ReportsService {
         cogsAmount: true,
         branchId: true,
         locationId: true,
+        customerId: true,
         branch: {
           select: {
             name: true,
@@ -817,6 +819,7 @@ export class ReportsService {
           location_code: row.location?.code ?? row.locationId,
           cashier_name: row.user.fullName,
           cashier_email: row.user.email,
+          customer_id: row.customerId ?? null,
           customer_name: row.customer?.name ?? null,
           customer_code: row.customer?.code ?? null,
           sale_type: row.saleType,
@@ -859,6 +862,7 @@ export class ReportsService {
       location_code: string;
       cashier_name: string;
       cashier_email: string;
+      customer_id: string | null;
       customer_name: string | null;
       customer_code: string | null;
       shift_id: string | null;
@@ -1248,6 +1252,7 @@ export class ReportsService {
         location_code: row.location?.code ?? row.locationId,
         cashier_name: row.user.fullName,
         cashier_email: row.user.email,
+        customer_id: row.customerId ?? null,
         customer_name: row.customer?.name ?? null,
         customer_code: row.customer?.code ?? null,
         shift_id: row.shiftId ?? null,
@@ -1704,10 +1709,13 @@ export class ReportsService {
     }
 
     const db = binding.client as DbClient;
-    const balances = await db.cylinderBalance.findMany({
+    const balances = await db.inventoryBalance.findMany({
       where: {
         companyId,
-        ...(query.location_id?.trim() ? { locationId: query.location_id.trim() } : {})
+        ...(query.location_id?.trim() ? { locationId: query.location_id.trim() } : {}),
+        product: {
+          isLpg: true
+        }
       },
       select: {
         locationId: true,
@@ -1789,14 +1797,12 @@ export class ReportsService {
       where: {
         companyId,
         isLpg: true,
-        cylinderTypeId: { not: null },
         ...(query.product_id?.trim() ? { id: query.product_id.trim() } : {})
       },
       select: {
         id: true,
         sku: true,
-        name: true,
-        cylinderTypeId: true
+        name: true
       },
       orderBy: [{ name: 'asc' }, { sku: 'asc' }]
     });
@@ -1808,16 +1814,16 @@ export class ReportsService {
       };
     }
 
-    const cylinderTypeIds = [...new Set(products.map((row) => row.cylinderTypeId).filter(Boolean))] as string[];
-    const balances = await db.cylinderBalance.findMany({
+    const productIds = products.map((row) => row.id);
+    const balances = await db.inventoryBalance.findMany({
       where: {
         companyId,
-        cylinderTypeId: { in: cylinderTypeIds },
+        productId: { in: productIds },
         ...(query.location_id?.trim() ? { locationId: query.location_id.trim() } : {})
       },
       select: {
         locationId: true,
-        cylinderTypeId: true,
+        productId: true,
         qtyFull: true,
         qtyEmpty: true
       }
@@ -1837,13 +1843,13 @@ export class ReportsService {
     });
     const locationMap = new Map(locations.map((row) => [row.id, row]));
 
-    const countsByLocationType = new Map<string, { qty_full: number; qty_empty: number }>();
+    const countsByLocationProduct = new Map<string, { qty_full: number; qty_empty: number }>();
     for (const row of balances) {
-      const key = `${row.locationId}::${row.cylinderTypeId}`;
-      const current = countsByLocationType.get(key) ?? { qty_full: 0, qty_empty: 0 };
+      const key = `${row.locationId}::${row.productId}`;
+      const current = countsByLocationProduct.get(key) ?? { qty_full: 0, qty_empty: 0 };
       current.qty_full += Number(row.qtyFull ?? 0);
       current.qty_empty += Number(row.qtyEmpty ?? 0);
-      countsByLocationType.set(key, current);
+      countsByLocationProduct.set(key, current);
     }
 
     const rows: Array<{
@@ -1859,8 +1865,8 @@ export class ReportsService {
 
     for (const product of products) {
       for (const locationId of locationIds) {
-        const key = `${locationId}::${product.cylinderTypeId}`;
-        const counts = countsByLocationType.get(key);
+        const key = `${locationId}::${product.id}`;
+        const counts = countsByLocationProduct.get(key);
         if (!counts) {
           continue;
         }

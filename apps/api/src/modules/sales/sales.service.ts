@@ -1026,9 +1026,10 @@ export class SalesService {
           cancelledAt,
           lines: sale.lines.map(
             (line: {
-              product: { sku: string; cylinderTypeId?: string | null; isLpg?: boolean };
+              product: { id: string; sku: string; cylinderTypeId?: string | null; isLpg?: boolean };
             }) => ({
               product: {
+                id: line.product.id,
                 sku: line.product.sku,
                 cylinderTypeId: line.product.cylinderTypeId ?? null,
                 isLpg: Boolean(line.product.isLpg)
@@ -2647,11 +2648,11 @@ export class SalesService {
       });
 
       if (fullCylinders.length < qty) {
-        const fallbackBalance = await tx.cylinderBalance.findUnique({
+        const fallbackBalance = await tx.inventoryBalance.findUnique({
           where: {
-            locationId_cylinderTypeId: {
+            locationId_productId: {
               locationId: input.locationId,
-              cylinderTypeId
+              productId: line.product.id
             }
           },
           select: { qtyFull: true }
@@ -2688,27 +2689,28 @@ export class SalesService {
         });
 
         if (lineFlow === 'REFILL_EXCHANGE') {
-          await this.adjustCylinderBalance(tx, {
+          await this.adjustInventoryBreakdown(tx, {
             companyId: input.companyId,
             locationId: input.locationId,
-            cylinderTypeId,
+            productId: line.product.id,
             qtyFullDelta: -qty,
             qtyEmptyDelta: qty
           });
         } else {
-          await this.adjustCylinderBalance(tx, {
+          await this.adjustInventoryBreakdown(tx, {
             companyId: input.companyId,
             locationId: input.locationId,
-            cylinderTypeId,
+            productId: line.product.id,
             qtyFullDelta: -qty,
             qtyEmptyDelta: 0
           });
-          await this.adjustCylinderBalance(tx, {
+          await this.adjustInventoryBreakdown(tx, {
             companyId: input.companyId,
             locationId: outboundLocation?.id ?? input.locationId,
-            cylinderTypeId,
+            productId: line.product.id,
             qtyFullDelta: qty,
-            qtyEmptyDelta: 0
+            qtyEmptyDelta: 0,
+            adjustQtyOnHand: true
           });
         }
         continue;
@@ -2810,27 +2812,28 @@ export class SalesService {
       }
 
       if (lineFlow === 'REFILL_EXCHANGE') {
-        await this.adjustCylinderBalance(tx, {
+        await this.adjustInventoryBreakdown(tx, {
           companyId: input.companyId,
           locationId: input.locationId,
-          cylinderTypeId,
+          productId: line.product.id,
           qtyFullDelta: -qty,
           qtyEmptyDelta: qty
         });
       } else {
-        await this.adjustCylinderBalance(tx, {
+        await this.adjustInventoryBreakdown(tx, {
           companyId: input.companyId,
           locationId: input.locationId,
-          cylinderTypeId,
+          productId: line.product.id,
           qtyFullDelta: -qty,
           qtyEmptyDelta: 0
         });
-        await this.adjustCylinderBalance(tx, {
+        await this.adjustInventoryBreakdown(tx, {
           companyId: input.companyId,
           locationId: outboundLocation?.id ?? input.locationId,
-          cylinderTypeId,
+          productId: line.product.id,
           qtyFullDelta: qty,
-          qtyEmptyDelta: 0
+          qtyEmptyDelta: 0,
+          adjustQtyOnHand: true
         });
       }
     }
@@ -2847,6 +2850,7 @@ export class SalesService {
       cancelledAt: Date;
       lines: Array<{
         product: {
+          id: string;
           sku: string;
           cylinderTypeId: string | null;
           isLpg: boolean;
@@ -2854,13 +2858,16 @@ export class SalesService {
       }>;
     }
   ): Promise<boolean> {
-    const saleLineCylinderTypeBySku = new Map<string, string>();
+    const saleLineProductBySku = new Map<string, { productId: string; cylinderTypeId: string }>();
     for (const line of input.lines) {
       if (line.product.isLpg && line.product.cylinderTypeId) {
-        saleLineCylinderTypeBySku.set(line.product.sku, line.product.cylinderTypeId);
+        saleLineProductBySku.set(line.product.sku, {
+          productId: line.product.id,
+          cylinderTypeId: line.product.cylinderTypeId
+        });
       }
     }
-    if (saleLineCylinderTypeBySku.size === 0) {
+    if (saleLineProductBySku.size === 0) {
       return false;
     }
 
@@ -2896,9 +2903,11 @@ export class SalesService {
       }
       const workflow = typeof payload.workflow === 'string' ? payload.workflow : null;
       const productSku = typeof payload.product_sku === 'string' ? payload.product_sku : null;
-      const cylinderTypeId = productSku ? saleLineCylinderTypeBySku.get(productSku) ?? null : null;
+      const lineProduct = productSku ? saleLineProductBySku.get(productSku) ?? null : null;
+      const cylinderTypeId = lineProduct?.cylinderTypeId ?? null;
+      const productId = lineProduct?.productId ?? null;
 
-      if (!workflow || !cylinderTypeId) {
+      if (!workflow || !cylinderTypeId || !productId) {
         continue;
       }
 
@@ -2908,27 +2917,28 @@ export class SalesService {
           continue;
         }
         if (workflow === 'REFILL_EXCHANGE') {
-          await this.adjustCylinderBalance(tx, {
+          await this.adjustInventoryBreakdown(tx, {
             companyId: input.companyId,
             locationId: input.saleLocationId,
-            cylinderTypeId,
+            productId,
             qtyFullDelta: qty,
             qtyEmptyDelta: -qty
           });
         } else if (workflow === 'NON_REFILL') {
-          await this.adjustCylinderBalance(tx, {
+          await this.adjustInventoryBreakdown(tx, {
             companyId: input.companyId,
             locationId: input.saleLocationId,
-            cylinderTypeId,
+            productId,
             qtyFullDelta: qty,
             qtyEmptyDelta: 0
           });
-          await this.adjustCylinderBalance(tx, {
+          await this.adjustInventoryBreakdown(tx, {
             companyId: input.companyId,
             locationId: outboundLocation.id,
-            cylinderTypeId,
+            productId,
             qtyFullDelta: -qty,
-            qtyEmptyDelta: 0
+            qtyEmptyDelta: 0,
+            adjustQtyOnHand: true
           });
         }
 
@@ -2994,10 +3004,10 @@ export class SalesService {
             notes: `${this.buildSaleCancelCylinderNote(input.saleId, productSku ?? serial, workflow)}|FULL_RESTORE`
           }
         });
-        await this.adjustCylinderBalance(tx, {
+        await this.adjustInventoryBreakdown(tx, {
           companyId: input.companyId,
           locationId: input.saleLocationId,
-          cylinderTypeId,
+          productId,
           qtyFullDelta: 1,
           qtyEmptyDelta: -1
         });
@@ -3044,19 +3054,20 @@ export class SalesService {
             notes: `${this.buildSaleCancelCylinderNote(input.saleId, productSku ?? serial, workflow)}|FULL_RETURN`
           }
         });
-        await this.adjustCylinderBalance(tx, {
+        await this.adjustInventoryBreakdown(tx, {
           companyId: input.companyId,
           locationId: input.saleLocationId,
-          cylinderTypeId,
+          productId,
           qtyFullDelta: 1,
           qtyEmptyDelta: 0
         });
-        await this.adjustCylinderBalance(tx, {
+        await this.adjustInventoryBreakdown(tx, {
           companyId: input.companyId,
           locationId: toLocationId,
-          cylinderTypeId,
+          productId,
           qtyFullDelta: -1,
-          qtyEmptyDelta: 0
+          qtyEmptyDelta: 0,
+          adjustQtyOnHand: true
         });
         await tx.eventStockMovement.create({
           data: {
@@ -3083,43 +3094,51 @@ export class SalesService {
     return true;
   }
 
-  private async adjustCylinderBalance(
+  private async adjustInventoryBreakdown(
     tx: DbTransaction,
     input: {
       companyId: string;
       locationId: string;
-      cylinderTypeId: string;
+      productId: string;
       qtyFullDelta: number;
       qtyEmptyDelta: number;
+      adjustQtyOnHand?: boolean;
     }
   ): Promise<void> {
     if (input.qtyFullDelta === 0 && input.qtyEmptyDelta === 0) {
       return;
     }
 
-    const existing = await tx.cylinderBalance.findUnique({
+    const existing = await tx.inventoryBalance.findUnique({
       where: {
-        locationId_cylinderTypeId: {
+        locationId_productId: {
           locationId: input.locationId,
-          cylinderTypeId: input.cylinderTypeId
+          productId: input.productId
         }
       },
       select: {
         id: true,
+        qtyOnHand: true,
         qtyFull: true,
         qtyEmpty: true
       }
     });
 
+    const currentQty = Number(existing?.qtyOnHand ?? 0);
     const currentFull = Number(existing?.qtyFull ?? 0);
     const currentEmpty = Number(existing?.qtyEmpty ?? 0);
-    const nextFull = Math.max(0, Math.trunc(currentFull + input.qtyFullDelta));
-    const nextEmpty = Math.max(0, Math.trunc(currentEmpty + input.qtyEmptyDelta));
+    const nextFull = this.roundQty(Math.max(0, currentFull + input.qtyFullDelta));
+    const nextEmpty = this.roundQty(Math.max(0, currentEmpty + input.qtyEmptyDelta));
+    const totalDelta = this.roundQty(input.qtyFullDelta + input.qtyEmptyDelta);
+    const nextQtyOnHand = input.adjustQtyOnHand
+      ? this.roundQty(Math.max(0, currentQty + totalDelta))
+      : currentQty;
 
     if (existing) {
-      await tx.cylinderBalance.update({
+      await tx.inventoryBalance.update({
         where: { id: existing.id },
         data: {
+          ...(input.adjustQtyOnHand ? { qtyOnHand: nextQtyOnHand } : {}),
           qtyFull: nextFull,
           qtyEmpty: nextEmpty
         }
@@ -3127,11 +3146,12 @@ export class SalesService {
       return;
     }
 
-    await tx.cylinderBalance.create({
+    await tx.inventoryBalance.create({
       data: {
         companyId: input.companyId,
         locationId: input.locationId,
-        cylinderTypeId: input.cylinderTypeId,
+        productId: input.productId,
+        qtyOnHand: nextQtyOnHand,
         qtyFull: nextFull,
         qtyEmpty: nextEmpty
       }

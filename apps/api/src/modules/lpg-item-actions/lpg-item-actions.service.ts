@@ -164,16 +164,24 @@ export class LpgItemActionsService {
       if (ctx.referenceActionId) {
         throw new BadRequestException('Dispose actions cannot reference a previous disposed item action');
       }
-      const balance = await this.requireCylinderBalance(tx, binding.companyId, ctx.locationId, ctx.cylinderTypeId);
+      const balance = await this.requireProductInventoryBalance(
+        tx,
+        binding.companyId,
+        ctx.locationId,
+        ctx.productId
+      );
       if (balance.qtyEmpty < ctx.qty) {
         throw new BadRequestException(
           `Not enough empty stock. Available ${balance.qtyEmpty}, requested ${ctx.qty}.`
         );
       }
 
-      await tx.cylinderBalance.update({
+      await tx.inventoryBalance.update({
         where: { id: balance.id },
-        data: { qtyEmpty: balance.qtyEmpty - ctx.qty }
+        data: {
+          qtyOnHand: Math.max(0, balance.qtyOnHand - ctx.qty),
+          qtyEmpty: balance.qtyEmpty - ctx.qty
+        }
       });
 
       const actionTx = tx as unknown as { lpgItemServiceAction: LpgItemActionDelegate };
@@ -211,6 +219,7 @@ export class LpgItemActionsService {
             product_sku: ctx.productSku,
             product_name: ctx.productName,
             qty: ctx.qty,
+            qty_delta: -ctx.qty,
             empty_delta: -ctx.qty,
             reason: ctx.reason,
             notes: ctx.notes
@@ -232,27 +241,33 @@ export class LpgItemActionsService {
         input.actor_user_id ?? null
       );
       await this.requireAvailableDisposedQty(tx, binding.companyId, ctx, 'REPLACE');
-      const balance = await tx.cylinderBalance.findUnique({
+      const balance = await tx.inventoryBalance.findUnique({
         where: {
-          locationId_cylinderTypeId: {
+          locationId_productId: {
             locationId: ctx.locationId,
-            cylinderTypeId: ctx.cylinderTypeId
+            productId: ctx.productId
           }
         },
-        select: { id: true, qtyFull: true, qtyEmpty: true }
+        select: { id: true, qtyOnHand: true, qtyFull: true, qtyEmpty: true }
       });
 
       if (balance) {
-        await tx.cylinderBalance.update({
+        const currentQtyOnHand = Number(balance.qtyOnHand ?? 0);
+        const currentQtyEmpty = Number(balance.qtyEmpty ?? 0);
+        await tx.inventoryBalance.update({
           where: { id: balance.id },
-          data: { qtyEmpty: balance.qtyEmpty + ctx.qty }
+          data: {
+            qtyOnHand: currentQtyOnHand + ctx.qty,
+            qtyEmpty: currentQtyEmpty + ctx.qty
+          }
         });
       } else {
-        await tx.cylinderBalance.create({
+        await tx.inventoryBalance.create({
           data: {
             companyId: binding.companyId,
             locationId: ctx.locationId,
-            cylinderTypeId: ctx.cylinderTypeId,
+            productId: ctx.productId,
+            qtyOnHand: ctx.qty,
             qtyFull: 0,
             qtyEmpty: ctx.qty
           }
@@ -294,6 +309,7 @@ export class LpgItemActionsService {
             product_sku: ctx.productSku,
             product_name: ctx.productName,
             qty: ctx.qty,
+            qty_delta: ctx.qty,
             empty_delta: ctx.qty,
             reason: ctx.reason,
             notes: ctx.notes
@@ -549,28 +565,29 @@ export class LpgItemActionsService {
     }
   }
 
-  private async requireCylinderBalance(
+  private async requireProductInventoryBalance(
     tx: any,
     _companyId: string,
     locationId: string,
-    cylinderTypeId: string
-  ): Promise<{ id: string; qtyFull: number; qtyEmpty: number }> {
-    const balance = await tx.cylinderBalance.findUnique({
+    productId: string
+  ): Promise<{ id: string; qtyOnHand: number; qtyFull: number; qtyEmpty: number }> {
+    const balance = await tx.inventoryBalance.findUnique({
       where: {
-        locationId_cylinderTypeId: {
+        locationId_productId: {
           locationId,
-          cylinderTypeId
+          productId
         }
       },
-      select: { id: true, qtyFull: true, qtyEmpty: true }
+      select: { id: true, qtyOnHand: true, qtyFull: true, qtyEmpty: true }
     });
     if (!balance) {
       throw new BadRequestException('No LPG empty stock exists for the selected item and location');
     }
     return {
       id: balance.id,
-      qtyFull: balance.qtyFull,
-      qtyEmpty: balance.qtyEmpty
+      qtyOnHand: Number(balance.qtyOnHand ?? 0),
+      qtyFull: Number(balance.qtyFull ?? 0),
+      qtyEmpty: Number(balance.qtyEmpty ?? 0)
     };
   }
 

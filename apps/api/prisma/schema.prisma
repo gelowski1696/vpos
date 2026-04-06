@@ -1090,6 +1090,8 @@ model InventoryBalance {
   locationId String
   productId  String
   qtyOnHand  Decimal  @default(0) @db.Decimal(14, 4)
+  qtyFull    Decimal  @default(0) @db.Decimal(14, 4)
+  qtyEmpty   Decimal  @default(0) @db.Decimal(14, 4)
   avgCost    Decimal  @default(0) @db.Decimal(14, 4)
   updatedAt  DateTime @updatedAt
 
