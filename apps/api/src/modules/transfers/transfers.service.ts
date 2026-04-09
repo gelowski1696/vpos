@@ -25,6 +25,9 @@ export type TransferRecord = {
   transfer_mode?:
     | 'SUPPLIER_RESTOCK_IN'
     | 'SUPPLIER_RESTOCK_OUT'
+    | 'CREATE'
+    | 'USED'
+    | 'CONVERT'
     | 'INTER_STORE_TRANSFER'
     | 'STORE_TO_WAREHOUSE'
     | 'WAREHOUSE_TO_STORE'
@@ -79,6 +82,9 @@ type RuntimeMeta = {
   transfer_mode?:
     | 'SUPPLIER_RESTOCK_IN'
     | 'SUPPLIER_RESTOCK_OUT'
+    | 'CREATE'
+    | 'USED'
+    | 'CONVERT'
     | 'INTER_STORE_TRANSFER'
     | 'STORE_TO_WAREHOUSE'
     | 'WAREHOUSE_TO_STORE'
@@ -251,6 +257,95 @@ export class TransfersService {
     return String(mode ?? '').trim().toUpperCase() === 'SUPPLIER_RESTOCK_OUT';
   }
 
+  private isCreateMode(
+    mode:
+      | RuntimeMeta['transfer_mode']
+      | TransferMode
+      | null
+      | undefined
+  ): boolean {
+    return String(mode ?? '').trim().toUpperCase() === 'CREATE';
+  }
+
+  private isUsedMode(
+    mode:
+      | RuntimeMeta['transfer_mode']
+      | TransferMode
+      | null
+      | undefined
+  ): boolean {
+    return String(mode ?? '').trim().toUpperCase() === 'USED';
+  }
+
+  private isConvertMode(
+    mode:
+      | RuntimeMeta['transfer_mode']
+      | TransferMode
+      | null
+      | undefined
+  ): boolean {
+    return String(mode ?? '').trim().toUpperCase() === 'CONVERT';
+  }
+
+  private isInventoryAdjustmentMode(
+    mode:
+      | RuntimeMeta['transfer_mode']
+      | TransferMode
+      | null
+      | undefined
+  ): boolean {
+    return (
+      this.isSupplierRestockMode(mode) ||
+      this.isCreateMode(mode) ||
+      this.isUsedMode(mode) ||
+      this.isConvertMode(mode)
+    );
+  }
+
+  private getAdjustmentDeltas(
+    mode:
+      | RuntimeMeta['transfer_mode']
+      | TransferMode
+      | null
+      | undefined,
+    qtyFull: number,
+    qtyEmpty: number
+  ): { qtyDelta: number; fullDelta: number; emptyDelta: number } {
+    if (this.isSupplierRestockInMode(mode)) {
+      return {
+        qtyDelta: this.roundQty(qtyFull + qtyEmpty),
+        fullDelta: this.roundQty(qtyFull),
+        emptyDelta: this.roundQty(qtyEmpty)
+      };
+    }
+    if (this.isSupplierRestockOutMode(mode)) {
+      return {
+        qtyDelta: this.roundQty(-(qtyFull + qtyEmpty)),
+        fullDelta: this.roundQty(-qtyFull),
+        emptyDelta: this.roundQty(-qtyEmpty)
+      };
+    }
+    if (this.isUsedMode(mode)) {
+      return {
+        qtyDelta: 0,
+        fullDelta: this.roundQty(-qtyFull),
+        emptyDelta: this.roundQty(qtyFull)
+      };
+    }
+    if (this.isCreateMode(mode) || this.isConvertMode(mode)) {
+      return {
+        qtyDelta: 0,
+        fullDelta: this.roundQty(qtyEmpty),
+        emptyDelta: this.roundQty(-qtyEmpty)
+      };
+    }
+    return {
+      qtyDelta: this.roundQty(qtyFull + qtyEmpty),
+      fullDelta: this.roundQty(qtyFull),
+      emptyDelta: this.roundQty(qtyEmpty)
+    };
+  }
+
   private createInMemory(
     companyId: string,
     input: {
@@ -338,12 +433,28 @@ export class TransfersService {
       const inventory = this.getInventory(companyId);
       const isRestockIn = this.isSupplierRestockInMode(row.transfer_mode);
       const isRestockOut = this.isSupplierRestockOutMode(row.transfer_mode);
-      if (!isRestockIn && !isRestockOut) {
+      const isCreate = this.isCreateMode(row.transfer_mode);
+      const isUsed = this.isUsedMode(row.transfer_mode);
+      const isConvert = this.isConvertMode(row.transfer_mode);
+      if (!isRestockIn && !isRestockOut && !isCreate && !isUsed && !isConvert) {
         const sourceKey = this.inventoryKey(row.source_location_id, line.product_id);
         const source = inventory.get(sourceKey) ?? { qty_full: 0, qty_empty: 0 };
         if (source.qty_full < line.qty_full || source.qty_empty < line.qty_empty) {
           throw new BadRequestException(
             `Insufficient stock for ${line.product_id} at ${row.source_location_id}`
+          );
+        }
+      } else if (isCreate || isConvert || isUsed) {
+        const locationKey = this.inventoryKey(row.destination_location_id, line.product_id);
+        const current = inventory.get(locationKey) ?? { qty_full: 0, qty_empty: 0 };
+        if ((isCreate || isConvert) && current.qty_empty < line.qty_empty) {
+          throw new BadRequestException(
+            `Insufficient EMPTY stock for ${line.product_id} at ${row.destination_location_id}`
+          );
+        }
+        if (isUsed && current.qty_full < line.qty_full) {
+          throw new BadRequestException(
+            `Insufficient FULL stock for ${line.product_id} at ${row.destination_location_id}`
           );
         }
       }
@@ -353,7 +464,10 @@ export class TransfersService {
     for (const line of row.lines) {
       const isRestockIn = this.isSupplierRestockInMode(row.transfer_mode);
       const isRestockOut = this.isSupplierRestockOutMode(row.transfer_mode);
-      if (isRestockIn || isRestockOut) {
+      const isCreate = this.isCreateMode(row.transfer_mode);
+      const isUsed = this.isUsedMode(row.transfer_mode);
+      const isConvert = this.isConvertMode(row.transfer_mode);
+      if (isRestockIn || isRestockOut || isCreate || isUsed || isConvert) {
         const locationKey = this.inventoryKey(row.destination_location_id, line.product_id);
         const current = inventory.get(locationKey) ?? { qty_full: 0, qty_empty: 0 };
         if (
@@ -364,9 +478,10 @@ export class TransfersService {
             `Insufficient stock for ${line.product_id} at ${row.destination_location_id}`
           );
         }
+        const deltas = this.getAdjustmentDeltas(row.transfer_mode, line.qty_full, line.qty_empty);
         inventory.set(locationKey, {
-          qty_full: this.roundQty(current.qty_full + (isRestockIn ? line.qty_full : -line.qty_full)),
-          qty_empty: this.roundQty(current.qty_empty + (isRestockIn ? line.qty_empty : -line.qty_empty))
+          qty_full: this.roundQty(current.qty_full + deltas.fullDelta),
+          qty_empty: this.roundQty(current.qty_empty + deltas.emptyDelta)
         });
         continue;
       }
@@ -412,20 +527,30 @@ export class TransfersService {
     for (const line of row.lines) {
       const isRestockIn = this.isSupplierRestockInMode(row.transfer_mode);
       const isRestockOut = this.isSupplierRestockOutMode(row.transfer_mode);
-      if (isRestockIn || isRestockOut) {
+      const isCreate = this.isCreateMode(row.transfer_mode);
+      const isUsed = this.isUsedMode(row.transfer_mode);
+      const isConvert = this.isConvertMode(row.transfer_mode);
+      if (isRestockIn || isRestockOut || isCreate || isUsed || isConvert) {
         const locationKey = this.inventoryKey(row.destination_location_id, line.product_id);
         const current = inventory.get(locationKey) ?? { qty_full: 0, qty_empty: 0 };
-        if (
-          isRestockIn &&
-          (current.qty_full < line.qty_full || current.qty_empty < line.qty_empty)
-        ) {
+        if (isRestockIn && (current.qty_full < line.qty_full || current.qty_empty < line.qty_empty)) {
           throw new BadRequestException(
             `Cannot reverse transfer: destination stock is insufficient for ${line.product_id}`
           );
         }
+        if ((isCreate || isConvert) && current.qty_full < line.qty_empty) {
+          throw new BadRequestException(
+            `Cannot reverse transfer: FULL stock is insufficient for ${line.product_id}`
+          );
+        }
+        if (isUsed && current.qty_empty < line.qty_full) {
+          throw new BadRequestException(
+            `Cannot reverse transfer: EMPTY stock is insufficient for ${line.product_id}`
+          );
+        }
         inventory.set(locationKey, {
-          qty_full: this.roundQty(current.qty_full + (isRestockIn ? -line.qty_full : line.qty_full)),
-          qty_empty: this.roundQty(current.qty_empty + (isRestockIn ? -line.qty_empty : line.qty_empty))
+          qty_full: this.roundQty(current.qty_full - this.getAdjustmentDeltas(row.transfer_mode, line.qty_full, line.qty_empty).fullDelta),
+          qty_empty: this.roundQty(current.qty_empty - this.getAdjustmentDeltas(row.transfer_mode, line.qty_full, line.qty_empty).emptyDelta)
         });
         continue;
       }
@@ -495,7 +620,7 @@ export class TransfersService {
     const result = await db.$transaction(async (tx) => {
       const source = await this.resolveLocation(tx, companyId, input.source_location_id);
       const destination = await this.resolveLocation(tx, companyId, input.destination_location_id);
-      if (!this.isSupplierRestockMode(input.transfer_mode) && source.id === destination.id) {
+      if (!this.isInventoryAdjustmentMode(input.transfer_mode) && source.id === destination.id) {
         throw new BadRequestException(
           'source_location_id and destination_location_id must be different'
         );
@@ -767,7 +892,7 @@ export class TransfersService {
 
         const isRestockIn = this.isSupplierRestockInMode(transfer.transferMode);
         const isRestockOut = this.isSupplierRestockOutMode(transfer.transferMode);
-        const isSupplierRestock = isRestockIn || isRestockOut;
+        const isAdjustmentMode = this.isInventoryAdjustmentMode(transfer.transferMode);
         const adjustmentLocationId = transfer.destinationLocationId;
 
         for (const line of transfer.lines) {
@@ -797,7 +922,12 @@ export class TransfersService {
             continue;
           }
 
-          if (isSupplierRestock) {
+          if (this.isInventoryAdjustmentMode(transfer.transferMode)) {
+            if ((this.isCreateMode(transfer.transferMode) || this.isUsedMode(transfer.transferMode) || this.isConvertMode(transfer.transferMode)) && !isLpgCylinderLine) {
+              throw new BadRequestException(
+                `${this.toApiTransferMode(transfer.transferMode)} is only allowed for LPG items with cylinder type (${line.product.sku})`
+              );
+            }
             const balance = await tx.inventoryBalance.findUnique({
               where: {
                 locationId_productId: {
@@ -810,6 +940,7 @@ export class TransfersService {
             const currentFull = Number(balance?.qtyFull ?? balance?.qtyOnHand ?? 0);
             const currentEmpty = Number(balance?.qtyEmpty ?? 0);
             const currentAvg = Number(balance?.avgCost ?? 0);
+            const adjustmentDeltas = this.getAdjustmentDeltas(transfer.transferMode, qtyFull, qtyEmpty);
             if (isRestockOut) {
               if (isLpgCylinderLine) {
                 if (currentFull < qtyFull || currentEmpty < qtyEmpty || currentQty < inventoryMoveQty) {
@@ -822,17 +953,21 @@ export class TransfersService {
                   `Insufficient stock for ${line.product.sku} at ${adjustmentLocationId}`
                 );
               }
+            } else if (this.isCreateMode(transfer.transferMode) || this.isConvertMode(transfer.transferMode)) {
+              if (currentEmpty < qtyEmpty) {
+                throw new BadRequestException(
+                  `Insufficient EMPTY stock for ${line.product.sku} at ${adjustmentLocationId}`
+                );
+              }
+            } else if (this.isUsedMode(transfer.transferMode) && currentFull < qtyFull) {
+              throw new BadRequestException(
+                `Insufficient FULL stock for ${line.product.sku} at ${adjustmentLocationId}`
+              );
             }
 
-            const nextQty = this.roundQty(
-              currentQty + (isRestockIn ? inventoryMoveQty : -inventoryMoveQty)
-            );
-            const nextFull = this.roundQty(
-              currentFull + (isRestockIn ? qtyFull : -qtyFull)
-            );
-            const nextEmpty = this.roundQty(
-              currentEmpty + (isRestockIn ? qtyEmpty : -qtyEmpty)
-            );
+            const nextQty = this.roundQty(currentQty + adjustmentDeltas.qtyDelta);
+            const nextFull = this.roundQty(currentFull + adjustmentDeltas.fullDelta);
+            const nextEmpty = this.roundQty(currentEmpty + adjustmentDeltas.emptyDelta);
 
             await tx.inventoryBalance.upsert({
               where: {
@@ -858,10 +993,11 @@ export class TransfersService {
               }
             });
 
-            const referenceId = `${transfer.id}::${line.id}::${isRestockIn ? 'RESTOCK_IN' : 'RESTOCK_OUT'}`;
-            const qtyDelta = this.roundQty(isRestockIn ? inventoryMoveQty : -inventoryMoveQty);
-            const fullDelta = this.roundQty(isRestockIn ? qtyFull : -qtyFull);
-            const emptyDelta = this.roundQty(isRestockIn ? qtyEmpty : -qtyEmpty);
+            const modeTag = this.toApiTransferMode(transfer.transferMode) ?? 'GENERAL';
+            const referenceId = `${transfer.id}::${line.id}::${modeTag}`;
+            const qtyDelta = adjustmentDeltas.qtyDelta;
+            const fullDelta = adjustmentDeltas.fullDelta;
+            const emptyDelta = adjustmentDeltas.emptyDelta;
             const ledger = await tx.inventoryLedger.create({
               data: {
                 companyId,
@@ -886,7 +1022,7 @@ export class TransfersService {
                   source: 'TRANSFER_POST',
                   transfer_id: transfer.id,
                   transfer_status: 'POSTED',
-                  direction: isRestockIn ? 'IN' : 'OUT',
+                  direction: fullDelta >= 0 ? 'IN' : 'OUT',
                   product_id: line.productId,
                   qty_delta: qtyDelta,
                   full_delta: fullDelta,
@@ -1127,9 +1263,7 @@ export class TransfersService {
           throw new BadRequestException('Only POSTED transfers can be reversed');
         }
 
-        const isRestockIn = this.isSupplierRestockInMode(transfer.transferMode);
-        const isRestockOut = this.isSupplierRestockOutMode(transfer.transferMode);
-        const isSupplierRestock = isRestockIn || isRestockOut;
+        const isAdjustmentMode = this.isInventoryAdjustmentMode(transfer.transferMode);
         const adjustmentLocationId = transfer.destinationLocationId;
 
         for (const line of transfer.lines) {
@@ -1159,7 +1293,7 @@ export class TransfersService {
             continue;
           }
 
-          if (isSupplierRestock) {
+          if (isAdjustmentMode) {
             const balance = await tx.inventoryBalance.findUnique({
               where: {
                 locationId_productId: {
@@ -1172,29 +1306,24 @@ export class TransfersService {
             const currentFull = Number(balance?.qtyFull ?? balance?.qtyOnHand ?? 0);
             const currentEmpty = Number(balance?.qtyEmpty ?? 0);
             const currentAvg = Number(balance?.avgCost ?? 0);
-            if (isRestockIn) {
-              if (isLpgCylinderLine) {
-                if (currentFull < qtyFull || currentEmpty < qtyEmpty || currentQty < inventoryMoveQty) {
-                  throw new BadRequestException(
-                    `Cannot reverse transfer: destination stock is insufficient for ${line.product.sku}`
-                  );
-                }
-              } else if (currentQty < inventoryMoveQty) {
-                throw new BadRequestException(
-                  `Cannot reverse transfer: destination stock is insufficient for ${line.product.sku}`
-                );
-              }
+            const forwardDeltas = this.getAdjustmentDeltas(transfer.transferMode, qtyFull, qtyEmpty);
+            const reverseQtyDelta = this.roundQty(-forwardDeltas.qtyDelta);
+            const reverseFullDelta = this.roundQty(-forwardDeltas.fullDelta);
+            const reverseEmptyDelta = this.roundQty(-forwardDeltas.emptyDelta);
+
+            if (
+              currentQty + reverseQtyDelta < 0 ||
+              currentFull + reverseFullDelta < 0 ||
+              currentEmpty + reverseEmptyDelta < 0
+            ) {
+              throw new BadRequestException(
+                `Cannot reverse transfer: destination stock is insufficient for ${line.product.sku}`
+              );
             }
 
-            const nextQty = this.roundQty(
-              currentQty + (isRestockIn ? -inventoryMoveQty : inventoryMoveQty)
-            );
-            const nextFull = this.roundQty(
-              currentFull + (isRestockIn ? -qtyFull : qtyFull)
-            );
-            const nextEmpty = this.roundQty(
-              currentEmpty + (isRestockIn ? -qtyEmpty : qtyEmpty)
-            );
+            const nextQty = this.roundQty(currentQty + reverseQtyDelta);
+            const nextFull = this.roundQty(currentFull + reverseFullDelta);
+            const nextEmpty = this.roundQty(currentEmpty + reverseEmptyDelta);
 
             await tx.inventoryBalance.upsert({
               where: {
@@ -1220,10 +1349,11 @@ export class TransfersService {
               }
             });
 
-            const referenceId = `${transfer.id}::${line.id}::${isRestockIn ? 'REV_RESTOCK_IN' : 'REV_RESTOCK_OUT'}`;
-            const qtyDelta = this.roundQty(isRestockIn ? -inventoryMoveQty : inventoryMoveQty);
-            const fullDelta = this.roundQty(isRestockIn ? -qtyFull : qtyFull);
-            const emptyDelta = this.roundQty(isRestockIn ? -qtyEmpty : qtyEmpty);
+            const modeTag = this.toApiTransferMode(transfer.transferMode) ?? 'GENERAL';
+            const referenceId = `${transfer.id}::${line.id}::REV_${modeTag}`;
+            const qtyDelta = reverseQtyDelta;
+            const fullDelta = reverseFullDelta;
+            const emptyDelta = reverseEmptyDelta;
             const ledger = await tx.inventoryLedger.create({
               data: {
                 companyId,
@@ -1248,7 +1378,7 @@ export class TransfersService {
                   source: 'TRANSFER_REVERSE',
                   transfer_id: transfer.id,
                   transfer_status: 'REVERSED',
-                  direction: isRestockIn ? 'OUT' : 'IN',
+                  direction: qtyDelta >= 0 ? 'IN' : 'OUT',
                   product_id: line.productId,
                   qty_delta: qtyDelta,
                   full_delta: fullDelta,
@@ -1583,6 +1713,9 @@ export class TransfersService {
     const transfer_mode: RuntimeMeta['transfer_mode'] =
       rawTransferMode === 'SUPPLIER_RESTOCK_IN' ||
       rawTransferMode === 'SUPPLIER_RESTOCK_OUT' ||
+      rawTransferMode === 'CREATE' ||
+      rawTransferMode === 'USED' ||
+      rawTransferMode === 'CONVERT' ||
       rawTransferMode === 'INTER_STORE_TRANSFER' ||
       rawTransferMode === 'STORE_TO_WAREHOUSE' ||
       rawTransferMode === 'WAREHOUSE_TO_STORE' ||
@@ -1593,7 +1726,7 @@ export class TransfersService {
       throw new BadRequestException('source_location_id and destination_location_id are required');
     }
     if (
-      !this.isSupplierRestockMode(transfer_mode) &&
+      !this.isInventoryAdjustmentMode(transfer_mode) &&
       source_location_id === destination_location_id
     ) {
       throw new BadRequestException(
@@ -1996,40 +2129,27 @@ export class TransfersService {
     }
     for (const line of transfer.lines) {
       const movedQty = this.roundQty(Number(line.qty_full) + Number(line.qty_empty));
-      if (movedQty <= 0) {
+      const forwardDeltas = this.getAdjustmentDeltas(
+        transfer.transfer_mode,
+        Number(line.qty_full),
+        Number(line.qty_empty)
+      );
+      if (movedQty <= 0 && forwardDeltas.fullDelta === 0 && forwardDeltas.emptyDelta === 0) {
         continue;
       }
       const isRestockIn = this.isSupplierRestockInMode(transfer.transfer_mode);
       const isRestockOut = this.isSupplierRestockOutMode(transfer.transfer_mode);
-      const isSupplierRestock = isRestockIn || isRestockOut;
-      if (isSupplierRestock) {
+      const isAdjustmentMode = this.isInventoryAdjustmentMode(transfer.transfer_mode);
+      if (isAdjustmentMode) {
         const locationId = transfer.destination_location_id;
         const qtyDelta = this.roundQty(
-          source === 'TRANSFER_POST'
-            ? isRestockIn
-              ? movedQty
-              : -movedQty
-            : isRestockIn
-              ? -movedQty
-              : movedQty
+          source === 'TRANSFER_POST' ? forwardDeltas.qtyDelta : -forwardDeltas.qtyDelta
         );
         const fullDelta = this.roundQty(
-          source === 'TRANSFER_POST'
-            ? isRestockIn
-              ? Number(line.qty_full)
-              : -Number(line.qty_full)
-            : isRestockIn
-              ? -Number(line.qty_full)
-              : Number(line.qty_full)
+          source === 'TRANSFER_POST' ? forwardDeltas.fullDelta : -forwardDeltas.fullDelta
         );
         const emptyDelta = this.roundQty(
-          source === 'TRANSFER_POST'
-            ? isRestockIn
-              ? Number(line.qty_empty)
-              : -Number(line.qty_empty)
-            : isRestockIn
-              ? -Number(line.qty_empty)
-              : Number(line.qty_empty)
+          source === 'TRANSFER_POST' ? forwardDeltas.emptyDelta : -forwardDeltas.emptyDelta
         );
         this.aiEventBuffer.append({
           company_id: companyId,
@@ -2168,6 +2288,9 @@ export class TransfersService {
     switch (mode) {
       case 'SUPPLIER_RESTOCK_IN':
       case 'SUPPLIER_RESTOCK_OUT':
+      case 'CREATE':
+      case 'USED':
+      case 'CONVERT':
       case 'INTER_STORE_TRANSFER':
       case 'STORE_TO_WAREHOUSE':
       case 'WAREHOUSE_TO_STORE':
@@ -2184,6 +2307,12 @@ export class TransfersService {
         return 'SUPPLIER_RESTOCK_IN';
       case TransferMode.SUPPLIER_RESTOCK_OUT:
         return 'SUPPLIER_RESTOCK_OUT';
+      case TransferMode.CREATE:
+        return 'CREATE';
+      case TransferMode.USED:
+        return 'USED';
+      case TransferMode.CONVERT:
+        return 'CONVERT';
       case TransferMode.INTER_STORE_TRANSFER:
         return 'INTER_STORE_TRANSFER';
       case TransferMode.STORE_TO_WAREHOUSE:

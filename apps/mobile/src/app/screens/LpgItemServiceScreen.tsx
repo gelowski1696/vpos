@@ -4,6 +4,7 @@ import type { SQLiteDatabase } from 'expo-sqlite';
 import { LocalSessionService } from '../../features/auth/local-session.service';
 import { OfflineTransactionService } from '../../services/offline-transaction.service';
 import { normalizeApiBaseUrl } from '../api-base-url';
+import { loadLocationOptions, type MasterDataOption } from '../master-data-local';
 import {
   loadPendingInventoryDeltaByProductForLocation,
   mergeInventoryWithDeltas
@@ -258,10 +259,12 @@ export function LpgItemServiceScreen({
 }: Props): JSX.Element {
   const prevSyncBusyRef = useRef(syncBusy);
   const [loading, setLoading] = useState(false);
+  const [locations, setLocations] = useState<MasterDataOption[]>([]);
   const [products, setProducts] = useState<ProductRecord[]>([]);
   const [stockByProduct, setStockByProduct] = useState<Record<string, ProductStockMetrics>>({});
   const [selectedLocationId, setSelectedLocationId] = useState<string | null>(null);
   const [selectedLocationName, setSelectedLocationName] = useState<string | null>(null);
+  const [selectedLocationType, setSelectedLocationType] = useState<'STORE' | 'WAREHOUSE'>('STORE');
   const [query, setQuery] = useState('');
   const [selectedProductId, setSelectedProductId] = useState<string | null>(null);
   const [actions, setActions] = useState<LpgItemActionRow[]>([]);
@@ -276,6 +279,15 @@ export function LpgItemServiceScreen({
   const [reason, setReason] = useState('');
   const [notes, setNotes] = useState('');
   const [saving, setSaving] = useState(false);
+  const storeLocations = useMemo(
+    () => locations.filter((location) => (location.type ?? '').toUpperCase() === 'BRANCH_STORE'),
+    [locations]
+  );
+  const warehouseLocations = useMemo(
+    () => locations.filter((location) => (location.type ?? '').toUpperCase() === 'BRANCH_WAREHOUSE'),
+    [locations]
+  );
+  const showLocationTypeSelector = storeLocations.length > 0 && warehouseLocations.length > 0;
 
   const apiRequest = async <T,>(path: string, init?: RequestInit): Promise<T> => {
     const session = new LocalSessionService(db);
@@ -312,13 +324,39 @@ export function LpgItemServiceScreen({
         selected_location_name: string | null;
       }>('SELECT selected_location_id, selected_location_name FROM app_state WHERE id = 1');
       const activeLocationId = appState?.selected_location_id ?? null;
-      setSelectedLocationId(activeLocationId);
-      setSelectedLocationName(appState?.selected_location_name ?? null);
 
-      const [productRows, inventoryRows] = await Promise.all([
+      const [locationOptions, productRows, inventoryRows] = await Promise.all([
+        loadLocationOptions(db),
         getEntityRows(db, ['product', 'products']),
         getEntityRows(db, ['inventory_balance', 'inventory_balances'])
       ]);
+      setLocations(locationOptions);
+
+      const storeOptions = locationOptions.filter((location) => (location.type ?? '').toUpperCase() === 'BRANCH_STORE');
+      const warehouseOptions = locationOptions.filter((location) => (location.type ?? '').toUpperCase() === 'BRANCH_WAREHOUSE');
+      const activeLocationOption = locationOptions.find((location) => location.id === activeLocationId) ?? null;
+      const resolvedLocationType: 'STORE' | 'WAREHOUSE' =
+        (activeLocationOption?.type ?? '').toUpperCase() === 'BRANCH_WAREHOUSE' ? 'WAREHOUSE' : 'STORE';
+      setSelectedLocationType((current) => {
+        if (current === 'WAREHOUSE' && warehouseOptions.length > 0) {
+          return current;
+        }
+        return resolvedLocationType;
+      });
+      const hasWarehouseTopology = storeOptions.length > 0 && warehouseOptions.length > 0;
+      const desiredType = hasWarehouseTopology ? selectedLocationType : resolvedLocationType;
+      const candidateLocations =
+        desiredType === 'WAREHOUSE' && warehouseOptions.length > 0
+          ? warehouseOptions
+          : storeOptions.length > 0
+            ? storeOptions
+            : warehouseOptions.length > 0
+              ? warehouseOptions
+              : locationOptions;
+      const scopedLocation =
+        candidateLocations.find((location) => location.id === activeLocationId) ?? candidateLocations[0] ?? null;
+      setSelectedLocationId(scopedLocation?.id ?? null);
+      setSelectedLocationName(scopedLocation?.label ?? appState?.selected_location_name ?? null);
 
       const nextProducts = productRows
         .map((row) => parseProduct(row))
@@ -330,7 +368,7 @@ export function LpgItemServiceScreen({
         if (!parsed) {
           continue;
         }
-        if (activeLocationId && parsed.locationId && parsed.locationId !== activeLocationId) {
+        if (scopedLocation?.id && parsed.locationId && parsed.locationId !== scopedLocation.id) {
           continue;
         }
         const existing = inventoryByProduct.get(parsed.productId) ?? { qtyOnHand: 0, qtyFull: 0, qtyEmpty: 0 };
@@ -339,8 +377,8 @@ export function LpgItemServiceScreen({
         existing.qtyEmpty += parsed.qtyEmpty;
         inventoryByProduct.set(parsed.productId, existing);
       }
-      const pendingDeltaByProduct = activeLocationId
-        ? await loadPendingInventoryDeltaByProductForLocation(db, activeLocationId)
+      const pendingDeltaByProduct = scopedLocation?.id
+        ? await loadPendingInventoryDeltaByProductForLocation(db, scopedLocation.id)
         : new Map();
       const projectedInventoryByProduct = mergeInventoryWithDeltas(
         inventoryByProduct,
@@ -379,6 +417,22 @@ export function LpgItemServiceScreen({
     }
     prevSyncBusyRef.current = syncBusy;
   }, [syncBusy]);
+
+  useEffect(() => {
+    if (!showLocationTypeSelector) {
+      return;
+    }
+    const options = selectedLocationType === 'WAREHOUSE' ? warehouseLocations : storeLocations;
+    if (!options.length) {
+      return;
+    }
+    const currentStillMatches = options.some((location) => location.id === selectedLocationId);
+    if (currentStillMatches) {
+      return;
+    }
+    setSelectedLocationId(options[0]?.id ?? null);
+    setSelectedLocationName(options[0]?.label ?? null);
+  }, [selectedLocationId, selectedLocationType, showLocationTypeSelector, storeLocations, warehouseLocations]);
 
   const visibleProducts = useMemo(() => {
     const search = query.trim().toLowerCase();
@@ -687,54 +741,83 @@ export function LpgItemServiceScreen({
   };
 
   return (
-    <View style={[styles.card, { backgroundColor: theme.card, borderColor: theme.cardBorder }]}>
-      <Text style={[styles.title, { color: theme.heading }]}>LPG Service Records</Text>
-      <Text style={[styles.sub, { color: theme.subtext }]}>
+    <View className="gap-2.5 rounded-2xl border px-3.5 py-3.5" style={{ backgroundColor: theme.card, borderColor: theme.cardBorder }}>
+      <Text className="text-lg font-bold" style={{ color: theme.heading }}>LPG Service Records</Text>
+      <Text className="text-[13px]" style={{ color: theme.subtext }}>
         Record disposed items here. Junked and replaced entries must come from an existing disposed record.
       </Text>
 
-      <View style={styles.summaryRow}>
-        <View style={[styles.summaryCard, { borderColor: theme.cardBorder, backgroundColor: theme.inputBg }]}>
-          <Text style={[styles.summaryLabel, { color: theme.subtext }]}>Location</Text>
-          <Text style={[styles.summaryValueSmall, { color: theme.heading }]} numberOfLines={2}>
+      <View className="flex-row gap-2">
+        <View className="flex-1 gap-0.5 rounded-xl border px-2.5 py-2" style={{ borderColor: theme.cardBorder, backgroundColor: theme.inputBg }}>
+          <Text className="text-[11px] font-semibold" style={{ color: theme.subtext }}>Location</Text>
+          <Text className="text-[12px] font-bold" style={{ color: theme.heading }} numberOfLines={2}>
             {selectedLocationName ?? selectedLocationId ?? 'No location selected'}
           </Text>
         </View>
-        <View style={[styles.summaryCard, { borderColor: theme.cardBorder, backgroundColor: theme.inputBg }]}>
-          <Text style={[styles.summaryLabel, { color: theme.subtext }]}>LPG Items</Text>
-          <Text style={[styles.summaryValue, { color: theme.heading }]}>{products.length}</Text>
+        <View className="flex-1 gap-0.5 rounded-xl border px-2.5 py-2" style={{ borderColor: theme.cardBorder, backgroundColor: theme.inputBg }}>
+          <Text className="text-[11px] font-semibold" style={{ color: theme.subtext }}>LPG Items</Text>
+          <Text className="text-lg font-extrabold" style={{ color: theme.heading }}>{products.length}</Text>
         </View>
       </View>
+
+      {showLocationTypeSelector ? (
+        <View className="gap-1.5">
+          <Text className="text-[11px] font-semibold" style={{ color: theme.subtext }}>Location Scope</Text>
+          <View className="flex-row gap-2">
+            {([
+              { key: 'STORE', label: 'Store' },
+              { key: 'WAREHOUSE', label: 'Warehouse' }
+            ] as const).map((option) => {
+              const active = selectedLocationType === option.key;
+              return (
+                <Pressable
+                  key={option.key}
+                  onPress={() => setSelectedLocationType(option.key)}
+                  className="min-h-9 flex-1 items-center justify-center rounded-full px-3"
+                  style={{ backgroundColor: active ? theme.primary : theme.pillBg }}
+                >
+                  <Text className="text-[11px] font-bold" style={{ color: active ? '#FFFFFF' : theme.pillText }}>
+                    {option.label}
+                  </Text>
+                </Pressable>
+              );
+            })}
+          </View>
+          <Text className="text-[11px]" style={{ color: theme.subtext }}>
+            Switch between store and warehouse service records when warehouse topology is enabled.
+          </Text>
+        </View>
+      ) : null}
 
       <TextInput
         value={query}
         onChangeText={setQuery}
         placeholder="Search records by item, reason, or action"
         placeholderTextColor={theme.inputPlaceholder}
-        style={[styles.input, { backgroundColor: theme.inputBg, color: theme.inputText }]}
+        className="rounded-xl px-3 py-[11px] text-[13px]"
+        style={{ backgroundColor: theme.inputBg, color: theme.inputText }}
       />
 
       <Pressable
         onPress={() => openComposer('DISPOSE')}
         disabled={!selectedLocationId}
-        style={[
-          styles.primaryButton,
-          { backgroundColor: selectedLocationId ? theme.primary : theme.primaryMuted }
-        ]}
+        className="min-h-11 items-center justify-center rounded-xl px-3"
+        style={{ backgroundColor: selectedLocationId ? theme.primary : theme.primaryMuted }}
       >
-        <Text style={styles.primaryButtonText}>{actionLabel('DISPOSE')}</Text>
+        <Text className="text-[13px] font-bold text-white">{actionLabel('DISPOSE')}</Text>
       </Pressable>
 
-      <View style={styles.topActionRow}>
+      <View className="flex-row justify-end">
         <Pressable
           onPress={() => setHistoryOpen(true)}
-          style={[styles.secondaryButton, styles.topActionBtn, { backgroundColor: theme.pillBg }]}
+          className="min-h-10 items-center justify-center rounded-xl px-3"
+          style={{ backgroundColor: theme.pillBg }}
         >
-          <Text style={[styles.secondaryButtonText, { color: theme.pillText }]}>Service History</Text>
+          <Text className="text-[13px] font-bold" style={{ color: theme.pillText }}>Service History</Text>
         </Pressable>
       </View>
 
-      <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.filterRow}>
+      <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 8, paddingRight: 4 }}>
         {([
           { key: 'ALL', label: 'All Records' },
           { key: 'DISPOSE', label: 'Disposed' },
@@ -746,12 +829,10 @@ export function LpgItemServiceScreen({
             <Pressable
               key={chip.key}
               onPress={() => setActionTypeFilter(chip.key)}
-              style={[
-                styles.filterChip,
-                { backgroundColor: active ? theme.primary : theme.pillBg }
-              ]}
+              className="min-h-9 items-center justify-center rounded-full px-3"
+              style={{ backgroundColor: active ? theme.primary : theme.pillBg }}
             >
-              <Text style={[styles.filterChipText, { color: active ? '#FFFFFF' : theme.pillText }]}>
+              <Text className="text-[11px] font-bold" style={{ color: active ? '#FFFFFF' : theme.pillText }}>
                 {chip.label}
               </Text>
             </Pressable>
@@ -759,8 +840,8 @@ export function LpgItemServiceScreen({
         })}
       </ScrollView>
 
-      <View style={[styles.detailBlock, { borderColor: theme.cardBorder, backgroundColor: theme.inputBg }]}>
-        <Text style={[styles.blockTitle, { color: theme.heading }]}>{mainBlockTitle}</Text>
+      <View className="gap-2 rounded-2xl border px-3 py-3" style={{ borderColor: theme.cardBorder, backgroundColor: theme.inputBg }}>
+        <Text className="text-[13px] font-bold" style={{ color: theme.heading }}>{mainBlockTitle}</Text>
         {!selectedLocationId ? (
           <Text style={[styles.detailLine, { color: theme.subtext }]}>Select a location in app setup first.</Text>
         ) : actionTypeFilter === 'DISPOSE' ? (
@@ -845,13 +926,13 @@ export function LpgItemServiceScreen({
         )}
       </View>
       <Modal visible={composerOpen} transparent animationType="fade" onRequestClose={closeComposer}>
-        <View style={styles.modalOverlay}>
+        <View className="flex-1 justify-end bg-[rgba(2,8,23,0.55)] px-3 pt-3">
           <Pressable style={styles.modalBackdrop} onPress={closeComposer} />
-          <View style={[styles.dialogCard, { backgroundColor: theme.card, borderColor: theme.cardBorder }]}>
-            <Text style={[styles.modalTitle, { color: theme.heading }]}>
+          <View className="min-h-[76%] max-h-[92%] gap-3 rounded-[20px] border p-3" style={{ backgroundColor: theme.card, borderColor: theme.cardBorder }}>
+            <Text className="text-base font-extrabold" style={{ color: theme.heading }}>
               {actionLabel(composerType)}
             </Text>
-            <Text style={[styles.modalSub, { color: theme.subtext }]}> 
+            <Text className="text-[12px]" style={{ color: theme.subtext }}> 
               {composerType === 'DISPOSE'
                 ? 'Choose the LPG item here, then save the disposed record.'
                 : composerType === 'REPLACE'
@@ -868,9 +949,10 @@ export function LpgItemServiceScreen({
                   onChangeText={setModalProductQuery}
                   placeholder="Search LPG item"
                   placeholderTextColor={theme.inputPlaceholder}
-                  style={[styles.input, { backgroundColor: theme.inputBg, color: theme.inputText }]}
+                  className="rounded-xl px-3 py-[11px] text-[13px]"
+                  style={{ backgroundColor: theme.inputBg, color: theme.inputText }}
                 />
-                <ScrollView style={styles.modalProductList} contentContainerStyle={styles.modalProductListContent}>
+                <ScrollView className="min-h-0 flex-1" contentContainerStyle={{ gap: 10, paddingBottom: 8 }}>
                   {modalVisibleProducts.map((row) => {
                     const active = selectedProductId === row.id;
                     const stock = stockByProduct[row.id] ?? { qtyFull: 0, qtyEmpty: 0, qtyOnHand: 0 };
@@ -899,7 +981,7 @@ export function LpgItemServiceScreen({
                 </ScrollView>
               </>
             ) : selectedProduct ? (
-              <View style={[styles.composerProductCard, { borderColor: theme.cardBorder, backgroundColor: theme.inputBg }]}>
+              <View className="rounded-xl border px-3 py-3" style={{ borderColor: theme.cardBorder, backgroundColor: theme.inputBg }}>
                 <Text style={[styles.itemName, { color: theme.heading }]}>{selectedProduct.name}</Text>
                 <Text style={[styles.itemMeta, { color: theme.subtext }]}>{selectedProduct.itemCode}</Text>
               </View>
@@ -910,14 +992,16 @@ export function LpgItemServiceScreen({
               placeholder="Quantity"
               keyboardType="number-pad"
               placeholderTextColor={theme.inputPlaceholder}
-              style={[styles.input, { backgroundColor: theme.inputBg, color: theme.inputText }]}
+              className="rounded-xl px-3 py-[11px] text-[13px]"
+              style={{ backgroundColor: theme.inputBg, color: theme.inputText }}
             />
             <TextInput
               value={reason}
               onChangeText={setReason}
               placeholder="Reason"
               placeholderTextColor={theme.inputPlaceholder}
-              style={[styles.input, { backgroundColor: theme.inputBg, color: theme.inputText }]}
+              className="rounded-xl px-3 py-[11px] text-[13px]"
+              style={{ backgroundColor: theme.inputBg, color: theme.inputText }}
             />
             <TextInput
               value={notes}
@@ -925,18 +1009,20 @@ export function LpgItemServiceScreen({
               placeholder="Notes (optional)"
               placeholderTextColor={theme.inputPlaceholder}
               multiline
-              style={[styles.notesInput, { backgroundColor: theme.inputBg, color: theme.inputText }]}
+              className="min-h-[84px] rounded-xl px-3 py-[11px] text-[13px]"
+              style={{ backgroundColor: theme.inputBg, color: theme.inputText, textAlignVertical: 'top' }}
             />
-            <View style={styles.dialogActions}>
-              <Pressable onPress={closeComposer} style={[styles.secondaryButton, { backgroundColor: theme.pillBg }]}>
-                <Text style={[styles.secondaryButtonText, { color: theme.pillText }]}>Cancel</Text>
+            <View className="flex-row gap-2">
+              <Pressable onPress={closeComposer} className="min-h-11 flex-1 items-center justify-center rounded-xl px-3" style={{ backgroundColor: theme.pillBg }}>
+                <Text className="text-[13px] font-bold" style={{ color: theme.pillText }}>Cancel</Text>
               </Pressable>
               <Pressable
                 onPress={() => void submitAction()}
                 disabled={saving}
-                style={[styles.primaryButton, { flex: 1, backgroundColor: saving ? theme.primaryMuted : theme.primary }]}
+                className="min-h-11 flex-1 items-center justify-center rounded-xl px-3"
+                style={{ backgroundColor: saving ? theme.primaryMuted : theme.primary }}
               >
-                <Text style={styles.primaryButtonText}>{saving ? 'Saving...' : 'Save Action'}</Text>
+                <Text className="text-[13px] font-bold text-white">{saving ? 'Saving...' : 'Save Action'}</Text>
               </Pressable>
             </View>
           </View>
@@ -944,25 +1030,26 @@ export function LpgItemServiceScreen({
       </Modal>
 
       <Modal visible={historyOpen} transparent animationType="fade" onRequestClose={() => setHistoryOpen(false)}>
-        <View style={styles.modalOverlay}>
+        <View className="flex-1 justify-end bg-[rgba(2,8,23,0.55)] px-3 pt-3">
           <Pressable style={styles.modalBackdrop} onPress={() => setHistoryOpen(false)} />
-          <View style={[styles.historyDialogCard, { backgroundColor: theme.card, borderColor: theme.cardBorder }]}>
-            <View style={styles.historyHeader}>
+          <View className="min-h-[80%] max-h-[92%] gap-3 rounded-[20px] border p-3" style={{ backgroundColor: theme.card, borderColor: theme.cardBorder }}>
+            <View className="flex-row items-start gap-2">
               <View style={{ flex: 1 }}>
-                <Text style={[styles.modalTitle, { color: theme.heading }]}>Service History</Text>
-                <Text style={[styles.modalSub, { color: theme.subtext }]}>
+                <Text className="text-base font-extrabold" style={{ color: theme.heading }}>Service History</Text>
+                <Text className="text-[12px]" style={{ color: theme.subtext }}>
                   Filter: {actionFilterLabel(actionTypeFilter)}
                 </Text>
               </View>
               <Pressable
                 onPress={() => setHistoryOpen(false)}
-                style={[styles.secondaryButton, { backgroundColor: theme.pillBg }]}
+                className="min-h-10 items-center justify-center rounded-xl px-3"
+                style={{ backgroundColor: theme.pillBg }}
               >
-                <Text style={[styles.secondaryButtonText, { color: theme.pillText }]}>Close</Text>
+                <Text className="text-[13px] font-bold" style={{ color: theme.pillText }}>Close</Text>
               </Pressable>
             </View>
 
-            <ScrollView style={styles.historyList} contentContainerStyle={styles.historyListContent}>
+            <ScrollView className="min-h-0 flex-1" contentContainerStyle={{ gap: 10, paddingBottom: 8 }}>
               {actionLoading ? (
                 <Text style={[styles.detailLine, { color: theme.subtext }]}>Loading history...</Text>
               ) : historyRows.length === 0 ? (

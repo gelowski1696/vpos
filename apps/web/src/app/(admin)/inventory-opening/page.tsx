@@ -401,7 +401,7 @@ export default function InventoryOpeningPage(): JSX.Element {
           <li>Use this only for go-live opening balances.</li>
           <li>Do not use after sales/transfers already started for the same SKU/location.</li>
           <li>After go-live, use stock adjustment workflow (not opening stock) for corrections.</li>
-          <li>Use Force Replace only for opening-only corrections before transactional movements.</li>
+          <li>Use the replace option only when you need to overwrite opening-only setup before any real stock movements exist.</li>
         </ol>
       </section>
 
@@ -641,8 +641,11 @@ export default function InventoryOpeningPage(): JSX.Element {
                   onChange={(event) => setForce(event.target.checked)}
                   type="checkbox"
                 />
-                Force replace existing opening-only setup
+                Replace existing opening-only setup
               </label>
+              <p className="text-xs text-slate-500 dark:text-slate-400">
+                This only replaces opening balances for rows that still have no transactional stock movements yet.
+              </p>
               <div className="flex items-center gap-2">
                 <button
                   className="rounded-lg border border-slate-300 px-3 py-2 text-sm font-semibold text-slate-700 dark:border-slate-600 dark:text-slate-200"

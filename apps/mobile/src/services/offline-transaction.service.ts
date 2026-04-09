@@ -111,6 +111,9 @@ type TransferInput = {
   transferMode?:
     | 'SUPPLIER_RESTOCK_IN'
     | 'SUPPLIER_RESTOCK_OUT'
+    | 'CREATE'
+    | 'USED'
+    | 'CONVERT'
     | 'INTER_STORE_TRANSFER'
     | 'STORE_TO_WAREHOUSE'
     | 'WAREHOUSE_TO_STORE'

@@ -134,9 +134,21 @@ function normalizeFlow(value: unknown): 'REFILL_EXCHANGE' | 'NON_REFILL' | null 
 
 function normalizeTransferMode(
   value: unknown
-): 'SUPPLIER_RESTOCK_IN' | 'SUPPLIER_RESTOCK_OUT' | null {
+):
+  | 'SUPPLIER_RESTOCK_IN'
+  | 'SUPPLIER_RESTOCK_OUT'
+  | 'CREATE'
+  | 'USED'
+  | 'CONVERT'
+  | null {
   const raw = asString(value)?.toUpperCase();
-  if (raw === 'SUPPLIER_RESTOCK_IN' || raw === 'SUPPLIER_RESTOCK_OUT') {
+  if (
+    raw === 'SUPPLIER_RESTOCK_IN' ||
+    raw === 'SUPPLIER_RESTOCK_OUT' ||
+    raw === 'CREATE' ||
+    raw === 'USED' ||
+    raw === 'CONVERT'
+  ) {
     return raw;
   }
   return null;
@@ -205,17 +217,33 @@ function applyPendingTransferDeltas(
     const transferMode = normalizeTransferMode(payload.transfer_mode ?? payload.transferMode);
     const sourceLocationId = asString(payload.source_location_id ?? payload.sourceLocationId);
     const destinationLocationId = asString(payload.destination_location_id ?? payload.destinationLocationId);
+    const adjustmentLocationId =
+      transferMode === 'SUPPLIER_RESTOCK_IN' ||
+      transferMode === 'SUPPLIER_RESTOCK_OUT' ||
+      transferMode === 'CREATE' ||
+      transferMode === 'USED' ||
+      transferMode === 'CONVERT'
+        ? destinationLocationId
+        : null;
     const affectsAsSource =
       transferMode === 'SUPPLIER_RESTOCK_IN'
         ? false
         : transferMode === 'SUPPLIER_RESTOCK_OUT'
           ? destinationLocationId === locationId
+          : transferMode === 'CREATE'
+            ? false
+            : transferMode === 'USED'
+              ? false
+              : transferMode === 'CONVERT'
+                ? false
           : sourceLocationId === locationId;
     const affectsAsDestination =
       transferMode === 'SUPPLIER_RESTOCK_IN'
         ? destinationLocationId === locationId
         : transferMode === 'SUPPLIER_RESTOCK_OUT'
           ? false
+          : transferMode === 'CREATE' || transferMode === 'USED' || transferMode === 'CONVERT'
+            ? adjustmentLocationId === locationId
           : destinationLocationId === locationId;
     if (!affectsAsSource && !affectsAsDestination) {
       continue;
@@ -228,6 +256,32 @@ function applyPendingTransferDeltas(
       const qtyEmpty = asNumber(line.qtyEmpty ?? line.qty_empty) ?? 0;
       const qtyOnHand = qtyFull + qtyEmpty;
       if (!productId || (qtyFull <= 0 && qtyEmpty <= 0 && qtyOnHand <= 0)) {
+        continue;
+      }
+
+      if (transferMode === 'CREATE' || transferMode === 'CONVERT') {
+        const movedQty = qtyEmpty;
+        if (movedQty <= 0 || !affectsAsDestination) {
+          continue;
+        }
+        applyDelta(deltaByProduct, productId, {
+          qtyOnHand: 0,
+          qtyFull: movedQty,
+          qtyEmpty: -movedQty
+        });
+        continue;
+      }
+
+      if (transferMode === 'USED') {
+        const movedQty = qtyFull;
+        if (movedQty <= 0 || !affectsAsDestination) {
+          continue;
+        }
+        applyDelta(deltaByProduct, productId, {
+          qtyOnHand: 0,
+          qtyFull: -movedQty,
+          qtyEmpty: movedQty
+        });
         continue;
       }
 

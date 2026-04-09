@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { Modal, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
+import { Modal, Pressable, ScrollView, StyleSheet, Text, TextInput, View, useWindowDimensions } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import type { SQLiteDatabase } from 'expo-sqlite';
 import type { AppTheme } from '../theme';
 import { useTutorialTarget } from '../tutorial/tutorial-provider';
@@ -7,6 +8,9 @@ import {
   loadPendingInventoryDeltaByProductForLocation,
   mergeInventoryWithDeltas
 } from '../local-stock-projection';
+import { LocalSessionService } from '../../features/auth/local-session.service';
+import { HttpAuthTransport } from '../../features/auth/http-auth.transport';
+import { normalizeApiBaseUrl } from '../api-base-url';
 
 type Props = {
   db: SQLiteDatabase;
@@ -45,7 +49,40 @@ type ProductStockMetrics = {
   qtyFull: number;
   qtyEmpty: number;
   qtyOnHand: number | null;
-  source: 'LPG_INVENTORY' | 'LPG_CYLINDER' | 'INVENTORY' | 'UNAVAILABLE';
+  source: 'LPG_INVENTORY' | 'INVENTORY' | 'UNAVAILABLE';
+};
+
+type LendingListRow = {
+  lending_id: string;
+  status: string;
+};
+
+type LendingDetailRecord = {
+  lending_id: string;
+  status: string;
+  lines: Array<{
+    product_id: string;
+    quantity_open: number;
+  }>;
+};
+
+type LocalLendingRow = {
+  id: string;
+  payload: string;
+  sync_status: string;
+};
+
+type LocalLendingPayload = {
+  branch_id?: string;
+  branchId?: string;
+  location_id?: string;
+  locationId?: string;
+  status?: string;
+  lines?: Array<{
+    product_id?: string;
+    productId?: string;
+    quantity?: number | string;
+  }>;
 };
 
 type CylinderTypeRecord = {
@@ -100,12 +137,6 @@ function flowLabel(value: 'ANY' | 'REFILL_EXCHANGE' | 'NON_REFILL'): string {
   return 'Any Flow';
 }
 
-type CylinderCountRow = {
-  cylinder_type_code: string;
-  status: string;
-  qty: number;
-};
-
 type InventoryBalanceRow = {
   productId: string;
   locationId: string | null;
@@ -113,6 +144,13 @@ type InventoryBalanceRow = {
   qtyFull: number;
   qtyEmpty: number;
 };
+
+const env = (
+  globalThis as { process?: { env?: Record<string, string | undefined> } }
+).process?.env;
+const API_BASE_URL = normalizeApiBaseUrl(
+  env?.EXPO_PUBLIC_API_BASE_URL ?? 'https://vmjamtech.com/api'
+);
 
 function parsePayload(value: string): Record<string, unknown> {
   try {
@@ -357,6 +395,11 @@ export function ItemsViewScreen({
   inventoryProjectionVersion = 0,
   syncBusy = false
 }: Props): JSX.Element {
+  const insets = useSafeAreaInsets();
+  const { width, height } = useWindowDimensions();
+  const shortEdge = Math.min(width, height);
+  const longEdge = Math.max(width, height);
+  const isCompactItemDetailsLayout = shortEdge <= 360 || longEdge <= 740;
   const tutorialSearch = useTutorialTarget('items-search');
   const tutorialFirstCard = useTutorialTarget('items-first-card');
   const prevSyncBusyRef = useRef(syncBusy);
@@ -365,6 +408,7 @@ export function ItemsViewScreen({
   const [cylinderMap, setCylinderMap] = useState<Record<string, CylinderTypeRecord>>({});
   const [priceLists, setPriceLists] = useState<PriceListRecord[]>([]);
   const [stockByProduct, setStockByProduct] = useState<Record<string, ProductStockMetrics>>({});
+  const [lendedQtyByProduct, setLendedQtyByProduct] = useState<Record<string, number>>({});
   const [selectedLocationId, setSelectedLocationId] = useState<string | null>(null);
   const [typeFilter, setTypeFilter] = useState<'ALL' | 'LPG' | 'NON_LPG'>('ALL');
   const [categoryFilter, setCategoryFilter] = useState<string>('ALL');
@@ -374,27 +418,21 @@ export function ItemsViewScreen({
   const refresh = async (): Promise<void> => {
     setLoading(true);
     try {
-      const selectedLocation = await db.getFirstAsync<{ selected_location_id: string | null }>(
-        'SELECT selected_location_id FROM app_state WHERE id = 1'
+      const selectedLocation = await db.getFirstAsync<{
+        selected_branch_id: string | null;
+        selected_location_id: string | null;
+      }>(
+        'SELECT selected_branch_id, selected_location_id FROM app_state WHERE id = 1'
       );
+      const activeBranchId = selectedLocation?.selected_branch_id ?? null;
       const activeLocationId = selectedLocation?.selected_location_id ?? null;
       setSelectedLocationId(activeLocationId);
 
-      const [productRows, cylinderRows, priceListRows, inventoryRows, cylinderCountRows] = await Promise.all([
+      const [productRows, cylinderRows, priceListRows, inventoryRows] = await Promise.all([
         getEntityRows(db, ['product', 'products']),
         getEntityRows(db, ['cylinder_type', 'cylinder_types', 'cylinder-type', 'cylinder-types']),
         getEntityRows(db, ['price_list', 'price_lists', 'price-list', 'price-lists']),
-        getEntityRows(db, ['inventory_balance', 'inventory_balances']),
-        db.getAllAsync<CylinderCountRow>(
-          `
-          SELECT cylinder_type_code, status, COUNT(1) AS qty
-          FROM cylinders_local
-          WHERE (? IS NULL OR location_id = ?)
-          GROUP BY cylinder_type_code, status
-          `,
-          activeLocationId,
-          activeLocationId
-        )
+        getEntityRows(db, ['inventory_balance', 'inventory_balances'])
       ]);
 
       const productMap = new Map<string, ProductRecord>();
@@ -423,24 +461,6 @@ export function ItemsViewScreen({
       }
       const nextPriceLists = [...priceListMap.values()].sort((a, b) => a.name.localeCompare(b.name));
 
-      const cylinderCountsByCode = new Map<string, { qtyFull: number; qtyEmpty: number }>();
-      for (const row of cylinderCountRows) {
-        const code = asString(row.cylinder_type_code).toUpperCase();
-        if (!code) {
-          continue;
-        }
-        const existing = cylinderCountsByCode.get(code) ?? { qtyFull: 0, qtyEmpty: 0 };
-        const status = asString(row.status).toUpperCase();
-        const qty = Number(row.qty ?? 0);
-        if (status === 'FULL') {
-          existing.qtyFull += qty;
-        }
-        if (status === 'EMPTY') {
-          existing.qtyEmpty += qty;
-        }
-        cylinderCountsByCode.set(code, existing);
-      }
-
       const inventoryByProduct = new Map<string, { qtyOnHand: number; qtyFull: number; qtyEmpty: number }>();
       for (const row of inventoryRows) {
         const parsed = parseInventoryBalanceRow(row);
@@ -463,43 +483,118 @@ export function ItemsViewScreen({
 
       const nextStockByProduct: Record<string, ProductStockMetrics> = {};
       for (const product of nextProducts) {
-        if (product.isLpg && product.cylinderTypeId) {
-          const inventory = projectedInventoryByProduct.get(product.id);
-          if (inventory) {
-            nextStockByProduct[product.id] = {
-              qtyFull: inventory.qtyFull,
-              qtyEmpty: inventory.qtyEmpty,
-              qtyOnHand: inventory.qtyOnHand,
-              source: 'LPG_INVENTORY'
-            };
-          } else {
-            const typeCode = nextCylinderMap[product.cylinderTypeId]?.code?.toUpperCase() ?? '';
-            const counted = typeCode ? cylinderCountsByCode.get(typeCode) : undefined;
-            const qtyFull = counted?.qtyFull ?? 0;
-            const qtyEmpty = counted?.qtyEmpty ?? 0;
-            nextStockByProduct[product.id] = {
-              qtyFull,
-              qtyEmpty,
-              qtyOnHand: qtyFull + qtyEmpty,
-              source: 'LPG_CYLINDER'
-            };
+        const inventory = projectedInventoryByProduct.get(product.id);
+        const qtyOnHand = inventory?.qtyOnHand;
+        nextStockByProduct[product.id] = {
+          qtyFull: inventory?.qtyFull ?? 0,
+          qtyEmpty: inventory?.qtyEmpty ?? 0,
+          qtyOnHand: qtyOnHand ?? null,
+          source:
+            qtyOnHand === undefined
+              ? 'UNAVAILABLE'
+              : product.isLpg
+                ? 'LPG_INVENTORY'
+                : 'INVENTORY'
+        };
+      }
+
+      const nextLendedQtyByProduct: Record<string, number> = {};
+      try {
+        const session = new LocalSessionService(db);
+        await session.initializeFromStorage();
+        const transport = new HttpAuthTransport({ baseUrl: API_BASE_URL });
+        const request = async <T,>(path: string): Promise<T> => {
+          const send = async (): Promise<Response> => {
+            const headers = new Headers();
+            const token = await session.getAccessToken();
+            const clientId = await session.getClientId();
+            if (token) {
+              headers.set('authorization', `Bearer ${token}`);
+            }
+            if (clientId?.trim()) {
+              headers.set('x-client-id', clientId.trim());
+            }
+            return fetch(`${API_BASE_URL}${path}`, { headers });
+          };
+
+          let response = await send();
+          if (response.status === 401) {
+            const refreshed = await session.refreshSession(transport);
+            if (refreshed) {
+              response = await send();
+            }
           }
+          if (!response.ok) {
+            throw new Error(`Request failed (${response.status})`);
+          }
+          return (await response.json()) as T;
+        };
+
+        if (activeBranchId || activeLocationId) {
+          const params = new URLSearchParams();
+          if (activeBranchId) {
+            params.set('branch_id', activeBranchId);
+          }
+          if (activeLocationId) {
+            params.set('location_id', activeLocationId);
+          }
+          params.set('limit', '200');
+          const list = await request<LendingListRow[]>(`/lending?${params.toString()}`);
+          const activeRows = list.filter((row) => shouldCountOpenLending(row.status));
+          const details = await Promise.allSettled(
+            activeRows.map((row) => request<LendingDetailRecord>(`/lending/${encodeURIComponent(row.lending_id)}`))
+          );
+          for (const result of details) {
+            if (result.status !== 'fulfilled' || !shouldCountOpenLending(result.value.status)) {
+              continue;
+            }
+            for (const line of result.value.lines) {
+              addLendedQty(nextLendedQtyByProduct, line.product_id, Number(line.quantity_open ?? 0));
+            }
+          }
+        }
+      } catch {
+        // Keep lended qty best-effort and avoid blocking the local catalog.
+      }
+
+      const localPendingLendingRows = await db.getAllAsync<LocalLendingRow>(
+        `
+        SELECT id, payload, sync_status
+        FROM lending_local
+        WHERE sync_status IN ('pending', 'processing')
+        ORDER BY created_at DESC
+        `
+      );
+      for (const row of localPendingLendingRows) {
+        const payload = parsePayload(row.payload);
+        const branchId = asString(payload.branch_id ?? payload.branchId);
+        const locationId = asString(payload.location_id ?? payload.locationId);
+        if (activeBranchId && branchId && branchId !== activeBranchId) {
           continue;
         }
-
-        const qtyOnHand = projectedInventoryByProduct.get(product.id)?.qtyOnHand;
-        nextStockByProduct[product.id] = {
-          qtyFull: 0,
-          qtyEmpty: 0,
-          qtyOnHand: qtyOnHand ?? null,
-          source: qtyOnHand === undefined ? 'UNAVAILABLE' : 'INVENTORY'
-        };
+        if (activeLocationId && locationId && locationId !== activeLocationId) {
+          continue;
+        }
+        if (!shouldCountOpenLending(asString(payload.status))) {
+          continue;
+        }
+        const lines = Array.isArray(payload.lines) ? payload.lines : [];
+        for (const lineValue of lines) {
+          if (!lineValue || typeof lineValue !== 'object') {
+            continue;
+          }
+          const line = lineValue as Record<string, unknown>;
+          const productId = asString(line.product_id ?? line.productId);
+          const qty = asNumber(line.quantity) ?? 0;
+          addLendedQty(nextLendedQtyByProduct, productId, qty);
+        }
       }
 
       setRows(nextProducts);
       setCylinderMap(nextCylinderMap);
       setPriceLists(nextPriceLists);
       setStockByProduct(nextStockByProduct);
+      setLendedQtyByProduct(nextLendedQtyByProduct);
     } finally {
       setLoading(false);
     }
@@ -627,23 +722,28 @@ export function ItemsViewScreen({
     return rules;
   }, [selectedItem, priceLists]);
 
-  return (
-    <View style={[styles.card, { backgroundColor: theme.card, borderColor: theme.cardBorder }]}>
-      <Text style={[styles.title, { color: theme.heading }]}>Items</Text>
-      <Text style={[styles.sub, { color: theme.subtext }]}>Read-only item catalog with stock snapshot, linked pricing, and cylinder details (without cost fields).</Text>
+  const selectedLendedQty = useMemo(
+    () => (selectedItem ? lendedQtyByProduct[selectedItem.id] ?? 0 : 0),
+    [lendedQtyByProduct, selectedItem]
+  );
 
-      <View style={styles.summaryRow}>
-        <View style={[styles.summaryCard, { borderColor: theme.cardBorder, backgroundColor: theme.inputBg }]}>
-          <Text style={[styles.summaryLabel, { color: theme.subtext }]}>Total</Text>
-          <Text style={[styles.summaryValue, { color: theme.heading }]}>{summary.total}</Text>
+  return (
+    <View className="gap-2.5 rounded-2xl border px-3.5 py-3.5" style={{ backgroundColor: theme.card, borderColor: theme.cardBorder }}>
+      <Text className="text-lg font-bold" style={{ color: theme.heading }}>Items</Text>
+      <Text className="text-[13px]" style={{ color: theme.subtext }}>Read-only item catalog with stock snapshot, linked pricing, and cylinder details (without cost fields).</Text>
+
+      <View className="flex-row gap-2">
+        <View className="flex-1 gap-0.5 rounded-xl border px-2.5 py-2" style={{ borderColor: theme.cardBorder, backgroundColor: theme.inputBg }}>
+          <Text className="text-[11px] font-semibold" style={{ color: theme.subtext }}>Total</Text>
+          <Text className="text-lg font-extrabold" style={{ color: theme.heading }}>{summary.total}</Text>
         </View>
-        <View style={[styles.summaryCard, { borderColor: theme.cardBorder, backgroundColor: theme.inputBg }]}>
-          <Text style={[styles.summaryLabel, { color: theme.subtext }]}>Active</Text>
-          <Text style={[styles.summaryValue, { color: theme.heading }]}>{summary.active}</Text>
+        <View className="flex-1 gap-0.5 rounded-xl border px-2.5 py-2" style={{ borderColor: theme.cardBorder, backgroundColor: theme.inputBg }}>
+          <Text className="text-[11px] font-semibold" style={{ color: theme.subtext }}>Active</Text>
+          <Text className="text-lg font-extrabold" style={{ color: theme.heading }}>{summary.active}</Text>
         </View>
-        <View style={[styles.summaryCard, { borderColor: theme.cardBorder, backgroundColor: theme.inputBg }]}>
-          <Text style={[styles.summaryLabel, { color: theme.subtext }]}>LPG</Text>
-          <Text style={[styles.summaryValue, { color: theme.heading }]}>{summary.lpg}</Text>
+        <View className="flex-1 gap-0.5 rounded-xl border px-2.5 py-2" style={{ borderColor: theme.cardBorder, backgroundColor: theme.inputBg }}>
+          <Text className="text-[11px] font-semibold" style={{ color: theme.subtext }}>LPG</Text>
+          <Text className="text-lg font-extrabold" style={{ color: theme.heading }}>{summary.lpg}</Text>
         </View>
       </View>
 
@@ -653,45 +753,45 @@ export function ItemsViewScreen({
           onChangeText={setQuery}
           placeholder="Search item code or product name..."
           placeholderTextColor={theme.inputPlaceholder}
+          className="rounded-xl px-3 py-[11px] text-[13px]"
           style={[
-            styles.input,
             { backgroundColor: theme.inputBg, color: theme.inputText },
             tutorialSearch.active ? styles.tutorialTargetFocus : null
           ]}
         />
       </View>
 
-      <View style={styles.filterRow}>
+      <View className="flex-row flex-wrap gap-2">
         {(['ALL', 'LPG', 'NON_LPG'] as const).map((value) => {
           const selected = typeFilter === value;
           return (
             <Pressable
               key={value}
               onPress={() => setTypeFilter(value)}
-              style={[styles.filterChip, { backgroundColor: selected ? theme.pillActive : theme.pillBg }]}
+              className="min-h-9 items-center justify-center rounded-full px-3"
+              style={{ backgroundColor: selected ? theme.pillActive : theme.pillBg }}
             >
-              <Text style={[styles.filterChipText, { color: selected ? '#FFFFFF' : theme.pillText }]}>{value === 'NON_LPG' ? 'NON-LPG' : value}</Text>
+              <Text className="text-[11px] font-bold" style={{ color: selected ? '#FFFFFF' : theme.pillText }}>{value === 'NON_LPG' ? 'NON-LPG' : value}</Text>
             </Pressable>
           );
         })}
         <Pressable
           onPress={() => void refresh()}
-          style={[styles.refreshChip, { backgroundColor: loading ? theme.primaryMuted : theme.primary }]}
+          className="min-h-9 items-center justify-center rounded-full px-3"
+          style={{ backgroundColor: loading ? theme.primaryMuted : theme.primary }}
           disabled={loading}
         >
-          <Text style={styles.refreshChipText}>{loading ? '...' : 'Refresh'}</Text>
+          <Text className="text-[11px] font-bold text-white">{loading ? '...' : 'Refresh'}</Text>
         </Pressable>
       </View>
 
-      <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.categoryRow}>
+      <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 8, paddingRight: 4 }}>
         <Pressable
           onPress={() => setCategoryFilter('ALL')}
-          style={[
-            styles.categoryChip,
-            { backgroundColor: categoryFilter === 'ALL' ? theme.primary : theme.pillBg }
-          ]}
+          className="min-h-9 items-center justify-center rounded-full px-3"
+          style={{ backgroundColor: categoryFilter === 'ALL' ? theme.primary : theme.pillBg }}
         >
-          <Text style={[styles.categoryChipText, { color: categoryFilter === 'ALL' ? '#FFFFFF' : theme.pillText }]}>
+          <Text className="text-[11px] font-bold" style={{ color: categoryFilter === 'ALL' ? '#FFFFFF' : theme.pillText }}>
             All Categories
           </Text>
         </Pressable>
@@ -701,12 +801,10 @@ export function ItemsViewScreen({
             <Pressable
               key={category}
               onPress={() => setCategoryFilter(category)}
-              style={[
-                styles.categoryChip,
-                { backgroundColor: selected ? theme.primary : theme.pillBg }
-              ]}
+              className="min-h-9 items-center justify-center rounded-full px-3"
+              style={{ backgroundColor: selected ? theme.primary : theme.pillBg }}
             >
-              <Text style={[styles.categoryChipText, { color: selected ? '#FFFFFF' : theme.pillText }]}>
+              <Text className="text-[11px] font-bold" style={{ color: selected ? '#FFFFFF' : theme.pillText }}>
                 {category}
               </Text>
             </Pressable>
@@ -714,11 +812,11 @@ export function ItemsViewScreen({
         })}
       </ScrollView>
 
-      <ScrollView style={styles.list} contentContainerStyle={styles.listContent} showsVerticalScrollIndicator>
+      <ScrollView className="min-h-0 flex-1" contentContainerStyle={{ gap: 10, paddingBottom: 8 }} showsVerticalScrollIndicator>
         {loading ? (
-          <Text style={[styles.sub, { color: theme.subtext }]}>Loading items...</Text>
+          <Text className="text-[13px]" style={{ color: theme.subtext }}>Loading items...</Text>
         ) : filtered.length === 0 ? (
-          <Text style={[styles.sub, { color: theme.subtext }]}>No items found.</Text>
+          <Text className="text-[13px]" style={{ color: theme.subtext }}>No items found.</Text>
         ) : (
           filtered.map((row, index) => (
             <Pressable
@@ -737,15 +835,14 @@ export function ItemsViewScreen({
                 <Text style={[styles.itemMeta, { color: theme.subtext }]} numberOfLines={1}>
                   {row.itemCode} | {row.unit} | {row.category ?? 'Uncategorized'}
                 </Text>
-                {row.isLpg ? (
+                <Text style={[styles.itemMeta, { color: theme.subtext }]} numberOfLines={1}>
+                  FULL {formatQty(stockByProduct[row.id]?.qtyFull ?? 0)} | EMPTY {formatQty(stockByProduct[row.id]?.qtyEmpty ?? 0)} | QOH {formatQty(stockByProduct[row.id]?.qtyOnHand)} {stockByProduct[row.id]?.source === 'UNAVAILABLE' ? '(not synced yet)' : ''}
+                </Text>
+                {(lendedQtyByProduct[row.id] ?? 0) > 0 ? (
                   <Text style={[styles.itemMeta, { color: theme.subtext }]} numberOfLines={1}>
-                    FULL {formatQty(stockByProduct[row.id]?.qtyFull ?? 0)} | EMPTY {formatQty(stockByProduct[row.id]?.qtyEmpty ?? 0)} | QOH {formatQty(stockByProduct[row.id]?.qtyOnHand ?? 0)}
+                    Lended {formatQty(lendedQtyByProduct[row.id])}
                   </Text>
-                ) : (
-                  <Text style={[styles.itemMeta, { color: theme.subtext }]} numberOfLines={1}>
-                    QOH {formatQty(stockByProduct[row.id]?.qtyOnHand)} {stockByProduct[row.id]?.source === 'UNAVAILABLE' ? '(not synced yet)' : ''}
-                  </Text>
-                )}
+                ) : null}
               </View>
               <View style={styles.itemRight}>
                 <View style={[styles.badge, { backgroundColor: row.isLpg ? theme.primary : theme.pillBg }]}>
@@ -772,117 +869,154 @@ export function ItemsViewScreen({
 
       <Modal visible={Boolean(selectedItem)} transparent animationType="slide" onRequestClose={() => setSelectedItemId(null)}>
         {selectedItem ? (
-          <View style={styles.modalOverlay}>
-            <Pressable style={styles.modalBackdrop} onPress={() => setSelectedItemId(null)} />
-            <View style={[styles.modalCard, { borderColor: theme.cardBorder, backgroundColor: theme.card }]}>
-              <View style={styles.modalHeader}>
-                <View style={{ flex: 1 }}>
-                  <Text style={[styles.modalTitle, { color: theme.heading }]}>{selectedItem.name}</Text>
-                  <Text style={[styles.modalSub, { color: theme.subtext }]}>{selectedItem.itemCode}</Text>
+          <View className="flex-1 justify-end bg-[rgba(2,8,23,0.55)] pt-3" style={{ paddingTop: Math.max(insets.top + 8, 16) }}>
+            <Pressable style={StyleSheet.absoluteFillObject} onPress={() => setSelectedItemId(null)} />
+            <View
+              className="w-full rounded-t-[20px] border px-3 py-3"
+              style={[
+                styles.itemDetailsModalCard,
+                isCompactItemDetailsLayout ? styles.itemDetailsModalCardCompact : null,
+                { backgroundColor: theme.card, borderColor: theme.cardBorder }
+              ]}
+            >
+              <View style={styles.itemDetailsModalHeader}>
+                <View className="flex-1">
+                  <Text className="text-base font-extrabold" style={{ color: theme.heading }}>Item Details</Text>
+                  <Text className="text-[12px]" style={{ color: theme.subtext }}>Item {selectedItem.itemCode}</Text>
                 </View>
                 <Pressable
                   onPress={() => setSelectedItemId(null)}
-                  style={[styles.modalCloseBtn, { borderColor: theme.cardBorder, backgroundColor: theme.inputBg }]}
+                  className="min-h-10 min-w-[72px] items-center justify-center rounded-xl border px-3"
+                  style={{ borderColor: theme.cardBorder, backgroundColor: theme.inputBg }}
                 >
-                  <Text style={[styles.modalCloseText, { color: theme.pillText }]}>Close</Text>
+                  <Text className="text-[13px] font-bold" style={{ color: theme.pillText }}>Back</Text>
                 </Pressable>
               </View>
 
-              <ScrollView style={styles.modalScroll} contentContainerStyle={styles.modalContent} showsVerticalScrollIndicator>
-                <View style={[styles.detailBlock, { borderColor: theme.cardBorder, backgroundColor: theme.inputBg }]}>
-                  <Text style={[styles.blockTitle, { color: theme.heading }]}>Item Details</Text>
-                  <Text style={[styles.detailLine, { color: theme.subtext }]}>Item Code: {selectedItem.itemCode}</Text>
-                  <Text style={[styles.detailLine, { color: theme.subtext }]}>Product Name: {selectedItem.name}</Text>
-                  <Text style={[styles.detailLine, { color: theme.subtext }]}>Product ID: {selectedItem.id}</Text>
-                  <Text style={[styles.detailLine, { color: theme.subtext }]}>Unit: {selectedItem.unit}</Text>
-                  <Text style={[styles.detailLine, { color: theme.subtext }]}>Category: {selectedItem.category ?? '-'}</Text>
-                  <Text style={[styles.detailLine, { color: theme.subtext }]}>Brand: {selectedItem.brand ?? '-'}</Text>
-                  <Text style={[styles.detailLine, { color: theme.subtext }]}>Type: {selectedItem.isLpg ? 'LPG' : 'Non-LPG'}</Text>
-                  <Text style={[styles.detailLine, { color: theme.subtext }]}>Lendable: {selectedItem.isLendable ? 'Yes' : 'No'}</Text>
-                  <Text style={[styles.detailLine, { color: theme.subtext }]}>Requires Return: {selectedItem.requiresReturn ? 'Yes' : 'No'}</Text>
-                  <Text style={[styles.detailLine, { color: theme.subtext }]}>Requires Deposit: {selectedItem.requiresDeposit ? 'Yes' : 'No'}</Text>
-                  <Text style={[styles.detailLine, { color: theme.subtext }]}>
-                    Default Deposit: {fmtMoney(selectedItem.defaultDepositAmount)}
-                  </Text>
-                  <Text style={[styles.detailLine, { color: theme.subtext }]}>
-                    Lending Unit: {selectedItem.lendingUnitType ?? selectedItem.unit}
-                  </Text>
-                  <Text style={[styles.detailLine, { color: theme.subtext }]}>
-                    Low Stock Alert Qty: {selectedItem.lowStockAlertQty === null ? '-' : formatQty(selectedItem.lowStockAlertQty)}
-                  </Text>
-                  <Text style={[styles.detailLine, { color: theme.subtext }]}>Active: {selectedItem.isActive ? 'Yes' : 'No'}</Text>
-                  <Text style={[styles.detailLine, { color: theme.subtext }]}>Updated: {fmtDate(selectedItem.updatedAt)}</Text>
-                </View>
+              <View style={styles.itemDetailsContentWrap}>
+                <View style={styles.itemDetailsModalBody}>
+                  <ScrollView
+                    style={styles.itemDetailsScroll}
+                    contentContainerStyle={[
+                      styles.itemDetailsModalContent,
+                      isCompactItemDetailsLayout ? styles.itemDetailsModalContentCompact : null
+                    ]}
+                    showsVerticalScrollIndicator
+                    nestedScrollEnabled
+                    keyboardShouldPersistTaps="handled"
+                  >
+                    <View style={[styles.detailBlock, { borderColor: theme.cardBorder, backgroundColor: theme.inputBg }]}>
+                      <Text style={[styles.heroTitle, { color: theme.heading }]}>{selectedItem.name}</Text>
+                      <Text style={[styles.detailLine, { color: theme.subtext }]}>{selectedItem.itemCode}</Text>
+                    </View>
 
-                <View style={[styles.detailBlock, { borderColor: theme.cardBorder, backgroundColor: theme.inputBg }]}>
-                  <Text style={[styles.blockTitle, { color: theme.heading }]}>Stock Snapshot</Text>
-                  {selectedItem.isLpg ? (
-                    <>
+                    <View style={[styles.detailBlock, { borderColor: theme.cardBorder, backgroundColor: theme.inputBg }]}>
+                      <Text style={[styles.blockTitle, { color: theme.heading }]}>Item Details</Text>
+                      <Text style={[styles.detailLine, { color: theme.subtext }]}>Item Code: {selectedItem.itemCode}</Text>
+                      <Text style={[styles.detailLine, { color: theme.subtext }]}>Product Name: {selectedItem.name}</Text>
+                      <Text style={[styles.detailLine, { color: theme.subtext }]}>Product ID: {selectedItem.id}</Text>
+                      <Text style={[styles.detailLine, { color: theme.subtext }]}>Unit: {selectedItem.unit}</Text>
+                      <Text style={[styles.detailLine, { color: theme.subtext }]}>Category: {selectedItem.category ?? '-'}</Text>
+                      <Text style={[styles.detailLine, { color: theme.subtext }]}>Brand: {selectedItem.brand ?? '-'}</Text>
+                      <Text style={[styles.detailLine, { color: theme.subtext }]}>Type: {selectedItem.isLpg ? 'LPG' : 'Non-LPG'}</Text>
+                      <Text style={[styles.detailLine, { color: theme.subtext }]}>Lendable: {selectedItem.isLendable ? 'Yes' : 'No'}</Text>
+                      <Text style={[styles.detailLine, { color: theme.subtext }]}>Lended Qty: {formatQty(selectedLendedQty)}</Text>
+                      <Text style={[styles.detailLine, { color: theme.subtext }]}>Requires Return: {selectedItem.requiresReturn ? 'Yes' : 'No'}</Text>
+                      <Text style={[styles.detailLine, { color: theme.subtext }]}>Requires Deposit: {selectedItem.requiresDeposit ? 'Yes' : 'No'}</Text>
+                      <Text style={[styles.detailLine, { color: theme.subtext }]}>
+                        Default Deposit: {fmtMoney(selectedItem.defaultDepositAmount)}
+                      </Text>
+                      <Text style={[styles.detailLine, { color: theme.subtext }]}>
+                        Lending Unit: {selectedItem.lendingUnitType ?? selectedItem.unit}
+                      </Text>
+                      <Text style={[styles.detailLine, { color: theme.subtext }]}>
+                        Low Stock Alert Qty: {selectedItem.lowStockAlertQty === null ? '-' : formatQty(selectedItem.lowStockAlertQty)}
+                      </Text>
+                      <Text style={[styles.detailLine, { color: theme.subtext }]}>Active: {selectedItem.isActive ? 'Yes' : 'No'}</Text>
+                      <Text style={[styles.detailLine, { color: theme.subtext }]}>Updated: {fmtDate(selectedItem.updatedAt)}</Text>
+                    </View>
+
+                    <View style={[styles.detailBlock, { borderColor: theme.cardBorder, backgroundColor: theme.inputBg }]}>
+                      <Text style={[styles.blockTitle, { color: theme.heading }]}>Stock Snapshot</Text>
                       <Text style={[styles.detailLine, { color: theme.subtext }]}>Opening FULL: {formatQty(selectedStock.qtyFull)}</Text>
                       <Text style={[styles.detailLine, { color: theme.subtext }]}>Opening EMPTY: {formatQty(selectedStock.qtyEmpty)}</Text>
-                      <Text style={[styles.detailLine, { color: theme.subtext }]}>Qty On Hand: {formatQty(selectedStock.qtyOnHand)}</Text>
-                      <Text style={[styles.detailLine, { color: theme.subtext }]}>Rule: LPG qty on hand = FULL + EMPTY.</Text>
-                      <Text style={[styles.detailLine, { color: theme.subtext }]}>Low-stock rule: compare FULL qty only.</Text>
-                    </>
-                  ) : (
-                    <>
                       <Text style={[styles.detailLine, { color: theme.subtext }]}>
                         Qty On Hand: {formatQty(selectedStock.qtyOnHand)}
                       </Text>
                       <Text style={[styles.detailLine, { color: theme.subtext }]}>
-                        Rule: Non-LPG qty on hand comes from inventory balances (no FULL/EMPTY split).
+                        {selectedItem.isLpg
+                          ? 'Rule: Mobile uses product-level FULL, EMPTY, and Qty On Hand for LPG items so stock stays product-based instead of sharing cylinder-type totals across different products.'
+                          : 'Rule: Non-LPG qty on hand comes from inventory balances (no FULL/EMPTY split).'}
                       </Text>
                       <Text style={[styles.detailLine, { color: theme.subtext }]}>Low-stock rule: compare Qty On Hand.</Text>
-                    </>
-                  )}
-                  <Text style={[styles.detailLine, { color: theme.subtext }]}>
-                    Location Scope: {selectedLocationId ?? 'All downloaded locations'}
-                  </Text>
-                </View>
-                <View style={[styles.detailBlock, { borderColor: theme.cardBorder, backgroundColor: theme.inputBg }]}>
-                  <Text style={[styles.blockTitle, { color: theme.heading }]}>Linked Cylinder Type</Text>
-                  {!selectedItem.cylinderTypeId ? (
-                    <Text style={[styles.detailLine, { color: theme.subtext }]}>No cylinder type linked.</Text>
-                  ) : selectedCylinder ? (
-                    <>
-                      <Text style={[styles.detailLine, { color: theme.subtext }]}>Code: {selectedCylinder.code}</Text>
-                      <Text style={[styles.detailLine, { color: theme.subtext }]}>Name: {selectedCylinder.name}</Text>
                       <Text style={[styles.detailLine, { color: theme.subtext }]}>
-                        Size: {selectedCylinder.sizeKg === null ? '-' : `${selectedCylinder.sizeKg} kg`}
+                        Location Scope: {selectedLocationId ?? 'All downloaded locations'}
                       </Text>
-                      <Text style={[styles.detailLine, { color: theme.subtext }]}>Deposit Amount: {fmtMoney(selectedCylinder.depositAmount)}</Text>
-                      <Text style={[styles.detailLine, { color: theme.subtext }]}>Active: {selectedCylinder.isActive ? 'Yes' : 'No'}</Text>
-                    </>
-                  ) : (
-                    <Text style={[styles.detailLine, { color: theme.subtext }]}>
-                      Linked cylinder type ID: {selectedItem.cylinderTypeId}
-                    </Text>
-                  )}
-                </View>
+                    </View>
+                    <View style={[styles.detailBlock, { borderColor: theme.cardBorder, backgroundColor: theme.inputBg }]}>
+                      <Text style={[styles.blockTitle, { color: theme.heading }]}>Linked Cylinder Type</Text>
+                      {!selectedItem.cylinderTypeId ? (
+                        <Text style={[styles.detailLine, { color: theme.subtext }]}>No cylinder type linked.</Text>
+                      ) : selectedCylinder ? (
+                        <>
+                          <Text style={[styles.detailLine, { color: theme.subtext }]}>Code: {selectedCylinder.code}</Text>
+                          <Text style={[styles.detailLine, { color: theme.subtext }]}>Name: {selectedCylinder.name}</Text>
+                          <Text style={[styles.detailLine, { color: theme.subtext }]}>
+                            Size: {selectedCylinder.sizeKg === null ? '-' : `${selectedCylinder.sizeKg} kg`}
+                          </Text>
+                          <Text style={[styles.detailLine, { color: theme.subtext }]}>Deposit Amount: {fmtMoney(selectedCylinder.depositAmount)}</Text>
+                          <Text style={[styles.detailLine, { color: theme.subtext }]}>Active: {selectedCylinder.isActive ? 'Yes' : 'No'}</Text>
+                        </>
+                      ) : (
+                        <Text style={[styles.detailLine, { color: theme.subtext }]}>
+                          Linked cylinder type ID: {selectedItem.cylinderTypeId}
+                        </Text>
+                      )}
+                    </View>
 
-                <View style={[styles.detailBlock, { borderColor: theme.cardBorder, backgroundColor: theme.inputBg }]}>
-                  <Text style={[styles.blockTitle, { color: theme.heading }]}>Linked Pricing Rules</Text>
-                  {selectedRules.length === 0 ? (
-                    <Text style={[styles.detailLine, { color: theme.subtext }]}>No linked pricing rules.</Text>
-                  ) : (
-                    selectedRules.map((rule) => (
-                      <View key={`${rule.priceListId}-${rule.priority ?? 'na'}-${rule.flowMode}-${rule.unitPrice}`} style={[styles.ruleCard, { borderColor: theme.cardBorder, backgroundColor: theme.card }]}>
-                        <Text style={[styles.ruleTitle, { color: theme.heading }]}>{rule.priceListName}</Text>
-                        <Text style={[styles.ruleLine, { color: theme.subtext }]}>Scope: {rule.scope} | {rule.appliesTo}</Text>
-                        <Text style={[styles.ruleLine, { color: theme.subtext }]}>Flow: {flowLabel(rule.flowMode)}</Text>
-                        <Text style={[styles.ruleLine, { color: theme.subtext }]}>Unit Price: {fmtMoney(rule.unitPrice)}</Text>
-                        <Text style={[styles.ruleLine, { color: theme.subtext }]}>
-                          Discount Cap: {rule.discountCapPct === null ? '-' : `${rule.discountCapPct}%`} | Priority: {rule.priority === null ? '-' : rule.priority}
-                        </Text>
-                        <Text style={[styles.ruleLine, { color: theme.subtext }]}>
-                          Effectivity: {fmtDate(rule.startsAt)} to {rule.endsAt ? fmtDate(rule.endsAt) : 'N/A'}
-                        </Text>
-                        <Text style={[styles.ruleLine, { color: theme.subtext }]}>Active: {rule.isActive ? 'Yes' : 'No'}</Text>
-                      </View>
-                    ))
-                  )}
+                    <View style={[styles.detailBlock, { borderColor: theme.cardBorder, backgroundColor: theme.inputBg }]}>
+                      <Text style={[styles.blockTitle, { color: theme.heading }]}>Linked Pricing Rules</Text>
+                      {selectedRules.length === 0 ? (
+                        <Text style={[styles.detailLine, { color: theme.subtext }]}>No linked pricing rules.</Text>
+                      ) : (
+                        selectedRules.map((rule) => (
+                          <View key={`${rule.priceListId}-${rule.priority ?? 'na'}-${rule.flowMode}-${rule.unitPrice}`} style={[styles.ruleCard, { borderColor: theme.cardBorder, backgroundColor: theme.card }]}>
+                            <Text style={[styles.ruleTitle, { color: theme.heading }]}>{rule.priceListName}</Text>
+                            <Text style={[styles.ruleLine, { color: theme.subtext }]}>Scope: {rule.scope} | {rule.appliesTo}</Text>
+                            <Text style={[styles.ruleLine, { color: theme.subtext }]}>Flow: {flowLabel(rule.flowMode)}</Text>
+                            <Text style={[styles.ruleLine, { color: theme.subtext }]}>Unit Price: {fmtMoney(rule.unitPrice)}</Text>
+                            <Text style={[styles.ruleLine, { color: theme.subtext }]}>
+                              Discount Cap: {rule.discountCapPct === null ? '-' : `${rule.discountCapPct}%`} | Priority: {rule.priority === null ? '-' : rule.priority}
+                            </Text>
+                            <Text style={[styles.ruleLine, { color: theme.subtext }]}>
+                              Effectivity: {fmtDate(rule.startsAt)} to {rule.endsAt ? fmtDate(rule.endsAt) : 'N/A'}
+                            </Text>
+                            <Text style={[styles.ruleLine, { color: theme.subtext }]}>Active: {rule.isActive ? 'Yes' : 'No'}</Text>
+                          </View>
+                        ))
+                      )}
+                    </View>
+                  </ScrollView>
                 </View>
-              </ScrollView>
+                <View
+                  style={[
+                    styles.itemDetailsActionPanel,
+                    isCompactItemDetailsLayout ? styles.itemDetailsActionPanelCompact : null,
+                    {
+                      borderTopColor: theme.cardBorder,
+                      backgroundColor: theme.card,
+                      paddingBottom: Math.max(insets.bottom, 8)
+                    }
+                  ]}
+                >
+                  <Pressable
+                    onPress={() => setSelectedItemId(null)}
+                    style={[styles.itemDetailsFooterBtn, { backgroundColor: theme.inputBg, borderColor: theme.cardBorder }]}
+                  >
+                    <Text style={[styles.modalCloseText, { color: theme.pillText }]}>Close</Text>
+                  </Pressable>
+                </View>
+              </View>
             </View>
           </View>
         ) : null}
@@ -891,8 +1025,26 @@ export function ItemsViewScreen({
   );
 }
 
+function normalizeStatus(value: string | null | undefined): string {
+  return String(value ?? '').trim().toUpperCase();
+}
+
+function shouldCountOpenLending(status: string | null | undefined): boolean {
+  const normalized = normalizeStatus(status);
+  return normalized === 'OPEN' || normalized === 'PARTIALLY_RETURNED' || normalized === 'OVERDUE';
+}
+
+function addLendedQty(target: Record<string, number>, productId: string, qty: number): void {
+  if (!productId || !Number.isFinite(qty) || qty <= 0) {
+    return;
+  }
+  target[productId] = Number(((target[productId] ?? 0) + qty).toFixed(4));
+}
+
 const styles = StyleSheet.create({
   card: {
+    flex: 1,
+    minHeight: 0,
     borderWidth: 1,
     borderRadius: 16,
     paddingHorizontal: 14,
@@ -977,7 +1129,8 @@ const styles = StyleSheet.create({
     fontWeight: '700'
   },
   list: {
-    maxHeight: 520
+    flex: 1,
+    minHeight: 0
   },
   listContent: {
     gap: 8,
@@ -1020,24 +1173,20 @@ const styles = StyleSheet.create({
     fontSize: 11,
     fontWeight: '700'
   },
-  modalOverlay: {
-    flex: 1,
-    justifyContent: 'flex-end',
-    paddingTop: 12
-  },
   modalBackdrop: {
-    ...StyleSheet.absoluteFillObject,
-    backgroundColor: 'rgba(2, 8, 23, 0.55)'
+    flex: 1,
+    backgroundColor: 'rgba(2, 8, 23, 0.55)',
+    paddingTop: 12,
+    justifyContent: 'flex-end'
   },
   modalCard: {
-    maxHeight: '90%',
-    minHeight: '72%',
+    borderWidth: 1,
     borderTopLeftRadius: 18,
     borderTopRightRadius: 18,
-    borderWidth: 1,
+    maxHeight: '90%',
+    minHeight: '72%',
     paddingHorizontal: 12,
-    paddingTop: 12,
-    paddingBottom: 14,
+    paddingVertical: 12,
     gap: 10
   },
   modalHeader: {
@@ -1066,12 +1215,64 @@ const styles = StyleSheet.create({
     fontSize: 12,
     fontWeight: '700'
   },
-  modalScroll: {
-    maxHeight: 620
+  itemDetailsModalCard: {
+    height: '85%',
+    maxHeight: '85%',
+    overflow: 'hidden'
   },
-  modalContent: {
-    gap: 10,
+  itemDetailsModalCardCompact: {
+    height: '82%',
+    maxHeight: '82%'
+  },
+  itemDetailsModalHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 8,
     paddingBottom: 8
+  },
+  itemDetailsContentWrap: {
+    flex: 1,
+    minHeight: 0
+  },
+  itemDetailsModalBody: {
+    flex: 1,
+    flexBasis: 0,
+    minHeight: 0,
+    overflow: 'hidden'
+  },
+  itemDetailsScroll: {
+    flex: 1,
+    flexBasis: 0,
+    flexGrow: 1,
+    height: 0,
+    minHeight: 0,
+    flexShrink: 1
+  },
+  itemDetailsModalContent: {
+    gap: 10,
+    paddingBottom: 20
+  },
+  itemDetailsModalContentCompact: {
+    gap: 8,
+    paddingBottom: 16
+  },
+  itemDetailsActionPanel: {
+    borderTopWidth: 1,
+    marginTop: 8,
+    paddingTop: 10,
+    paddingBottom: 4,
+    flexShrink: 0
+  },
+  itemDetailsActionPanelCompact: {
+    paddingTop: 8
+  },
+  itemDetailsFooterBtn: {
+    borderWidth: 1,
+    minHeight: 42,
+    borderRadius: 12,
+    alignItems: 'center',
+    justifyContent: 'center'
   },
   detailBlock: {
     borderWidth: 1,
@@ -1084,6 +1285,10 @@ const styles = StyleSheet.create({
     fontSize: 13,
     fontWeight: '800',
     marginBottom: 2
+  },
+  heroTitle: {
+    fontSize: 15,
+    fontWeight: '800'
   },
   detailLine: {
     fontSize: 12

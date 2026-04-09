@@ -170,6 +170,23 @@ function fmtQty(value: number | null | undefined): string {
   return Number(value).toLocaleString(undefined, { maximumFractionDigits: 4 });
 }
 
+function formatLendingStatusLabel(status: LendingStatus | string | null | undefined): string {
+  switch (String(status ?? '').trim().toUpperCase()) {
+    case 'OPEN':
+      return 'Lended';
+    case 'CLOSED':
+      return 'Returned';
+    case 'PARTIALLY_RETURNED':
+      return 'Partially Returned';
+    case 'FORCE_CLOSED':
+      return 'Force Closed';
+    case 'OVERDUE':
+      return 'Overdue';
+    default:
+      return String(status ?? '-').replace(/_/g, ' ');
+  }
+}
+
 function parsePayload<T>(value: string): T {
   try {
     return JSON.parse(value) as T;
@@ -497,6 +514,7 @@ export function LendingScreen({
     selectedDetail.status !== 'CANCELLED' &&
     selectedDetail.status !== 'FORCE_CLOSED' &&
     selectedDetail.lines.some((line) => line.quantity_open > 0);
+  const returnableLines = selectedDetail?.lines.filter((line) => line.quantity_open > 0) ?? [];
 
   const openReturnModal = (): void => {
     if (!selectedDetail || !canReturn) {
@@ -620,52 +638,52 @@ export function LendingScreen({
   };
 
   return (
-    <View style={[styles.card, { backgroundColor: theme.card, borderColor: theme.cardBorder }]}>
-      <Text style={[styles.title, { color: theme.heading }]}>Lending</Text>
-      <Text style={[styles.sub, { color: theme.subtext }]}>
+    <View className="gap-2.5 rounded-2xl border px-3.5 py-3.5" style={{ backgroundColor: theme.card, borderColor: theme.cardBorder }}>
+      <Text className="text-lg font-bold" style={{ color: theme.heading }}>Lending</Text>
+      <Text className="text-[13px]" style={{ color: theme.subtext }}>
         Track open lendings, view details, and record returned tanks or accessories.
       </Text>
 
-      <View style={styles.topRow}>
+      <View className="flex-row gap-2">
         <TextInput
           value={query}
           onChangeText={setQuery}
           placeholder="Search by customer, sale, or lending ID..."
           placeholderTextColor={theme.inputPlaceholder}
-          style={[styles.input, { backgroundColor: theme.inputBg, color: theme.inputText }]}
+          className="min-h-11 flex-1 rounded-xl px-3 py-[11px] text-[13px]"
+          style={{ backgroundColor: theme.inputBg, color: theme.inputText }}
         />
         <Pressable
-          style={[styles.refreshBtn, { backgroundColor: loading || syncBusy ? theme.primaryMuted : theme.primary }]}
+          className="min-h-11 items-center justify-center rounded-xl px-4"
+          style={{ backgroundColor: loading || syncBusy ? theme.primaryMuted : theme.primary }}
           onPress={() => void refresh()}
           disabled={loading || syncBusy}
         >
-          <Text style={styles.refreshText}>{loading ? '...' : 'Refresh'}</Text>
+          <Text className="text-[13px] font-bold text-white">{loading ? '...' : 'Refresh'}</Text>
         </Pressable>
       </View>
 
-      <View style={styles.filterRow}>
+      <View className="flex-row flex-wrap gap-2">
         {(['ALL', 'OPEN', 'PARTIALLY_RETURNED', 'OVERDUE', 'CLOSED'] as const).map((value) => {
           const active = statusFilter === value;
           return (
             <Pressable
               key={value}
-              style={[
-                styles.filterPill,
-                { backgroundColor: active ? theme.primary : theme.pillBg, borderColor: theme.cardBorder }
-              ]}
+              className="min-h-9 items-center justify-center rounded-full border px-3"
+              style={{ backgroundColor: active ? theme.primary : theme.pillBg, borderColor: theme.cardBorder }}
               onPress={() => setStatusFilter(value)}
             >
-              <Text style={{ color: active ? '#FFFFFF' : theme.pillText, fontWeight: '700', fontSize: 10 }}>
-                {value === 'PARTIALLY_RETURNED' ? 'PARTIAL' : value}
+              <Text className="text-[10px] font-bold" style={{ color: active ? '#FFFFFF' : theme.pillText }}>
+                {value === 'ALL' ? 'ALL' : formatLendingStatusLabel(value)}
               </Text>
             </Pressable>
           );
         })}
       </View>
 
-      <ScrollView style={styles.list} contentContainerStyle={styles.listContent} showsVerticalScrollIndicator>
+      <ScrollView className="min-h-0 flex-1" contentContainerStyle={{ gap: 10, paddingBottom: 8 }} showsVerticalScrollIndicator>
         {filteredRows.length === 0 ? (
-          <Text style={[styles.sub, { color: theme.subtext }]}>
+          <Text className="text-[13px]" style={{ color: theme.subtext }}>
             {loading ? 'Loading lending records...' : 'No lending records found.'}
           </Text>
         ) : (
@@ -696,12 +714,12 @@ export function LendingScreen({
                     {row.branch_name ?? row.branch_id} / {row.location_name ?? row.location_id}
                   </Text>
                   <Text style={[styles.itemMeta, { color: theme.subtext }]}>
-                    Open {fmtQty(openQty)} of {fmtQty(row.total_quantity_lent)} | {fmtDate(row.opened_at)}
+                    Lended {fmtQty(openQty)} remaining of {fmtQty(row.total_quantity_lent)} | {fmtDate(row.opened_at)}
                   </Text>
                 </View>
                 <View style={styles.itemActions}>
                   <View style={[styles.statusPill, { backgroundColor: `${statusTone}20` }]}>
-                    <Text style={[styles.statusText, { color: statusTone }]}>{row.status}</Text>
+                    <Text style={[styles.statusText, { color: statusTone }]}>{formatLendingStatusLabel(row.status)}</Text>
                   </View>
                   <Text style={[styles.viewHint, { color: theme.primary }]}>View Detail</Text>
                 </View>
@@ -711,8 +729,13 @@ export function LendingScreen({
         )}
       </ScrollView>
 
-      <Modal visible={Boolean(selectedId)} transparent animationType="slide" onRequestClose={() => setSelectedId(null)}>
-        <View style={styles.modalOverlay}>
+      <Modal
+        visible={Boolean(selectedId) && !returnModalOpen}
+        transparent
+        animationType="slide"
+        onRequestClose={() => setSelectedId(null)}
+      >
+        <View className="flex-1 justify-end bg-[rgba(2,8,23,0.55)] px-3 pt-3">
           <Pressable
             style={styles.modalBackdrop}
             onPress={() => {
@@ -720,26 +743,27 @@ export function LendingScreen({
               setSelectedDetail(null);
             }}
           />
-          <View style={[styles.modalCard, { backgroundColor: theme.card, borderColor: theme.cardBorder }]}>
+          <View className="min-h-[80%] max-h-[92%] gap-3 rounded-[20px] border p-3" style={{ backgroundColor: theme.card, borderColor: theme.cardBorder }}>
             {detailLoading || !selectedDetail ? (
               <Text style={[styles.sub, { color: theme.subtext }]}>Loading lending detail...</Text>
             ) : (
               <>
-                <View style={styles.modalHead}>
+                <View className="flex-row items-start gap-2">
                   <View style={{ flex: 1 }}>
-                    <Text style={[styles.modalTitle, { color: theme.heading }]}>Lending Detail</Text>
-                    <Text style={[styles.modalSub, { color: theme.subtext }]}>
+                    <Text className="text-base font-extrabold" style={{ color: theme.heading }}>Lending Detail</Text>
+                    <Text className="text-[12px]" style={{ color: theme.subtext }}>
                       {selectedDetail.lending_id} | Sale {selectedDetail.sale_id}
                     </Text>
                   </View>
                   <Pressable
-                    style={[styles.closeBtn, { borderColor: theme.cardBorder, backgroundColor: theme.inputBg }]}
+                    className="min-h-10 min-w-[72px] items-center justify-center rounded-xl border px-3"
+                    style={{ borderColor: theme.cardBorder, backgroundColor: theme.inputBg }}
                     onPress={() => {
                       setSelectedId(null);
                       setSelectedDetail(null);
                     }}
                   >
-                    <Text style={[styles.closeText, { color: theme.pillText }]}>Close</Text>
+                    <Text className="text-[13px] font-bold" style={{ color: theme.pillText }}>Close</Text>
                   </Pressable>
                 </View>
 
@@ -770,7 +794,7 @@ export function LendingScreen({
                   </View>
                   <View style={[styles.summaryCard, { borderColor: theme.cardBorder, backgroundColor: theme.inputBg }]}>
                     <Text style={[styles.summaryLabel, { color: theme.subtext }]}>Status</Text>
-                    <Text style={[styles.summaryValue, { color: theme.heading }]}>{selectedDetail.status}</Text>
+                    <Text style={[styles.summaryValue, { color: theme.heading }]}>{formatLendingStatusLabel(selectedDetail.status)}</Text>
                   </View>
                   <View style={[styles.summaryCard, { borderColor: theme.cardBorder, backgroundColor: theme.inputBg }]}>
                     <Text style={[styles.summaryLabel, { color: theme.subtext }]}>Due</Text>
@@ -782,7 +806,16 @@ export function LendingScreen({
                   </View>
                 </View>
 
-                <ScrollView style={styles.modalList} contentContainerStyle={styles.modalListContent} showsVerticalScrollIndicator nestedScrollEnabled>
+                {selectedDetail.status === 'OVERDUE' ? (
+                  <View style={[styles.detailCard, { borderColor: theme.cardBorder, backgroundColor: theme.inputBg }]}>
+                    <Text style={[styles.itemName, { color: theme.heading }]}>Why this is overdue</Text>
+                    <Text style={[styles.itemMeta, { color: theme.subtext }]}>
+                      The due date has already passed and this lending still has quantity open.
+                    </Text>
+                  </View>
+                ) : null}
+
+                <ScrollView className="min-h-0 flex-1" contentContainerStyle={{ gap: 10, paddingBottom: 8 }} showsVerticalScrollIndicator nestedScrollEnabled>
                   <Text style={[styles.sectionTitle, { color: theme.heading }]}>Lines</Text>
                   {selectedDetail.lines.map((line) => (
                     <View
@@ -834,16 +867,14 @@ export function LendingScreen({
                   )}
                 </ScrollView>
 
-                <View style={styles.actionRow}>
+                <View className="pt-1">
                   <Pressable
-                    style={[
-                      styles.primaryBtn,
-                      { backgroundColor: canReturn ? theme.primary : theme.primaryMuted }
-                    ]}
+                    className="min-h-11 items-center justify-center rounded-xl px-3"
+                    style={{ backgroundColor: canReturn ? theme.primary : theme.primaryMuted }}
                     disabled={!canReturn}
                     onPress={openReturnModal}
                   >
-                    <Text style={styles.primaryBtnText}>Record Return</Text>
+                    <Text className="text-[13px] font-bold text-white">Record Return</Text>
                   </Pressable>
                 </View>
               </>
@@ -853,29 +884,54 @@ export function LendingScreen({
       </Modal>
 
       <Modal visible={returnModalOpen} transparent animationType="fade" onRequestClose={() => setReturnModalOpen(false)}>
-        <View style={styles.modalOverlay}>
+        <View className="flex-1 justify-end bg-[rgba(2,8,23,0.55)] px-3 pt-3">
           <Pressable style={styles.modalBackdrop} onPress={() => setReturnModalOpen(false)} />
-          <View style={[styles.returnModalCard, { backgroundColor: theme.card, borderColor: theme.cardBorder }]}>
-            <View style={styles.modalHead}>
+          <View
+            className="min-h-[82%] max-h-[94%] gap-3 rounded-[20px] border p-3"
+            style={{ backgroundColor: theme.card, borderColor: theme.cardBorder }}
+            onStartShouldSetResponder={() => true}
+          >
+            <View className="flex-row items-start gap-2">
               <View style={{ flex: 1 }}>
-                <Text style={[styles.modalTitle, { color: theme.heading }]}>Record Return</Text>
-                <Text style={[styles.modalSub, { color: theme.subtext }]}>
+                <Text className="text-base font-extrabold" style={{ color: theme.heading }}>Record Return</Text>
+                <Text className="text-[12px]" style={{ color: theme.subtext }}>
                   Enter returned quantity for the open lines below.
                 </Text>
               </View>
               <Pressable
-                style={[styles.closeBtn, { borderColor: theme.cardBorder, backgroundColor: theme.inputBg }]}
+                className="min-h-10 min-w-[72px] items-center justify-center rounded-xl border px-3"
+                style={{ borderColor: theme.cardBorder, backgroundColor: theme.inputBg }}
                 onPress={() => setReturnModalOpen(false)}
                 disabled={returnSaving}
               >
-                <Text style={[styles.closeText, { color: theme.pillText }]}>Close</Text>
+                <Text className="text-[13px] font-bold" style={{ color: theme.pillText }}>Close</Text>
               </Pressable>
             </View>
 
-            <ScrollView style={styles.modalList} contentContainerStyle={styles.modalListContent} showsVerticalScrollIndicator nestedScrollEnabled keyboardShouldPersistTaps="handled">
-              {selectedDetail?.lines
-                .filter((line) => line.quantity_open > 0)
-                .map((line) => (
+            <ScrollView
+              className="min-h-0 flex-1"
+              contentContainerStyle={{ gap: 10, paddingBottom: 8 }}
+              showsVerticalScrollIndicator
+              nestedScrollEnabled
+              keyboardShouldPersistTaps="always"
+              keyboardDismissMode="none"
+            >
+              <View style={[styles.detailCard, { borderColor: theme.cardBorder, backgroundColor: theme.inputBg }]}>
+                <Text style={[styles.itemMeta, { color: theme.subtext }]}>
+                  Choose the line, type the quantity being returned, then tap `Save Return`.
+                </Text>
+              </View>
+
+              {returnableLines.length === 0 ? (
+                <View style={[styles.detailCard, { borderColor: theme.cardBorder, backgroundColor: theme.inputBg }]}>
+                  <Text style={[styles.itemName, { color: theme.heading }]}>No Open Lines</Text>
+                  <Text style={[styles.itemMeta, { color: theme.subtext }]}>
+                    There are no remaining quantities available to return for this lending.
+                  </Text>
+                </View>
+              ) : null}
+
+              {returnableLines.map((line) => (
                   <View
                     key={line.lending_line_id}
                     style={[styles.detailCard, { borderColor: theme.cardBorder, backgroundColor: theme.inputBg }]}
@@ -886,16 +942,30 @@ export function LendingScreen({
                     <Text style={[styles.itemMeta, { color: theme.subtext }]}>
                       Open {fmtQty(line.quantity_open)}
                     </Text>
+                    <Text style={[styles.summaryLabel, { color: theme.subtext }]}>Return Qty</Text>
                     <TextInput
                       value={returnQtyByLine[line.lending_line_id] ?? ''}
                       onChangeText={(value) =>
                         setReturnQtyByLine((prev) => ({ ...prev, [line.lending_line_id]: value }))
                       }
-                      keyboardType="numeric"
+                      autoFocus={
+                        returnableLines[0]?.lending_line_id === line.lending_line_id
+                      }
+                      keyboardType="decimal-pad"
+                      blurOnSubmit={false}
                       placeholder="0"
                       placeholderTextColor={theme.inputPlaceholder}
-                      style={[styles.inputStandalone, { backgroundColor: theme.card, color: theme.inputText }]}
+                      style={[
+                        styles.inputStandalone,
+                        styles.strongInput,
+                        {
+                          backgroundColor: theme.card,
+                          color: theme.inputText,
+                          borderColor: theme.cardBorder
+                        }
+                      ]}
                     />
+                    <Text style={[styles.summaryLabel, { color: theme.subtext }]}>Condition</Text>
                     <View style={styles.filterRow}>
                       {(['GOOD', 'DAMAGED', 'LOST'] as const).map((value) => {
                         const active = (returnConditionByLine[line.lending_line_id] ?? 'GOOD') === value;
@@ -921,14 +991,20 @@ export function LendingScreen({
                       })}
                     </View>
                   </View>
-                ))}
+              ))}
 
+              <Text style={[styles.summaryLabel, { color: theme.subtext }]}>Remarks</Text>
               <TextInput
                 value={returnRemarks}
                 onChangeText={setReturnRemarks}
                 placeholder="Remarks (optional)"
                 placeholderTextColor={theme.inputPlaceholder}
-                style={[styles.inputStandalone, { backgroundColor: theme.inputBg, color: theme.inputText }]}
+                blurOnSubmit={false}
+                style={[
+                  styles.inputStandalone,
+                  styles.strongInput,
+                  { backgroundColor: theme.inputBg, color: theme.inputText, borderColor: theme.cardBorder }
+                ]}
               />
             </ScrollView>
 
@@ -981,6 +1057,10 @@ const styles = StyleSheet.create({
     paddingHorizontal: 12,
     paddingVertical: 11,
     fontSize: 13
+  },
+  strongInput: {
+    minHeight: 48,
+    borderWidth: 1
   },
   refreshBtn: {
     minWidth: 86,
@@ -1054,6 +1134,12 @@ const styles = StyleSheet.create({
     justifyContent: 'flex-end',
     paddingTop: 12
   },
+  returnModalOverlay: {
+    flex: 1,
+    justifyContent: 'center',
+    paddingHorizontal: 16,
+    paddingVertical: 24
+  },
   modalBackdrop: {
     ...StyleSheet.absoluteFillObject,
     backgroundColor: 'rgba(2, 8, 23, 0.55)'
@@ -1070,9 +1156,8 @@ const styles = StyleSheet.create({
     gap: 10
   },
   returnModalCard: {
-    marginHorizontal: 16,
-    marginBottom: 20,
-    maxHeight: '88%',
+    height: '70%',
+    maxHeight: '70%',
     borderRadius: 18,
     borderWidth: 1,
     paddingHorizontal: 12,

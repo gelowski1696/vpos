@@ -47,6 +47,9 @@ type TransferPayload = {
 type TransferMode =
   | 'SUPPLIER_RESTOCK_IN'
   | 'SUPPLIER_RESTOCK_OUT'
+  | 'CREATE'
+  | 'USED'
+  | 'CONVERT'
   | 'INTER_STORE_TRANSFER'
   | 'STORE_TO_WAREHOUSE'
   | 'WAREHOUSE_TO_STORE'
@@ -142,8 +145,23 @@ const TRANSFER_MODE_OPTIONS: Array<{ value: TransferMode; label: string; subtitl
   },
   {
     value: 'SUPPLIER_RESTOCK_OUT',
-    label: 'Supplier Return Out',
+    label: 'Supplier Restock Out',
     subtitle: 'Store/Warehouse -> Supplier'
+  },
+  {
+    value: 'CREATE',
+    label: 'Create',
+    subtitle: 'Empty -> Full (branch adjustment)'
+  },
+  {
+    value: 'USED',
+    label: 'Used',
+    subtitle: 'Full -> Empty (branch adjustment)'
+  },
+  {
+    value: 'CONVERT',
+    label: 'Convert',
+    subtitle: 'Empty -> Full (branch adjustment)'
   },
   {
     value: 'INTER_STORE_TRANSFER',
@@ -152,12 +170,12 @@ const TRANSFER_MODE_OPTIONS: Array<{ value: TransferMode; label: string; subtitl
   },
   {
     value: 'STORE_TO_WAREHOUSE',
-    label: 'Store to Warehouse',
+    label: 'Warehouse Restock Out',
     subtitle: 'Store -> Warehouse'
   },
   {
     value: 'WAREHOUSE_TO_STORE',
-    label: 'Warehouse to Store',
+    label: 'Warehouse Restock In',
     subtitle: 'Warehouse -> Store'
   },
   {
@@ -166,6 +184,63 @@ const TRANSFER_MODE_OPTIONS: Array<{ value: TransferMode; label: string; subtitl
     subtitle: 'Any location pair'
   }
 ];
+
+function isSupplierRestockMode(mode: TransferMode | ''): boolean {
+  return mode === 'SUPPLIER_RESTOCK_IN' || mode === 'SUPPLIER_RESTOCK_OUT';
+}
+
+function isSingleBucketAdjustmentMode(mode: TransferMode | ''): mode is 'CREATE' | 'USED' | 'CONVERT' {
+  return mode === 'CREATE' || mode === 'USED' || mode === 'CONVERT';
+}
+
+function getMovementSummary(mode: TransferMode | ''): Array<{ label: string; delta: string }> {
+  switch (mode) {
+    case 'SUPPLIER_RESTOCK_IN':
+      return [
+        { label: 'Full', delta: '+' },
+        { label: 'Empty', delta: '+' }
+      ];
+    case 'SUPPLIER_RESTOCK_OUT':
+      return [
+        { label: 'Full', delta: '-' },
+        { label: 'Empty', delta: '-' }
+      ];
+    case 'CREATE':
+    case 'CONVERT':
+      return [
+        { label: 'Full', delta: '+' },
+        { label: 'Empty', delta: '-' }
+      ];
+    case 'USED':
+      return [
+        { label: 'Full', delta: '-' },
+        { label: 'Empty', delta: '+' }
+      ];
+    case 'STORE_TO_WAREHOUSE':
+      return [
+        { label: 'Full', delta: 'Store (-) -> Warehouse (+)' },
+        { label: 'Empty', delta: 'Store (-) -> Warehouse (+)' }
+      ];
+    case 'WAREHOUSE_TO_STORE':
+      return [
+        { label: 'Full', delta: 'Warehouse (-) -> Store (+)' },
+        { label: 'Empty', delta: 'Warehouse (-) -> Store (+)' }
+      ];
+    case 'INTER_STORE_TRANSFER':
+    case 'GENERAL':
+      return [
+        { label: 'Full', delta: 'Source (-) -> Destination (+)' },
+        { label: 'Empty', delta: 'Source (-) -> Destination (+)' }
+      ];
+    default:
+      return [];
+  }
+}
+
+function transferModeLabel(value: TransferMode | string | undefined): string {
+  const mode = TRANSFER_MODE_OPTIONS.find((option) => option.value === value);
+  return mode?.label ?? String(value ?? 'GENERAL').replace(/_/g, ' ');
+}
 
 type PickerModalProps = {
   visible: boolean;
@@ -338,6 +413,9 @@ export function TransfersScreen({
     }
     switch (transferMode) {
       case 'SUPPLIER_RESTOCK_IN':
+      case 'CREATE':
+      case 'USED':
+      case 'CONVERT':
         return [];
       case 'SUPPLIER_RESTOCK_OUT':
         return [...storeLocations, ...warehouseLocations];
@@ -358,6 +436,9 @@ export function TransfersScreen({
     }
     switch (transferMode) {
       case 'SUPPLIER_RESTOCK_IN':
+      case 'CREATE':
+      case 'USED':
+      case 'CONVERT':
         return [...storeLocations, ...warehouseLocations];
       case 'SUPPLIER_RESTOCK_OUT':
         return [];
@@ -380,6 +461,9 @@ export function TransfersScreen({
       return;
     }
     if (transferMode === 'SUPPLIER_RESTOCK_OUT') {
+      return;
+    }
+    if (isSingleBucketAdjustmentMode(transferMode)) {
       return;
     }
     if (!selectableSourceLocations.some((location) => location.id === sourceLocationId)) {
@@ -440,6 +524,16 @@ export function TransfersScreen({
       }, 0),
     [emptyLines]
   );
+
+  const visibleBuckets = useMemo<Array<'full' | 'empty'>>(() => {
+    if (transferMode === 'USED') {
+      return ['full'];
+    }
+    if (transferMode === 'CREATE' || transferMode === 'CONVERT') {
+      return ['empty'];
+    }
+    return ['full', 'empty'];
+  }, [transferMode]);
 
   const transferModeOptions = useMemo<MasterDataOption[]>(
     () =>
@@ -644,7 +738,7 @@ export function TransfersScreen({
       return null;
     }
     const id =
-      transferMode === 'SUPPLIER_RESTOCK_IN' || transferMode === 'SUPPLIER_RESTOCK_OUT'
+      isSupplierRestockMode(transferMode) || isSingleBucketAdjustmentMode(transferMode)
         ? preferredAdjustmentLocationId
         : requiresSourceStockCheck(transferMode)
           ? sourceLocationId.trim()
@@ -704,12 +798,8 @@ export function TransfersScreen({
 
   const resolveAvailableQtyForBucket = (productId: string, bucket: 'full' | 'empty'): number => {
     const stock = sourceInventoryByProduct.get(productId) ?? { qtyOnHand: 0, qtyFull: 0, qtyEmpty: 0 };
-    const product = productById.get(productId);
-    if (product?.isLpg) {
-      return Math.max(0, Number(stock.qtyOnHand || 0));
-    }
     let available = bucket === 'full' ? stock.qtyFull : stock.qtyEmpty;
-    if (available <= 0.0001 && stock.qtyFull <= 0.0001 && stock.qtyEmpty <= 0.0001) {
+    if (stock.qtyFull <= 0.0001 && stock.qtyEmpty <= 0.0001) {
       available = stock.qtyOnHand;
     }
     return Math.max(0, Number(available || 0));
@@ -881,6 +971,20 @@ export function TransfersScreen({
       };
     }
 
+    if (isSingleBucketAdjustmentMode(transferMode)) {
+      if (!preferredAdjustmentLocationId) {
+        toastError('Transfer', 'Current branch location is missing. Reopen branch setup.');
+        return null;
+      }
+      return {
+        sourceId: preferredAdjustmentLocationId,
+        destinationId: preferredAdjustmentLocationId,
+        sourceLabel: selectedAdjustmentLocation?.label ?? preferredAdjustmentLocationId,
+        destinationLabel: selectedAdjustmentLocation?.label ?? preferredAdjustmentLocationId,
+        supplierName
+      };
+    }
+
     if (!sourceLocationId || !destinationLocationId) {
       toastError('Transfer', 'Source and destination locations are required.');
       return null;
@@ -990,6 +1094,8 @@ export function TransfersScreen({
       toastSuccess('Transfer queued', `Transfer ID: ${id}`);
       resetTransferLines();
       await refresh();
+      await refreshMasterData();
+      await refreshActiveShift();
       await onDataChanged?.();
     } catch (cause) {
       toastError('Transfer failed', cause instanceof Error ? cause.message : 'Unable to queue transfer.');
@@ -1010,7 +1116,13 @@ export function TransfersScreen({
     >
       <View className="flex-row items-center justify-between gap-2">
         <Text className="text-[13px] font-bold" style={{ color: theme.heading }}>
-          {bucket === 'full' ? 'FULL Items' : 'EMPTY Items'}
+          {transferMode === 'USED'
+            ? 'FULL Source Items'
+            : transferMode === 'CREATE' || transferMode === 'CONVERT'
+              ? 'EMPTY Source Items'
+              : bucket === 'full'
+                ? 'FULL Items'
+                : 'EMPTY Items'}
         </Text>
         <Pressable
           className="min-h-9 items-center justify-center rounded-xl border px-3"
@@ -1217,28 +1329,30 @@ export function TransfersScreen({
           <Text style={[styles.helper, { color: theme.subtext }]}>{modeSubtitle}</Text>
         </View>
 
-        {hasSelectedTransferMode && (transferMode === 'SUPPLIER_RESTOCK_IN' || transferMode === 'SUPPLIER_RESTOCK_OUT') ? (
+        {hasSelectedTransferMode && (isSupplierRestockMode(transferMode) || isSingleBucketAdjustmentMode(transferMode)) ? (
           <View className="gap-2">
-            <Pressable
-              onPress={() => {
-                if (saving || syncBusy) {
-                  return;
-                }
-                setSupplierSearch('');
-                setSupplierModalOpen(true);
-              }}
-              className="rounded-xl border px-3 py-2.5"
-              style={[
-                isCompactLayout ? { paddingHorizontal: 10, paddingVertical: 9 } : null,
-                { borderColor: theme.cardBorder, backgroundColor: theme.inputBg }
-              ]}
-              disabled={saving || syncBusy}
-            >
-              <Text className="text-[11px] font-semibold" style={{ color: theme.subtext }}>Supplier</Text>
-              <Text className="text-[14px] font-bold" style={[isCompactLayout ? { fontSize: 13 } : null, { color: theme.inputText }]} numberOfLines={1}>
-                {selectedSupplier?.label ?? 'Select supplier'}
-              </Text>
-            </Pressable>
+            {isSupplierRestockMode(transferMode) ? (
+              <Pressable
+                onPress={() => {
+                  if (saving || syncBusy) {
+                    return;
+                  }
+                  setSupplierSearch('');
+                  setSupplierModalOpen(true);
+                }}
+                className="rounded-xl border px-3 py-2.5"
+                style={[
+                  isCompactLayout ? { paddingHorizontal: 10, paddingVertical: 9 } : null,
+                  { borderColor: theme.cardBorder, backgroundColor: theme.inputBg }
+                ]}
+                disabled={saving || syncBusy}
+              >
+                <Text className="text-[11px] font-semibold" style={{ color: theme.subtext }}>Supplier</Text>
+                <Text className="text-[14px] font-bold" style={[isCompactLayout ? { fontSize: 13 } : null, { color: theme.inputText }]} numberOfLines={1}>
+                  {selectedSupplier?.label ?? 'Select supplier'}
+                </Text>
+              </Pressable>
+            ) : null}
             <View
               className="rounded-xl border px-3 py-2.5"
               style={[
@@ -1247,7 +1361,11 @@ export function TransfersScreen({
               ]}
             >
               <Text className="text-[11px] font-semibold" style={{ color: theme.subtext }}>
-                {transferMode === 'SUPPLIER_RESTOCK_IN' ? 'Restock Destination' : 'Restock Source'}
+                {transferMode === 'SUPPLIER_RESTOCK_IN'
+                  ? 'Restock Destination'
+                  : transferMode === 'SUPPLIER_RESTOCK_OUT'
+                    ? 'Restock Source'
+                    : 'Adjustment Location'}
               </Text>
               <Text
                 className="text-[14px] font-bold"
@@ -1257,15 +1375,17 @@ export function TransfersScreen({
                 {selectedAdjustmentLocation?.label ?? 'No active branch location'}
               </Text>
               <Text className="mt-1 text-[11px]" style={{ color: theme.subtext }}>
-                Supplier restocks use the current branch/store location automatically.
+                {isSupplierRestockMode(transferMode)
+                  ? 'Supplier restocks use the current branch/store location automatically.'
+                  : 'This movement applies directly to the current branch/store location.'}
               </Text>
             </View>
           </View>
         ) : null}
 
         {hasSelectedTransferMode &&
-        transferMode !== 'SUPPLIER_RESTOCK_IN' &&
-        transferMode !== 'SUPPLIER_RESTOCK_OUT' ? (
+        !isSupplierRestockMode(transferMode) &&
+        !isSingleBucketAdjustmentMode(transferMode) ? (
           <Pressable
             onPress={() => {
               if (saving || syncBusy) {
@@ -1289,8 +1409,8 @@ export function TransfersScreen({
         ) : null}
 
         {hasSelectedTransferMode &&
-        transferMode !== 'SUPPLIER_RESTOCK_IN' &&
-        transferMode !== 'SUPPLIER_RESTOCK_OUT' ? (
+        !isSupplierRestockMode(transferMode) &&
+        !isSingleBucketAdjustmentMode(transferMode) ? (
           <Pressable
             onPress={() => {
               if (saving || syncBusy) {
@@ -1314,8 +1434,35 @@ export function TransfersScreen({
         ) : null}
         {hasSelectedTransferMode ? (
           <View ref={tutorialProduct.ref} onLayout={tutorialProduct.onLayout}>
-            {renderLineTable('full', fullLines)}
-            {renderLineTable('empty', emptyLines)}
+            <View
+              className="mb-2 gap-2 rounded-xl border px-3 py-3"
+              style={[
+                isCompactLayout ? { paddingHorizontal: 10, paddingVertical: 9 } : null,
+                { borderColor: theme.cardBorder, backgroundColor: theme.inputBg }
+              ]}
+            >
+              <Text className="text-[13px] font-bold" style={{ color: theme.heading }}>
+                Movement Preview
+              </Text>
+              <View className="flex-row flex-wrap gap-2">
+                {getMovementSummary(transferMode).map((entry) => (
+                  <View
+                    key={`${entry.label}-${entry.delta}`}
+                    className="min-w-[48%] flex-1 rounded-xl px-3 py-2"
+                    style={{ backgroundColor: theme.card }}
+                  >
+                    <Text className="text-[10px] font-semibold uppercase" style={{ color: theme.subtext }}>
+                      {entry.label}
+                    </Text>
+                    <Text className="text-[13px] font-bold" style={{ color: theme.heading }}>
+                      {entry.delta}
+                    </Text>
+                  </View>
+                ))}
+              </View>
+            </View>
+            {visibleBuckets.includes('full') ? renderLineTable('full', fullLines) : null}
+            {visibleBuckets.includes('empty') ? renderLineTable('empty', emptyLines) : null}
           </View>
         ) : (
           <View
@@ -1533,6 +1680,8 @@ export function TransfersScreen({
                   const stock = canShowSourceStock
                     ? sourceInventoryByProduct.get(product.id) ?? { qtyOnHand: 0, qtyFull: 0, qtyEmpty: 0 }
                     : null;
+                  const isSupplierRestockMode =
+                    transferMode === 'SUPPLIER_RESTOCK_IN' || transferMode === 'SUPPLIER_RESTOCK_OUT';
                   const showProductBasedStock = Boolean(product.isLpg);
                   const availableQty =
                     activeSourceLocationId
@@ -1584,16 +1733,32 @@ export function TransfersScreen({
                       </View>
                       {stock && showProductBasedStock ? (
                         <View className="gap-2">
-                          <View
-                            className="rounded-xl px-3 py-2"
-                            style={{ backgroundColor: theme.pillBg }}
-                          >
-                            <Text className="text-[10px] font-semibold uppercase" style={{ color: theme.subtext }}>Product Stock</Text>
-                            <Text className="text-[13px] font-bold" style={{ color: theme.heading }}>{stock.qtyOnHand.toFixed(2)}</Text>
+                          <View className="flex-row flex-wrap gap-2" style={isCompactLayout ? { gap: 6 } : null}>
+                            <View
+                              className="min-w-[31%] flex-1 rounded-xl px-3 py-2"
+                              style={[isCompactLayout ? { minWidth: '31%', flexBasis: '31%' } : null, { backgroundColor: theme.pillBg }]}
+                            >
+                              <Text className="text-[10px] font-semibold uppercase" style={{ color: theme.subtext }}>FULL</Text>
+                              <Text className="text-[13px] font-bold" style={{ color: theme.heading }}>{stock.qtyFull.toFixed(2)}</Text>
+                            </View>
+                            <View
+                              className="min-w-[31%] flex-1 rounded-xl px-3 py-2"
+                              style={[isCompactLayout ? { minWidth: '31%', flexBasis: '31%' } : null, { backgroundColor: theme.pillBg }]}
+                            >
+                              <Text className="text-[10px] font-semibold uppercase" style={{ color: theme.subtext }}>EMPTY</Text>
+                              <Text className="text-[13px] font-bold" style={{ color: theme.heading }}>{stock.qtyEmpty.toFixed(2)}</Text>
+                            </View>
+                            <View
+                              className="min-w-[31%] flex-1 rounded-xl px-3 py-2"
+                              style={[isCompactLayout ? { minWidth: '31%', flexBasis: '31%' } : null, { backgroundColor: theme.pillBg }]}
+                            >
+                              <Text className="text-[10px] font-semibold uppercase" style={{ color: theme.subtext }}>QOH</Text>
+                              <Text className="text-[13px] font-bold" style={{ color: theme.heading }}>{stock.qtyOnHand.toFixed(2)}</Text>
+                            </View>
                           </View>
                           <Text className="text-[11px]" style={{ color: theme.subtext }}>
-                            {transferMode === 'SUPPLIER_RESTOCK_IN' || transferMode === 'SUPPLIER_RESTOCK_OUT'
-                              ? 'Current branch/store quantity for this item.'
+                            {isSupplierRestockMode
+                              ? 'Current store/branch stock for this item.'
                               : 'Transfer stock checks use this item&apos;s product quantity, not shared cylinder-type totals.'}
                           </Text>
                         </View>
@@ -1628,15 +1793,13 @@ export function TransfersScreen({
                             : 'Source stock appears after you select a source location.'}
                         </Text>
                       )}
-                      {availableQty !== null ? (
+                      {availableQty !== null && !isSupplierRestockMode ? (
                         <View
                           className="self-start rounded-full px-3 py-1"
                           style={{ backgroundColor: theme.pillBg }}
                         >
                           <Text className="text-[11px] font-semibold" style={{ color: theme.pillText }}>
-                            {transferMode === 'SUPPLIER_RESTOCK_IN' || transferMode === 'SUPPLIER_RESTOCK_OUT'
-                              ? `Store Qty: ${availableQty.toFixed(2)}`
-                              : `Available ${bucket.toUpperCase()}: ${availableQty.toFixed(2)}`}
+                            {`Available ${bucket.toUpperCase()}: ${availableQty.toFixed(2)}`}
                           </Text>
                         </View>
                       ) : null}

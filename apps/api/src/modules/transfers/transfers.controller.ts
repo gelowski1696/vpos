@@ -32,6 +32,9 @@ export class TransfersController {
       transfer_mode?:
         | 'SUPPLIER_RESTOCK_IN'
         | 'SUPPLIER_RESTOCK_OUT'
+        | 'CREATE'
+        | 'USED'
+        | 'CONVERT'
         | 'INTER_STORE_TRANSFER'
         | 'STORE_TO_WAREHOUSE'
         | 'WAREHOUSE_TO_STORE'
@@ -92,6 +95,9 @@ export class TransfersController {
       transfer_mode:
         normalizedTransferMode === 'SUPPLIER_RESTOCK_IN' ||
         normalizedTransferMode === 'SUPPLIER_RESTOCK_OUT' ||
+        normalizedTransferMode === 'CREATE' ||
+        normalizedTransferMode === 'USED' ||
+        normalizedTransferMode === 'CONVERT' ||
         normalizedTransferMode === 'INTER_STORE_TRANSFER' ||
         normalizedTransferMode === 'STORE_TO_WAREHOUSE' ||
         normalizedTransferMode === 'WAREHOUSE_TO_STORE' ||
