@@ -1563,35 +1563,27 @@ export class ReportsService {
         : {})
     };
 
-    const [rows, grouped] = await Promise.all([
-      db.inventoryLedger.findMany({
-        where,
-        include: {
-          location: {
-            select: {
-              id: true,
-              name: true
-            }
-          },
-          product: {
-            select: {
-              id: true,
-              sku: true,
-              name: true,
-              isLpg: true
-            }
+    const rows = await db.inventoryLedger.findMany({
+      where,
+      include: {
+        location: {
+          select: {
+            id: true,
+            name: true
           }
         },
-        orderBy: { createdAt: 'desc' },
-        take: limit
-      }),
-      db.inventoryLedger.groupBy({
-        by: ['movementType'],
-        where,
-        _sum: { qtyDelta: true },
-        _count: { _all: true }
-      })
-    ]);
+        product: {
+          select: {
+            id: true,
+            sku: true,
+            name: true,
+            isLpg: true
+          }
+        }
+      },
+      orderBy: { createdAt: 'desc' },
+      take: limit
+    });
 
     const ledgerIds = rows.map((row) => row.id);
     const stockEvents =
@@ -1639,35 +1631,213 @@ export class ReportsService {
       qty_after: this.roundQty(this.toNumber(row.qtyAfter))
     }));
 
+    const supplementalRows: typeof mappedRows = [];
+
+    if (!movementType || movementType === InventoryMovementType.ADJUSTMENT) {
+      const actionRows = await db.lpgItemServiceAction.findMany({
+        where: {
+          companyId,
+          ...(query.location_id?.trim() ? { locationId: query.location_id.trim() } : {}),
+          ...(query.product_id?.trim() ? { productId: query.product_id.trim() } : {}),
+          ...(range.since || range.until
+            ? {
+                createdAt: {
+                  ...(range.since ? { gte: range.since } : {}),
+                  ...(range.until ? { lte: range.until } : {})
+                }
+              }
+            : {})
+        },
+        include: {
+          location: { select: { id: true, name: true } },
+          product: { select: { id: true, sku: true, name: true } }
+        },
+        orderBy: { createdAt: 'desc' },
+        take: limit
+      });
+
+      for (const row of actionRows) {
+        const qty = Number(row.qty ?? 0);
+        const qtyDelta = row.actionType === 'DISPOSE' ? -qty : row.actionType === 'REPLACE' ? qty : 0;
+        const qtyEmptyDelta = row.actionType === 'DISPOSE' ? -qty : row.actionType === 'REPLACE' ? qty : 0;
+        supplementalRows.push({
+          id: `lpg-item-action:${row.id}`,
+          created_at: row.createdAt.toISOString(),
+          movement_type: InventoryMovementType.ADJUSTMENT,
+          reference_type: `LPG_ITEM_${row.actionType}`,
+          reference_id: row.id,
+          location_id: row.locationId,
+          location_name: row.location.name,
+          product_id: row.productId,
+          product_sku: row.product.sku,
+          product_name: row.product.name,
+          qty_delta: this.roundQty(qtyDelta),
+          qty_full_delta: 0,
+          qty_empty_delta: this.roundQty(qtyEmptyDelta),
+          unit_cost: 0,
+          avg_cost_after: 0,
+          qty_after: 0
+        });
+      }
+    }
+
+    if (!movementType || movementType === InventoryMovementType.LENDING_OUT) {
+      const lendingOutRows = await db.lendingLine.findMany({
+        where: {
+          companyId,
+          sourceSaleLineId: { not: null },
+          ...(query.product_id?.trim() ? { productId: query.product_id.trim() } : {}),
+          ...(query.location_id?.trim()
+            ? {
+                lendingTransaction: {
+                  locationId: query.location_id.trim()
+                }
+              }
+            : {}),
+          ...(range.since || range.until
+            ? {
+                createdAt: {
+                  ...(range.since ? { gte: range.since } : {}),
+                  ...(range.until ? { lte: range.until } : {})
+                }
+              }
+            : {})
+        },
+        include: {
+          product: { select: { id: true, sku: true, name: true } },
+          lendingTransaction: {
+            select: {
+              id: true,
+              locationId: true,
+              location: { select: { name: true } }
+            }
+          }
+        },
+        orderBy: { createdAt: 'desc' },
+        take: limit
+      });
+
+      for (const row of lendingOutRows) {
+        supplementalRows.push({
+          id: `lending-out:${row.id}`,
+          created_at: row.createdAt.toISOString(),
+          movement_type: InventoryMovementType.LENDING_OUT,
+          reference_type: 'LENDING',
+          reference_id: `${row.lendingTransactionId}::${row.id}`,
+          location_id: row.lendingTransaction.locationId,
+          location_name: row.lendingTransaction.location.name,
+          product_id: row.productId,
+          product_sku: row.product.sku,
+          product_name: row.product.name,
+          qty_delta: 0,
+          qty_full_delta: 0,
+          qty_empty_delta: 0,
+          unit_cost: 0,
+          avg_cost_after: 0,
+          qty_after: 0
+        });
+      }
+    }
+
+    if (!movementType || movementType === InventoryMovementType.LENDING_RETURN) {
+      const lendingReturnRows = await db.lendingReturn.findMany({
+        where: {
+          companyId,
+          lendingLine: {
+            sourceSaleLineId: { not: null },
+            ...(query.product_id?.trim() ? { productId: query.product_id.trim() } : {})
+          },
+          ...(query.location_id?.trim()
+            ? {
+                lendingTransaction: {
+                  locationId: query.location_id.trim()
+                }
+              }
+            : {}),
+          ...(range.since || range.until
+            ? {
+                returnedAt: {
+                  ...(range.since ? { gte: range.since } : {}),
+                  ...(range.until ? { lte: range.until } : {})
+                }
+              }
+            : {})
+        },
+        include: {
+          lendingLine: {
+            select: {
+              id: true,
+              productId: true,
+              product: { select: { id: true, sku: true, name: true } }
+            }
+          },
+          lendingTransaction: {
+            select: {
+              id: true,
+              locationId: true,
+              location: { select: { name: true } }
+            }
+          }
+        },
+        orderBy: { returnedAt: 'desc' },
+        take: limit
+      });
+
+      for (const row of lendingReturnRows) {
+        supplementalRows.push({
+          id: `lending-return:${row.id}`,
+          created_at: row.returnedAt.toISOString(),
+          movement_type: InventoryMovementType.LENDING_RETURN,
+          reference_type: 'LENDING_RETURN',
+          reference_id: `${row.lendingTransactionId}::${row.lendingLineId}::${row.id}`,
+          location_id: row.lendingTransaction.locationId,
+          location_name: row.lendingTransaction.location.name,
+          product_id: row.lendingLine.productId,
+          product_sku: row.lendingLine.product.sku,
+          product_name: row.lendingLine.product.name,
+          qty_delta: 0,
+          qty_full_delta: 0,
+          qty_empty_delta: 0,
+          unit_cost: 0,
+          avg_cost_after: 0,
+          qty_after: 0
+        });
+      }
+    }
+
+    const mergedRows = [...mappedRows, ...supplementalRows]
+      .sort((a, b) => b.created_at.localeCompare(a.created_at))
+      .slice(0, limit);
+
     const qtyIn = this.roundQty(
-      mappedRows.filter((row) => row.qty_delta > 0).reduce((sum, row) => sum + row.qty_delta, 0)
+      mergedRows.filter((row) => row.qty_delta > 0).reduce((sum, row) => sum + row.qty_delta, 0)
     );
     const qtyOut = this.roundQty(
       Math.abs(
-        mappedRows
+        mergedRows
           .filter((row) => row.qty_delta < 0)
           .reduce((sum, row) => sum + row.qty_delta, 0)
       )
     );
-    const netQty = this.roundQty(mappedRows.reduce((sum, row) => sum + row.qty_delta, 0));
+    const netQty = this.roundQty(mergedRows.reduce((sum, row) => sum + row.qty_delta, 0));
     const qtyFullIn = this.roundQty(
-      mappedRows.filter((row) => row.qty_full_delta > 0).reduce((sum, row) => sum + row.qty_full_delta, 0)
+      mergedRows.filter((row) => row.qty_full_delta > 0).reduce((sum, row) => sum + row.qty_full_delta, 0)
     );
     const qtyFullOut = this.roundQty(
       Math.abs(
-        mappedRows
+        mergedRows
           .filter((row) => row.qty_full_delta < 0)
           .reduce((sum, row) => sum + row.qty_full_delta, 0)
       )
     );
     const qtyEmptyIn = this.roundQty(
-      mappedRows
+      mergedRows
         .filter((row) => row.qty_empty_delta > 0)
         .reduce((sum, row) => sum + row.qty_empty_delta, 0)
     );
     const qtyEmptyOut = this.roundQty(
       Math.abs(
-        mappedRows
+        mergedRows
           .filter((row) => row.qty_empty_delta < 0)
           .reduce((sum, row) => sum + row.qty_empty_delta, 0)
       )
@@ -1679,7 +1849,7 @@ export class ReportsService {
         until: range.until?.toISOString() ?? null
       },
       summary: {
-        row_count: mappedRows.length,
+        row_count: mergedRows.length,
         qty_in: qtyIn,
         qty_out: qtyOut,
         net_qty: netQty,
@@ -1688,14 +1858,22 @@ export class ReportsService {
         qty_empty_in: qtyEmptyIn,
         qty_empty_out: qtyEmptyOut
       },
-      by_movement_type: grouped
-        .map((row) => ({
-          movement_type: row.movementType,
-          qty_delta: this.roundQty(this.toNumber(row._sum.qtyDelta)),
-          count: row._count._all
+      by_movement_type: Array.from(
+        mergedRows.reduce((acc, row) => {
+          const current = acc.get(row.movement_type) ?? { qty_delta: 0, count: 0 };
+          current.qty_delta += row.qty_delta;
+          current.count += 1;
+          acc.set(row.movement_type, current);
+          return acc;
+        }, new Map<InventoryMovementType, { qty_delta: number; count: number }>())
+      )
+        .map(([movement_type, totals]) => ({
+          movement_type,
+          qty_delta: this.roundQty(totals.qty_delta),
+          count: totals.count
         }))
         .sort((a, b) => b.count - a.count),
-      rows: mappedRows
+      rows: mergedRows
     };
   }
 
