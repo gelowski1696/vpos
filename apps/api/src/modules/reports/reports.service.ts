@@ -2585,7 +2585,11 @@ export class ReportsService {
     if (!value?.trim()) {
       return undefined;
     }
-    const parsed = new Date(value.trim());
+    const normalized = value.trim();
+    const dateOnlyMatch = /^\d{4}-\d{2}-\d{2}$/.test(normalized);
+    const parsed = dateOnlyMatch
+      ? new Date(`${normalized}${field === 'until' ? 'T23:59:59.999Z' : 'T00:00:00.000Z'}`)
+      : new Date(normalized);
     if (Number.isNaN(parsed.getTime())) {
       throw new BadRequestException(`${field} must be a valid date`);
     }
