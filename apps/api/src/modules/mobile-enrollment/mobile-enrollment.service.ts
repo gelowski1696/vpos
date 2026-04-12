@@ -305,72 +305,87 @@ export class MobileEnrollmentService {
       return { branch, location };
     }
 
-    try {
-      const binding = await this.tenantRouter.forCompany(companyId);
-      const [tenantBranch, tenantLocation] = await Promise.all([
-        binding.client.branch.findFirst({
-          where: { id: branchId, companyId, isActive: true },
-          select: { id: true, code: true, name: true }
-        }),
-        binding.client.location.findFirst({
-          where: { id: locationId, companyId, isActive: true },
-          select: { id: true, code: true, name: true, branchId: true, type: true }
-        })
-      ]);
+    const binding = await this.tenantRouter.forCompany(companyId);
+    const [tenantBranch, tenantLocation] = await Promise.all([
+      binding.client.branch.findFirst({
+        where: { id: branchId, companyId, isActive: true },
+        select: { id: true, code: true, name: true }
+      }),
+      binding.client.location.findFirst({
+        where: { id: locationId, companyId, isActive: true },
+        select: { id: true, code: true, name: true, branchId: true, type: true }
+      })
+    ]);
 
-      if (tenantBranch && !branch) {
-        branch = tenantBranch;
-      }
-      if (tenantLocation && !location) {
-        location = tenantLocation;
-      }
-
-      // Keep shared control DB references in sync so MobileEnrollmentToken FK constraints remain valid.
-      if (tenantBranch) {
-        await this.prisma.branch.upsert({
-          where: { id: tenantBranch.id },
-          update: {
-            companyId,
-            code: tenantBranch.code,
-            name: tenantBranch.name,
-            isActive: true
-          },
-          create: {
-            id: tenantBranch.id,
-            companyId,
-            code: tenantBranch.code,
-            name: tenantBranch.name,
-            isActive: true
-          }
-        });
-      }
-
-      if (tenantLocation) {
-        await this.prisma.location.upsert({
-          where: { id: tenantLocation.id },
-          update: {
-            companyId,
-            branchId: tenantLocation.branchId,
-            code: tenantLocation.code,
-            name: tenantLocation.name,
-            type: tenantLocation.type,
-            isActive: true
-          },
-          create: {
-            id: tenantLocation.id,
-            companyId,
-            branchId: tenantLocation.branchId,
-            code: tenantLocation.code,
-            name: tenantLocation.name,
-            type: tenantLocation.type ?? LocationType.BRANCH_STORE,
-            isActive: true
-          }
-        });
-      }
-    } catch {
-      // Fall back to shared lookup result only.
+    if (tenantBranch && !branch) {
+      branch = tenantBranch;
+    }
+    if (tenantLocation && !location) {
+      location = tenantLocation;
     }
 
-    return { branch, location };
+    if (!tenantBranch || !tenantLocation) {
+      return { branch, location };
+    }
+
+    // Keep shared control DB references in sync so MobileEnrollmentToken FK constraints remain valid.
+    await this.prisma.$transaction(async (tx) => {
+      await tx.branch.upsert({
+        where: { id: tenantBranch.id },
+        update: {
+          companyId,
+          code: tenantBranch.code,
+          name: tenantBranch.name,
+          isActive: true
+        },
+        create: {
+          id: tenantBranch.id,
+          companyId,
+          code: tenantBranch.code,
+          name: tenantBranch.name,
+          isActive: true
+        }
+      });
+
+      await tx.location.upsert({
+        where: { id: tenantLocation.id },
+        update: {
+          companyId,
+          branchId: tenantLocation.branchId,
+          code: tenantLocation.code,
+          name: tenantLocation.name,
+          type: tenantLocation.type,
+          isActive: true
+        },
+        create: {
+          id: tenantLocation.id,
+          companyId,
+          branchId: tenantLocation.branchId,
+          code: tenantLocation.code,
+          name: tenantLocation.name,
+          type: tenantLocation.type ?? LocationType.BRANCH_STORE,
+          isActive: true
+        }
+      });
+    });
+
+    const [ensuredBranch, ensuredLocation] = await Promise.all([
+      this.prisma.branch.findFirst({
+        where: { id: tenantBranch.id, companyId, isActive: true },
+        select: { id: true, code: true, name: true }
+      }),
+      this.prisma.location.findFirst({
+        where: { id: tenantLocation.id, companyId, isActive: true },
+        select: { id: true, code: true, name: true, branchId: true, type: true }
+      })
+    ]);
+
+    if (!ensuredBranch || !ensuredLocation) {
+      throw new BadRequestException(
+        'Selected branch/location could not be synchronized to the control database for mobile enrollment'
+      );
+    }
+
+    return { branch: ensuredBranch, location: ensuredLocation };
   }
 }

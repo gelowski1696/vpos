@@ -126,6 +126,19 @@ type ProductCostSnapshotRecord = {
   locations: ProductCostLocationRecord[];
 };
 
+type InventoryMovementRow = {
+  id: string;
+  created_at: string;
+  movement_type: string;
+  reference_type: string;
+  reference_id: string;
+  location_name: string;
+  qty_delta: number;
+  qty_full_delta: number;
+  qty_empty_delta: number;
+  qty_after: number;
+};
+
 function yesNo(value: unknown): string {
   if (value === true || value === 'true' || value === 1 || value === '1') {
     return 'Yes';
@@ -172,6 +185,11 @@ export default function ProductsPage(): JSX.Element {
   const [costSnapshot, setCostSnapshot] = useState<ProductCostSnapshotRecord | null>(null);
   const [costLoading, setCostLoading] = useState(false);
   const [costError, setCostError] = useState<string | null>(null);
+  const [movementRows, setMovementRows] = useState<InventoryMovementRow[]>([]);
+  const [movementLoading, setMovementLoading] = useState(false);
+  const [movementError, setMovementError] = useState<string | null>(null);
+  const [movementFromDate, setMovementFromDate] = useState('');
+  const [movementToDate, setMovementToDate] = useState('');
   const [handledSearchProductId, setHandledSearchProductId] = useState<string | null>(null);
 
   async function loadDetailData(): Promise<void> {
@@ -251,6 +269,7 @@ export default function ProductsPage(): JSX.Element {
     setCostSnapshot(null);
     setCostError(null);
     void loadCostSnapshot(productId);
+    void loadMovementHistory(productId);
     const params = new URLSearchParams(searchParams.toString());
     params.delete('product_id');
     const nextQuery = params.toString();
@@ -275,6 +294,44 @@ export default function ProductsPage(): JSX.Element {
       setCostLoading(false);
     }
   }
+
+  async function loadMovementHistory(productId: string): Promise<void> {
+    setMovementLoading(true);
+    setMovementError(null);
+    try {
+      if (movementFromDate && movementToDate && movementFromDate > movementToDate) {
+        throw new Error('From date must be earlier than or equal to To date.');
+      }
+      const params = new URLSearchParams();
+      params.set('product_id', productId);
+      params.set('limit', '180');
+      if (movementFromDate) {
+        params.set('since', movementFromDate);
+      }
+      if (movementToDate) {
+        params.set('until', movementToDate);
+      }
+      const payload = await apiRequest<{ rows?: InventoryMovementRow[] }>(
+        `/reports/inventory/movements?${params.toString()}`
+      );
+      setMovementRows(Array.isArray(payload.rows) ? payload.rows : []);
+    } catch (error) {
+      setMovementRows([]);
+      setMovementError(
+        error instanceof Error ? error.message : 'Failed to load product movement history'
+      );
+    } finally {
+      setMovementLoading(false);
+    }
+  }
+
+  useEffect(() => {
+    if (!viewProductId) {
+      return;
+    }
+    void loadMovementHistory(viewProductId);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [viewProductId, movementFromDate, movementToDate]);
 
   const cylinderTypeOptions = useMemo(
     () => [
@@ -679,8 +736,11 @@ export default function ProductsPage(): JSX.Element {
               setViewProductId(productId);
               setCostSnapshot(null);
               setCostError(null);
+              setMovementRows([]);
+              setMovementError(null);
               void loadDetailData();
               void loadCostSnapshot(productId);
+              void loadMovementHistory(productId);
             },
             buttonClassName:
               'rounded-lg border border-sky-300 px-3 py-1.5 text-xs font-semibold text-sky-700 hover:bg-sky-50 dark:border-sky-700 dark:text-sky-300 dark:hover:bg-sky-950/40',
@@ -772,6 +832,7 @@ export default function ProductsPage(): JSX.Element {
                     void loadDetailData();
                     if (viewProductId) {
                       void loadCostSnapshot(viewProductId);
+                      void loadMovementHistory(viewProductId);
                     }
                   }}
                   type="button"
@@ -969,6 +1030,91 @@ export default function ProductsPage(): JSX.Element {
                             </table>
                           </div>
                         )}
+                      </div>
+                    )}
+                  </article>
+
+                  <article className="rounded-xl border border-slate-200 p-3 dark:border-slate-700">
+                    <h3 className="mb-2 text-sm font-semibold text-slate-900 dark:text-slate-100">
+                      Item Movement History
+                    </h3>
+                    <div className="mb-3 grid gap-2 sm:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_auto]">
+                      <label className="grid gap-1 text-xs font-medium text-slate-500 dark:text-slate-400">
+                        <span>From</span>
+                        <input
+                          type="date"
+                          value={movementFromDate}
+                          onChange={(event) => setMovementFromDate(event.target.value)}
+                          className="rounded-lg border border-slate-200 bg-white px-2.5 py-2 text-xs text-slate-900 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100"
+                        />
+                      </label>
+                      <label className="grid gap-1 text-xs font-medium text-slate-500 dark:text-slate-400">
+                        <span>To</span>
+                        <input
+                          type="date"
+                          value={movementToDate}
+                          onChange={(event) => setMovementToDate(event.target.value)}
+                          className="rounded-lg border border-slate-200 bg-white px-2.5 py-2 text-xs text-slate-900 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100"
+                        />
+                      </label>
+                      <div className="flex items-end">
+                        <button
+                          type="button"
+                          className="rounded-lg border border-slate-300 px-3 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-100 dark:border-slate-600 dark:text-slate-200 dark:hover:bg-slate-800"
+                          onClick={() => {
+                            setMovementFromDate('');
+                            setMovementToDate('');
+                          }}
+                        >
+                          Clear
+                        </button>
+                      </div>
+                    </div>
+                    {movementLoading ? (
+                      <p className="text-sm text-slate-500 dark:text-slate-400">
+                        Loading movement history...
+                      </p>
+                    ) : movementError ? (
+                      <p className="text-sm text-rose-700">{movementError}</p>
+                    ) : movementRows.length === 0 ? (
+                      <p className="text-sm text-slate-500 dark:text-slate-400">
+                        No movement records found for this item.
+                      </p>
+                    ) : (
+                      <div className="overflow-x-auto">
+                        <table className="w-full min-w-[860px] text-left text-xs">
+                          <thead>
+                            <tr className="border-b border-slate-200 text-slate-500 dark:border-slate-700 dark:text-slate-400">
+                              <th className="px-2 py-2">Date</th>
+                              <th className="px-2 py-2">Movement</th>
+                              <th className="px-2 py-2">Location</th>
+                              <th className="px-2 py-2">Qty</th>
+                              <th className="px-2 py-2">FULL</th>
+                              <th className="px-2 py-2">EMPTY</th>
+                              <th className="px-2 py-2">After</th>
+                              <th className="px-2 py-2">Reference</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {movementRows.slice(0, 80).map((row) => (
+                              <tr
+                                className="border-b border-slate-100 dark:border-slate-800"
+                                key={row.id}
+                              >
+                                <td className="px-2 py-2">{formatDate(row.created_at)}</td>
+                                <td className="px-2 py-2">{row.movement_type}</td>
+                                <td className="px-2 py-2">{row.location_name}</td>
+                                <td className="px-2 py-2">{formatQty(row.qty_delta)}</td>
+                                <td className="px-2 py-2">{formatQty(row.qty_full_delta)}</td>
+                                <td className="px-2 py-2">{formatQty(row.qty_empty_delta)}</td>
+                                <td className="px-2 py-2">{formatQty(row.qty_after)}</td>
+                                <td className="px-2 py-2">
+                                  {row.reference_type}:{row.reference_id}
+                                </td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
                       </div>
                     )}
                   </article>
