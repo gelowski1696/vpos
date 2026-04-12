@@ -199,6 +199,12 @@ export default function CustomersPage(): JSX.Element {
         aliases: ['customername', 'customer_name']
       },
       {
+        key: 'address',
+        label: 'Address',
+        example: 'Brgy. Sample, City',
+        aliases: ['customer_address']
+      },
+      {
         key: 'type',
         label: 'Customer Type',
         example: 'RETAIL',
@@ -335,7 +341,7 @@ export default function CustomersPage(): JSX.Element {
   return (
     <>
       <EntityManager
-      defaultValues={{ code: '', name: '', type: 'RETAIL', tier: 'REGULAR', contractPrice: null, isActive: true }}
+      defaultValues={{ code: '', name: '', address: '', type: 'RETAIL', tier: 'REGULAR', contractPrice: null, isActive: true }}
       endpoint="/master-data/customers?include_balance=true"
       reloadSignal={reloadSignal}
       toolbarActions={
@@ -360,6 +366,11 @@ export default function CustomersPage(): JSX.Element {
           label: 'Customer Name',
           required: true,
           helperText: 'Display name used in POS and reports.'
+        },
+        {
+          key: 'address',
+          label: 'Customer Address',
+          helperText: 'Optional address shown in customer detail screens.'
         },
         {
           key: 'type',
@@ -402,6 +413,10 @@ export default function CustomersPage(): JSX.Element {
         },
         tier: {
           label: 'Tier',
+          render: (value) => (value ? String(value) : '-')
+        },
+        address: {
+          label: 'Address',
           render: (value) => (value ? String(value) : '-')
         },
         contractPrice: {
@@ -495,6 +510,10 @@ export default function CustomersPage(): JSX.Element {
         return {
           ...payload,
           code: normalizedCode,
+          address:
+            payload.address === null || payload.address === undefined || String(payload.address).trim() === ''
+              ? null
+              : String(payload.address).trim(),
           tier: payload.tier ? String(payload.tier) : null,
           contractPrice:
             payload.contractPrice === null || payload.contractPrice === undefined || payload.contractPrice === ''

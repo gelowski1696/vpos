@@ -603,6 +603,7 @@ export class MasterDataController {
       name: String(body.name ?? ''),
       type,
       tier: body.tier ? String(body.tier) : null,
+      address: body.address ? String(body.address) : null,
       contractPrice: this.toNumber(body.contractPrice),
       isActive: body.isActive === undefined ? true : Boolean(body.isActive)
     }, targetCompanyId);
@@ -626,6 +627,7 @@ export class MasterDataController {
       name: body.name === undefined ? undefined : String(body.name),
       type,
       tier: body.tier === undefined ? undefined : body.tier ? String(body.tier) : null,
+      address: body.address === undefined ? undefined : body.address ? String(body.address) : null,
       contractPrice: body.contractPrice === undefined ? undefined : this.toNumber(body.contractPrice),
       isActive: body.isActive === undefined ? undefined : Boolean(body.isActive)
     }, targetCompanyId);

@@ -79,6 +79,7 @@ export type CustomerRecord = Timestamped & {
   name: string;
   type: 'RETAIL' | 'BUSINESS';
   tier?: string | null;
+  address?: string | null;
   contractPrice?: number | null;
   outstandingBalance?: number;
   pointsBalance?: number;
@@ -195,7 +196,7 @@ export type CreatePersonnelRole = Pick<PersonnelRoleRecord, 'code' | 'name'> &
   Partial<Pick<PersonnelRoleRecord, 'isActive'>>;
 export type CreatePersonnel = Pick<PersonnelRecord, 'code' | 'fullName' | 'branchId' | 'roleId'> &
   Partial<Pick<PersonnelRecord, 'phone' | 'email' | 'isActive'>>;
-export type CreateCustomer = Pick<CustomerRecord, 'code' | 'name' | 'type'> & Partial<Pick<CustomerRecord, 'tier' | 'contractPrice' | 'isActive'>>;
+export type CreateCustomer = Pick<CustomerRecord, 'code' | 'name' | 'type'> & Partial<Pick<CustomerRecord, 'tier' | 'address' | 'contractPrice' | 'isActive'>>;
 export type CreateCylinderType = Pick<CylinderTypeRecord, 'code' | 'name' | 'sizeKg' | 'depositAmount'> &
   Partial<Pick<CylinderTypeRecord, 'isActive'>>;
 export type CreateProduct = Pick<ProductRecord, 'sku' | 'name' | 'unit'> &
@@ -2079,7 +2080,7 @@ export class MasterDataService {
       async (candidate) => this.customerCodeExists(candidate, companyId ?? undefined)
     );
     if (!binding || !companyId) {
-      const row = { id: uuidv4(), ...this.stamp(), code, name: input.name.trim(), type: input.type, tier: input.tier ?? null, contractPrice: input.contractPrice ?? null, isActive: input.isActive ?? true };
+      const row = { id: uuidv4(), ...this.stamp(), code, name: input.name.trim(), type: input.type, tier: input.tier ?? null, address: input.address?.trim() || null, contractPrice: input.contractPrice ?? null, isActive: input.isActive ?? true };
       this.customers.push(row);
       return row;
     }
@@ -2091,6 +2092,7 @@ export class MasterDataService {
           name: input.name.trim(),
           type: input.type,
           tier: input.tier ?? null,
+          address: input.address?.trim() || null,
           contractPrice:
             input.contractPrice === null || input.contractPrice === undefined
               ? null
@@ -2103,7 +2105,7 @@ export class MasterDataService {
       if (binding.mode === TenancyDatastoreMode.DEDICATED_DB) {
         throw error;
       }
-      const row = { id: uuidv4(), ...this.stamp(), code, name: input.name.trim(), type: input.type, tier: input.tier ?? null, contractPrice: input.contractPrice ?? null, isActive: input.isActive ?? true };
+      const row = { id: uuidv4(), ...this.stamp(), code, name: input.name.trim(), type: input.type, tier: input.tier ?? null, address: input.address?.trim() || null, contractPrice: input.contractPrice ?? null, isActive: input.isActive ?? true };
       this.customers.push(row);
       return row;
     }
@@ -2148,6 +2150,7 @@ export class MasterDataService {
           name: input.name === undefined ? undefined : input.name.trim(),
           type: input.type,
           tier: input.tier,
+          address: input.address === undefined ? undefined : input.address?.trim() || null,
           contractPrice:
             input.contractPrice === undefined
               ? undefined
@@ -2233,6 +2236,7 @@ export class MasterDataService {
       const type = typeRaw === 'BUSINESS' ? 'BUSINESS' : typeRaw === 'RETAIL' || !typeRaw ? 'RETAIL' : null;
       const tierRaw = this.toImportNullableString(row.tier);
       const tier = tierRaw ? tierRaw.toUpperCase() : null;
+      const address = this.toImportNullableString(row.address);
       const contractPrice = this.toImportNullableNumber(row.contractPrice ?? row.contract_price);
       const isActive = this.toImportBoolean(row.isActive ?? row.is_active, true);
 
@@ -2271,6 +2275,7 @@ export class MasterDataService {
               name,
               type,
               tier,
+              address,
               contractPrice,
               isActive
             };
@@ -2328,6 +2333,7 @@ export class MasterDataService {
               name: String(row.normalized.name ?? ''),
               type: row.normalized.type === 'BUSINESS' ? 'BUSINESS' : 'RETAIL',
               tier: (row.normalized.tier as string | null) ?? null,
+              address: (row.normalized.address as string | null) ?? null,
               contractPrice:
                 row.normalized.contractPrice === null
                   ? null
@@ -2344,6 +2350,7 @@ export class MasterDataService {
               name: String(row.normalized.name ?? ''),
               type: row.normalized.type === 'BUSINESS' ? 'BUSINESS' : 'RETAIL',
               tier: (row.normalized.tier as string | null) ?? null,
+              address: (row.normalized.address as string | null) ?? null,
               contractPrice:
                 row.normalized.contractPrice === null
                   ? null
@@ -6288,6 +6295,7 @@ export class MasterDataService {
     name: string;
     type: 'RETAIL' | 'BUSINESS';
     tier: string | null;
+    address: string | null;
     contractPrice: Prisma.Decimal | null;
     pointsBalance: number;
     isActive: boolean;
@@ -6300,6 +6308,7 @@ export class MasterDataService {
       name: row.name,
       type: row.type,
       tier: row.tier,
+      address: row.address,
       contractPrice: row.contractPrice ? Number(row.contractPrice) : null,
       pointsBalance: Math.max(0, Math.floor(row.pointsBalance ?? 0)),
       isActive: row.isActive,
