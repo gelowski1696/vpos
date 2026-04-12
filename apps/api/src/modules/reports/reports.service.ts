@@ -1810,9 +1810,50 @@ export class ReportsService {
       }
     }
 
-    const mergedRows = [...mappedRows, ...supplementalRows]
-      .sort((a, b) => b.created_at.localeCompare(a.created_at))
-      .slice(0, limit);
+    const mergedAllRows = [...mappedRows, ...supplementalRows].sort((a, b) => {
+      const byCreatedAt = b.created_at.localeCompare(a.created_at);
+      if (byCreatedAt !== 0) {
+        return byCreatedAt;
+      }
+      return b.id.localeCompare(a.id);
+    });
+
+    const groupedByInventoryScope = new Map<string, typeof mergedAllRows>();
+    for (const row of mergedAllRows) {
+      const scopeKey = `${row.location_id}::${row.product_id}`;
+      const scoped = groupedByInventoryScope.get(scopeKey) ?? [];
+      scoped.push(row);
+      groupedByInventoryScope.set(scopeKey, scoped);
+    }
+
+    for (const scopedRows of groupedByInventoryScope.values()) {
+      const chronological = [...scopedRows].sort((a, b) => {
+        const byCreatedAt = a.created_at.localeCompare(b.created_at);
+        if (byCreatedAt !== 0) {
+          return byCreatedAt;
+        }
+        return a.id.localeCompare(b.id);
+      });
+
+      let runningQtyAfter: number | null = null;
+      for (const row of chronological) {
+        if (row.qty_after_known) {
+          runningQtyAfter = row.qty_after;
+          continue;
+        }
+
+        const isLpgServiceAdjustment = row.reference_type.startsWith('LPG_ITEM_');
+        if (!isLpgServiceAdjustment || runningQtyAfter === null) {
+          continue;
+        }
+
+        runningQtyAfter = this.roundQty(runningQtyAfter + row.qty_delta);
+        row.qty_after = runningQtyAfter;
+        row.qty_after_known = true;
+      }
+    }
+
+    const mergedRows = mergedAllRows.slice(0, limit);
 
     const qtyIn = this.roundQty(
       mergedRows.filter((row) => row.qty_delta > 0).reduce((sum, row) => sum + row.qty_delta, 0)
