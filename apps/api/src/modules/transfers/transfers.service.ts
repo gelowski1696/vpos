@@ -754,8 +754,8 @@ export class TransfersService {
         { destinationLocation: { branchId } }
       ];
     }
-    const sinceDate = this.parseIsoDate(filters.since);
-    const untilDate = this.parseIsoDate(filters.until);
+    const sinceDate = this.parseIsoDate(filters.since, 'since');
+    const untilDate = this.parseIsoDate(filters.until, 'until');
     const createdAtFilter: Prisma.DateTimeFilter = {};
     if (sinceDate) {
       createdAtFilter.gte = sinceDate;
@@ -2235,11 +2235,11 @@ export class TransfersService {
     ) {
       return false;
     }
-    const sinceDate = this.parseIsoDate(filters.since);
+    const sinceDate = this.parseIsoDate(filters.since, 'since');
     if (sinceDate && new Date(row.created_at).getTime() < sinceDate.getTime()) {
       return false;
     }
-    const untilDate = this.parseIsoDate(filters.until);
+    const untilDate = this.parseIsoDate(filters.until, 'until');
     if (untilDate && new Date(row.created_at).getTime() > untilDate.getTime()) {
       return false;
     }
@@ -2259,12 +2259,15 @@ export class TransfersService {
     return true;
   }
 
-  private parseIsoDate(value: string | undefined): Date | null {
+  private parseIsoDate(value: string | undefined, field: 'since' | 'until'): Date | null {
     const normalized = value?.trim();
     if (!normalized) {
       return null;
     }
-    const parsed = new Date(normalized);
+    const dateOnlyMatch = /^\d{4}-\d{2}-\d{2}$/.test(normalized);
+    const parsed = dateOnlyMatch
+      ? new Date(`${normalized}${field === 'until' ? 'T23:59:59.999Z' : 'T00:00:00.000Z'}`)
+      : new Date(normalized);
     if (Number.isNaN(parsed.getTime())) {
       throw new BadRequestException(`Invalid datetime value: ${value}`);
     }

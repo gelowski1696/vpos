@@ -214,6 +214,12 @@ export class CustomerPaymentsService {
     const rows = this.getCompanyPayments(companyId);
     const limit = this.normalizeLimit(query?.limit);
     const sort = this.normalizeSort(query?.sort);
+    const since = query?.since?.trim()
+      ? this.parseRangeDate(query.since, 'since', `Invalid datetime: ${query.since}`)
+      : null;
+    const until = query?.until?.trim()
+      ? this.parseRangeDate(query.until, 'until', `Invalid datetime: ${query.until}`)
+      : null;
     const filtered = rows
       .filter((row) => {
         if (query?.customer_id?.trim()) {
@@ -230,11 +236,18 @@ export class CustomerPaymentsService {
             return false;
           }
         }
-        if (query?.since && row.posted_at < query.since) {
-          return false;
-        }
-        if (query?.until && row.posted_at > query.until) {
-          return false;
+        if (since || until) {
+          const postedAt = new Date(row.posted_at);
+          const postedAtMs = postedAt.getTime();
+          if (!Number.isFinite(postedAtMs)) {
+            return false;
+          }
+          if (since && postedAtMs < since.getTime()) {
+            return false;
+          }
+          if (until && postedAtMs > until.getTime()) {
+            return false;
+          }
         }
         return true;
       });
@@ -261,8 +274,12 @@ export class CustomerPaymentsService {
     const branch = query?.branch_id?.trim()
       ? await this.resolveBranchOptional(db, companyId, query.branch_id)
       : null;
-    const since = query?.since?.trim() ? this.toDate(query.since) : null;
-    const until = query?.until?.trim() ? this.toDate(query.until) : null;
+    const since = query?.since?.trim()
+      ? this.parseRangeDate(query.since, 'since', `Invalid datetime: ${query.since}`)
+      : null;
+    const until = query?.until?.trim()
+      ? this.parseRangeDate(query.until, 'until', `Invalid datetime: ${query.until}`)
+      : null;
     const sort = this.normalizeSort(query?.sort);
 
     let rows: Array<{
@@ -593,6 +610,18 @@ export class CustomerPaymentsService {
     const parsed = new Date(value);
     if (Number.isNaN(parsed.getTime())) {
       throw new BadRequestException(`Invalid datetime: ${value}`);
+    }
+    return parsed;
+  }
+
+  private parseRangeDate(value: string, field: 'since' | 'until', errorMessage: string): Date {
+    const normalized = value.trim();
+    const dateOnlyMatch = /^\d{4}-\d{2}-\d{2}$/.test(normalized);
+    const parsed = dateOnlyMatch
+      ? new Date(`${normalized}${field === 'until' ? 'T23:59:59.999Z' : 'T00:00:00.000Z'}`)
+      : new Date(normalized);
+    if (Number.isNaN(parsed.getTime())) {
+      throw new BadRequestException(errorMessage);
     }
     return parsed;
   }

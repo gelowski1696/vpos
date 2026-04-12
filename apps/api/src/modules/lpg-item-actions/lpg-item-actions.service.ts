@@ -385,22 +385,26 @@ export class LpgItemActionsService {
     if (filter?.since || filter?.until) {
       const createdAt: { gte?: Date; lte?: Date } = {};
       if (filter.since) {
-        const date = new Date(filter.since);
-        if (Number.isNaN(date.getTime())) {
-          throw new BadRequestException('Invalid since filter');
-        }
-        createdAt.gte = date;
+        createdAt.gte = this.parseRangeDate(filter.since, 'since', 'Invalid since filter');
       }
       if (filter.until) {
-        const date = new Date(filter.until);
-        if (Number.isNaN(date.getTime())) {
-          throw new BadRequestException('Invalid until filter');
-        }
-        createdAt.lte = date;
+        createdAt.lte = this.parseRangeDate(filter.until, 'until', 'Invalid until filter');
       }
       where.createdAt = createdAt;
     }
     return where;
+  }
+
+  private parseRangeDate(value: string, field: 'since' | 'until', errorMessage: string): Date {
+    const normalized = value.trim();
+    const dateOnlyMatch = /^\d{4}-\d{2}-\d{2}$/.test(normalized);
+    const parsed = dateOnlyMatch
+      ? new Date(`${normalized}${field === 'until' ? 'T23:59:59.999Z' : 'T00:00:00.000Z'}`)
+      : new Date(normalized);
+    if (Number.isNaN(parsed.getTime())) {
+      throw new BadRequestException(errorMessage);
+    }
+    return parsed;
   }
 
   private limit(value?: number): number {

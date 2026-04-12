@@ -1810,8 +1810,8 @@ export class VcardService {
         message: 'action filter must start with VCARD_'
       });
     }
-    const since = query.since?.trim() ? this.toDate(query.since) : null;
-    const until = query.until?.trim() ? this.toDate(query.until) : null;
+    const since = query.since?.trim() ? this.parseRangeDate(query.since, 'since') : null;
+    const until = query.until?.trim() ? this.parseRangeDate(query.until, 'until') : null;
     const rows = await binding.client.auditLog.findMany({
       where: {
         companyId,
@@ -3285,6 +3285,18 @@ export class VcardService {
 
   private toDate(value: string): Date {
     const parsed = new Date(value);
+    if (Number.isNaN(parsed.getTime())) {
+      throw new BadRequestException({ code: 'VCARD_DATE_INVALID', message: `Invalid date: ${value}` });
+    }
+    return parsed;
+  }
+
+  private parseRangeDate(value: string, field: 'since' | 'until'): Date {
+    const normalized = value.trim();
+    const dateOnlyMatch = /^\d{4}-\d{2}-\d{2}$/.test(normalized);
+    const parsed = dateOnlyMatch
+      ? new Date(`${normalized}${field === 'until' ? 'T23:59:59.999Z' : 'T00:00:00.000Z'}`)
+      : new Date(normalized);
     if (Number.isNaN(parsed.getTime())) {
       throw new BadRequestException({ code: 'VCARD_DATE_INVALID', message: `Invalid date: ${value}` });
     }
