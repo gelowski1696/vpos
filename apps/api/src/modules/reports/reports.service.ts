@@ -677,6 +677,7 @@ export class ReportsService {
       customer_id: string | null;
       customer_name: string | null;
       customer_code: string | null;
+      customer_address: string | null;
       sale_type: string;
       subtotal: number;
       discount_amount: number;
@@ -752,7 +753,8 @@ export class ReportsService {
         customer: {
           select: {
             name: true,
-            code: true
+            code: true,
+            address: true
           }
         },
         receipt: {
@@ -822,6 +824,7 @@ export class ReportsService {
           customer_id: row.customerId ?? null,
           customer_name: row.customer?.name ?? null,
           customer_code: row.customer?.code ?? null,
+          customer_address: row.customer?.address ?? null,
           sale_type: row.saleType,
           subtotal: this.roundMoney(this.toNumber(row.subtotal)),
           discount_amount: this.roundMoney(this.toNumber(row.discountAmount)),
@@ -865,6 +868,7 @@ export class ReportsService {
       customer_id: string | null;
       customer_name: string | null;
       customer_code: string | null;
+      customer_address: string | null;
       shift_id: string | null;
       shift_opened_at: string | null;
       personnel_name: string | null;
@@ -991,12 +995,13 @@ export class ReportsService {
             email: true
           }
         },
-        customer: {
-          select: {
-            name: true,
-            code: true
-          }
-        },
+      customer: {
+        select: {
+          name: true,
+          code: true,
+          address: true
+        }
+      },
         receipt: {
           select: {
             receiptNumber: true
@@ -1255,6 +1260,7 @@ export class ReportsService {
         customer_id: row.customerId ?? null,
         customer_name: row.customer?.name ?? null,
         customer_code: row.customer?.code ?? null,
+        customer_address: row.customer?.address ?? null,
         shift_id: row.shiftId ?? null,
         shift_opened_at: row.shift?.openedAt ? row.shift.openedAt.toISOString() : null,
         personnel_name: resolvedPersonnelName ?? null,
@@ -1369,6 +1375,7 @@ export class ReportsService {
       location_code: string;
       customer_name: string | null;
       customer_code: string | null;
+      customer_address: string | null;
       line_count: number;
     }>;
   }> {
@@ -1426,7 +1433,8 @@ export class ReportsService {
         customer: {
           select: {
             name: true,
-            code: true
+            code: true,
+            address: true
           }
         },
         sale: {
@@ -1472,6 +1480,7 @@ export class ReportsService {
         location_code: row.location?.code ?? row.locationId,
         customer_name: row.customer?.name ?? null,
         customer_code: row.customer?.code ?? null,
+        customer_address: row.customer?.address ?? null,
         line_count: row.lines.length
       }))
     };

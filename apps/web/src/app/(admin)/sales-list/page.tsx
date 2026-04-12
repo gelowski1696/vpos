@@ -32,8 +32,10 @@ type SalesListRow = {
   location_code: string;
   cashier_name: string;
   cashier_email: string;
+  customer_id: string | null;
   customer_name: string | null;
   customer_code: string | null;
+  customer_address: string | null;
   sale_type: string;
   subtotal: number;
   discount_amount: number;
@@ -129,8 +131,10 @@ type SalesReturnHistoryRow = {
   location_id: string;
   location_name: string;
   location_code: string;
+  customer_id: string | null;
   customer_name: string | null;
   customer_code: string | null;
+  customer_address: string | null;
   line_count: number;
 };
 
@@ -534,7 +538,7 @@ export default function SalesListPage(): JSX.Element {
                 <th className="px-3 py-2">Receipt</th>
                 <th className="px-3 py-2">Sale ID</th>
                 <th className="px-3 py-2">Branch</th>
-                <th className="px-3 py-2">Location</th>
+                <th className="px-3 py-2">Customer Address</th>
                 <th className="px-3 py-2">Cashier</th>
                 <th className="px-3 py-2">Customer</th>
                 <th className="px-3 py-2">Type</th>
@@ -575,7 +579,7 @@ export default function SalesListPage(): JSX.Element {
                       {row.branch_name} ({row.branch_code})
                     </td>
                     <td className="px-3 py-2 text-slate-700 dark:text-slate-200">
-                      {row.location_name} ({row.location_code})
+                      {row.customer_address ?? 'N/A'}
                     </td>
                     <td className="px-3 py-2 text-slate-700 dark:text-slate-200">{row.cashier_name}</td>
                     <td className="px-3 py-2 text-slate-700 dark:text-slate-200">
@@ -628,7 +632,7 @@ export default function SalesListPage(): JSX.Element {
                 <th className="px-3 py-2">Receipt / Sale</th>
                 <th className="px-3 py-2">Customer</th>
                 <th className="px-3 py-2">Branch</th>
-                <th className="px-3 py-2">Location</th>
+                <th className="px-3 py-2">Customer Address</th>
                 <th className="px-3 py-2 text-right">Amount</th>
                 <th className="px-3 py-2 text-right">Points Reversed</th>
                 <th className="px-3 py-2 text-right">Lines</th>
@@ -662,7 +666,7 @@ export default function SalesListPage(): JSX.Element {
                       {row.customer_name ? `${row.customer_name}${row.customer_code ? ` (${row.customer_code})` : ''}` : 'Walk-in / N/A'}
                     </td>
                     <td className="px-3 py-2 text-slate-700 dark:text-slate-200">{row.branch_name}</td>
-                    <td className="px-3 py-2 text-slate-700 dark:text-slate-200">{row.location_name}</td>
+                    <td className="px-3 py-2 text-slate-700 dark:text-slate-200">{row.customer_address ?? 'N/A'}</td>
                     <td className="px-3 py-2 text-right text-slate-700 dark:text-slate-200">{fmtMoney(row.total_amount)}</td>
                     <td className="px-3 py-2 text-right text-slate-700 dark:text-slate-200">{row.points_reversed}</td>
                     <td className="px-3 py-2 text-right text-slate-700 dark:text-slate-200">{row.line_count}</td>
@@ -795,9 +799,9 @@ export default function SalesListPage(): JSX.Element {
                         <dd className="text-slate-800 dark:text-slate-100">
                           {selectedDetails.sale.branch_name} ({selectedDetails.sale.branch_code})
                         </dd>
-                        <dt className="text-slate-500 dark:text-slate-400">Location</dt>
+                        <dt className="text-slate-500 dark:text-slate-400">Customer Address</dt>
                         <dd className="text-slate-800 dark:text-slate-100">
-                          {selectedDetails.sale.location_name} ({selectedDetails.sale.location_code})
+                          {selectedDetails.sale.customer_address ?? 'N/A'}
                         </dd>
                         <dt className="text-slate-500 dark:text-slate-400">Cashier</dt>
                         <dd className="text-slate-800 dark:text-slate-100">
