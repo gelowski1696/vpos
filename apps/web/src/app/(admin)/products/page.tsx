@@ -137,6 +137,7 @@ type InventoryMovementRow = {
   qty_full_delta: number;
   qty_empty_delta: number;
   qty_after: number;
+  qty_after_known?: boolean;
 };
 
 function yesNo(value: unknown): string {
@@ -1209,7 +1210,9 @@ export default function ProductsPage(): JSX.Element {
                           <td className="px-2 py-2">{formatQty(row.qty_delta)}</td>
                           <td className="px-2 py-2">{formatQty(row.qty_full_delta)}</td>
                           <td className="px-2 py-2">{formatQty(row.qty_empty_delta)}</td>
-                          <td className="px-2 py-2">{formatQty(row.qty_after)}</td>
+                          <td className="px-2 py-2">
+                            {row.qty_after_known === false ? '-' : formatQty(row.qty_after)}
+                          </td>
                           <td className="px-2 py-2">
                             {row.reference_type}:{row.reference_id}
                           </td>

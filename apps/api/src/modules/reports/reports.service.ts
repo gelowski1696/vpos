@@ -1520,6 +1520,7 @@ export class ReportsService {
       unit_cost: number;
       avg_cost_after: number;
       qty_after: number;
+      qty_after_known: boolean;
     }>;
   }> {
     const range = this.parseRange(query);
@@ -1628,7 +1629,8 @@ export class ReportsService {
       qty_delta: this.roundQty(this.toNumber(row.qtyDelta)),
       unit_cost: this.roundQty(this.toNumber(row.unitCost)),
       avg_cost_after: this.roundQty(this.toNumber(row.avgCostAfter)),
-      qty_after: this.roundQty(this.toNumber(row.qtyAfter))
+      qty_after: this.roundQty(this.toNumber(row.qtyAfter)),
+      qty_after_known: true
     }));
 
     const supplementalRows: typeof mappedRows = [];
@@ -1676,7 +1678,8 @@ export class ReportsService {
           qty_empty_delta: this.roundQty(qtyEmptyDelta),
           unit_cost: 0,
           avg_cost_after: 0,
-          qty_after: 0
+          qty_after: 0,
+          qty_after_known: false
         });
       }
     }
@@ -1734,7 +1737,8 @@ export class ReportsService {
           qty_empty_delta: 0,
           unit_cost: 0,
           avg_cost_after: 0,
-          qty_after: 0
+          qty_after: 0,
+          qty_after_known: false
         });
       }
     }
@@ -1800,7 +1804,8 @@ export class ReportsService {
           qty_empty_delta: 0,
           unit_cost: 0,
           avg_cost_after: 0,
-          qty_after: 0
+          qty_after: 0,
+          qty_after_known: false
         });
       }
     }
