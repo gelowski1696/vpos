@@ -190,6 +190,7 @@ export default function ProductsPage(): JSX.Element {
   const [movementError, setMovementError] = useState<string | null>(null);
   const [movementFromDate, setMovementFromDate] = useState('');
   const [movementToDate, setMovementToDate] = useState('');
+  const [itemHistoryOpen, setItemHistoryOpen] = useState(false);
   const [handledSearchProductId, setHandledSearchProductId] = useState<string | null>(null);
 
   async function loadDetailData(): Promise<void> {
@@ -266,6 +267,7 @@ export default function ProductsPage(): JSX.Element {
     }
     setHandledSearchProductId(productId);
     setViewProductId(productId);
+    setItemHistoryOpen(false);
     setCostSnapshot(null);
     setCostError(null);
     void loadCostSnapshot(productId);
@@ -734,6 +736,7 @@ export default function ProductsPage(): JSX.Element {
             onClick: (row) => {
               const productId = String(row.id);
               setViewProductId(productId);
+              setItemHistoryOpen(false);
               setCostSnapshot(null);
               setCostError(null);
               setMovementRows([]);
@@ -828,6 +831,13 @@ export default function ProductsPage(): JSX.Element {
               <div className="flex items-center gap-2">
                 <button
                   className="rounded-lg border border-slate-300 px-3 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-100 dark:border-slate-600 dark:text-slate-200 dark:hover:bg-slate-800"
+                  onClick={() => setItemHistoryOpen(true)}
+                  type="button"
+                >
+                  Item History
+                </button>
+                <button
+                  className="rounded-lg border border-slate-300 px-3 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-100 dark:border-slate-600 dark:text-slate-200 dark:hover:bg-slate-800"
                   onClick={() => {
                     void loadDetailData();
                     if (viewProductId) {
@@ -843,6 +853,7 @@ export default function ProductsPage(): JSX.Element {
                   className="rounded-lg border border-slate-300 px-3 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-100 dark:border-slate-600 dark:text-slate-200 dark:hover:bg-slate-800"
                   onClick={() => {
                     setViewProductId(null);
+                    setItemHistoryOpen(false);
                     setCostSnapshot(null);
                     setCostError(null);
                   }}
@@ -1036,91 +1047,6 @@ export default function ProductsPage(): JSX.Element {
 
                   <article className="rounded-xl border border-slate-200 p-3 dark:border-slate-700">
                     <h3 className="mb-2 text-sm font-semibold text-slate-900 dark:text-slate-100">
-                      Item Movement History
-                    </h3>
-                    <div className="mb-3 grid gap-2 sm:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_auto]">
-                      <label className="grid gap-1 text-xs font-medium text-slate-500 dark:text-slate-400">
-                        <span>From</span>
-                        <input
-                          type="date"
-                          value={movementFromDate}
-                          onChange={(event) => setMovementFromDate(event.target.value)}
-                          className="rounded-lg border border-slate-200 bg-white px-2.5 py-2 text-xs text-slate-900 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100"
-                        />
-                      </label>
-                      <label className="grid gap-1 text-xs font-medium text-slate-500 dark:text-slate-400">
-                        <span>To</span>
-                        <input
-                          type="date"
-                          value={movementToDate}
-                          onChange={(event) => setMovementToDate(event.target.value)}
-                          className="rounded-lg border border-slate-200 bg-white px-2.5 py-2 text-xs text-slate-900 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100"
-                        />
-                      </label>
-                      <div className="flex items-end">
-                        <button
-                          type="button"
-                          className="rounded-lg border border-slate-300 px-3 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-100 dark:border-slate-600 dark:text-slate-200 dark:hover:bg-slate-800"
-                          onClick={() => {
-                            setMovementFromDate('');
-                            setMovementToDate('');
-                          }}
-                        >
-                          Clear
-                        </button>
-                      </div>
-                    </div>
-                    {movementLoading ? (
-                      <p className="text-sm text-slate-500 dark:text-slate-400">
-                        Loading movement history...
-                      </p>
-                    ) : movementError ? (
-                      <p className="text-sm text-rose-700">{movementError}</p>
-                    ) : movementRows.length === 0 ? (
-                      <p className="text-sm text-slate-500 dark:text-slate-400">
-                        No movement records found for this item.
-                      </p>
-                    ) : (
-                      <div className="overflow-x-auto">
-                        <table className="w-full min-w-[860px] text-left text-xs">
-                          <thead>
-                            <tr className="border-b border-slate-200 text-slate-500 dark:border-slate-700 dark:text-slate-400">
-                              <th className="px-2 py-2">Date</th>
-                              <th className="px-2 py-2">Movement</th>
-                              <th className="px-2 py-2">Location</th>
-                              <th className="px-2 py-2">Qty</th>
-                              <th className="px-2 py-2">FULL</th>
-                              <th className="px-2 py-2">EMPTY</th>
-                              <th className="px-2 py-2">After</th>
-                              <th className="px-2 py-2">Reference</th>
-                            </tr>
-                          </thead>
-                          <tbody>
-                            {movementRows.slice(0, 80).map((row) => (
-                              <tr
-                                className="border-b border-slate-100 dark:border-slate-800"
-                                key={row.id}
-                              >
-                                <td className="px-2 py-2">{formatDate(row.created_at)}</td>
-                                <td className="px-2 py-2">{row.movement_type}</td>
-                                <td className="px-2 py-2">{row.location_name}</td>
-                                <td className="px-2 py-2">{formatQty(row.qty_delta)}</td>
-                                <td className="px-2 py-2">{formatQty(row.qty_full_delta)}</td>
-                                <td className="px-2 py-2">{formatQty(row.qty_empty_delta)}</td>
-                                <td className="px-2 py-2">{formatQty(row.qty_after)}</td>
-                                <td className="px-2 py-2">
-                                  {row.reference_type}:{row.reference_id}
-                                </td>
-                              </tr>
-                            ))}
-                          </tbody>
-                        </table>
-                      </div>
-                    )}
-                  </article>
-
-                  <article className="rounded-xl border border-slate-200 p-3 dark:border-slate-700">
-                    <h3 className="mb-2 text-sm font-semibold text-slate-900 dark:text-slate-100">
                       Linked Pricing Rules
                     </h3>
                     {linkedPrices.length === 0 ? (
@@ -1177,6 +1103,120 @@ export default function ProductsPage(): JSX.Element {
                       </div>
                     )}
                   </article>
+                </div>
+              )}
+            </div>
+          </section>
+        </div>
+      ) : null}
+      {viewProductId && selectedProduct && itemHistoryOpen ? (
+        <div className="fixed inset-0 z-[60] flex items-center justify-center bg-slate-950/65 p-4">
+          <section className="flex max-h-[92vh] w-full max-w-5xl flex-col overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-2xl dark:border-slate-700 dark:bg-slate-900">
+            <header className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-200 px-4 py-3 dark:border-slate-700">
+              <div>
+                <h2 className="text-lg font-semibold text-slate-900 dark:text-slate-100">
+                  Item Movement History
+                </h2>
+                <p className="text-xs text-slate-500 dark:text-slate-400">
+                  {selectedProduct.name} ({selectedProduct.sku})
+                </p>
+              </div>
+              <div className="flex items-center gap-2">
+                <button
+                  className="rounded-lg border border-slate-300 px-3 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-100 dark:border-slate-600 dark:text-slate-200 dark:hover:bg-slate-800"
+                  onClick={() => void loadMovementHistory(viewProductId)}
+                  type="button"
+                  disabled={movementLoading}
+                >
+                  {movementLoading ? 'Refreshing...' : 'Refresh'}
+                </button>
+                <button
+                  className="rounded-lg border border-slate-300 px-3 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-100 dark:border-slate-600 dark:text-slate-200 dark:hover:bg-slate-800"
+                  onClick={() => setItemHistoryOpen(false)}
+                  type="button"
+                >
+                  Close
+                </button>
+              </div>
+            </header>
+            <div className="overflow-auto p-4">
+              <div className="mb-3 grid gap-2 sm:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_auto]">
+                <label className="grid gap-1 text-xs font-medium text-slate-500 dark:text-slate-400">
+                  <span>From</span>
+                  <input
+                    type="date"
+                    value={movementFromDate}
+                    onChange={(event) => setMovementFromDate(event.target.value)}
+                    className="rounded-lg border border-slate-200 bg-white px-2.5 py-2 text-xs text-slate-900 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100"
+                  />
+                </label>
+                <label className="grid gap-1 text-xs font-medium text-slate-500 dark:text-slate-400">
+                  <span>To</span>
+                  <input
+                    type="date"
+                    value={movementToDate}
+                    onChange={(event) => setMovementToDate(event.target.value)}
+                    className="rounded-lg border border-slate-200 bg-white px-2.5 py-2 text-xs text-slate-900 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100"
+                  />
+                </label>
+                <div className="flex items-end">
+                  <button
+                    type="button"
+                    className="rounded-lg border border-slate-300 px-3 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-100 dark:border-slate-600 dark:text-slate-200 dark:hover:bg-slate-800"
+                    onClick={() => {
+                      setMovementFromDate('');
+                      setMovementToDate('');
+                    }}
+                  >
+                    Clear
+                  </button>
+                </div>
+              </div>
+              {movementLoading ? (
+                <p className="text-sm text-slate-500 dark:text-slate-400">
+                  Loading movement history...
+                </p>
+              ) : movementError ? (
+                <p className="text-sm text-rose-700">{movementError}</p>
+              ) : movementRows.length === 0 ? (
+                <p className="text-sm text-slate-500 dark:text-slate-400">
+                  No movement records found for this item.
+                </p>
+              ) : (
+                <div className="overflow-x-auto">
+                  <table className="w-full min-w-[860px] text-left text-xs">
+                    <thead>
+                      <tr className="border-b border-slate-200 text-slate-500 dark:border-slate-700 dark:text-slate-400">
+                        <th className="px-2 py-2">Date</th>
+                        <th className="px-2 py-2">Movement</th>
+                        <th className="px-2 py-2">Location</th>
+                        <th className="px-2 py-2">Qty</th>
+                        <th className="px-2 py-2">FULL</th>
+                        <th className="px-2 py-2">EMPTY</th>
+                        <th className="px-2 py-2">After</th>
+                        <th className="px-2 py-2">Reference</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {movementRows.slice(0, 120).map((row) => (
+                        <tr
+                          className="border-b border-slate-100 dark:border-slate-800"
+                          key={row.id}
+                        >
+                          <td className="px-2 py-2">{formatDate(row.created_at)}</td>
+                          <td className="px-2 py-2">{row.movement_type}</td>
+                          <td className="px-2 py-2">{row.location_name}</td>
+                          <td className="px-2 py-2">{formatQty(row.qty_delta)}</td>
+                          <td className="px-2 py-2">{formatQty(row.qty_full_delta)}</td>
+                          <td className="px-2 py-2">{formatQty(row.qty_empty_delta)}</td>
+                          <td className="px-2 py-2">{formatQty(row.qty_after)}</td>
+                          <td className="px-2 py-2">
+                            {row.reference_type}:{row.reference_id}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
                 </div>
               )}
             </div>
