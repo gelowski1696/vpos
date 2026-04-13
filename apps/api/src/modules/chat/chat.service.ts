@@ -28,7 +28,7 @@ export class ChatService {
     }
     return this.genAI.getGenerativeModel(
       { model: 'gemini-1.5-flash', systemInstruction: systemPrompt },
-      { apiVersion: 'v1' }
+      { apiVersion: 'v1beta' }
     );
   }
 
