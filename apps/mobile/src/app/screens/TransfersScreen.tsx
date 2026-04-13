@@ -193,6 +193,14 @@ function isSingleBucketAdjustmentMode(mode: TransferMode | ''): mode is 'CREATE'
   return mode === 'CREATE' || mode === 'USED' || mode === 'CONVERT';
 }
 
+function usesFullInputForAdjustment(mode: TransferMode | ''): mode is 'CREATE' | 'CONVERT' {
+  return mode === 'CREATE' || mode === 'CONVERT';
+}
+
+function usesEmptyInputForAdjustment(mode: TransferMode | ''): mode is 'USED' {
+  return mode === 'USED';
+}
+
 function getMovementSummary(mode: TransferMode | ''): Array<{ label: string; delta: string }> {
   switch (mode) {
     case 'SUPPLIER_RESTOCK_IN':
@@ -525,25 +533,32 @@ export function TransfersScreen({
     [emptyLines]
   );
 
-  const visibleBuckets = useMemo<Array<'full' | 'empty'>>(() => {
-    if (transferMode === 'USED') {
-      return ['full'];
-    }
-    if (transferMode === 'CREATE' || transferMode === 'CONVERT') {
-      return ['empty'];
-    }
-    return ['full', 'empty'];
-  }, [transferMode]);
+  const visibleBuckets = useMemo<Array<'full' | 'empty'>>(() => ['full', 'empty'], []);
 
   const transferModeOptions = useMemo<MasterDataOption[]>(
     () =>
-      TRANSFER_MODE_OPTIONS.map((mode) => ({
+      TRANSFER_MODE_OPTIONS.filter((mode) => {
+        if (mode.value === 'STORE_TO_WAREHOUSE' || mode.value === 'WAREHOUSE_TO_STORE') {
+          return warehouseLocations.length > 0;
+        }
+        return true;
+      }).map((mode) => ({
         id: mode.value,
         label: mode.label,
         subtitle: mode.subtitle
       })),
-    []
+    [warehouseLocations.length]
   );
+
+  useEffect(() => {
+    if (!transferMode) {
+      return;
+    }
+    const stillAvailable = transferModeOptions.some((option) => option.id === transferMode);
+    if (!stillAvailable) {
+      setTransferMode('');
+    }
+  }, [transferMode, transferModeOptions]);
 
   const itemCategoryOptions = useMemo(() => {
     return [...new Set(products.map((product) => product.group).filter((value): value is string => Boolean(value)))]
@@ -731,7 +746,7 @@ export function TransfersScreen({
   };
 
   const requiresSourceStockCheck = (mode: TransferMode | ''): boolean =>
-    mode.length > 0 && mode !== 'SUPPLIER_RESTOCK_IN';
+    mode.length > 0 && mode !== 'SUPPLIER_RESTOCK_IN' && !isSingleBucketAdjustmentMode(mode);
 
   const activeSourceLocationId = useMemo(() => {
     if (!transferMode) {
@@ -798,7 +813,13 @@ export function TransfersScreen({
 
   const resolveAvailableQtyForBucket = (productId: string, bucket: 'full' | 'empty'): number => {
     const stock = sourceInventoryByProduct.get(productId) ?? { qtyOnHand: 0, qtyFull: 0, qtyEmpty: 0 };
-    let available = bucket === 'full' ? stock.qtyFull : stock.qtyEmpty;
+    const stockBucket: 'full' | 'empty' =
+      usesFullInputForAdjustment(transferMode) && bucket === 'full'
+        ? 'empty'
+        : usesEmptyInputForAdjustment(transferMode) && bucket === 'empty'
+          ? 'full'
+          : bucket;
+    let available = stockBucket === 'full' ? stock.qtyFull : stock.qtyEmpty;
     if (stock.qtyFull <= 0.0001 && stock.qtyEmpty <= 0.0001) {
       available = stock.qtyOnHand;
     }
@@ -1009,8 +1030,8 @@ export function TransfersScreen({
     }
     if (
       endpoints.sourceId === endpoints.destinationId &&
-      transferMode !== 'SUPPLIER_RESTOCK_IN' &&
-      transferMode !== 'SUPPLIER_RESTOCK_OUT'
+      !isSupplierRestockMode(transferMode) &&
+      !isSingleBucketAdjustmentMode(transferMode)
     ) {
       toastError('Transfer', 'Source and destination must be different.');
       return;
@@ -1031,7 +1052,11 @@ export function TransfersScreen({
         continue;
       }
       const bucket = merged.get(productId) ?? { qtyFull: 0, qtyEmpty: 0 };
-      bucket.qtyFull = Number((bucket.qtyFull + qty).toFixed(4));
+      if (usesFullInputForAdjustment(transferMode)) {
+        bucket.qtyEmpty = Number((bucket.qtyEmpty + qty).toFixed(4));
+      } else {
+        bucket.qtyFull = Number((bucket.qtyFull + qty).toFixed(4));
+      }
       merged.set(productId, bucket);
     }
     for (const line of emptyLines) {
@@ -1048,7 +1073,11 @@ export function TransfersScreen({
         continue;
       }
       const bucket = merged.get(productId) ?? { qtyFull: 0, qtyEmpty: 0 };
-      bucket.qtyEmpty = Number((bucket.qtyEmpty + qty).toFixed(4));
+      if (usesEmptyInputForAdjustment(transferMode)) {
+        bucket.qtyFull = Number((bucket.qtyFull + qty).toFixed(4));
+      } else {
+        bucket.qtyEmpty = Number((bucket.qtyEmpty + qty).toFixed(4));
+      }
       merged.set(productId, bucket);
     }
 
@@ -1091,14 +1120,15 @@ export function TransfersScreen({
         destinationLocationLabel: endpoints.destinationLabel,
         lines
       });
-      toastSuccess('Transfer queued', `Transfer ID: ${id}`);
+      toastSuccess('Transfer saved', `Transfer ID: ${id}`);
       resetTransferLines();
+      setTransferMode('');
       await refresh();
       await refreshMasterData();
       await refreshActiveShift();
       await onDataChanged?.();
     } catch (cause) {
-      toastError('Transfer failed', cause instanceof Error ? cause.message : 'Unable to queue transfer.');
+      toastError('Transfer failed', cause instanceof Error ? cause.message : 'Unable to save transfer.');
     } finally {
       setSaving(false);
     }
@@ -1116,13 +1146,7 @@ export function TransfersScreen({
     >
       <View className="flex-row items-center justify-between gap-2">
         <Text className="text-[13px] font-bold" style={{ color: theme.heading }}>
-          {transferMode === 'USED'
-            ? 'FULL Source Items'
-            : transferMode === 'CREATE' || transferMode === 'CONVERT'
-              ? 'EMPTY Source Items'
-              : bucket === 'full'
-                ? 'FULL Items'
-                : 'EMPTY Items'}
+          {bucket === 'full' ? 'FULL Items' : 'EMPTY Items'}
         </Text>
         <Pressable
           className="min-h-9 items-center justify-center rounded-xl border px-3"
@@ -1279,25 +1303,11 @@ export function TransfersScreen({
     >
       <View className="flex-row items-start gap-2.5" style={isCompactLayout ? { flexDirection: 'column', gap: 8 } : null}>
         <View className="flex-1">
-          <Text className="text-lg font-bold" style={[isCompactLayout ? { fontSize: 16 } : null, { color: theme.heading }]}>Advanced Transfers</Text>
+          <Text className="text-lg font-bold" style={[isCompactLayout ? { fontSize: 16 } : null, { color: theme.heading }]}>Transfer Items</Text>
           <Text className="text-[13px]" style={[isCompactLayout ? { fontSize: 12 } : null, { color: theme.subtext }]}>
             Supplier, store, and warehouse stock movements with FULL/EMPTY control.
           </Text>
         </View>
-        <Pressable
-          className="min-h-11 items-center justify-center rounded-xl px-4"
-          style={[
-            isCompactLayout ? { alignSelf: 'stretch' } : null,
-            { backgroundColor: saving || syncBusy ? theme.primaryMuted : theme.primary }
-          ]}
-          onPress={() => {
-            void refresh();
-            void refreshMasterData();
-          }}
-          disabled={saving || syncBusy}
-        >
-          <Text className="text-[13px] font-bold text-white">Refresh</Text>
-        </Pressable>
       </View>
 
       <ScrollView
@@ -1502,17 +1512,17 @@ export function TransfersScreen({
         <View ref={tutorialQueue.ref} onLayout={tutorialQueue.onLayout}>
           <Pressable
             style={[
-              styles.primaryBtn,
-              {
-                backgroundColor:
-                  saving || !activeShiftId || !hasSelectedTransferMode ? theme.primaryMuted : theme.primary
-              },
-              tutorialQueue.active ? styles.tutorialTargetFocus : null
-            ]}
-            onPress={() => void createTransfer()}
-            disabled={saving || syncBusy || !activeShiftId || !hasSelectedTransferMode}
-          >
-            <Text style={styles.primaryText}>{saving ? 'Queueing...' : 'Queue Transfer'}</Text>
+            styles.primaryBtn,
+            {
+              backgroundColor:
+                saving || !activeShiftId || !hasSelectedTransferMode ? theme.primaryMuted : theme.primary
+            },
+            tutorialQueue.active ? styles.tutorialTargetFocus : null
+          ]}
+          onPress={() => void createTransfer()}
+          disabled={saving || syncBusy || !activeShiftId || !hasSelectedTransferMode}
+        >
+            <Text style={styles.primaryText}>{saving ? 'Saving...' : 'Save Transfer'}</Text>
           </Pressable>
         </View>
       </ScrollView>
