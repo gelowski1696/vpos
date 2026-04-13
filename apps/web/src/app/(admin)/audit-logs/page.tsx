@@ -21,6 +21,19 @@ type BranchRow = {
   name: string;
 };
 
+function formatWhen(value: string): string {
+  const isoMatch = value.match(/^(\d{4}-\d{2}-\d{2})T(\d{2}:\d{2}:\d{2})/);
+  if (isoMatch) {
+    return `${isoMatch[1]} ${isoMatch[2]}`;
+  }
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) {
+    return value;
+  }
+  const pad = (num: number): string => String(num).padStart(2, '0');
+  return `${parsed.getUTCFullYear()}-${pad(parsed.getUTCMonth() + 1)}-${pad(parsed.getUTCDate())} ${pad(parsed.getUTCHours())}:${pad(parsed.getUTCMinutes())}:${pad(parsed.getUTCSeconds())}`;
+}
+
 export default function AuditLogsPage(): JSX.Element {
   const [rows, setRows] = useState<AuditLogRow[]>([]);
   const [branches, setBranches] = useState<BranchRow[]>([]);
@@ -95,7 +108,7 @@ export default function AuditLogsPage(): JSX.Element {
               <tbody>
                 {rows.map((row) => (
                   <tr className="border-t border-slate-100 text-slate-800 dark:border-slate-700 dark:text-slate-200" key={row.id}>
-                    <td className="py-2 pr-3">{row.created_at}</td>
+                    <td className="py-2 pr-3">{formatWhen(row.created_at)}</td>
                     <td className="py-2 pr-3">{row.level}</td>
                     <td className="py-2 pr-3">{row.action}</td>
                     <td className="py-2 pr-3">{row.entity}</td>

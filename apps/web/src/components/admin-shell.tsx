@@ -6,6 +6,7 @@ import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { AdminWalkthrough, type AdminTourStep } from './admin-walkthrough';
+import { ChatWidget } from './chat/ChatWidget';
 import { apiRequest, clearAuthSession, getAccessToken, getSessionRoles } from '../lib/api-client';
 
 type ThemeMode = 'light' | 'dark';
@@ -1399,6 +1400,7 @@ export function AdminShell({ children }: { children: React.ReactNode }): JSX.Ele
           steps={walkthroughSteps}
         />
       ) : null}
+      {!isPlatformOwner ? <ChatWidget /> : null}
     </div>
   );
 }
