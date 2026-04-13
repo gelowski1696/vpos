@@ -43,6 +43,7 @@ export class TransfersController {
       supplier_name?: string | null;
       source_location_label?: string | null;
       destination_location_label?: string | null;
+      notes?: string | null;
       lines: Array<{ product_id: string; qty_full: number; qty_empty: number }>;
     }
   ): Promise<TransferRecord> {

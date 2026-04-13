@@ -1175,6 +1175,7 @@ export class SyncService {
         destination_location_label: this.asString(
           payload.destination_location_label ?? payload.destinationLocationLabel
         ),
+        notes: this.asString(payload.notes),
         lines
       });
       if (created.status === 'POSTED') {
@@ -1215,6 +1216,25 @@ export class SyncService {
 
     const source = this.asString(payload.source_location_id ?? payload.sourceLocationId);
     const destination = this.asString(payload.destination_location_id ?? payload.destinationLocationId);
+    const rawMode = this.asString(payload.transfer_mode ?? payload.transferMode)?.toUpperCase() ?? 'GENERAL';
+    const transferMode =
+      rawMode === 'SUPPLIER_RESTOCK_IN' ||
+      rawMode === 'SUPPLIER_RESTOCK_OUT' ||
+      rawMode === 'CREATE' ||
+      rawMode === 'USED' ||
+      rawMode === 'CONVERT' ||
+      rawMode === 'INTER_STORE_TRANSFER' ||
+      rawMode === 'STORE_TO_WAREHOUSE' ||
+      rawMode === 'WAREHOUSE_TO_STORE' ||
+      rawMode === 'GENERAL'
+        ? rawMode
+        : 'GENERAL';
+    const isRestockIn = transferMode === 'SUPPLIER_RESTOCK_IN';
+    const isRestockOut = transferMode === 'SUPPLIER_RESTOCK_OUT';
+    const isCreate = transferMode === 'CREATE';
+    const isUsed = transferMode === 'USED';
+    const isConvert = transferMode === 'CONVERT';
+    const isAdjustment = isRestockIn || isRestockOut || isCreate || isUsed || isConvert;
     const shiftId = this.asString(payload.shift_id ?? payload.shiftId);
     const requestedBy = this.asString(
       payload.requested_by_user_id ??
@@ -1227,6 +1247,12 @@ export class SyncService {
       return {
         ok: false,
         reason: 'Transfer payload missing required source/destination/shift_id/lines'
+      };
+    }
+    if (!isAdjustment && source === destination) {
+      return {
+        ok: false,
+        reason: 'source_location_id and destination_location_id must be different'
       };
     }
 
@@ -1251,15 +1277,36 @@ export class SyncService {
       if (line.qtyFull < 0 || line.qtyEmpty < 0) {
         return { ok: false, reason: 'Transfer quantities must be non-negative' };
       }
+      if (line.qtyFull === 0 && line.qtyEmpty === 0) {
+        return { ok: false, reason: `line ${line.productId} must move qty_full or qty_empty` };
+      }
       validated.push({ productId: line.productId, qtyFull: line.qtyFull, qtyEmpty: line.qtyEmpty });
     }
 
     for (const line of validated) {
       const sourceBucket = this.getInventory(companyId, source, line.productId);
-      if (sourceBucket.qty_full < line.qtyFull || sourceBucket.qty_empty < line.qtyEmpty) {
+      if (isRestockIn) {
+        continue;
+      }
+      if (isRestockOut || !isAdjustment) {
+        if (sourceBucket.qty_full < line.qtyFull || sourceBucket.qty_empty < line.qtyEmpty) {
+          return {
+            ok: false,
+            reason: `Insufficient stock for ${line.productId} at ${source}: full=${sourceBucket.qty_full}, empty=${sourceBucket.qty_empty}`
+          };
+        }
+        continue;
+      }
+      if ((isCreate || isConvert) && sourceBucket.qty_empty < line.qtyEmpty) {
         return {
           ok: false,
-          reason: `Insufficient stock for ${line.productId} at ${source}: full=${sourceBucket.qty_full}, empty=${sourceBucket.qty_empty}`
+          reason: `Insufficient EMPTY stock for ${line.productId} at ${source}: empty=${sourceBucket.qty_empty}`
+        };
+      }
+      if (isUsed && sourceBucket.qty_full < line.qtyFull) {
+        return {
+          ok: false,
+          reason: `Insufficient FULL stock for ${line.productId} at ${source}: full=${sourceBucket.qty_full}`
         };
       }
     }
@@ -1268,6 +1315,43 @@ export class SyncService {
     for (const line of validated) {
       const sourceBucket = this.getInventory(companyId, source, line.productId);
       const destinationBucket = this.getInventory(companyId, destination, line.productId);
+
+      if (isRestockIn) {
+        inventory.set(this.inventoryKey(destination, line.productId), {
+          qty_full: Number((destinationBucket.qty_full + line.qtyFull).toFixed(4)),
+          qty_empty: Number((destinationBucket.qty_empty + line.qtyEmpty).toFixed(4))
+        });
+        continue;
+      }
+
+      if (isRestockOut) {
+        inventory.set(this.inventoryKey(source, line.productId), {
+          qty_full: Number((sourceBucket.qty_full - line.qtyFull).toFixed(4)),
+          qty_empty: Number((sourceBucket.qty_empty - line.qtyEmpty).toFixed(4))
+        });
+        continue;
+      }
+
+      if (isCreate || isConvert) {
+        const key = this.inventoryKey(destination, line.productId);
+        const current = this.getInventory(companyId, destination, line.productId);
+        inventory.set(key, {
+          qty_full: Number((current.qty_full + line.qtyEmpty).toFixed(4)),
+          qty_empty: Number((current.qty_empty - line.qtyEmpty).toFixed(4))
+        });
+        continue;
+      }
+
+      if (isUsed) {
+        const key = this.inventoryKey(destination, line.productId);
+        const current = this.getInventory(companyId, destination, line.productId);
+        inventory.set(key, {
+          qty_full: Number((current.qty_full - line.qtyFull).toFixed(4)),
+          qty_empty: Number((current.qty_empty + line.qtyFull).toFixed(4))
+        });
+        continue;
+      }
+
       inventory.set(this.inventoryKey(source, line.productId), {
         qty_full: Number((sourceBucket.qty_full - line.qtyFull).toFixed(4)),
         qty_empty: Number((sourceBucket.qty_empty - line.qtyEmpty).toFixed(4))

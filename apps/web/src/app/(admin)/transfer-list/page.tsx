@@ -36,6 +36,9 @@ type TransferRow = {
   transfer_mode?:
     | 'SUPPLIER_RESTOCK_IN'
     | 'SUPPLIER_RESTOCK_OUT'
+    | 'CREATE'
+    | 'USED'
+    | 'CONVERT'
     | 'INTER_STORE_TRANSFER'
     | 'STORE_TO_WAREHOUSE'
     | 'WAREHOUSE_TO_STORE'
@@ -44,6 +47,7 @@ type TransferRow = {
   supplier_name?: string | null;
   source_location_label?: string | null;
   destination_location_label?: string | null;
+  notes?: string | null;
   lines: Array<{ product_id: string; qty_full: number; qty_empty: number }>;
   approval_note?: string;
   posted_at?: string;
@@ -72,6 +76,12 @@ function modeLabel(value: TransferRow['transfer_mode']): string {
       return 'Supplier Restock In';
     case 'SUPPLIER_RESTOCK_OUT':
       return 'Supplier Return Out';
+    case 'CREATE':
+      return 'Create';
+    case 'USED':
+      return 'Used';
+    case 'CONVERT':
+      return 'Convert';
     case 'INTER_STORE_TRANSFER':
       return 'Inter-Store Transfer';
     case 'STORE_TO_WAREHOUSE':
@@ -232,6 +242,9 @@ export default function TransferListPage(): JSX.Element {
     if (
       deepLinkMode === 'SUPPLIER_RESTOCK_IN' ||
       deepLinkMode === 'SUPPLIER_RESTOCK_OUT' ||
+      deepLinkMode === 'CREATE' ||
+      deepLinkMode === 'USED' ||
+      deepLinkMode === 'CONVERT' ||
       deepLinkMode === 'INTER_STORE_TRANSFER' ||
       deepLinkMode === 'STORE_TO_WAREHOUSE' ||
       deepLinkMode === 'WAREHOUSE_TO_STORE' ||
@@ -374,6 +387,9 @@ export default function TransferListPage(): JSX.Element {
               <option value="ALL">All Modes</option>
               <option value="SUPPLIER_RESTOCK_IN">Supplier Restock In</option>
               <option value="SUPPLIER_RESTOCK_OUT">Supplier Return Out</option>
+              <option value="CREATE">Create</option>
+              <option value="USED">Used</option>
+              <option value="CONVERT">Convert</option>
               <option value="INTER_STORE_TRANSFER">Inter-Store Transfer</option>
               <option value="STORE_TO_WAREHOUSE">Store to Warehouse</option>
               <option value="WAREHOUSE_TO_STORE">Warehouse to Store</option>
@@ -559,6 +575,15 @@ export default function TransferListPage(): JSX.Element {
                   </p>
                 </article>
               </div>
+
+              {selectedTransfer.notes ? (
+                <article className="rounded-xl border border-slate-200 p-3 dark:border-slate-700">
+                  <p className="text-xs uppercase tracking-wide text-slate-500 dark:text-slate-400">Remarks / Notes</p>
+                  <p className="mt-1 whitespace-pre-wrap text-sm font-semibold text-slate-900 dark:text-slate-100">
+                    {selectedTransfer.notes}
+                  </p>
+                </article>
+              ) : null}
 
               <div className="rounded-xl border border-slate-200 dark:border-slate-700">
                 <div className="border-b border-slate-200 px-3 py-2 text-sm font-semibold text-slate-800 dark:border-slate-700 dark:text-slate-100">

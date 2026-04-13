@@ -36,6 +36,7 @@ export type TransferRecord = {
   supplier_name?: string | null;
   source_location_label?: string | null;
   destination_location_label?: string | null;
+  notes?: string | null;
   status: TransferStatus;
   lines: TransferLineInput[];
   approved_by_user_id?: string;
@@ -93,6 +94,7 @@ type RuntimeMeta = {
   supplier_name?: string | null;
   source_location_label?: string | null;
   destination_location_label?: string | null;
+  notes?: string | null;
   approved_by_user_id?: string;
   approval_note?: string;
   approved_at?: string;
@@ -132,6 +134,7 @@ export class TransfersService {
       supplier_name?: string | null;
       source_location_label?: string | null;
       destination_location_label?: string | null;
+      notes?: string | null;
       lines: TransferLineInput[];
     }
   ): Promise<TransferRecord> {
@@ -359,6 +362,7 @@ export class TransfersService {
       supplier_name?: string | null;
       source_location_label?: string | null;
       destination_location_label?: string | null;
+      notes?: string | null;
       lines: TransferLineInput[];
     }
   ): TransferRecord {
@@ -388,6 +392,7 @@ export class TransfersService {
       supplier_name: input.supplier_name ?? null,
       source_location_label: input.source_location_label ?? null,
       destination_location_label: input.destination_location_label ?? null,
+      notes: input.notes ?? null,
       status: 'CREATED',
       lines: input.lines,
       created_at: now,
@@ -611,6 +616,7 @@ export class TransfersService {
       supplier_name?: string | null;
       source_location_label?: string | null;
       destination_location_label?: string | null;
+      notes?: string | null;
       lines: TransferLineInput[];
     }
   ): Promise<TransferRecord> {
@@ -714,7 +720,8 @@ export class TransfersService {
       supplier_id: input.supplier_id ?? null,
       supplier_name: input.supplier_name ?? null,
       source_location_label: input.source_location_label ?? null,
-      destination_location_label: input.destination_location_label ?? null
+      destination_location_label: input.destination_location_label ?? null,
+      notes: input.notes ?? null
     });
     return this.mapTransferFromDb(companyId, result);
   }
@@ -1660,6 +1667,7 @@ export class TransfersService {
       source_location_label: meta?.source_location_label ?? row.sourceLocationLabel ?? null,
       destination_location_label:
         meta?.destination_location_label ?? row.destinationLocationLabel ?? null,
+      notes: meta?.notes ?? null,
       status: this.normalizeStatus(row.status),
       lines: row.lines.map((line) => ({
         product_id: line.product?.sku ?? line.productId,
@@ -1690,6 +1698,7 @@ export class TransfersService {
     supplier_name?: string | null;
     source_location_label?: string | null;
     destination_location_label?: string | null;
+    notes?: string | null;
     lines: TransferLineInput[];
   }): {
     client_transfer_id?: string;
@@ -1702,6 +1711,7 @@ export class TransfersService {
     supplier_name?: string | null;
     source_location_label?: string | null;
     destination_location_label?: string | null;
+    notes?: string | null;
     lines: TransferLineInput[];
   } {
     const client_transfer_id = input.client_transfer_id?.trim() || undefined;
@@ -1764,6 +1774,7 @@ export class TransfersService {
     const supplier_name = input.supplier_name?.trim() || null;
     const source_location_label = input.source_location_label?.trim() || null;
     const destination_location_label = input.destination_location_label?.trim() || null;
+    const notes = input.notes?.trim() || null;
 
     return {
       client_transfer_id,
@@ -1776,6 +1787,7 @@ export class TransfersService {
       supplier_name,
       source_location_label,
       destination_location_label,
+      notes,
       lines
     };
   }
