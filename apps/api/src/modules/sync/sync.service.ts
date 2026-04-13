@@ -1159,6 +1159,9 @@ export class SyncService {
         transfer_mode: this.asString(payload.transfer_mode ?? payload.transferMode) as
           | 'SUPPLIER_RESTOCK_IN'
           | 'SUPPLIER_RESTOCK_OUT'
+          | 'CREATE'
+          | 'USED'
+          | 'CONVERT'
           | 'INTER_STORE_TRANSFER'
           | 'STORE_TO_WAREHOUSE'
           | 'WAREHOUSE_TO_STORE'
