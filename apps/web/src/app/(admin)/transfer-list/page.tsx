@@ -594,7 +594,7 @@ export default function TransferListPage(): JSX.Element {
                     <thead className="bg-slate-50 text-left text-xs uppercase tracking-wide text-slate-600 dark:bg-slate-800/70 dark:text-slate-300">
                       <tr>
                         <th className="px-3 py-2">Item Code</th>
-                        <th className="px-3 py-2">Product</th>
+                        <th className="px-3 py-2">Item Name</th>
                         <th className="px-3 py-2 text-right">FULL</th>
                         <th className="px-3 py-2 text-right">EMPTY</th>
                       </tr>
