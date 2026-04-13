@@ -33,6 +33,7 @@ services:
       HOST: 0.0.0.0
       PORT: 3001
       VPOS_DEDICATED_DB_URLS_JSON: ${VPOS_DEDICATED_DB_URLS_JSON:-}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY}
     command: sh -c "pnpm --filter @vpos/api prisma:migrate:deploy && pnpm --filter @vpos/api start"
     ports:
       - "127.0.0.1:3101:3001"
