@@ -11,16 +11,26 @@ type DbClient = PrismaService | PrismaClient;
 
 @Injectable()
 export class ChatService {
-  private readonly anthropic: Anthropic;
+  private anthropic: Anthropic | null = null;
 
   constructor(
     @Optional() private readonly prisma?: PrismaService,
     @Optional() private readonly tenantRouter?: TenantDatasourceRouterService
-  ) {
-    this.anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
+  ) {}
+
+  private getClient(): Anthropic {
+    const apiKey = process.env.ANTHROPIC_API_KEY?.trim();
+    if (!apiKey) {
+      throw new Error('AI assistant is not configured. Set ANTHROPIC_API_KEY on the server.');
+    }
+    if (!this.anthropic) {
+      this.anthropic = new Anthropic({ apiKey });
+    }
+    return this.anthropic;
   }
 
   async *streamResponse(companyId: string, message: string): AsyncGenerator<string> {
+    const client = this.getClient();
     const binding = await this.getTenantBinding(companyId);
     const context = await this.buildContext(binding, message);
     const today = new Date().toLocaleDateString('en-PH', {
@@ -41,7 +51,7 @@ Today's date: ${today}
 ${context}
 --- END OF DATA ---`;
 
-    const stream = this.anthropic.messages.stream({
+    const stream = client.messages.stream({
       model: 'claude-haiku-4-5-20251001',
       max_tokens: 1024,
       system: systemPrompt,
