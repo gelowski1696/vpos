@@ -1,5 +1,5 @@
 import { Injectable, Optional } from '@nestjs/common';
-import Anthropic from '@anthropic-ai/sdk';
+import { GoogleGenerativeAI, type GenerativeModel } from '@google/generative-ai';
 import { TenancyDatastoreMode, type PrismaClient } from '@prisma/client';
 import { PrismaService } from '../../common/prisma.service';
 import {
@@ -11,26 +11,28 @@ type DbClient = PrismaService | PrismaClient;
 
 @Injectable()
 export class ChatService {
-  private anthropic: Anthropic | null = null;
+  private genAI: GoogleGenerativeAI | null = null;
 
   constructor(
     @Optional() private readonly prisma?: PrismaService,
     @Optional() private readonly tenantRouter?: TenantDatasourceRouterService
   ) {}
 
-  private getClient(): Anthropic {
-    const apiKey = process.env.ANTHROPIC_API_KEY?.trim();
+  private getModel(systemPrompt: string): GenerativeModel {
+    const apiKey = process.env.GEMINI_API_KEY?.trim();
     if (!apiKey) {
-      throw new Error('AI assistant is not configured. Set ANTHROPIC_API_KEY on the server.');
+      throw new Error('AI assistant is not configured. Set GEMINI_API_KEY on the server.');
     }
-    if (!this.anthropic) {
-      this.anthropic = new Anthropic({ apiKey });
+    if (!this.genAI) {
+      this.genAI = new GoogleGenerativeAI(apiKey);
     }
-    return this.anthropic;
+    return this.genAI.getGenerativeModel({
+      model: 'gemini-2.0-flash',
+      systemInstruction: systemPrompt
+    });
   }
 
   async *streamResponse(companyId: string, message: string): AsyncGenerator<string> {
-    const client = this.getClient();
     const binding = await this.getTenantBinding(companyId);
     const context = await this.buildContext(binding, message);
     const today = new Date().toLocaleDateString('en-PH', {
@@ -51,17 +53,12 @@ Today's date: ${today}
 ${context}
 --- END OF DATA ---`;
 
-    const stream = client.messages.stream({
-      model: 'claude-haiku-4-5-20251001',
-      max_tokens: 1024,
-      system: systemPrompt,
-      messages: [{ role: 'user', content: message }]
-    });
+    const model = this.getModel(systemPrompt);
+    const result = await model.generateContentStream(message);
 
-    for await (const chunk of stream) {
-      if (chunk.type === 'content_block_delta' && chunk.delta.type === 'text_delta') {
-        yield chunk.delta.text;
-      }
+    for await (const chunk of result.stream) {
+      const text = chunk.text();
+      if (text) yield text;
     }
   }
 

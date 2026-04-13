@@ -36,7 +36,7 @@ services:
       PORT: 3001
       CORS_ORIGINS: http://localhost:3000,http://127.0.0.1:3000,http://0.0.0.0:3000
       VPOS_DEDICATED_DB_URLS_JSON: ""
-      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
     command: sh -c "pnpm --filter @vpos/api prisma:migrate:deploy && pnpm --filter @vpos/api start"
     ports:
       - "3001:3001"
