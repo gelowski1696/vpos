@@ -26,10 +26,10 @@ export class ChatService {
     if (!this.genAI) {
       this.genAI = new GoogleGenerativeAI(apiKey);
     }
-    return this.genAI.getGenerativeModel({
-      model: 'gemini-1.5-flash',
-      systemInstruction: systemPrompt
-    });
+    return this.genAI.getGenerativeModel(
+      { model: 'gemini-1.5-flash', systemInstruction: systemPrompt },
+      { apiVersion: 'v1' }
+    );
   }
 
   async *streamResponse(companyId: string, message: string): AsyncGenerator<string> {
