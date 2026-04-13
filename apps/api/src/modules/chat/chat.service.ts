@@ -12,22 +12,91 @@ type DbClient = PrismaService | PrismaClient;
 @Injectable()
 export class ChatService {
   private genAI: GoogleGenerativeAI | null = null;
+  private resolvedModelName: string | null = null;
 
   constructor(
     @Optional() private readonly prisma?: PrismaService,
     @Optional() private readonly tenantRouter?: TenantDatasourceRouterService
   ) {}
 
-  private getModel(systemPrompt: string): GenerativeModel {
+  private getApiKey(): string {
     const apiKey = process.env.GEMINI_API_KEY?.trim();
     if (!apiKey) {
       throw new Error('AI assistant is not configured. Set GEMINI_API_KEY on the server.');
     }
+    return apiKey;
+  }
+
+  private getClient(apiKey: string): GoogleGenerativeAI {
     if (!this.genAI) {
       this.genAI = new GoogleGenerativeAI(apiKey);
     }
-    return this.genAI.getGenerativeModel(
-      { model: 'gemini-1.5-flash', systemInstruction: systemPrompt },
+    return this.genAI;
+  }
+
+  private normalizeModelName(value: string | null | undefined): string | null {
+    const trimmed = value?.trim();
+    if (!trimmed) {
+      return null;
+    }
+    return trimmed.startsWith('models/') ? trimmed.slice('models/'.length) : trimmed;
+  }
+
+  private async resolveModelName(apiKey: string): Promise<string> {
+    const configured = this.normalizeModelName(process.env.GEMINI_MODEL);
+    if (configured) {
+      this.resolvedModelName = configured;
+      return configured;
+    }
+    if (this.resolvedModelName) {
+      return this.resolvedModelName;
+    }
+
+    const listedRes = await fetch('https://generativelanguage.googleapis.com/v1beta/models', {
+      headers: {
+        'x-goog-api-key': apiKey
+      }
+    });
+    if (!listedRes.ok) {
+      throw new Error(
+        `Unable to discover Gemini models (${listedRes.status}). Set GEMINI_MODEL in server env.`
+      );
+    }
+    const listed = (await listedRes.json()) as {
+      models?: Array<{ name?: string; supportedGenerationMethods?: string[] }>;
+    };
+    const models = Array.isArray(listed.models) ? listed.models : [];
+
+    const supportsGenerate = (item: { supportedGenerationMethods?: string[] }): boolean =>
+      Array.isArray(item.supportedGenerationMethods) && item.supportedGenerationMethods.includes('generateContent');
+
+    const preferred = ['gemini-2.5-flash', 'gemini-2.0-flash', 'gemini-1.5-flash', 'gemini-1.5-pro'];
+    for (const candidate of preferred) {
+      const hit = models.find((entry) => this.normalizeModelName(entry.name) === candidate && supportsGenerate(entry));
+      if (hit) {
+        this.resolvedModelName = candidate;
+        return candidate;
+      }
+    }
+
+    const fallback = models.find(
+      (entry) => supportsGenerate(entry) && this.normalizeModelName(entry.name)?.startsWith('gemini-')
+    );
+    const fallbackName = this.normalizeModelName(fallback?.name);
+    if (fallbackName) {
+      this.resolvedModelName = fallbackName;
+      return fallbackName;
+    }
+
+    throw new Error('No Gemini model with generateContent is available. Set GEMINI_MODEL in server env.');
+  }
+
+  private async getModel(systemPrompt: string): Promise<GenerativeModel> {
+    const apiKey = this.getApiKey();
+    const client = this.getClient(apiKey);
+    const modelName = await this.resolveModelName(apiKey);
+    return client.getGenerativeModel(
+      { model: modelName, systemInstruction: systemPrompt },
       { apiVersion: 'v1beta' }
     );
   }
@@ -53,7 +122,7 @@ Today's date: ${today}
 ${context}
 --- END OF DATA ---`;
 
-    const model = this.getModel(systemPrompt);
+    const model = await this.getModel(systemPrompt);
     const result = await model.generateContentStream(message);
 
     for await (const chunk of result.stream) {
