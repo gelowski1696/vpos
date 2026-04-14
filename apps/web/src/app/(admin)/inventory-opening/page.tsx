@@ -102,6 +102,13 @@ export default function InventoryOpeningPage(): JSX.Element {
     [locationId, locations]
   );
   const productById = useMemo(() => new Map(products.map((item) => [item.id, item])), [products]);
+  const visibleSnapshotRows = useMemo(() => {
+    const activeLocationIds = new Set(locations.map((row) => row.id));
+    const activeProductIds = new Set(products.map((row) => row.id));
+    return snapshot.rows.filter(
+      (row) => activeLocationIds.has(row.locationId) && activeProductIds.has(row.productId)
+    );
+  }, [locations, products, snapshot.rows]);
   const productCategoryOptions = useMemo(() => {
     const categories = new Set<string>();
     for (const product of products) {
@@ -806,7 +813,7 @@ export default function InventoryOpeningPage(): JSX.Element {
               </tr>
             </thead>
             <tbody>
-              {snapshot.rows.map((row) => (
+              {visibleSnapshotRows.map((row) => (
                 <tr className="border-b border-slate-100 dark:border-slate-800" key={`${row.locationId}-${row.productId}`}>
                   <td className="px-2 py-2 text-slate-700 dark:text-slate-200">
                     {row.locationName} ({row.locationCode})
@@ -846,7 +853,7 @@ export default function InventoryOpeningPage(): JSX.Element {
                   </td>
                 </tr>
               ))}
-              {snapshot.rows.length === 0 ? (
+              {visibleSnapshotRows.length === 0 ? (
                 <tr>
                   <td className="px-2 py-6 text-center text-slate-500 dark:text-slate-400" colSpan={10}>
                     No inventory balances yet.

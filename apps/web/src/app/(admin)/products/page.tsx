@@ -471,7 +471,6 @@ export default function ProductsPage(): JSX.Element {
       'isLpg',
       'cylinderTypeId',
       'lowStockAlertQty',
-      'standardCost',
       'isActive',
       'createdAt',
       'updatedAt'
@@ -501,8 +500,6 @@ export default function ProductsPage(): JSX.Element {
                   ? 'Cylinder Type'
                   : key === 'lowStockAlertQty'
                     ? 'Low Stock Alert Qty'
-                  : key === 'standardCost'
-                    ? 'Standard Cost'
                   : key.replace(/([A-Z])/g, ' $1').replace(/^./, (char) => char.toUpperCase()),
         value:
           key === 'isLpg' || key === 'isActive'
@@ -514,10 +511,6 @@ export default function ProductsPage(): JSX.Element {
                   ? cylinderTypeLabelById.get(selectedProduct.cylinderTypeId) ??
                     selectedProduct.cylinderTypeId
                   : 'None'
-                : key === 'standardCost'
-                  ? selectedProduct.standardCost === null
-                    ? 'N/A'
-                    : formatMoney(selectedProduct.standardCost)
                 : key === 'lowStockAlertQty'
                   ? selectedProduct.lowStockAlertQty === null
                     ? 'N/A'
@@ -625,7 +618,6 @@ export default function ProductsPage(): JSX.Element {
         aliases: ['cylinder_type_code', 'cylindertypeid', 'cylinder_type_id'],
         templateDropdownValues: cylinderTypeCodeTemplateValues
       },
-      { key: 'standardCost', label: 'Standard Cost', example: 700, aliases: ['standard_cost'] },
       {
         key: 'lowStockAlertQty',
         label: 'Low Stock Alert Qty',
@@ -653,7 +645,6 @@ export default function ProductsPage(): JSX.Element {
           unit: 'unit',
           isLpg: true,
           cylinderTypeId: '',
-          standardCost: '',
           lowStockAlertQty: '',
           isActive: true
         }}
@@ -716,12 +707,6 @@ export default function ProductsPage(): JSX.Element {
               'Pick a cylinder type for LPG products. Leave as None for non-cylinder products.'
           },
           {
-            key: 'standardCost',
-            label: 'Standard Cost',
-            type: 'number',
-            helperText: 'Optional default cost used when Costing Method is set to Standard Cost.'
-          },
-          {
             key: 'lowStockAlertQty',
             label: 'Low Stock Alert Qty',
             type: 'number',
@@ -756,10 +741,6 @@ export default function ProductsPage(): JSX.Element {
           category: payload.category ? String(payload.category).trim() : null,
           brand: payload.brand ? String(payload.brand).trim() : null,
           cylinderTypeId: payload.cylinderTypeId ? payload.cylinderTypeId : null,
-          standardCost:
-            payload.standardCost === '' || payload.standardCost === null
-              ? null
-              : Number(payload.standardCost),
           lowStockAlertQty:
             payload.lowStockAlertQty === '' || payload.lowStockAlertQty === null
               ? null
@@ -788,16 +769,6 @@ export default function ProductsPage(): JSX.Element {
             render: (value) => {
               const key = value ? String(value) : '';
               return key ? cylinderTypeLabelById.get(key) ?? key : 'None';
-            }
-          },
-          standardCost: {
-            label: 'Standard Cost',
-            render: (value) => {
-              if (value === null || value === undefined || value === '') {
-                return 'N/A';
-              }
-              const parsed = Number(value);
-              return Number.isFinite(parsed) ? formatMoney(parsed) : String(value);
             }
           },
           lowStockAlertQty: {
