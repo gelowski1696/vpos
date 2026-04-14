@@ -728,7 +728,7 @@ export class SalesService {
           });
         }
 
-        const receiptPrefix = this.receiptPrefix(input.branch_id, branch.code);
+        const receiptPrefix = this.receiptPrefix(now);
         const receiptNumber = await this.createReceiptWithRetry(
           tx,
           sale.id,
@@ -3282,7 +3282,7 @@ export class SalesService {
   ): Promise<string> {
     let nextSequence = await this.readNextReceiptSequence(tx, branchId, prefix);
     for (let attempt = 0; attempt < 5; attempt += 1) {
-      const receiptNumber = `${prefix}-${String(nextSequence).padStart(6, '0')}`;
+      const receiptNumber = `${prefix}-${String(nextSequence).padStart(7, '0')}`;
       try {
         await tx.receipt.create({
           data: {
@@ -3468,12 +3468,14 @@ export class SalesService {
     return normalized;
   }
 
-  private receiptPrefix(branchRef: string | undefined, branchCode: string): string {
-    const ref = branchRef?.trim();
-    if (ref && /^branch-/i.test(ref)) {
-      return ref.toUpperCase();
-    }
-    return branchCode.trim().toUpperCase();
+  private receiptPrefix(now: Date): string {
+    const ymd = new Intl.DateTimeFormat('en-CA', {
+      timeZone: 'Asia/Manila',
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit'
+    }).format(now);
+    return ymd.replace(/-/g, '');
   }
 
   private escapeRegex(value: string): string {
