@@ -13,6 +13,7 @@ type AuditLogRow = {
   user_name: string | null;
   user_email: string | null;
   user_branch_id?: string | null;
+  metadata?: unknown;
 };
 
 type BranchRow = {
@@ -32,6 +33,22 @@ function formatWhen(value: string): string {
   }
   const pad = (num: number): string => String(num).padStart(2, '0');
   return `${parsed.getUTCFullYear()}-${pad(parsed.getUTCMonth() + 1)}-${pad(parsed.getUTCDate())} ${pad(parsed.getUTCHours())}:${pad(parsed.getUTCMinutes())}:${pad(parsed.getUTCSeconds())}`;
+}
+
+function branchIdFromMetadata(metadata: unknown): string | null {
+  if (!metadata || typeof metadata !== 'object' || Array.isArray(metadata)) {
+    return null;
+  }
+  const record = metadata as Record<string, unknown>;
+  const direct = record.branch_id;
+  if (typeof direct === 'string' && direct.trim()) {
+    return direct.trim();
+  }
+  const camel = record.branchId;
+  if (typeof camel === 'string' && camel.trim()) {
+    return camel.trim();
+  }
+  return null;
 }
 
 export default function AuditLogsPage(): JSX.Element {
@@ -101,6 +118,7 @@ export default function AuditLogsPage(): JSX.Element {
                   <th className="pb-2 pr-3">Action</th>
                   <th className="pb-2 pr-3">Entity</th>
                   <th className="pb-2 pr-3">Entity ID</th>
+                  <th className="pb-2 pr-3">Branch</th>
                   <th className="pb-2 pr-3">User</th>
                   <th className="pb-2">Email</th>
                 </tr>
@@ -113,13 +131,14 @@ export default function AuditLogsPage(): JSX.Element {
                     <td className="py-2 pr-3">{row.action}</td>
                     <td className="py-2 pr-3">{row.entity}</td>
                     <td className="py-2 pr-3">{row.entity_id ?? ''}</td>
+                    <td className="py-2 pr-3">{row.user_branch_id ?? branchIdFromMetadata(row.metadata) ?? ''}</td>
                     <td className="py-2 pr-3">{row.user_name ?? ''}</td>
                     <td className="py-2">{row.user_email ?? ''}</td>
                   </tr>
                 ))}
                 {rows.length === 0 ? (
                   <tr>
-                    <td className="py-3 text-slate-500 dark:text-slate-400" colSpan={7}>
+                    <td className="py-3 text-slate-500 dark:text-slate-400" colSpan={8}>
                       No audit records for the selected scope.
                     </td>
                   </tr>

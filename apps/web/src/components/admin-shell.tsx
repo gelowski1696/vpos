@@ -313,6 +313,29 @@ const ROUTE_SPECIFIC_WALKTHROUGHS: Record<string, AdminTourStep[]> = {
       placement: 'top'
     }
   ],
+  '/lending/return-history': [
+    {
+      id: 'lending-return-history-overview',
+      title: 'Lending return history',
+      description: 'Review posted and reversed sales returns by branch and date range from this dedicated page.',
+      selectors: ['[data-tour="lending-return-history-root"]', '[data-tour="header-page-title"]'],
+      placement: 'bottom'
+    },
+    {
+      id: 'lending-return-history-filters',
+      title: 'Filter by branch and date',
+      description: 'Set branch and date range first, then refresh to load return history records.',
+      selectors: ['[data-tour="lending-return-history-filters"]'],
+      placement: 'bottom'
+    },
+    {
+      id: 'lending-return-history-table',
+      title: 'Review return postings',
+      description: 'Each row shows the return status, amount, customer, and related sale reference.',
+      selectors: ['[data-tour="lending-return-history-table"]'],
+      placement: 'top'
+    }
+  ],
   '/product-categories': buildEntityRouteSteps('/product-categories', 'product-categories', 'Product Categories'),
   '/product-brands': buildEntityRouteSteps('/product-brands', 'product-brands', 'Product Brands'),
   '/lpg-item-actions': [
@@ -380,6 +403,7 @@ const NAV_SECTIONS: Array<{ title: string; items: NavItem[] }> = [
     items: [
       { href: '/transfer-list' as Route, label: 'Transfer List', icon: 'transfer' },
       { href: '/lending' as Route, label: 'Lending', icon: 'transfer' },
+      { href: '/lending/return-history' as Route, label: 'Return History', icon: 'sales' },
       { href: '/branches', label: 'Branches', icon: 'branch' },
       { href: '/locations', label: 'Locations', icon: 'location' },
       { href: '/users', label: 'Users', icon: 'users' },
@@ -390,7 +414,6 @@ const NAV_SECTIONS: Array<{ title: string; items: NavItem[] }> = [
   {
     title: 'Settings',
     items: [
-      { href: '/branding', label: 'Branding', icon: 'branding', badge: 'Theme' },
       { href: '/personnel-roles', label: 'Personnel Roles', icon: 'users' },
       { href: '/expenses', label: 'Expense Categories', icon: 'expense' },
       { href: '/sync-reviews' as Route, label: 'Sync Reviews', icon: 'syncReview' },

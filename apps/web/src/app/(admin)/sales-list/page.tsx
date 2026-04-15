@@ -113,36 +113,6 @@ type SalesDetailResponse = {
   } | null;
 };
 
-type SalesReturnHistoryRow = {
-  sale_return_id: string;
-  sale_id: string;
-  sale_status: 'ACTIVE' | 'CANCELLED' | 'VOIDED';
-  status: 'POSTED' | 'VOIDED';
-  created_at: string;
-  voided_at: string | null;
-  void_reason: string | null;
-  reason: string;
-  total_amount: number;
-  points_reversed: number;
-  receipt_number: string | null;
-  branch_id: string;
-  branch_name: string;
-  branch_code: string;
-  location_id: string;
-  location_name: string;
-  location_code: string;
-  customer_id: string | null;
-  customer_name: string | null;
-  customer_code: string | null;
-  customer_address: string | null;
-  line_count: number;
-};
-
-type SalesReturnsHistoryResponse = {
-  period: { since: string | null; until: string | null };
-  rows: SalesReturnHistoryRow[];
-};
-
 function fmtDateTime(value: string | null): string {
   if (!value) {
     return 'N/A';
@@ -239,11 +209,8 @@ export default function SalesListPage(): JSX.Element {
   const [since, setSince] = useState('');
   const [until, setUntil] = useState('');
   const [rows, setRows] = useState<SalesListRow[]>([]);
-  const [returnRows, setReturnRows] = useState<SalesReturnHistoryRow[]>([]);
   const [loading, setLoading] = useState(false);
-  const [returnsLoading, setReturnsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [returnsError, setReturnsError] = useState<string | null>(null);
   const [actionMessage, setActionMessage] = useState<string | null>(null);
   const [selectedSaleId, setSelectedSaleId] = useState<string | null>(null);
   const [selectedDetails, setSelectedDetails] = useState<SalesDetailResponse | null>(null);
@@ -292,42 +259,12 @@ export default function SalesListPage(): JSX.Element {
     }
   }
 
-  async function loadSaleReturns(): Promise<void> {
-    setReturnsLoading(true);
-    setReturnsError(null);
-    try {
-      const params = new URLSearchParams();
-      if (since.trim()) {
-        params.set('since', new Date(`${since}T00:00:00.000`).toISOString());
-      }
-      if (until.trim()) {
-        params.set('until', new Date(`${until}T23:59:59.999`).toISOString());
-      }
-      if (branchFilter !== 'ALL') {
-        params.set('branch_id', branchFilter);
-      }
-      params.set('limit', '500');
-
-      const query = params.toString();
-      const data = await apiRequest<SalesReturnsHistoryResponse>(
-        `/reports/sales/returns${query ? `?${query}` : ''}`
-      );
-      setReturnRows(data.rows);
-    } catch (cause) {
-      setReturnsError(cause instanceof Error ? cause.message : 'Failed to load sale returns');
-      setReturnRows([]);
-    } finally {
-      setReturnsLoading(false);
-    }
-  }
-
   useEffect(() => {
     void loadBranches();
   }, []);
 
   useEffect(() => {
     void loadSales();
-    void loadSaleReturns();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [branchFilter, since, until]);
 
@@ -381,7 +318,7 @@ export default function SalesListPage(): JSX.Element {
   }
 
   async function refreshAllViews(): Promise<void> {
-    await Promise.all([loadSales(), loadSaleReturns(), refreshDetails()]);
+    await Promise.all([loadSales(), refreshDetails()]);
   }
 
   function openVoidReturnDialog(saleReturn: SalesDetailResponse['returns'][number]): void {
@@ -510,12 +447,6 @@ export default function SalesListPage(): JSX.Element {
         </div>
       ) : null}
 
-      {returnsError ? (
-        <div className="rounded-xl border border-amber-300 bg-amber-50 p-3 text-sm text-amber-700 dark:border-amber-700 dark:bg-amber-950/40 dark:text-amber-200">
-          {returnsError}
-        </div>
-      ) : null}
-
       {actionMessage ? (
         <div className="rounded-xl border border-emerald-300 bg-emerald-50 p-3 text-sm text-emerald-700 dark:border-emerald-700 dark:bg-emerald-950/40 dark:text-emerald-200">
           {actionMessage}
@@ -601,80 +532,6 @@ export default function SalesListPage(): JSX.Element {
                       >
                         View
                       </button>
-                    </td>
-                  </tr>
-                ))
-              )}
-            </tbody>
-          </table>
-        </div>
-      </div>
-
-      <div className="rounded-2xl border border-slate-200 bg-white p-0 dark:border-slate-800 dark:bg-slate-900">
-        <div className="flex items-center justify-between border-b border-slate-200 px-4 py-3 dark:border-slate-800">
-          <div>
-            <h2 className="text-sm font-semibold text-slate-800 dark:text-slate-100">Return History</h2>
-            <p className="text-xs text-slate-500 dark:text-slate-400">
-              Track item returns and any reversed return postings for the branch and date range above.
-            </p>
-          </div>
-          <span className="rounded-full bg-slate-100 px-2 py-1 text-xs text-slate-700 dark:bg-slate-800 dark:text-slate-200">
-            {returnRows.length} row(s)
-          </span>
-        </div>
-        <div className="overflow-x-auto">
-          <table className="min-w-[1250px] text-sm">
-            <thead className="bg-slate-50 text-left text-xs uppercase tracking-wide text-slate-600 dark:bg-slate-800/80 dark:text-slate-300">
-              <tr>
-                <th className="px-3 py-2">Returned At</th>
-                <th className="px-3 py-2">Status</th>
-                <th className="px-3 py-2">Return ID</th>
-                <th className="px-3 py-2">Receipt / Sale</th>
-                <th className="px-3 py-2">Customer</th>
-                <th className="px-3 py-2">Branch</th>
-                <th className="px-3 py-2">Customer Address</th>
-                <th className="px-3 py-2 text-right">Amount</th>
-                <th className="px-3 py-2 text-right">Points Reversed</th>
-                <th className="px-3 py-2 text-right">Lines</th>
-                <th className="px-3 py-2">Reason</th>
-              </tr>
-            </thead>
-            <tbody>
-              {returnRows.length === 0 ? (
-                <tr>
-                  <td className="px-3 py-6 text-center text-slate-500 dark:text-slate-400" colSpan={11}>
-                    {returnsLoading ? 'Loading return history...' : 'No sale returns found for selected filter.'}
-                  </td>
-                </tr>
-              ) : (
-                returnRows.map((row) => (
-                  <tr className="border-t border-slate-100 dark:border-slate-800" key={row.sale_return_id}>
-                    <td className="px-3 py-2 text-slate-700 dark:text-slate-200">{fmtDateTime(row.created_at)}</td>
-                    <td className="px-3 py-2">
-                      <span className={`inline-flex rounded-full px-2 py-1 text-[11px] font-semibold ${saleReturnStatusClasses(row.status)}`}>
-                        {saleReturnStatusLabel(row.status)}
-                      </span>
-                    </td>
-                    <td className="px-3 py-2 text-slate-700 dark:text-slate-200">{row.sale_return_id}</td>
-                    <td className="px-3 py-2 text-slate-700 dark:text-slate-200">
-                      {row.receipt_number ?? row.sale_id}
-                      <div className="mt-1 text-xs text-slate-500 dark:text-slate-400">
-                        Sale: {saleStatusLabel(row.sale_status)}
-                      </div>
-                    </td>
-                    <td className="px-3 py-2 text-slate-700 dark:text-slate-200">
-                      {row.customer_name ? `${row.customer_name}${row.customer_code ? ` (${row.customer_code})` : ''}` : 'Walk-in / N/A'}
-                    </td>
-                    <td className="px-3 py-2 text-slate-700 dark:text-slate-200">{row.branch_name}</td>
-                    <td className="px-3 py-2 text-slate-700 dark:text-slate-200">{row.customer_address ?? 'N/A'}</td>
-                    <td className="px-3 py-2 text-right text-slate-700 dark:text-slate-200">{fmtMoney(row.total_amount)}</td>
-                    <td className="px-3 py-2 text-right text-slate-700 dark:text-slate-200">{row.points_reversed}</td>
-                    <td className="px-3 py-2 text-right text-slate-700 dark:text-slate-200">{row.line_count}</td>
-                    <td className="px-3 py-2 text-slate-700 dark:text-slate-200">
-                      {row.reason}
-                      {row.status === 'VOIDED' && row.void_reason ? (
-                        <div className="mt-1 text-xs text-slate-500 dark:text-slate-400">Reversal note: {row.void_reason}</div>
-                      ) : null}
                     </td>
                   </tr>
                 ))
