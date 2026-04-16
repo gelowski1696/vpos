@@ -21,7 +21,7 @@ import {
 } from '@prisma/client';
 import { PrismaService } from '../../common/prisma.service';
 import { CompanyContextService } from '../../common/company-context.service';
-import { createHash, createHmac, timingSafeEqual } from 'node:crypto';
+import { createHash, createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
 import { SubscriptionGatewayService } from './subscription-gateway.service';
 import { AuthService } from '../auth/auth.service';
 import {
@@ -30,6 +30,7 @@ import {
 } from './dedicated-tenant-provisioning.service';
 import { DatastoreRegistryService } from '../../common/datastore-registry.service';
 import { TenantDatasourceRouterService } from '../../common/tenant-datasource-router.service';
+import { TenantWelcomeEmailService } from './tenant-welcome-email.service';
 
 type EntitlementSnapshot = {
   companyId: string;
@@ -91,6 +92,7 @@ type ProvisionTenantInput = {
   client_id: string;
   company_code?: string;
   company_name?: string;
+  tenant_email?: string;
   template?: ProvisionTemplateInput;
   bootstrap_defaults?: boolean;
   tenancy_mode?: TenancyDatastoreMode | 'SHARED_DB' | 'DEDICATED_DB';
@@ -109,12 +111,14 @@ type ProvisionTenantResult = {
   client_id: string;
   company_code: string;
   company_name: string;
+  tenant_email: string | null;
   template: ProvisionTemplate;
   tenancy_mode: TenancyDatastoreMode;
   datastore_ref: string | null;
   datastore_migration_state: TenancyMigrationState;
   branch_count: number;
   location_count: number;
+  addons: TenantAddonFlags;
   entitlement: EntitlementSnapshot;
 };
 
@@ -122,6 +126,7 @@ type ProvisionFromSubscriptionInput = {
   client_id: string;
   company_name?: string;
   company_code?: string;
+  tenant_email?: string;
   template?: ProvisionTemplateInput;
   bootstrap_defaults?: boolean;
   tenancy_mode?: TenancyDatastoreMode | 'SHARED_DB' | 'DEDICATED_DB';
@@ -155,6 +160,12 @@ type ProvisionFromSubscriptionResult = ProvisionTenantResult & {
     profile: 'network' | 'cache' | 'local';
     stale: boolean;
   };
+  welcome_email: {
+    sent: boolean;
+    recipient: string | null;
+    skipped_reason: string | null;
+    error: string | null;
+  };
 };
 
 type MemoryTenantProfile = {
@@ -162,12 +173,22 @@ type MemoryTenantProfile = {
   companyCode: string;
   companyName: string;
   externalClientId: string;
+  tenantEmail: string | null;
+};
+
+type TenantAddonFlags = {
+  email_features: boolean;
+  email_report: boolean;
+  email_customer_balance: boolean;
+  sms_alerts: boolean;
+  auto_report_digest: boolean;
 };
 
 type OwnerTenantSummary = {
   company_id: string;
   company_code: string;
   company_name: string;
+  tenant_email: string | null;
   client_id: string;
   tenancy_mode: TenancyDatastoreMode;
   datastore_ref: string | null;
@@ -176,6 +197,7 @@ type OwnerTenantSummary = {
   branch_count: number;
   location_count: number;
   user_count: number;
+  addons: TenantAddonFlags;
   entitlement: EntitlementSnapshot;
   updated_at: string;
 };
@@ -324,6 +346,16 @@ type OwnerEntitlementOverrideInput = {
   actor_id?: string | null;
 };
 
+type OwnerTenantAddonsInput = {
+  email_features?: boolean;
+  email_report?: boolean;
+  email_customer_balance?: boolean;
+  sms_alerts?: boolean;
+  auto_report_digest?: boolean;
+  reason?: string;
+  actor_id?: string | null;
+};
+
 type OwnerDeleteTenantInput = {
   reason?: string;
   actor_id?: string | null;
@@ -395,7 +427,8 @@ export class EntitlementsService {
     @Optional() private readonly authService?: AuthService,
     @Optional() private readonly dedicatedProvisioning?: DedicatedTenantProvisioningService,
     @Optional() private readonly datastoreRegistry?: DatastoreRegistryService,
-    @Optional() private readonly tenantRouter?: TenantDatasourceRouterService
+    @Optional() private readonly tenantRouter?: TenantDatasourceRouterService,
+    @Optional() private readonly tenantWelcomeEmailService?: TenantWelcomeEmailService
   ) {}
 
   private dbEnabled(): boolean {
@@ -702,7 +735,8 @@ export class EntitlementsService {
         companyId: 'comp-demo',
         companyCode: 'DEMO',
         companyName: 'VPOS Demo LPG Co.',
-        externalClientId: 'DEMO'
+        externalClientId: 'DEMO',
+        tenantEmail: null
       };
     }
     const normalized = companyId.replace(/^comp-/, '').toUpperCase();
@@ -710,7 +744,8 @@ export class EntitlementsService {
       companyId,
       companyCode: normalized || companyId.toUpperCase(),
       companyName: normalized || companyId,
-      externalClientId: normalized || companyId
+      externalClientId: normalized || companyId,
+      tenantEmail: null
     };
   }
 
@@ -1076,6 +1111,92 @@ export class EntitlementsService {
     return undefined;
   }
 
+  private normalizeTenantEmail(value: unknown): string | null {
+    if (typeof value !== 'string') {
+      return null;
+    }
+    const normalized = value.trim().toLowerCase();
+    if (!normalized) {
+      return null;
+    }
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/i.test(normalized)) {
+      return null;
+    }
+    return normalized.slice(0, 320);
+  }
+
+  private defaultTenantAddons(): TenantAddonFlags {
+    return {
+      email_features: false,
+      email_report: false,
+      email_customer_balance: false,
+      sms_alerts: false,
+      auto_report_digest: false
+    };
+  }
+
+  private mapTenantAddons(input: {
+    addonEmailFeatures?: boolean;
+    addonEmailReport?: boolean;
+    addonEmailCustomerBalance?: boolean;
+    addonSmsAlerts?: boolean;
+    addonAutoReportDigest?: boolean;
+  }): TenantAddonFlags {
+    return {
+      email_features: Boolean(input.addonEmailFeatures),
+      email_report: Boolean(input.addonEmailReport),
+      email_customer_balance: Boolean(input.addonEmailCustomerBalance),
+      sms_alerts: Boolean(input.addonSmsAlerts),
+      auto_report_digest: Boolean(input.addonAutoReportDigest)
+    };
+  }
+
+  private resolveTenantAddonsInput(
+    current: TenantAddonFlags,
+    input: OwnerTenantAddonsInput
+  ): TenantAddonFlags {
+    return {
+      email_features: input.email_features ?? current.email_features,
+      email_report: input.email_report ?? current.email_report,
+      email_customer_balance: input.email_customer_balance ?? current.email_customer_balance,
+      sms_alerts: input.sms_alerts ?? current.sms_alerts,
+      auto_report_digest: input.auto_report_digest ?? current.auto_report_digest
+    };
+  }
+
+  private resolveOwnerLoginUrl(): string {
+    const explicit = process.env.VPOS_WEB_LOGIN_URL?.trim();
+    if (explicit) {
+      return explicit;
+    }
+    const base =
+      process.env.VPOS_WEB_BASE_URL?.trim() ||
+      process.env.NEXT_PUBLIC_WEB_URL?.trim() ||
+      'https://vmjamtech.com';
+    return `${base.replace(/\/+$/, '')}/login`;
+  }
+
+  private generateTenantOwnerPassword(): string {
+    const uppercase = 'ABCDEFGHJKLMNPQRSTUVWXYZ';
+    const lowercase = 'abcdefghijkmnopqrstuvwxyz';
+    const digits = '23456789';
+    const symbols = '@#$%';
+    const all = `${uppercase}${lowercase}${digits}${symbols}`;
+    const pick = (pool: string): string => pool[randomBytes(1)[0] % pool.length];
+    const seed = [
+      pick(uppercase),
+      pick(lowercase),
+      pick(digits),
+      pick(symbols),
+      ...Array.from({ length: 8 }, () => pick(all))
+    ];
+    for (let i = seed.length - 1; i > 0; i -= 1) {
+      const j = randomBytes(1)[0] % (i + 1);
+      [seed[i], seed[j]] = [seed[j], seed[i]];
+    }
+    return seed.join('');
+  }
+
   private inferTemplateFromPayload(payload: Record<string, unknown>): ProvisionTemplate {
     const normalized = this.normalizePayload({
       client_id: String(payload.client_id ?? payload.external_client_id ?? 'TEMP_CLIENT'),
@@ -1180,6 +1301,7 @@ export class EntitlementsService {
   async provisionTenant(input: ProvisionTenantInput): Promise<ProvisionTenantResult> {
     const clientId = String(input.client_id ?? '').trim();
     const companyName = String(input.company_name ?? '').trim();
+    const tenantEmail = this.normalizeTenantEmail(input.tenant_email);
     if (!clientId) {
       throw new BadRequestException('client_id is required');
     }
@@ -1214,6 +1336,8 @@ export class EntitlementsService {
       const companyId = this.fallbackCompanyId(clientId);
       const existing = this.memoryTenantProvision.get(clientId);
       const created = !existing;
+      const addons = existing?.addons ?? this.defaultTenantAddons();
+      const resolvedTenantEmail = tenantEmail ?? existing?.tenant_email ?? null;
       const tenancyMode =
         input.tenancy_mode === undefined
           ? existing?.tenancy_mode ?? TenancyDatastoreMode.SHARED_DB
@@ -1247,11 +1371,11 @@ export class EntitlementsService {
         companyId,
         companyCode,
         companyName,
-        externalClientId: clientId
+        externalClientId: clientId,
+        tenantEmail: resolvedTenantEmail
       });
 
       if (
-        bootstrapDefaults &&
         this.authService &&
         input.admin_email?.trim() &&
         input.admin_password?.trim()
@@ -1273,12 +1397,14 @@ export class EntitlementsService {
         client_id: clientId,
         company_code: companyCode,
         company_name: companyName,
+        tenant_email: resolvedTenantEmail,
         template,
         tenancy_mode: tenancyMode,
         datastore_ref: datastoreRef,
         datastore_migration_state: datastoreMigrationState,
         branch_count: counts.branchCount,
         location_count: counts.locationCount,
+        addons,
         entitlement
       };
       this.memoryTenantProvision.set(clientId, result);
@@ -1310,10 +1436,16 @@ export class EntitlementsService {
             code: companyCode,
             externalClientId: clientId,
             name: companyName,
+            tenantEmail,
             currencyCode: 'PHP',
             timezone: 'Asia/Manila',
             subscriptionStatus: normalizedPayload.status,
             entitlementUpdatedAt: new Date(),
+            addonEmailFeatures: false,
+            addonEmailReport: false,
+            addonEmailCustomerBalance: false,
+            addonSmsAlerts: false,
+            addonAutoReportDigest: false,
             datastoreMode,
             datastoreRef,
             datastoreMigrationState
@@ -1339,6 +1471,7 @@ export class EntitlementsService {
             code: companyCode,
             externalClientId: clientId,
             name: companyName,
+            tenantEmail: tenantEmail ?? company.tenantEmail,
             subscriptionStatus: normalizedPayload.status,
             entitlementUpdatedAt: new Date(),
             datastoreMode,
@@ -1483,6 +1616,8 @@ export class EntitlementsService {
         companyId: company.id,
         companyCode: company.code,
         companyName: company.name,
+        tenantEmail: company.tenantEmail,
+        addons: this.mapTenantAddons(company),
         entitlement,
         datastoreMode: company.datastoreMode,
         datastoreRef: company.datastoreRef,
@@ -1497,7 +1632,6 @@ export class EntitlementsService {
     });
 
     if (
-      bootstrapDefaults &&
       this.authService &&
       input.admin_email?.trim() &&
       input.admin_password?.trim()
@@ -1572,12 +1706,14 @@ export class EntitlementsService {
       client_id: clientId,
       company_code: companyCode,
       company_name: companyName,
+      tenant_email: result.tenantEmail ?? null,
       template,
       tenancy_mode: result.datastoreMode,
       datastore_ref: result.datastoreRef,
       datastore_migration_state: finalDatastoreMigrationState,
       branch_count: counts.branchCount,
       location_count: counts.locationCount,
+      addons: result.addons,
       entitlement: this.mapEntitlementRow(result.entitlement)
     };
   }
@@ -1646,6 +1782,35 @@ export class EntitlementsService {
       this.readFirstString(profilePayload, ['company_code', 'companyCode', 'code']) ||
       this.readFirstString(entitlementGateway.payload, ['company_code', 'companyCode', 'code']) ||
       clientId;
+    const tenantEmail =
+      this.normalizeTenantEmail(input.tenant_email) ??
+      this.normalizeTenantEmail(
+        this.readFirstString(profilePayload, [
+          'tenant_email',
+          'tenantEmail',
+          'company_email',
+          'companyEmail',
+          'customer_email',
+          'customerEmail',
+          'email'
+        ])
+      ) ??
+      this.normalizeTenantEmail(
+        this.readFirstString(entitlementGateway.payload, [
+          'tenant_email',
+          'tenantEmail',
+          'company_email',
+          'companyEmail',
+          'customer_email',
+          'customerEmail',
+          'email'
+        ])
+      );
+    const adminEmail = this.normalizeTenantEmail(input.admin_email) ?? tenantEmail;
+    const generatedPassword = adminEmail && !String(input.admin_password ?? '').trim()
+      ? this.generateTenantOwnerPassword()
+      : null;
+    const adminPassword = String(input.admin_password ?? '').trim() || generatedPassword || undefined;
 
     const inferredTemplate = this.inferTemplateFromPayload({
       ...entitlementGateway.payload,
@@ -1657,6 +1822,7 @@ export class EntitlementsService {
       client_id: clientId,
       company_name: companyName,
       company_code: companyCode,
+      tenant_email: tenantEmail ?? undefined,
       template,
       tenancy_mode: input.tenancy_mode,
       datastore_ref: input.datastore_ref,
@@ -1668,9 +1834,32 @@ export class EntitlementsService {
           ? (entitlementGateway.payload.features as Record<string, unknown>)
           : {},
       grace_until: this.readFirstString(entitlementGateway.payload, ['grace_until', 'graceUntil']) ?? null,
-      admin_email: input.admin_email,
-      admin_password: input.admin_password
+      admin_email: adminEmail ?? undefined,
+      admin_password: adminPassword
     });
+
+    const welcomeEmail: ProvisionFromSubscriptionResult['welcome_email'] = {
+      sent: false,
+      recipient: null as string | null,
+      skipped_reason:
+        adminEmail && adminPassword ? 'welcome_email_disabled' : 'credentials_or_recipient_missing',
+      error: null as string | null
+    };
+    if (adminEmail && adminPassword && this.tenantWelcomeEmailService && this.authService) {
+      const sent = await this.tenantWelcomeEmailService.sendTenantWelcomeEmail({
+        toEmail: tenantEmail ?? adminEmail,
+        tenantName: result.company_name,
+        tenantCode: result.company_code,
+        clientId: result.client_id,
+        adminEmail,
+        adminPassword,
+        loginUrl: this.resolveOwnerLoginUrl()
+      });
+      welcomeEmail.sent = sent.sent;
+      welcomeEmail.recipient = sent.recipient;
+      welcomeEmail.skipped_reason = sent.skippedReason;
+      welcomeEmail.error = sent.error;
+    }
 
     return {
       ...result,
@@ -1678,7 +1867,8 @@ export class EntitlementsService {
         entitlement: entitlementGateway.meta.source,
         profile: profileSource,
         stale: entitlementGateway.meta.stale || profileStale
-      }
+      },
+      welcome_email: welcomeEmail
     };
   }
 
@@ -1749,6 +1939,7 @@ export class EntitlementsService {
             company_id: entitlement.companyId,
             company_code: provisioned?.company_code ?? profile.companyCode,
             company_name: provisioned?.company_name ?? profile.companyName,
+            tenant_email: provisioned?.tenant_email ?? profile.tenantEmail ?? null,
             client_id: entitlement.externalClientId,
             tenancy_mode: provisioned?.tenancy_mode ?? TenancyDatastoreMode.SHARED_DB,
             datastore_ref: provisioned?.datastore_ref ?? null,
@@ -1758,6 +1949,7 @@ export class EntitlementsService {
             branch_count: provisioned?.branch_count ?? 1,
             location_count: provisioned?.location_count ?? 1,
             user_count: 0,
+            addons: provisioned?.addons ?? this.defaultTenantAddons(),
             entitlement,
             updated_at: entitlement.lastSyncedAt
           };
@@ -1773,8 +1965,14 @@ export class EntitlementsService {
         id: true,
         code: true,
         name: true,
+        tenantEmail: true,
         externalClientId: true,
         subscriptionStatus: true,
+        addonEmailFeatures: true,
+        addonEmailReport: true,
+        addonEmailCustomerBalance: true,
+        addonSmsAlerts: true,
+        addonAutoReportDigest: true,
         datastoreMode: true,
         datastoreRef: true,
         datastoreMigrationState: true,
@@ -1816,6 +2014,7 @@ export class EntitlementsService {
           company_id: row.id,
           company_code: row.code,
           company_name: row.name,
+          tenant_email: row.tenantEmail ?? null,
           client_id: row.externalClientId ?? row.code,
           tenancy_mode: row.datastoreMode,
           datastore_ref: row.datastoreRef,
@@ -1824,6 +2023,7 @@ export class EntitlementsService {
           branch_count: row._count.branches,
           location_count: row._count.locations,
           user_count: row._count.users,
+          addons: this.mapTenantAddons(row),
           entitlement,
           updated_at: row.updatedAt.toISOString()
         };
@@ -3242,6 +3442,94 @@ export class EntitlementsService {
     });
 
     return this.mapEntitlementRow(result);
+  }
+
+  async ownerUpdateTenantAddons(
+    companyId: string,
+    input: OwnerTenantAddonsInput
+  ): Promise<TenantAddonFlags> {
+    const targetCompanyId = companyId.trim();
+    if (!targetCompanyId) {
+      throw new BadRequestException('company_id is required');
+    }
+
+    if (!this.dbEnabled()) {
+      const currentProvision = [...this.memoryTenantProvision.values()].find(
+        (row) => row.company_id === targetCompanyId
+      );
+      const current = currentProvision?.addons ?? this.defaultTenantAddons();
+      const next = this.resolveTenantAddonsInput(current, input);
+      if (currentProvision) {
+        this.memoryTenantProvision.set(currentProvision.client_id, {
+          ...currentProvision,
+          addons: next
+        });
+      }
+      const existingProfile =
+        this.memoryTenantProfiles.get(targetCompanyId) ??
+        this.defaultMemoryTenantProfile(targetCompanyId);
+      this.upsertMemoryTenantProfile(existingProfile);
+      return next;
+    }
+
+    const updated = await this.prisma!.$transaction(async (tx) => {
+      const company = await tx.company.findUnique({
+        where: { id: targetCompanyId },
+        select: {
+          id: true,
+          addonEmailFeatures: true,
+          addonEmailReport: true,
+          addonEmailCustomerBalance: true,
+          addonSmsAlerts: true,
+          addonAutoReportDigest: true
+        }
+      });
+      if (!company) {
+        throw new NotFoundException('Tenant company not found');
+      }
+
+      const entitlement = await tx.companyEntitlement.findUnique({
+        where: { companyId: targetCompanyId },
+        select: { id: true }
+      });
+      const current = this.mapTenantAddons(company);
+      const next = this.resolveTenantAddonsInput(current, input);
+      const saved = await tx.company.update({
+        where: { id: targetCompanyId },
+        data: {
+          addonEmailFeatures: next.email_features,
+          addonEmailReport: next.email_report,
+          addonEmailCustomerBalance: next.email_customer_balance,
+          addonSmsAlerts: next.sms_alerts,
+          addonAutoReportDigest: next.auto_report_digest
+        },
+        select: {
+          addonEmailFeatures: true,
+          addonEmailReport: true,
+          addonEmailCustomerBalance: true,
+          addonSmsAlerts: true,
+          addonAutoReportDigest: true
+        }
+      });
+
+      await tx.companyEntitlementEvent.create({
+        data: {
+          companyId: targetCompanyId,
+          entitlementId: entitlement?.id ?? null,
+          eventType: 'TENANT_ADDONS_UPDATED',
+          source: 'OWNER_CONSOLE',
+          payload: {
+            actor_id: input.actor_id ?? null,
+            reason: input.reason ?? null,
+            addons: next
+          } as Prisma.InputJsonObject
+        }
+      });
+
+      return this.mapTenantAddons(saved);
+    });
+
+    return updated;
   }
 
   private normalizeOwnerOverride(

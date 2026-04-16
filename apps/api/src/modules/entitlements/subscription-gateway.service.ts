@@ -546,7 +546,8 @@ export class SubscriptionGatewayService {
       return {
         client_id: clientId,
         company_name: `Tenant ${clientId}`,
-        company_code: clientId
+        company_code: clientId,
+        tenant_email: null
       };
     }
 
@@ -576,7 +577,11 @@ export class SubscriptionGatewayService {
     return {
       client_id: clientId,
       company_name: companyName,
-      company_code: companyCode || clientId
+      company_code: companyCode || clientId,
+      tenant_email:
+        this.toStringOrNull(customer.email) ??
+        this.toStringOrNull(chosen.customerEmail) ??
+        this.toStringOrNull(chosen.email)
     };
   }
 

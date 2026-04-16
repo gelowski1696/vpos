@@ -7,6 +7,7 @@ import { AuthModule } from '../auth/auth.module';
 import { TenantRoutingPolicyService } from './tenant-routing-policy.service';
 import { DedicatedTenantProvisioningService } from './dedicated-tenant-provisioning.service';
 import { SubmanTokenService } from './subman-token.service';
+import { TenantWelcomeEmailService } from './tenant-welcome-email.service';
 
 @Module({
   imports: [PrismaModule, AuthModule],
@@ -15,6 +16,7 @@ import { SubmanTokenService } from './subman-token.service';
     EntitlementsService,
     SubscriptionGatewayService,
     SubmanTokenService,
+    TenantWelcomeEmailService,
     TenantRoutingPolicyService,
     DedicatedTenantProvisioningService
   ],

@@ -103,6 +103,7 @@ export class EntitlementsController {
       client_id: string;
       company_name: string;
       company_code?: string;
+      tenant_email?: string;
       template?: 'SINGLE_STORE' | 'STORE_WAREHOUSE' | 'MULTI_BRANCH_STARTER' | 'MULTI_STORE';
       bootstrap_defaults?: boolean;
       tenancy_mode?: 'SHARED_DB' | 'DEDICATED_DB';
@@ -316,6 +317,7 @@ export class EntitlementsController {
       client_id: string;
       company_name?: string;
       company_code?: string;
+      tenant_email?: string;
       template?: 'SINGLE_STORE' | 'STORE_WAREHOUSE' | 'MULTI_BRANCH_STARTER' | 'MULTI_STORE';
       bootstrap_defaults?: boolean;
       tenancy_mode?: 'SHARED_DB' | 'DEDICATED_DB';
@@ -342,6 +344,44 @@ export class EntitlementsController {
       }
     });
     return result;
+  }
+
+  @Roles('platform_owner')
+  @Post('owner/tenants/:companyId/addons')
+  async updateTenantAddons(
+    @Req()
+    req: {
+      user?: { sub?: string };
+    },
+    @Param('companyId') companyId: string,
+    @Body()
+    payload: {
+      email_features?: boolean;
+      email_report?: boolean;
+      email_customer_balance?: boolean;
+      sms_alerts?: boolean;
+      auto_report_digest?: boolean;
+      reason?: string;
+    }
+  ) {
+    const addons = await this.entitlementsService.ownerUpdateTenantAddons(companyId, {
+      ...payload,
+      actor_id: req.user?.sub ?? null
+    });
+
+    await this.auditService.record({
+      companyId,
+      userId: req.user?.sub ?? null,
+      action: 'PLATFORM_TENANT_ADDONS_UPDATE',
+      entity: 'Company',
+      entityId: companyId,
+      metadata: {
+        reason: payload.reason ?? null,
+        addons
+      }
+    });
+
+    return { addons };
   }
 
   @Roles('platform_owner')

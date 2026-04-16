@@ -286,10 +286,16 @@ model Company {
   code                    String                @unique
   externalClientId        String?               @unique
   name                    String
+  tenantEmail             String?
   currencyCode            String                @default("PHP")
   timezone                String                @default("Asia/Manila")
   subscriptionStatus      EntitlementStatus     @default(ACTIVE)
   entitlementUpdatedAt    DateTime?
+  addonEmailFeatures      Boolean               @default(false)
+  addonEmailReport        Boolean               @default(false)
+  addonEmailCustomerBalance Boolean             @default(false)
+  addonSmsAlerts          Boolean               @default(false)
+  addonAutoReportDigest   Boolean               @default(false)
   datastoreMode           TenancyDatastoreMode  @default(SHARED_DB)
   datastoreRef            String?
   datastoreMigrationState TenancyMigrationState @default(NONE)

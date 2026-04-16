@@ -9,11 +9,19 @@ type BranchMode = 'SINGLE' | 'MULTI';
 type InventoryMode = 'STORE_ONLY' | 'STORE_WAREHOUSE';
 type TenancyMode = 'SHARED_DB' | 'DEDICATED_DB';
 type TenancyMigrationState = 'NONE' | 'PENDING' | 'IN_PROGRESS' | 'COMPLETED' | 'FAILED';
+type TenantAddons = {
+  email_features: boolean;
+  email_report: boolean;
+  email_customer_balance: boolean;
+  sms_alerts: boolean;
+  auto_report_digest: boolean;
+};
 
 type TenantSummary = {
   company_id: string;
   company_code: string;
   company_name: string;
+  tenant_email: string | null;
   client_id: string;
   tenancy_mode: TenancyMode;
   datastore_ref: string | null;
@@ -22,6 +30,7 @@ type TenantSummary = {
   branch_count: number;
   location_count: number;
   user_count: number;
+  addons: TenantAddons;
   updated_at: string;
   entitlement: {
     status: EntitlementStatus;
@@ -48,18 +57,23 @@ type OverrideFormState = {
   reason: string;
 };
 
-type DialogMode = 'bindings' | 'override' | 'suspend' | 'reactivate' | 'provision' | 'delete' | null;
+type DialogMode = 'bindings' | 'override' | 'addons' | 'suspend' | 'reactivate' | 'provision' | 'delete' | null;
 
 type ProvisionFormState = {
   client_id: string;
   company_name: string;
   company_code: string;
+  tenant_email: string;
   template: '' | 'SINGLE_STORE' | 'STORE_WAREHOUSE' | 'MULTI_BRANCH_STARTER';
   tenancy_mode: TenancyMode;
   datastore_ref: string;
   subman_api_key: string;
   admin_email: string;
   admin_password: string;
+};
+
+type AddonsFormState = TenantAddons & {
+  reason: string;
 };
 
 type ActiveSubscriptionOption = {
@@ -160,6 +174,7 @@ export default function TenantsPage(): JSX.Element {
   const [dialogMode, setDialogMode] = useState<DialogMode>(null);
   const [selected, setSelected] = useState<TenantSummary | null>(null);
   const [overrideForm, setOverrideForm] = useState<OverrideFormState | null>(null);
+  const [addonsForm, setAddonsForm] = useState<AddonsFormState | null>(null);
   const [actionReason, setActionReason] = useState('');
   const [suspendGraceUntil, setSuspendGraceUntil] = useState('');
   const [activeSubscriptions, setActiveSubscriptions] = useState<ActiveSubscriptionOption[]>([]);
@@ -172,6 +187,7 @@ export default function TenantsPage(): JSX.Element {
     client_id: '',
     company_name: '',
     company_code: '',
+    tenant_email: '',
     template: '',
     tenancy_mode: 'SHARED_DB',
     datastore_ref: '',
@@ -185,6 +201,8 @@ export default function TenantsPage(): JSX.Element {
       ? 'Provisioning tenant...'
       : dialogMode === 'override'
         ? 'Saving tenant changes...'
+        : dialogMode === 'addons'
+          ? 'Saving add-ons...'
         : dialogMode === 'suspend'
           ? 'Suspending tenant...'
         : dialogMode === 'reactivate'
@@ -226,6 +244,7 @@ export default function TenantsPage(): JSX.Element {
       [
         row.company_name,
         row.company_code,
+        row.tenant_email ?? '',
         row.client_id,
         row.subscription_status,
         row.tenancy_mode,
@@ -278,6 +297,20 @@ export default function TenantsPage(): JSX.Element {
     }
   }
 
+  function openAddons(row: TenantSummary): void {
+    setError(null);
+    setSelected(row);
+    setDialogMode('addons');
+    setAddonsForm({
+      email_features: row.addons.email_features,
+      email_report: row.addons.email_report,
+      email_customer_balance: row.addons.email_customer_balance,
+      sms_alerts: row.addons.sms_alerts,
+      auto_report_digest: row.addons.auto_report_digest,
+      reason: ''
+    });
+  }
+
   function openSuspend(row: TenantSummary): void {
     setError(null);
     setSelected(row);
@@ -307,6 +340,7 @@ export default function TenantsPage(): JSX.Element {
     setSelected(null);
     setBindings(null);
     setOverrideForm(null);
+    setAddonsForm(null);
     setActionReason('');
     setSuspendGraceUntil('');
     setSelectedSubscriptionId('');
@@ -315,6 +349,7 @@ export default function TenantsPage(): JSX.Element {
       client_id: '',
       company_name: '',
       company_code: '',
+      tenant_email: '',
       template: '',
       tenancy_mode: 'SHARED_DB',
       datastore_ref: '',
@@ -378,7 +413,9 @@ export default function TenantsPage(): JSX.Element {
       ...prev,
       client_id: selectedRow.client_id_hint || selectedRow.subscription_id,
       company_name: prev.company_name || selectedRow.customer_name,
-      company_code: prev.company_code || toCompanyCode(selectedRow.customer_name)
+      company_code: prev.company_code || toCompanyCode(selectedRow.customer_name),
+      tenant_email: prev.tenant_email || selectedRow.customer_email || '',
+      admin_email: prev.admin_email || selectedRow.customer_email || ''
     }));
   }
 
@@ -407,6 +444,39 @@ export default function TenantsPage(): JSX.Element {
       const message = submitError instanceof Error ? submitError.message : 'Failed to override entitlement';
       setError(message);
       toastError('Failed to override entitlement', { description: message });
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function submitAddons(): Promise<void> {
+    if (!selected || !addonsForm) {
+      return;
+    }
+    setSaving(true);
+    setError(null);
+    try {
+      await apiRequest<{ addons: TenantAddons }>(
+        `/platform/owner/tenants/${selected.company_id}/addons`,
+        {
+          method: 'POST',
+          body: {
+            email_features: addonsForm.email_features,
+            email_report: addonsForm.email_report,
+            email_customer_balance: addonsForm.email_customer_balance,
+            sms_alerts: addonsForm.sms_alerts,
+            auto_report_digest: addonsForm.auto_report_digest,
+            reason: addonsForm.reason.trim() || undefined
+          }
+        }
+      );
+      toastSuccess('Tenant add-ons updated', { description: selected.company_name });
+      closeDialog();
+      await loadTenants();
+    } catch (submitError) {
+      const message = submitError instanceof Error ? submitError.message : 'Failed to update add-ons';
+      setError(message);
+      toastError('Failed to update add-ons', { description: message });
     } finally {
       setSaving(false);
     }
@@ -512,6 +582,7 @@ export default function TenantsPage(): JSX.Element {
           client_id: provisionForm.client_id.trim(),
           company_name: provisionForm.company_name.trim() || undefined,
           company_code: provisionForm.company_code.trim() || undefined,
+          tenant_email: provisionForm.tenant_email.trim() || undefined,
           template: provisionForm.template || undefined,
           tenancy_mode: provisionForm.tenancy_mode,
           datastore_ref:
@@ -607,6 +678,7 @@ export default function TenantsPage(): JSX.Element {
                         <p className="font-semibold">{row.company_name}</p>
                         <p className="text-xs text-slate-500 dark:text-slate-400">{row.company_code}</p>
                         <p className="text-xs text-slate-500 dark:text-slate-400">Client: {row.client_id}</p>
+                        <p className="text-xs text-slate-500 dark:text-slate-400">Email: {row.tenant_email ?? '-'}</p>
                       </td>
                       <td className="px-4 py-3 align-top">
                         <span className={`inline-flex rounded-full px-2.5 py-1 text-xs font-semibold ${statusPill(row.subscription_status)}`}>
@@ -635,6 +707,10 @@ export default function TenantsPage(): JSX.Element {
                         <p>Delivery: {boolPill(row.entitlement.allowDelivery)}</p>
                         <p>Transfers: {boolPill(row.entitlement.allowTransfers)}</p>
                         <p>Mobile: {boolPill(row.entitlement.allowMobile)}</p>
+                        <p className="mt-1 font-semibold text-slate-700 dark:text-slate-200">Add-ons</p>
+                        <p>Email Features: {boolPill(row.addons.email_features)}</p>
+                        <p>Email Report: {boolPill(row.addons.email_report)}</p>
+                        <p>Email Customer Balance: {boolPill(row.addons.email_customer_balance)}</p>
                       </td>
                       <td className="px-4 py-3 align-top text-xs">
                         <p>Branches: {row.branch_count}</p>
@@ -659,6 +735,13 @@ export default function TenantsPage(): JSX.Element {
                             type="button"
                           >
                             Override
+                          </button>
+                          <button
+                            className="rounded-lg border border-indigo-300 px-2.5 py-1 text-xs font-semibold text-indigo-700 hover:bg-indigo-50 dark:border-indigo-700 dark:text-indigo-300 dark:hover:bg-indigo-950/40"
+                            onClick={() => openAddons(row)}
+                            type="button"
+                          >
+                            Add-ons
                           </button>
                           <button
                             className="rounded-lg border border-rose-300 px-2.5 py-1 text-xs font-semibold text-rose-700 hover:bg-rose-50 dark:border-rose-700 dark:text-rose-300 dark:hover:bg-rose-950/40"
@@ -704,15 +787,18 @@ export default function TenantsPage(): JSX.Element {
                   <div className="mt-2 space-y-1 text-xs text-slate-600 dark:text-slate-300">
                     <p>Branch Mode: {row.entitlement.branchMode} ({row.entitlement.maxBranches})</p>
                     <p>Inventory: {row.entitlement.inventoryMode}</p>
+                    <p>Email: {row.tenant_email ?? '-'}</p>
                     <p>
                       Tenancy: {row.tenancy_mode === 'DEDICATED_DB' ? 'Dedicated DB' : 'Shared DB'} | Ref:{' '}
                       {row.datastore_ref || 'N/A'} | State: {row.datastore_migration_state}
                     </p>
                     <p>Delivery/Transfers/Mobile: {boolPill(row.entitlement.allowDelivery)} / {boolPill(row.entitlement.allowTransfers)} / {boolPill(row.entitlement.allowMobile)}</p>
+                    <p>Add-ons (Email/Report/Balance): {boolPill(row.addons.email_features)} / {boolPill(row.addons.email_report)} / {boolPill(row.addons.email_customer_balance)}</p>
                   </div>
                   <div className="mt-3 flex flex-wrap gap-2">
                     <button className="rounded-lg border border-slate-300 px-2.5 py-1 text-xs font-semibold text-slate-700 dark:border-slate-600 dark:text-slate-200" onClick={() => void openBindings(row)} type="button">Bindings</button>
                     <button className="rounded-lg border border-slate-300 px-2.5 py-1 text-xs font-semibold text-slate-700 dark:border-slate-600 dark:text-slate-200" onClick={() => openOverride(row)} type="button">Override</button>
+                    <button className="rounded-lg border border-indigo-300 px-2.5 py-1 text-xs font-semibold text-indigo-700 dark:border-indigo-700 dark:text-indigo-300" onClick={() => openAddons(row)} type="button">Add-ons</button>
                     <button className="rounded-lg border border-rose-300 px-2.5 py-1 text-xs font-semibold text-rose-700 dark:border-rose-700 dark:text-rose-300" onClick={() => openSuspend(row)} type="button">Suspend</button>
                     <button className="rounded-lg border border-emerald-300 px-2.5 py-1 text-xs font-semibold text-emerald-700 dark:border-emerald-700 dark:text-emerald-300" onClick={() => openReactivate(row)} type="button">Reactivate</button>
                     <button className="rounded-lg border border-rose-500 bg-rose-600 px-2.5 py-1 text-xs font-semibold text-white dark:border-rose-700" onClick={() => openDelete(row)} type="button">Delete</button>
@@ -894,6 +980,49 @@ export default function TenantsPage(): JSX.Element {
         </div>
       ) : null}
 
+      {dialogMode === 'addons' && selected && addonsForm ? (
+        <div className="fixed inset-0 z-40 flex items-center justify-center bg-slate-950/45 p-4">
+          <section className="w-full max-w-2xl rounded-2xl border border-slate-200 bg-white shadow-xl dark:border-slate-700 dark:bg-slate-900">
+            <header className="flex items-center justify-between border-b border-slate-200 px-4 py-3 dark:border-slate-700">
+              <h2 className="text-lg font-semibold text-slate-900 dark:text-slate-100">Tenant Add-ons: {selected.company_name}</h2>
+              <button className="rounded-md border border-slate-300 px-2 py-1 text-xs text-slate-600 dark:border-slate-600 dark:text-slate-300" onClick={closeDialog} type="button">Close</button>
+            </header>
+            <div className="grid gap-3 p-4 md:grid-cols-2">
+              <label className="flex items-center gap-2 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-sm dark:border-slate-700 dark:bg-slate-800/60">
+                <input checked={addonsForm.email_features} onChange={(event) => setAddonsForm((prev) => prev ? { ...prev, email_features: event.target.checked } : prev)} type="checkbox" />
+                <span>Email Features</span>
+              </label>
+              <label className="flex items-center gap-2 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-sm dark:border-slate-700 dark:bg-slate-800/60">
+                <input checked={addonsForm.email_report} onChange={(event) => setAddonsForm((prev) => prev ? { ...prev, email_report: event.target.checked } : prev)} type="checkbox" />
+                <span>Email Report</span>
+              </label>
+              <label className="flex items-center gap-2 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-sm dark:border-slate-700 dark:bg-slate-800/60">
+                <input checked={addonsForm.email_customer_balance} onChange={(event) => setAddonsForm((prev) => prev ? { ...prev, email_customer_balance: event.target.checked } : prev)} type="checkbox" />
+                <span>Email Customer Balance</span>
+              </label>
+              <label className="flex items-center gap-2 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-sm dark:border-slate-700 dark:bg-slate-800/60">
+                <input checked={addonsForm.sms_alerts} onChange={(event) => setAddonsForm((prev) => prev ? { ...prev, sms_alerts: event.target.checked } : prev)} type="checkbox" />
+                <span>SMS Alerts</span>
+              </label>
+              <label className="flex items-center gap-2 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-sm dark:border-slate-700 dark:bg-slate-800/60 md:col-span-2">
+                <input checked={addonsForm.auto_report_digest} onChange={(event) => setAddonsForm((prev) => prev ? { ...prev, auto_report_digest: event.target.checked } : prev)} type="checkbox" />
+                <span>Auto Report Digest</span>
+              </label>
+              <label className="text-sm md:col-span-2">
+                <span className="mb-1 block font-medium text-slate-700 dark:text-slate-200">Reason (Audit Note)</span>
+                <textarea className="min-h-20 w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-slate-900 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-100" onChange={(event) => setAddonsForm((prev) => prev ? { ...prev, reason: event.target.value } : prev)} placeholder="Optional add-on update note..." value={addonsForm.reason} />
+              </label>
+            </div>
+            <footer className="flex items-center justify-end gap-2 border-t border-slate-200 px-4 py-3 dark:border-slate-700">
+              <button className="rounded-lg border border-slate-300 px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-100 dark:border-slate-600 dark:text-slate-200 dark:hover:bg-slate-800" onClick={closeDialog} type="button">Cancel</button>
+              <button className="rounded-lg bg-brandPrimary px-4 py-2 text-sm font-semibold text-white hover:brightness-110" disabled={saving} onClick={() => void submitAddons()} type="button">
+                {saving ? 'Saving...' : 'Save Add-ons'}
+              </button>
+            </footer>
+          </section>
+        </div>
+      ) : null}
+
       {dialogMode === 'provision' ? (
         <div className="fixed inset-0 z-40 flex items-center justify-center bg-slate-950/45 p-4">
           <section className="w-full max-w-2xl rounded-2xl border border-slate-200 bg-white shadow-xl dark:border-slate-700 dark:bg-slate-900">
@@ -931,6 +1060,7 @@ export default function TenantsPage(): JSX.Element {
                 {selectedSubscription ? (
                   <div className="mt-2 rounded-lg border border-slate-200 bg-slate-50 p-2 text-xs text-slate-700 dark:border-slate-700 dark:bg-slate-800/70 dark:text-slate-200">
                     <div><span className="font-medium">Subscription ID:</span> {selectedSubscription.subscription_id}</div>
+                    <div><span className="font-medium">Tenant Email:</span> {selectedSubscription.customer_email ?? 'N/A'}</div>
                     <div><span className="font-medium">Start:</span> {formatSubscriptionDate(selectedSubscription.start_date)}</div>
                     <div><span className="font-medium">End:</span> {formatSubscriptionDate(selectedSubscription.end_date)}</div>
                     <div><span className="font-medium">Next Billing:</span> {formatSubscriptionDate(selectedSubscription.next_billing_date)}</div>
@@ -1020,6 +1150,16 @@ export default function TenantsPage(): JSX.Element {
                   onChange={(event) => setProvisionForm((prev) => ({ ...prev, company_code: event.target.value }))}
                   placeholder="Leave blank to use subscriptionapp value"
                   value={provisionForm.company_code}
+                />
+              </label>
+              <label className="text-sm">
+                <span className="mb-1 block font-medium text-slate-700 dark:text-slate-200">Tenant Email (from SubMan)</span>
+                <input
+                  className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-slate-900 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-100"
+                  onChange={(event) => setProvisionForm((prev) => ({ ...prev, tenant_email: event.target.value }))}
+                  placeholder="tenant@example.com"
+                  type="email"
+                  value={provisionForm.tenant_email}
                 />
               </label>
               <label className="text-sm">
