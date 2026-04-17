@@ -3,6 +3,7 @@
 import Image from 'next/image';
 import Link from 'next/link';
 import { useCallback, useEffect, useMemo, useState } from 'react';
+import { ScrollMorphSection } from './scroll-morph-section';
 
 type ModuleCard = {
   id: string;
@@ -96,10 +97,10 @@ const modules: ModuleCard[] = [
 ];
 
 const outcomes = [
-  { label: 'Unified Control', value: 'One workspace', detail: 'Sales, stock, transfer, reporting, and tenant controls' },
-  { label: 'Branch + Outlet Visibility', value: 'Real-time', detail: 'Branch and outlet view of movements, risks, and operational status' },
-  { label: 'Posting Confidence', value: 'Server-authoritative', detail: 'Audit-ready records with centralized posting logic' },
-  { label: 'Faster Onboarding', value: 'Guided workflows', detail: 'Structured setup from tenant to branch and outlet operations' }
+  { label: 'Faster Shift Closing', value: 'Minutes, not hours', detail: 'Daily sales, cash posture, and inventory checks become one guided flow.' },
+  { label: 'Lower Stock Leakage', value: 'Tighter controls', detail: 'Movement-level transfer and stock traces reduce unexplained variances.' },
+  { label: 'Higher Cashier Accuracy', value: 'Flow-aware pricing', detail: 'Refill and non-refill rules stay consistent across POS execution.' },
+  { label: 'Cleaner Management Decisions', value: 'Live visibility', detail: 'Branch and outlet performance is visible in one operating view.' }
 ] as const;
 
 const trustStrip = [
@@ -284,8 +285,8 @@ function SafeIllustration({
 
 export function HomeLandingShowcase(): JSX.Element {
   const [activeModuleId, setActiveModuleId] = useState<string>(modules[0].id);
-  const [activeFaqId, setActiveFaqId] = useState<string>(faqs[0].id);
   const [carouselIndex, setCarouselIndex] = useState(0);
+  const [isCarouselPaused, setIsCarouselPaused] = useState(false);
   const [touchStartX, setTouchStartX] = useState<number | null>(null);
   const [dailySalesCount, setDailySalesCount] = useState(120);
   const [minutesSavedPerSale, setMinutesSavedPerSale] = useState(1.5);
@@ -296,7 +297,6 @@ export function HomeLandingShowcase(): JSX.Element {
     () => modules.find((module) => module.id === activeModuleId) ?? modules[0],
     [activeModuleId],
   );
-  const activeFaq = useMemo(() => faqs.find((item) => item.id === activeFaqId) ?? faqs[0], [activeFaqId]);
   const activeCarousel = lpgCarousel[carouselIndex] ?? lpgCarousel[0];
   const roi = useMemo(() => {
     const monthlyLaborHours = (dailySalesCount * minutesSavedPerSale * 30) / 60;
@@ -321,11 +321,14 @@ export function HomeLandingShowcase(): JSX.Element {
   }, []);
 
   useEffect(() => {
+    if (isCarouselPaused) {
+      return;
+    }
     const timer = window.setInterval(() => {
       rotateNext();
     }, 5400);
     return () => window.clearInterval(timer);
-  }, [rotateNext]);
+  }, [isCarouselPaused, rotateNext]);
 
   const currency = useMemo(
     () =>
@@ -344,10 +347,10 @@ export function HomeLandingShowcase(): JSX.Element {
         <div className="absolute left-0 top-0 h-full w-full bg-[radial-gradient(circle_at_15%_12%,rgba(240,200,111,0.15),transparent_34%),radial-gradient(circle_at_82%_18%,rgba(182,138,61,0.14),transparent_32%),radial-gradient(circle_at_45%_95%,rgba(250,214,136,0.10),transparent_32%)]" />
       </div>
 
-      <div className="mx-auto mb-4 flex max-w-7xl justify-end">
+      <div className="mx-auto mb-4 flex max-w-7xl items-center justify-end gap-2">
         <Link
           href="/login"
-          className="rounded-xl border border-amber-300/45 bg-amber-300/15 px-5 py-2 text-sm font-semibold text-amber-100 transition hover:bg-amber-300/25"
+          className="rounded-xl border border-amber-300/35 px-4 py-2 text-sm font-semibold text-amber-100/90 transition hover:border-amber-300/55 hover:text-amber-100"
         >
           Login
         </Link>
@@ -371,14 +374,13 @@ export function HomeLandingShowcase(): JSX.Element {
               </div>
             </div>
             <p className="inline-flex rounded-full border border-amber-300/40 bg-amber-300/10 px-3 py-1 text-xs font-semibold uppercase tracking-[0.15em] text-amber-200">
-              Enterprise Operations Suite
+              Outcome-Driven LPG Operations
             </p>
             <h1 className="mt-4 text-3xl font-black leading-tight text-white md:text-5xl">
-              Premium LPG Operations Platform Ready for Real-World Scale
+              Run Faster Cashier Operations With Lower Stock Risk
             </h1>
             <p className="mt-4 max-w-2xl text-sm leading-6 text-slate-200 md:text-base">
-              Sell with confidence using a platform tailored for Philippine LPG operations, combining branch and outlet execution,
-              inventory discipline, and management visibility. VPOS helps teams run cleaner processes and make faster decisions.
+              VPOS helps LPG teams close shifts faster, cut stock leakage, and keep pricing execution consistent across branch and outlet operations.
             </p>
             <div className="mt-7 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
               {outcomes.map((item) => (
@@ -437,6 +439,8 @@ export function HomeLandingShowcase(): JSX.Element {
         </div>
       </section>
 
+      <ScrollMorphSection />
+
       <section className="mx-auto mt-4 max-w-7xl rounded-2xl border border-amber-300/25 bg-black/35 p-3 backdrop-blur-md">
         <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-5">
           {trustStrip.map((item) => (
@@ -490,6 +494,10 @@ export function HomeLandingShowcase(): JSX.Element {
         <div className="grid gap-4 lg:grid-cols-[1.2fr_0.8fr]">
           <article
             className="group relative overflow-hidden rounded-2xl border border-amber-300/30 bg-white/5 p-3 transition-all duration-500 hover:-translate-y-1 hover:shadow-[0_0_36px_rgba(240,200,111,0.24)]"
+            onMouseEnter={() => setIsCarouselPaused(true)}
+            onMouseLeave={() => setIsCarouselPaused(false)}
+            onFocusCapture={() => setIsCarouselPaused(true)}
+            onBlurCapture={() => setIsCarouselPaused(false)}
             onTouchStart={(event) => setTouchStartX(event.changedTouches[0]?.clientX ?? null)}
             onTouchEnd={(event) => {
               if (touchStartX === null) {
@@ -573,6 +581,7 @@ export function HomeLandingShowcase(): JSX.Element {
             <label className="block text-xs text-slate-200">
               <span className="mb-1 block font-semibold uppercase tracking-wide text-amber-200">Daily Transactions per Cashier Lane (Branch/Outlet)</span>
               <input
+                aria-label="Daily transactions per cashier lane"
                 className="w-full accent-amber-300"
                 max={1200}
                 min={10}
@@ -586,6 +595,7 @@ export function HomeLandingShowcase(): JSX.Element {
             <label className="block text-xs text-slate-200">
               <span className="mb-1 block font-semibold uppercase tracking-wide text-amber-200">Minutes Saved Per Sale</span>
               <input
+                aria-label="Minutes saved per sale"
                 className="w-full accent-amber-300"
                 max={5}
                 min={0.2}
@@ -600,6 +610,7 @@ export function HomeLandingShowcase(): JSX.Element {
             <label className="block text-xs text-slate-200">
               <span className="mb-1 block font-semibold uppercase tracking-wide text-amber-200">Staff Hourly Rate (PHP)</span>
               <input
+                aria-label="Staff hourly rate in PHP"
                 className="w-full accent-amber-300"
                 max={40}
                 min={3}
@@ -614,6 +625,7 @@ export function HomeLandingShowcase(): JSX.Element {
             <label className="block text-xs text-slate-200">
               <span className="mb-1 block font-semibold uppercase tracking-wide text-amber-200">30-Day Stock Leakage Estimate (PHP)</span>
               <input
+                aria-label="30-day stock leakage estimate in PHP"
                 className="w-full accent-amber-300"
                 max={4000}
                 min={100}
@@ -628,6 +640,7 @@ export function HomeLandingShowcase(): JSX.Element {
             <label className="block text-xs text-slate-200">
               <span className="mb-1 block font-semibold uppercase tracking-wide text-amber-200">Expected Leakage Reduction</span>
               <input
+                aria-label="Expected stock leakage reduction percentage"
                 className="w-full accent-amber-300"
                 max={90}
                 min={10}
@@ -687,11 +700,8 @@ export function HomeLandingShowcase(): JSX.Element {
       </section>
 
       <section className="mx-auto mt-7 max-w-7xl rounded-2xl border border-slate-200/20 bg-white/5 p-5 backdrop-blur-md">
-        <div className="mb-3 flex items-center justify-between gap-3">
+        <div className="mb-3">
           <h3 className="text-lg font-bold text-white">Quick Access Modules (Interactive Showcase)</h3>
-          <span className="rounded-full border border-slate-300/30 bg-white/10 px-3 py-1 text-xs text-slate-200">
-            Presentation mode only
-          </span>
         </div>
         <p className="mb-4 text-sm text-slate-200">
           These cards are explainers for the product surface. They are intentionally non-navigation.
@@ -743,11 +753,8 @@ export function HomeLandingShowcase(): JSX.Element {
       </section>
 
       <section className="mx-auto mt-7 max-w-7xl rounded-2xl border border-slate-200/20 bg-white/5 p-5 backdrop-blur-md">
-        <div className="mb-4 flex items-center justify-between gap-3">
+        <div className="mb-4">
           <h3 className="text-lg font-bold text-white">Platform Mockups</h3>
-          <span className="rounded-full border border-slate-300/30 bg-white/10 px-3 py-1 text-xs text-slate-200">
-            Branded in-house visuals
-          </span>
         </div>
         <div className="grid gap-4 lg:grid-cols-3">
           {mockups.map((mockup) => (
@@ -821,27 +828,25 @@ export function HomeLandingShowcase(): JSX.Element {
             <p className="mt-1 text-xs text-slate-300">Focused answers for sales and onboarding conversations.</p>
             <div className="mt-3 space-y-2">
               {faqs.map((item) => (
-                <button
+                <details
                   key={item.id}
-                  type="button"
-                  onClick={() => setActiveFaqId(item.id)}
-                  className={`w-full rounded-lg border px-3 py-2 text-left text-xs transition ${
-                    item.id === activeFaq.id
-                      ? 'border-amber-300/55 bg-amber-300/15 text-amber-100'
-                      : 'border-slate-300/25 bg-white/5 text-slate-200 hover:border-amber-300/35'
-                  }`}
+                  className="faq-details rounded-lg border border-slate-300/25 bg-white/5 px-3 py-2 text-slate-200 open:border-amber-300/55 open:bg-amber-300/10"
                 >
-                  {item.question}
-                </button>
+                  <summary className="flex cursor-pointer list-none items-center justify-between gap-3 text-xs font-semibold text-amber-100 transition-colors hover:text-amber-50">
+                    <span>{item.question}</span>
+                    <span aria-hidden="true" className="faq-chevron text-sm leading-none text-amber-200">
+                      ▾
+                    </span>
+                  </summary>
+                  <div className="faq-answer-wrap">
+                    <p className="faq-answer mt-2 text-sm leading-6 text-slate-200">{item.answer}</p>
+                  </div>
+                </details>
               ))}
             </div>
           </aside>
 
           <article className="rounded-2xl border border-slate-200/20 bg-white/10 p-4">
-            <p className="text-xs font-semibold uppercase tracking-wide text-amber-200">Answer</p>
-            <h4 className="mt-2 text-lg font-bold text-white">{activeFaq.question}</h4>
-            <p className="mt-3 text-sm leading-6 text-slate-200">{activeFaq.answer}</p>
-
             <div className="mt-6 rounded-xl border border-amber-300/30 bg-amber-300/10 p-4">
               <h5 className="text-sm font-bold text-amber-100">Ready to onboard your team?</h5>
               <p className="mt-1 text-xs text-slate-200">
@@ -876,6 +881,28 @@ export function HomeLandingShowcase(): JSX.Element {
           </Link>
         </div>
       </div>
+      <style jsx>{`
+        .faq-details .faq-chevron {
+          transform: rotate(0deg);
+          transition: transform 220ms ease;
+        }
+        .faq-details .faq-answer-wrap {
+          display: grid;
+          grid-template-rows: 0fr;
+          opacity: 0;
+          transition: grid-template-rows 260ms ease, opacity 220ms ease;
+        }
+        .faq-details .faq-answer {
+          overflow: hidden;
+        }
+        .faq-details[open] .faq-chevron {
+          transform: rotate(180deg);
+        }
+        .faq-details[open] .faq-answer-wrap {
+          grid-template-rows: 1fr;
+          opacity: 1;
+        }
+      `}</style>
     </main>
   );
 }
