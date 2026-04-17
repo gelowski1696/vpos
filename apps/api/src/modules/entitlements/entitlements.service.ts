@@ -1387,7 +1387,8 @@ export class EntitlementsService {
           full_name: `${companyName} Owner`,
           roles: ['admin', 'supervisor'],
           active: true,
-          password: input.admin_password
+          password: input.admin_password,
+          require_password_change: true
         });
       }
 
@@ -1643,7 +1644,8 @@ export class EntitlementsService {
         full_name: `${companyName} Owner`,
         roles: ['admin', 'supervisor'],
         active: true,
-        password: input.admin_password
+        password: input.admin_password,
+        require_password_change: true
       });
     }
 

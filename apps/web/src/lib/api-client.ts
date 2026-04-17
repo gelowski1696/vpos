@@ -9,6 +9,7 @@ type AccessTokenPayload = {
   roles?: string[];
   email?: string;
   company_id?: string;
+  must_change_password?: boolean;
 };
 
 export type RequestOptions = {
@@ -66,6 +67,18 @@ export function getSessionCompanyId(): string | null {
   return typeof payload?.company_id === 'string' ? payload.company_id : null;
 }
 
+export function getSessionRequiresPasswordChange(): boolean {
+  if (typeof window === 'undefined') {
+    return false;
+  }
+  const token = getAccessToken();
+  if (!token) {
+    return false;
+  }
+  const payload = decodeJwtPayload(token);
+  return payload?.must_change_password === true;
+}
+
 export function getSessionClientId(): string {
   if (typeof window === 'undefined') {
     return API_CLIENT_ID;
@@ -106,10 +119,20 @@ function redirectToLoginForSession(reason: 'missing_token' | 'unauthorized'): vo
   }
 }
 
+function redirectToPasswordChange(): void {
+  if (typeof window === 'undefined') {
+    return;
+  }
+  if (window.location.pathname !== '/change-password') {
+    window.location.replace('/change-password');
+  }
+}
+
 export async function apiRequest<T>(path: string, options: RequestOptions = {}): Promise<T> {
   const authEnabled = options.auth ?? true;
   const headers: Record<string, string> = {
-    'Content-Type': 'application/json'
+    'Content-Type': 'application/json',
+    'X-VPOS-Client': 'web'
   };
   if (!options.omitClientId) {
     const clientId = options.clientId?.trim() || getSessionClientId() || API_CLIENT_ID;
@@ -141,13 +164,31 @@ export async function apiRequest<T>(path: string, options: RequestOptions = {}):
       throw new Error(`API error (${response.status})`);
     }
 
-    let parsed: { message?: string | string[]; error?: string; statusCode?: number } | null = null;
+    let parsed: {
+      message?: string | string[];
+      error?: string;
+      statusCode?: number;
+      code?: string;
+    } | null = null;
     try {
-      parsed = JSON.parse(text) as { message?: string | string[]; error?: string; statusCode?: number };
+      parsed = JSON.parse(text) as {
+        message?: string | string[];
+        error?: string;
+        statusCode?: number;
+        code?: string;
+      };
     } catch {
       parsed = null;
     }
     if (parsed) {
+      if (
+        authEnabled &&
+        response.status === 403 &&
+        typeof parsed.code === 'string' &&
+        parsed.code.trim().toUpperCase() === 'PASSWORD_CHANGE_REQUIRED'
+      ) {
+        redirectToPasswordChange();
+      }
       const message = parsed.message;
       if (Array.isArray(message)) {
         const joined = message.map((entry) => String(entry).trim()).filter(Boolean).join('; ');

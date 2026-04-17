@@ -7,7 +7,13 @@ import { usePathname, useRouter } from 'next/navigation';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { AdminWalkthrough, type AdminTourStep } from './admin-walkthrough';
 import { ChatWidget } from './chat/ChatWidget';
-import { apiRequest, clearAuthSession, getAccessToken, getSessionRoles } from '../lib/api-client';
+import {
+  apiRequest,
+  clearAuthSession,
+  getAccessToken,
+  getSessionRequiresPasswordChange,
+  getSessionRoles
+} from '../lib/api-client';
 
 type ThemeMode = 'light' | 'dark';
 
@@ -601,6 +607,7 @@ export function AdminShell({ children }: { children: React.ReactNode }): JSX.Ele
   const router = useRouter();
   const [ready, setReady] = useState(false);
   const [hasToken, setHasToken] = useState(false);
+  const [requiresPasswordChange, setRequiresPasswordChange] = useState(false);
   const [theme, setTheme] = useState<ThemeMode>('light');
   const [brandName, setBrandName] = useState('VPOS');
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
@@ -629,9 +636,17 @@ export function AdminShell({ children }: { children: React.ReactNode }): JSX.Ele
     setSidebarCollapsed(storedSidebar === '1');
 
     setHasToken(Boolean(getAccessToken()));
+    setRequiresPasswordChange(getSessionRequiresPasswordChange());
     setRoles(getSessionRoles());
     setReady(true);
   }, []);
+
+  useEffect(() => {
+    if (!ready || !hasToken || !requiresPasswordChange) {
+      return;
+    }
+    window.location.replace('/change-password');
+  }, [ready, hasToken, requiresPasswordChange]);
 
   useEffect(() => {
     if (!ready || !hasToken) {
@@ -1069,6 +1084,17 @@ export function AdminShell({ children }: { children: React.ReactNode }): JSX.Ele
           <Link className="mt-4 inline-flex rounded-lg bg-slate-900 px-4 py-2 text-sm font-semibold text-white dark:bg-slate-100 dark:text-slate-900" href="/login">
             Go to Login
           </Link>
+        </section>
+      </main>
+    );
+  }
+
+  if (requiresPasswordChange) {
+    return (
+      <main className="flex min-h-screen items-center justify-center px-6">
+        <section className="mx-auto w-full max-w-xl rounded-2xl border border-slate-300/60 bg-white/85 p-6 text-slate-700 shadow-sm dark:border-slate-700 dark:bg-slate-900/70 dark:text-slate-200">
+          <h1 className="text-xl font-semibold">Password Change Required</h1>
+          <p className="mt-2 text-sm">Redirecting to password update...</p>
         </section>
       </main>
     );

@@ -1,4 +1,4 @@
-import { CanActivate, ExecutionContext, Injectable, UnauthorizedException } from '@nestjs/common';
+import { CanActivate, ExecutionContext, ForbiddenException, Injectable, UnauthorizedException } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
 import { Reflector } from '@nestjs/core';
 import { IS_PUBLIC_KEY } from '../decorators/public.decorator';
@@ -40,7 +40,14 @@ export class JwtAuthGuard implements CanActivate {
     try {
       const payload = this.jwtService.verify(token, {
         secret: process.env.JWT_ACCESS_SECRET ?? 'dev-access-secret'
-      }) as { sub: string; email: string; roles: string[]; type: string; company_id: string };
+      }) as {
+        sub: string;
+        email: string;
+        roles: string[];
+        type: string;
+        company_id: string;
+        must_change_password?: boolean;
+      };
 
       if (payload.type !== 'access') {
         throw new UnauthorizedException('Invalid token type');
@@ -61,6 +68,18 @@ export class JwtAuthGuard implements CanActivate {
         roles: payload.roles,
         company_id: payload.company_id
       };
+      if (
+        payload.must_change_password &&
+        this.isWebAdminClient(request.headers) &&
+        !this.isPasswordChangePath(request.originalUrl ?? request.url ?? '')
+      ) {
+        throw new ForbiddenException({
+          statusCode: 403,
+          error: 'Forbidden',
+          code: 'PASSWORD_CHANGE_REQUIRED',
+          message: 'Password change is required before accessing this module.'
+        });
+      }
       return true;
     } catch (error) {
       if (error instanceof UnauthorizedException) {
@@ -130,5 +149,15 @@ export class JwtAuthGuard implements CanActivate {
       company_id: request.companyId
     };
     return true;
+  }
+
+  private isPasswordChangePath(path: string): boolean {
+    const normalized = path.toLowerCase();
+    return normalized.includes('/auth/change-password');
+  }
+
+  private isWebAdminClient(headers: Record<string, string | string[] | undefined>): boolean {
+    const client = this.pickHeader(headers['x-vpos-client'])?.toLowerCase() ?? '';
+    return client === 'web';
   }
 }

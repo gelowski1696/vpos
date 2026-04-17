@@ -7,6 +7,7 @@ export interface AuthUser {
   password_hash: string;
   roles: string[];
   active: boolean;
+  must_change_password?: boolean;
 }
 
 export interface StoredRefreshToken {
@@ -33,7 +34,8 @@ export class AuthRepository {
     }
     this.users.set(emailKey, {
       ...user,
-      email: emailKey
+      email: emailKey,
+      must_change_password: user.must_change_password === true
     });
   }
 

@@ -4,7 +4,13 @@ import Image from 'next/image';
 import { FormEvent, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import type { Route } from 'next';
-import { apiRequest, clearAuthSession, getSessionRoles, saveAuthSession } from '../../../lib/api-client';
+import {
+  apiRequest,
+  clearAuthSession,
+  getSessionRequiresPasswordChange,
+  getSessionRoles,
+  saveAuthSession
+} from '../../../lib/api-client';
 
 export default function LoginPage(): JSX.Element {
   const router = useRouter();
@@ -24,6 +30,7 @@ export default function LoginPage(): JSX.Element {
         access_token: string;
         refresh_token: string;
         client_id: string;
+        must_change_password?: boolean;
       }>('/auth/login', {
         method: 'POST',
         auth: false,
@@ -36,6 +43,12 @@ export default function LoginPage(): JSX.Element {
       });
 
       saveAuthSession(response.access_token, response.refresh_token, response.client_id);
+      const mustChangePassword = response.must_change_password === true || getSessionRequiresPasswordChange();
+      if (mustChangePassword) {
+        router.push('/change-password' as Route);
+        return;
+      }
+
       const roles = getSessionRoles();
       const canAccessWebAdmin = roles.some((role) => role === 'admin' || role === 'owner' || role === 'platform_owner');
       if (!canAccessWebAdmin) {

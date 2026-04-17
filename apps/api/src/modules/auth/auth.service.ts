@@ -21,6 +21,7 @@ type TokenPair = {
 
 type LoginTokenPair = TokenPair & {
   client_id: string;
+  must_change_password: boolean;
 };
 
 type ManagedAuthUserInput = {
@@ -31,6 +32,7 @@ type ManagedAuthUserInput = {
   roles: string[];
   active: boolean;
   password?: string;
+  require_password_change?: boolean;
 };
 
 type AuthChannelOptions = {
@@ -405,10 +407,18 @@ export class AuthService {
           roles
         );
         await this.assertSubscriptionLoginAllowed(dbUser.companyId);
-        const tokenPair = await this.issueTokenPair(dbUser.id, dbUser.companyId, dbUser.email, roles, deviceId);
+        const tokenPair = await this.issueTokenPair(
+          dbUser.id,
+          dbUser.companyId,
+          dbUser.email,
+          roles,
+          deviceId,
+          dbUser.mustChangePassword
+        );
         return {
           ...tokenPair,
-          client_id: clientCode
+          client_id: clientCode,
+          must_change_password: dbUser.mustChangePassword
         };
       } catch (error) {
         if (
@@ -446,16 +456,33 @@ export class AuthService {
     );
     await this.assertSubscriptionLoginAllowed(memoryUser.company_id);
 
-    const tokenPair = await this.issueTokenPair(memoryUser.id, memoryUser.company_id, memoryUser.email, memoryUser.roles, deviceId);
+    const tokenPair = await this.issueTokenPair(
+      memoryUser.id,
+      memoryUser.company_id,
+      memoryUser.email,
+      memoryUser.roles,
+      deviceId,
+      memoryUser.must_change_password === true
+    );
     return {
       ...tokenPair,
-      client_id: clientCode
+      client_id: clientCode,
+      must_change_password: memoryUser.must_change_password === true
     };
   }
 
   async refresh(refreshToken: string, options?: AuthChannelOptions): Promise<TokenPair> {
     this.assertProductionDatabaseAuth();
-    let payload: { sub: string; company_id: string; email: string; roles: string[]; type: string; jti: string; device_id: string };
+    let payload: {
+      sub: string;
+      company_id: string;
+      email: string;
+      roles: string[];
+      type: string;
+      jti: string;
+      device_id: string;
+      must_change_password?: boolean;
+    };
     try {
       payload = this.jwtService.verify(refreshToken, {
         secret: process.env.JWT_REFRESH_SECRET ?? 'dev-refresh-secret'
@@ -522,6 +549,7 @@ export class AuthService {
           stored.user.email,
           roles,
           payload.device_id,
+          stored.user.mustChangePassword,
           nextJti
         );
       } catch (error) {
@@ -566,7 +594,15 @@ export class AuthService {
     );
     await this.assertSubscriptionLoginAllowed(user.company_id);
 
-    return this.issueTokenPair(user.id, user.company_id, user.email, user.roles, payload.device_id, nextJti);
+    return this.issueTokenPair(
+      user.id,
+      user.company_id,
+      user.email,
+      user.roles,
+      payload.device_id,
+      user.must_change_password === true,
+      nextJti
+    );
   }
 
   async logout(refreshToken?: string, options?: AuthChannelOptions): Promise<{ success: true }> {
@@ -657,11 +693,13 @@ export class AuthService {
           dbUser.companyId,
           dbUser.email,
           roles,
-          input.deviceId
+          input.deviceId,
+          dbUser.mustChangePassword
         );
         return {
           ...tokenPair,
-          client_id: dbUser.company.externalClientId ?? dbUser.company.code
+          client_id: dbUser.company.externalClientId ?? dbUser.company.code,
+          must_change_password: dbUser.mustChangePassword
         };
       } catch (error) {
         if (error instanceof UnauthorizedException) {
@@ -685,12 +723,14 @@ export class AuthService {
       user.company_id,
       user.email,
       user.roles,
-      input.deviceId
+      input.deviceId,
+      user.must_change_password === true
     );
     const clientCode = user.company_id === 'comp-demo' ? 'DEMO' : user.company_id.replace(/^comp-/, '').toUpperCase();
     return {
       ...tokenPair,
-      client_id: clientCode
+      client_id: clientCode,
+      must_change_password: user.must_change_password === true
     };
   }
 
@@ -704,7 +744,7 @@ export class AuthService {
       try {
         const byId = await prisma.user.findUnique({
           where: { id: input.id },
-          select: { id: true, companyId: true, fullName: true, passwordHash: true }
+          select: { id: true, companyId: true, fullName: true, passwordHash: true, mustChangePassword: true }
         });
 
         const byEmail = await prisma.user.findUnique({
@@ -714,10 +754,16 @@ export class AuthService {
               email: normalizedEmail
             }
           },
-          select: { id: true, companyId: true, fullName: true, passwordHash: true }
+          select: { id: true, companyId: true, fullName: true, passwordHash: true, mustChangePassword: true }
         });
 
         const existing = byId && byId.companyId === input.company_id ? byId : byEmail;
+        const shouldForcePasswordChange =
+          input.require_password_change === true
+            ? true
+            : input.require_password_change === false
+              ? false
+              : (existing?.mustChangePassword ?? false);
 
         let passwordHash = existing?.passwordHash;
         if (input.password && input.password.trim()) {
@@ -736,7 +782,8 @@ export class AuthService {
                   email: normalizedEmail,
                   fullName,
                   isActive: input.active,
-                  passwordHash
+                  passwordHash,
+                  mustChangePassword: shouldForcePasswordChange
                 }
               })
             : await prisma.user.create({
@@ -746,7 +793,8 @@ export class AuthService {
                   email: normalizedEmail,
                   fullName,
                   passwordHash,
-                  isActive: input.active
+                  isActive: input.active,
+                  mustChangePassword: shouldForcePasswordChange
                 }
               });
 
@@ -799,6 +847,12 @@ export class AuthService {
     const existingById = this.repository.findById(input.id);
     const existingByEmail = this.repository.findByEmail(normalizedEmail);
     let passwordHash = existingById?.password_hash ?? existingByEmail?.password_hash;
+    const shouldForcePasswordChange =
+      input.require_password_change === true
+        ? true
+        : input.require_password_change === false
+          ? false
+          : (existingById?.must_change_password ?? existingByEmail?.must_change_password ?? false);
 
     if (input.password && input.password.trim()) {
       passwordHash = await argon2.hash(input.password.trim());
@@ -813,8 +867,101 @@ export class AuthService {
       email: normalizedEmail,
       password_hash: passwordHash,
       roles: input.roles,
-      active: input.active
+      active: input.active,
+      must_change_password: shouldForcePasswordChange
     });
+  }
+
+  async changePassword(input: {
+    userId: string;
+    companyId: string;
+    currentPassword: string;
+    newPassword: string;
+  }): Promise<{ success: true }> {
+    this.assertProductionDatabaseAuth();
+    await this.ensureSeedUsers();
+
+    const currentPassword = input.currentPassword.trim();
+    const newPassword = input.newPassword.trim();
+    if (newPassword.length < 8) {
+      throw new BadRequestException('New password must be at least 8 characters');
+    }
+    if (currentPassword === newPassword) {
+      throw new BadRequestException('New password must be different from current password');
+    }
+
+    const prisma = this.getPrismaIfEnabled();
+    if (prisma) {
+      try {
+        const user = await prisma.user.findFirst({
+          where: {
+            id: input.userId,
+            companyId: input.companyId,
+            isActive: true
+          },
+          select: {
+            id: true,
+            passwordHash: true
+          }
+        });
+        if (!user) {
+          throw new UnauthorizedException('User not found');
+        }
+
+        const validCurrentPassword = await argon2.verify(user.passwordHash, currentPassword);
+        if (!validCurrentPassword) {
+          throw new UnauthorizedException('Current password is incorrect');
+        }
+
+        const nextPasswordHash = await argon2.hash(newPassword);
+        await prisma.$transaction([
+          prisma.user.update({
+            where: { id: user.id },
+            data: {
+              passwordHash: nextPasswordHash,
+              mustChangePassword: false
+            }
+          }),
+          prisma.refreshToken.updateMany({
+            where: {
+              userId: user.id,
+              revokedAt: null
+            },
+            data: {
+              revokedAt: new Date()
+            }
+          })
+        ]);
+        return { success: true };
+      } catch (error) {
+        if (error instanceof UnauthorizedException || error instanceof BadRequestException) {
+          throw error;
+        }
+        throw new InternalServerErrorException('Auth datastore unavailable');
+      }
+    }
+
+    if (!this.memoryFallbackAllowed()) {
+      throw new InternalServerErrorException('Auth datastore unavailable');
+    }
+
+    const user = this.repository.findById(input.userId);
+    if (!user || user.company_id !== input.companyId || !user.active) {
+      throw new UnauthorizedException('User not found');
+    }
+
+    const validCurrentPassword = await argon2.verify(user.password_hash, currentPassword);
+    if (!validCurrentPassword) {
+      throw new UnauthorizedException('Current password is incorrect');
+    }
+
+    const nextPasswordHash = await argon2.hash(newPassword);
+    this.repository.upsertUser({
+      ...user,
+      password_hash: nextPasswordHash,
+      must_change_password: false
+    });
+    return { success: true };
   }
 
   private async issueTokenPair(
@@ -823,6 +970,7 @@ export class AuthService {
     email: string,
     roles: string[],
     deviceId: string,
+    mustChangePassword = false,
     forcedJti?: string
   ): Promise<TokenPair> {
     this.assertProductionDatabaseAuth();
@@ -831,6 +979,7 @@ export class AuthService {
       company_id: companyId,
       email,
       roles,
+      must_change_password: mustChangePassword,
       type: 'access'
     };
 
