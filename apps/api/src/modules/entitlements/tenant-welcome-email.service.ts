@@ -1,6 +1,6 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { promises as fs } from 'node:fs';
-import path from 'node:path';
+import { resolve } from 'node:path';
 
 export type TenantWelcomeEmailInput = {
   toEmail: string;
@@ -169,9 +169,9 @@ export class TenantWelcomeEmailService {
 
   private async tryLoadLogoAttachment(): Promise<{ filename: string; content: string } | null> {
     const candidates = [
-      path.resolve(process.cwd(), 'apps/web/public/logo.png'),
-      path.resolve(process.cwd(), 'public/logo.png'),
-      path.resolve(process.cwd(), 'apps/mobile/assests/vpos_logo.png')
+      resolve(process.cwd(), 'apps/web/public/logo.png'),
+      resolve(process.cwd(), 'public/logo.png'),
+      resolve(process.cwd(), 'apps/mobile/assests/vpos_logo.png')
     ];
 
     for (const filePath of candidates) {
