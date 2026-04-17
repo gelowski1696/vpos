@@ -13,7 +13,7 @@ const FRAME_DIR = '/illustrations/scroll-morph';
 const HEADLINE_FADE_IN_FRAME = 180;
 const MOBILE_BREAKPOINT = 768;
 const DESKTOP_FOCAL_X = 0.5;
-const MOBILE_FOCAL_X = 0.58;
+const MOBILE_FOCAL_X = 0.52;
 const FOCAL_Y = 0.5;
 
 function framePath(index: number): string {
@@ -58,29 +58,17 @@ export function ScrollMorphSection(): JSX.Element {
       if (!img || !img.complete || img.naturalWidth === 0) return;
       const iw = img.naturalWidth;
       const ih = img.naturalHeight;
-      const targetAspect = cw / ch;
-      const sourceAspect = iw / ih;
       const focalX = window.matchMedia(`(max-width: ${MOBILE_BREAKPOINT}px)`).matches
         ? MOBILE_FOCAL_X
         : DESKTOP_FOCAL_X;
-
-      let sx = 0;
-      let sy = 0;
-      let sw = iw;
-      let sh = ih;
-
-      if (sourceAspect > targetAspect) {
-        sw = ih * targetAspect;
-        sx = (iw - sw) * focalX;
-      } else if (sourceAspect < targetAspect) {
-        sh = iw / targetAspect;
-        sy = (ih - sh) * FOCAL_Y;
-      }
-
-      sx = Math.max(0, Math.min(sx, iw - sw));
-      sy = Math.max(0, Math.min(sy, ih - sh));
-
-      ctx.drawImage(img, sx, sy, sw, sh, 0, 0, cw, ch);
+      const scale = Math.max(cw / iw, ch / ih);
+      const drawW = iw * scale;
+      const drawH = ih * scale;
+      const overflowX = Math.max(0, drawW - cw);
+      const overflowY = Math.max(0, drawH - ch);
+      const dx = -overflowX * focalX;
+      const dy = -overflowY * FOCAL_Y;
+      ctx.drawImage(img, dx, dy, drawW, drawH);
     };
 
     for (let i = 0; i < FRAME_COUNT; i++) {
