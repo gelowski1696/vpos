@@ -11,6 +11,10 @@ if (typeof window !== 'undefined') {
 const FRAME_COUNT = 240;
 const FRAME_DIR = '/illustrations/scroll-morph';
 const HEADLINE_FADE_IN_FRAME = 180;
+const MOBILE_BREAKPOINT = 768;
+const DESKTOP_FOCAL_X = 0.5;
+const MOBILE_FOCAL_X = 0.58;
+const FOCAL_Y = 0.5;
 
 function framePath(index: number): string {
   return `${FRAME_DIR}/frame-${String(index).padStart(3, '0')}.jpg`;
@@ -54,12 +58,29 @@ export function ScrollMorphSection(): JSX.Element {
       if (!img || !img.complete || img.naturalWidth === 0) return;
       const iw = img.naturalWidth;
       const ih = img.naturalHeight;
-      const scale = Math.max(cw / iw, ch / ih);
-      const drawW = iw * scale;
-      const drawH = ih * scale;
-      const dx = (cw - drawW) / 2;
-      const dy = (ch - drawH) / 2;
-      ctx.drawImage(img, dx, dy, drawW, drawH);
+      const targetAspect = cw / ch;
+      const sourceAspect = iw / ih;
+      const focalX = window.matchMedia(`(max-width: ${MOBILE_BREAKPOINT}px)`).matches
+        ? MOBILE_FOCAL_X
+        : DESKTOP_FOCAL_X;
+
+      let sx = 0;
+      let sy = 0;
+      let sw = iw;
+      let sh = ih;
+
+      if (sourceAspect > targetAspect) {
+        sw = ih * targetAspect;
+        sx = (iw - sw) * focalX;
+      } else if (sourceAspect < targetAspect) {
+        sh = iw / targetAspect;
+        sy = (ih - sh) * FOCAL_Y;
+      }
+
+      sx = Math.max(0, Math.min(sx, iw - sw));
+      sy = Math.max(0, Math.min(sy, ih - sh));
+
+      ctx.drawImage(img, sx, sy, sw, sh, 0, 0, cw, ch);
     };
 
     for (let i = 0; i < FRAME_COUNT; i++) {
@@ -78,7 +99,7 @@ export function ScrollMorphSection(): JSX.Element {
     }
 
     const getScrollEnd = (): string =>
-      window.matchMedia('(max-width: 768px)').matches ? '+=180%' : '+=300%';
+      window.matchMedia(`(max-width: ${MOBILE_BREAKPOINT}px)`).matches ? '+=180%' : '+=300%';
 
     const tween = gsap.to(state, {
       frame: FRAME_COUNT - 1,
@@ -90,7 +111,7 @@ export function ScrollMorphSection(): JSX.Element {
         end: getScrollEnd,
         scrub: 0.5,
         pin: true,
-        pinType: window.matchMedia('(max-width: 768px)').matches ? 'transform' : 'fixed',
+        pinType: window.matchMedia(`(max-width: ${MOBILE_BREAKPOINT}px)`).matches ? 'transform' : 'fixed',
         anticipatePin: 1,
         invalidateOnRefresh: true,
         onRefresh: render,
