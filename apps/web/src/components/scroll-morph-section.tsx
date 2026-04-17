@@ -17,15 +17,17 @@ function framePath(index: number): string {
 }
 
 export function ScrollMorphSection(): JSX.Element {
+  const wrapperRef = useRef<HTMLDivElement>(null);
   const sectionRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const headlineRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
+    const wrapper = wrapperRef.current;
     const section = sectionRef.current;
     const canvas = canvasRef.current;
     const headline = headlineRef.current;
-    if (!section || !canvas || !headline) return;
+    if (!wrapper || !section || !canvas || !headline) return;
 
     const ctx = canvas.getContext('2d');
     if (!ctx) return;
@@ -83,13 +85,15 @@ export function ScrollMorphSection(): JSX.Element {
       snap: 'frame',
       ease: 'none',
       scrollTrigger: {
-        trigger: section,
+        trigger: wrapper,
         start: 'top top',
         end: getScrollEnd,
         scrub: 0.5,
         pin: true,
+        pinType: window.matchMedia('(max-width: 768px)').matches ? 'transform' : 'fixed',
         anticipatePin: 1,
         invalidateOnRefresh: true,
+        onRefresh: render,
         onUpdate: (self) => {
           const absoluteFrame = self.progress * (FRAME_COUNT - 1);
           const fadeStart = HEADLINE_FADE_IN_FRAME;
@@ -119,29 +123,31 @@ export function ScrollMorphSection(): JSX.Element {
   }, []);
 
   return (
-    <section
-      ref={sectionRef}
-      className="relative mx-auto mt-7 h-screen w-full max-w-[1400px] overflow-hidden rounded-2xl border border-amber-300/25 bg-black/50 sm:rounded-3xl"
-      style={{ height: '100dvh' }}
-      aria-label="VPOS product morph"
-    >
-      <div className="pointer-events-none absolute inset-0 z-0 bg-[radial-gradient(circle_at_50%_50%,rgba(240,200,111,0.12),transparent_60%)]" />
-      <canvas ref={canvasRef} className="absolute inset-0 z-10 block" aria-hidden="true" />
-      <div
-        ref={headlineRef}
-        className="pointer-events-none absolute inset-x-0 bottom-[10%] z-20 flex flex-col items-center px-4 text-center opacity-0 sm:bottom-[12%] sm:px-6"
-        style={{ transform: 'translate3d(0, 16px, 0)' }}
+    <div ref={wrapperRef} className="mx-auto mt-7 w-full max-w-[1400px]">
+      <section
+        ref={sectionRef}
+        className="relative h-screen w-full overflow-hidden rounded-2xl border border-amber-300/25 bg-black/50 sm:rounded-3xl"
+        style={{ height: '100dvh' }}
+        aria-label="VPOS product morph"
       >
-        <p className="mb-2 text-[10px] font-semibold uppercase tracking-[0.25em] text-amber-200/90 sm:mb-3 sm:text-[11px] sm:tracking-[0.3em]">
-          VMJAMTECH VPOS
-        </p>
-        <h2 className="max-w-3xl text-2xl font-black leading-tight text-white sm:text-3xl md:text-5xl">
-          From cylinder to command center
-        </h2>
-        <p className="mt-2 max-w-xl text-xs text-slate-200 sm:mt-3 sm:text-sm md:text-base">
-          One scroll away from the full LPG operations picture.
-        </p>
-      </div>
-    </section>
+        <div className="pointer-events-none absolute inset-0 z-0 bg-[radial-gradient(circle_at_50%_50%,rgba(240,200,111,0.12),transparent_60%)]" />
+        <canvas ref={canvasRef} className="absolute inset-0 z-10 block" aria-hidden="true" />
+        <div
+          ref={headlineRef}
+          className="pointer-events-none absolute inset-x-0 bottom-[10%] z-20 flex flex-col items-center px-4 text-center opacity-0 sm:bottom-[12%] sm:px-6"
+          style={{ transform: 'translate3d(0, 16px, 0)' }}
+        >
+          <p className="mb-2 text-[10px] font-semibold uppercase tracking-[0.25em] text-amber-200/90 sm:mb-3 sm:text-[11px] sm:tracking-[0.3em]">
+            VMJAMTECH VPOS
+          </p>
+          <h2 className="max-w-3xl text-2xl font-black leading-tight text-white sm:text-3xl md:text-5xl">
+            From cylinder to command center
+          </h2>
+          <p className="mt-2 max-w-xl text-xs text-slate-200 sm:mt-3 sm:text-sm md:text-base">
+            One scroll away from the full LPG operations picture.
+          </p>
+        </div>
+      </section>
+    </div>
   );
 }
