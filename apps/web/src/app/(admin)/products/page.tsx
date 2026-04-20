@@ -158,6 +158,13 @@ function formatDate(value: string | null): string {
   return parsed.toLocaleString();
 }
 
+function toDateInput(value: Date): string {
+  const year = value.getFullYear();
+  const month = String(value.getMonth() + 1).padStart(2, '0');
+  const day = String(value.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+}
+
 function flowModeLabel(value: 'ANY' | 'REFILL_EXCHANGE' | 'NON_REFILL'): string {
   if (value === 'REFILL_EXCHANGE') {
     return 'Refill Exchange';
@@ -189,8 +196,8 @@ export default function ProductsPage(): JSX.Element {
   const [movementRows, setMovementRows] = useState<InventoryMovementRow[]>([]);
   const [movementLoading, setMovementLoading] = useState(false);
   const [movementError, setMovementError] = useState<string | null>(null);
-  const [movementFromDate, setMovementFromDate] = useState('');
-  const [movementToDate, setMovementToDate] = useState('');
+  const [movementFromDate, setMovementFromDate] = useState(() => toDateInput(new Date()));
+  const [movementToDate, setMovementToDate] = useState(() => toDateInput(new Date()));
   const [itemHistoryOpen, setItemHistoryOpen] = useState(false);
   const [handledSearchProductId, setHandledSearchProductId] = useState<string | null>(null);
 
