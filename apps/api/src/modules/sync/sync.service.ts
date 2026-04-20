@@ -1001,20 +1001,17 @@ export class SyncService {
     }
 
     try {
+      const detail = await this.lendingService.getDetail(companyId, lendingId);
+      const resolved = this.resolveLendingReturnLines(detail, linesRaw);
+      if ('error' in resolved) {
+        return { ok: false, reason: resolved.error };
+      }
       const lending = await this.lendingService.returnLending(
         companyId,
         lendingId,
         {
           remarks: this.asString(payload.remarks) ?? null,
-          lines: linesRaw.map((entry) => {
-            const row = (entry as Record<string, unknown>) ?? {};
-            return {
-              lending_line_id: this.asString(row.lending_line_id ?? row.lendingLineId) ?? '',
-              returned_qty: this.asNumber(row.returned_qty ?? row.returnedQty),
-              condition: this.asString(row.condition),
-              remarks: this.asString(row.remarks)
-            };
-          })
+          lines: resolved.lines
         },
         this.asString(payload.user_id ?? payload.userId) ?? actorUserId
       );
@@ -1024,6 +1021,109 @@ export class SyncService {
         cause instanceof Error ? cause.message : 'Lending return posting failed during sync';
       return { ok: false, reason: message };
     }
+  }
+
+  private resolveLendingReturnLines(
+    detail: LendingDetailRecord,
+    linesRaw: unknown[]
+  ):
+    | {
+        lines: Array<{
+          lending_line_id: string;
+          returned_qty: number;
+          condition: string | null;
+          remarks: string | null;
+        }>;
+      }
+    | { error: string } {
+    const linesById = new Map(detail.lines.map((line) => [line.lending_line_id, line]));
+    const linesBySourceSaleLineId = new Map<string, LendingDetailRecord['lines'][number]>();
+    for (const line of detail.lines) {
+      const sourceSaleLineId =
+        typeof line.source_sale_line_id === 'string' ? line.source_sale_line_id.trim() : '';
+      if (!sourceSaleLineId) {
+        continue;
+      }
+      linesBySourceSaleLineId.set(sourceSaleLineId, line);
+    }
+    const openByLineId = new Map(
+      detail.lines.map((line) => [line.lending_line_id, Math.max(0, Number(line.quantity_open ?? 0))])
+    );
+
+    const resolvedLines: Array<{
+      lending_line_id: string;
+      returned_qty: number;
+      condition: string | null;
+      remarks: string | null;
+    }> = [];
+
+    for (let index = 0; index < linesRaw.length; index += 1) {
+      const row = (linesRaw[index] as Record<string, unknown>) ?? {};
+      const returnedQty = this.asNumber(row.returned_qty ?? row.returnedQty);
+      if (returnedQty <= 0) {
+        return { error: `Lending return line ${index + 1} is missing a positive quantity` };
+      }
+
+      const explicitLineId = this.asString(row.lending_line_id ?? row.lendingLineId)?.trim() ?? '';
+      const sourceSaleLineId =
+        this.asString(row.source_sale_line_id ?? row.sourceSaleLineId)?.trim() ?? '';
+      const productId = this.asString(row.product_id ?? row.productId)?.trim() ?? '';
+
+      let resolvedLineId = explicitLineId && linesById.has(explicitLineId) ? explicitLineId : '';
+      if (!resolvedLineId && sourceSaleLineId && linesBySourceSaleLineId.has(sourceSaleLineId)) {
+        resolvedLineId = linesBySourceSaleLineId.get(sourceSaleLineId)?.lending_line_id ?? '';
+      }
+      if (!resolvedLineId && productId) {
+        const candidates = detail.lines.filter((line) => line.product_id === productId);
+        if (candidates.length === 1) {
+          resolvedLineId = candidates[0].lending_line_id;
+        } else if (candidates.length > 1) {
+          const withSufficientOpen = candidates
+            .filter((line) => (openByLineId.get(line.lending_line_id) ?? 0) >= returnedQty)
+            .sort(
+              (a, b) =>
+                (openByLineId.get(b.lending_line_id) ?? 0) -
+                (openByLineId.get(a.lending_line_id) ?? 0)
+            );
+          if (withSufficientOpen.length > 0) {
+            resolvedLineId = withSufficientOpen[0].lending_line_id;
+          } else {
+            const bestOpen = [...candidates].sort(
+              (a, b) =>
+                (openByLineId.get(b.lending_line_id) ?? 0) -
+                (openByLineId.get(a.lending_line_id) ?? 0)
+            );
+            resolvedLineId = bestOpen[0]?.lending_line_id ?? '';
+          }
+        }
+      }
+
+      if (!resolvedLineId) {
+        return {
+          error: `Unable to resolve lending return line ${index + 1}; sync lending first then retry return`
+        };
+      }
+
+      const remainingOpen = openByLineId.get(resolvedLineId) ?? 0;
+      if (returnedQty > remainingOpen) {
+        return {
+          error: `Return quantity exceeds open balance for resolved lending line ${resolvedLineId}`
+        };
+      }
+      openByLineId.set(
+        resolvedLineId,
+        Number(Math.max(0, remainingOpen - returnedQty).toFixed(4))
+      );
+
+      resolvedLines.push({
+        lending_line_id: resolvedLineId,
+        returned_qty: returnedQty,
+        condition: this.asString(row.condition) ?? null,
+        remarks: this.asString(row.remarks) ?? null
+      });
+    }
+
+    return { lines: resolvedLines };
   }
 
   private async tryPostLpgItemActionOutbox(
