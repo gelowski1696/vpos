@@ -1018,7 +1018,8 @@ export class ReportsService {
             product: {
               select: {
                 sku: true,
-                name: true
+                name: true,
+                isLpg: true
               }
             }
           },
@@ -1289,6 +1290,7 @@ export class ReportsService {
           product_id: line.productId,
           item_code: line.product.sku,
           product_name: line.product.name,
+          is_lpg: Boolean(line.product.isLpg),
           cylinder_flow: resolvePayloadLineFlow(index, line.productId),
           qty: this.roundQty(this.toNumber(line.quantity)),
           unit_price: this.roundMoney(this.toNumber(line.unitPrice)),

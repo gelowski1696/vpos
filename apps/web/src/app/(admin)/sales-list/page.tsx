@@ -66,6 +66,7 @@ type SalesDetailResponse = {
     product_id: string;
     item_code: string;
     product_name: string;
+    is_lpg: boolean;
     cylinder_flow: 'REFILL_EXCHANGE' | 'NON_REFILL' | null;
     qty: number;
     unit_price: number;
@@ -769,7 +770,9 @@ export default function SalesListPage(): JSX.Element {
                                 <td className="px-2 py-1.5 text-slate-700 dark:text-slate-200">{line.product_name}</td>
                                 <td className="px-2 py-1.5 text-right text-slate-700 dark:text-slate-200">{fmtQty(line.qty)}</td>
                                 <td className="px-2 py-1.5 text-slate-700 dark:text-slate-200">
-                                  {line.cylinder_flow === 'REFILL_EXCHANGE'
+                                  {!line.is_lpg
+                                    ? 'Non-Refill'
+                                    : line.cylinder_flow === 'REFILL_EXCHANGE'
                                     ? 'Refill'
                                     : line.cylinder_flow === 'NON_REFILL'
                                       ? 'Non-Refill'

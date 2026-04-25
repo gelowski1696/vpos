@@ -1171,11 +1171,11 @@ export default function ReportsPage(): JSX.Element {
               </div>
             </ReportCard>
 
-            <ReportCard title="9. Inventory Movement Ledger" subtitle="Every movement with FULL/EMPTY deltas">
+            <ReportCard title="9. Inventory Movement Ledger" subtitle="Every movement with qty plus FULL/EMPTY deltas">
               <div className="overflow-x-auto">
                 <table className="w-full min-w-[760px] text-xs">
-                  <thead className="text-left text-[11px] uppercase text-slate-500"><tr><th className="pb-2 pr-2">When</th><th className="pb-2 pr-2">Type</th><th className="pb-2 pr-2">Location</th><th className="pb-2 pr-2">Item</th><th className="pb-2 pr-2">FULL</th><th className="pb-2">EMPTY</th></tr></thead>
-                  <tbody>{data.inventoryMovements.slice(0, 50).map((row) => <tr key={row.id} className="border-t border-slate-100 dark:border-slate-700"><td className="py-1.5 pr-2">{dt(row.created_at)}</td><td className="py-1.5 pr-2">{row.movement_type}</td><td className="py-1.5 pr-2">{row.location_name}</td><td className="py-1.5 pr-2">{row.product_sku}</td><td className="py-1.5 pr-2">{qty(row.qty_full_delta)}</td><td className="py-1.5">{qty(row.qty_empty_delta)}</td></tr>)}</tbody>
+                  <thead className="text-left text-[11px] uppercase text-slate-500"><tr><th className="pb-2 pr-2">When</th><th className="pb-2 pr-2">Type</th><th className="pb-2 pr-2">Location</th><th className="pb-2 pr-2">Item</th><th className="pb-2 pr-2">Qty</th><th className="pb-2 pr-2">FULL</th><th className="pb-2">EMPTY</th></tr></thead>
+                  <tbody>{data.inventoryMovements.slice(0, 50).map((row) => <tr key={row.id} className="border-t border-slate-100 dark:border-slate-700"><td className="py-1.5 pr-2">{dt(row.created_at)}</td><td className="py-1.5 pr-2">{row.movement_type}</td><td className="py-1.5 pr-2">{row.location_name}</td><td className="py-1.5 pr-2">{row.product_sku}</td><td className="py-1.5 pr-2">{qty(row.qty_delta)}</td><td className="py-1.5 pr-2">{qty(row.qty_full_delta)}</td><td className="py-1.5">{qty(row.qty_empty_delta)}</td></tr>)}</tbody>
                 </table>
               </div>
             </ReportCard>
