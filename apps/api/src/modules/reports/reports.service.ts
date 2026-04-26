@@ -41,6 +41,30 @@ type InventoryMovementSplit = {
   qty_empty_delta: number;
 };
 
+type InventoryMovementRowView = {
+  id: string;
+  created_at: string;
+  movement_type: InventoryMovementType;
+  reference_type: string;
+  reference_id: string;
+  location_id: string;
+  location_name: string;
+  product_id: string;
+  product_sku: string;
+  product_name: string;
+  qty_delta: number;
+  qty_full_delta: number;
+  qty_empty_delta: number;
+  unit_cost: number;
+  avg_cost_after: number;
+  qty_after: number;
+  qty_after_known: boolean;
+  qty_full_after: number;
+  qty_full_after_known: boolean;
+  qty_empty_after: number;
+  qty_empty_after_known: boolean;
+};
+
 type AuditLogQuery = ReportRangeQuery & {
   limit?: string;
   level?: string;
@@ -1615,7 +1639,7 @@ export class ReportsService {
       );
     }
 
-    const mappedRows = rows.map((row) => ({
+    const mappedRows: InventoryMovementRowView[] = rows.map((row) => ({
       ...(splitByLedger.get(row.id) ??
         this.parseMovementSplit(undefined, this.roundQty(this.toNumber(row.qtyDelta)), row.product.isLpg)),
       id: row.id,
@@ -1632,10 +1656,14 @@ export class ReportsService {
       unit_cost: this.roundQty(this.toNumber(row.unitCost)),
       avg_cost_after: this.roundQty(this.toNumber(row.avgCostAfter)),
       qty_after: this.roundQty(this.toNumber(row.qtyAfter)),
-      qty_after_known: true
+      qty_after_known: true,
+      qty_full_after: 0,
+      qty_full_after_known: false,
+      qty_empty_after: 0,
+      qty_empty_after_known: false
     }));
 
-    const supplementalRows: typeof mappedRows = [];
+    const supplementalRows: InventoryMovementRowView[] = [];
 
     if (!movementType || movementType === InventoryMovementType.ADJUSTMENT) {
       const actionRows = await db.lpgItemServiceAction.findMany({
@@ -1681,7 +1709,11 @@ export class ReportsService {
           unit_cost: 0,
           avg_cost_after: 0,
           qty_after: 0,
-          qty_after_known: false
+          qty_after_known: false,
+          qty_full_after: 0,
+          qty_full_after_known: false,
+          qty_empty_after: 0,
+          qty_empty_after_known: false
         });
       }
     }
@@ -1741,12 +1773,16 @@ export class ReportsService {
           unit_cost: 0,
           avg_cost_after: 0,
           qty_after: 0,
-          qty_after_known: false
+          qty_after_known: false,
+          qty_full_after: 0,
+          qty_full_after_known: false,
+          qty_empty_after: 0,
+          qty_empty_after_known: false
         });
       }
     }
 
-    const mergedAllRows = [...mappedRows, ...supplementalRows].sort((a, b) => {
+    const mergedAllRows: InventoryMovementRowView[] = [...mappedRows, ...supplementalRows].sort((a, b) => {
       const byCreatedAt = b.created_at.localeCompare(a.created_at);
       if (byCreatedAt !== 0) {
         return byCreatedAt;
@@ -1754,7 +1790,7 @@ export class ReportsService {
       return b.id.localeCompare(a.id);
     });
 
-    const groupedByInventoryScope = new Map<string, typeof mergedAllRows>();
+    const groupedByInventoryScope = new Map<string, InventoryMovementRowView[]>();
     for (const row of mergedAllRows) {
       const scopeKey = `${row.location_id}::${row.product_id}`;
       const scoped = groupedByInventoryScope.get(scopeKey) ?? [];
@@ -1762,38 +1798,209 @@ export class ReportsService {
       groupedByInventoryScope.set(scopeKey, scoped);
     }
 
-    for (const scopedRows of groupedByInventoryScope.values()) {
-      const chronological = [...scopedRows].sort((a, b) => {
-        const byCreatedAt = a.created_at.localeCompare(b.created_at);
-        if (byCreatedAt !== 0) {
-          return byCreatedAt;
+    const scopeEntries = Array.from(groupedByInventoryScope.entries()).map(([scopeKey, scopedRows]) => {
+      const separatorIndex = scopeKey.indexOf('::');
+      const locationId = scopeKey.slice(0, separatorIndex);
+      const productId = scopeKey.slice(separatorIndex + 2);
+      const latestCreatedAt = scopedRows.reduce((latest, row) => {
+        return row.created_at > latest ? row.created_at : latest;
+      }, '');
+      return { scopeKey, scopedRows, locationId, productId, latestCreatedAt };
+    });
+
+    if (scopeEntries.length > 0) {
+      const inventoryBalances = await db.inventoryBalance.findMany({
+        where: {
+          companyId,
+          OR: scopeEntries.map((entry) => ({
+            locationId: entry.locationId,
+            productId: entry.productId
+          }))
+        },
+        select: {
+          locationId: true,
+          productId: true,
+          qtyOnHand: true,
+          qtyFull: true,
+          qtyEmpty: true
         }
-        return a.id.localeCompare(b.id);
       });
 
-      let runningQtyAfter: number | null = null;
-      for (const row of chronological) {
-        if (row.qty_after_known) {
-          runningQtyAfter = row.qty_after;
-          continue;
+      const balanceByScope = new Map(
+        inventoryBalances.map((row) => [
+          `${row.locationId}::${row.productId}`,
+          {
+            qty_on_hand: this.roundQty(this.toNumber(row.qtyOnHand)),
+            qty_full: this.roundQty(this.toNumber(row.qtyFull)),
+            qty_empty: this.roundQty(this.toNumber(row.qtyEmpty))
+          }
+        ])
+      );
+
+      const minLatestCreatedAt = scopeEntries.reduce<string | null>((earliest, entry) => {
+        if (!entry.latestCreatedAt) {
+          return earliest;
+        }
+        if (earliest === null || entry.latestCreatedAt < earliest) {
+          return entry.latestCreatedAt;
+        }
+        return earliest;
+      }, null);
+
+      const futureTotalsByScope = new Map<string, { qty_delta: number; qty_full_delta: number; qty_empty_delta: number }>();
+      const addFutureTotals = (
+        scopeKey: string,
+        qtyDelta: number,
+        qtyFullDelta: number,
+        qtyEmptyDelta: number
+      ): void => {
+        const current = futureTotalsByScope.get(scopeKey) ?? {
+          qty_delta: 0,
+          qty_full_delta: 0,
+          qty_empty_delta: 0
+        };
+        current.qty_delta = this.roundQty(current.qty_delta + qtyDelta);
+        current.qty_full_delta = this.roundQty(current.qty_full_delta + qtyFullDelta);
+        current.qty_empty_delta = this.roundQty(current.qty_empty_delta + qtyEmptyDelta);
+        futureTotalsByScope.set(scopeKey, current);
+      };
+
+      if (minLatestCreatedAt) {
+        const minLatestDate = new Date(minLatestCreatedAt);
+        const scopeLatestDateByKey = new Map(
+          scopeEntries.map((entry) => [entry.scopeKey, new Date(entry.latestCreatedAt).getTime()])
+        );
+
+        const futureLedgerRows = await db.inventoryLedger.findMany({
+          where: {
+            companyId,
+            OR: scopeEntries.map((entry) => ({
+              locationId: entry.locationId,
+              productId: entry.productId
+            })),
+            createdAt: {
+              gt: minLatestDate
+            }
+          },
+          include: {
+            product: {
+              select: {
+                isLpg: true
+              }
+            }
+          }
+        });
+
+        const futureLedgerIds = futureLedgerRows.map((row) => row.id);
+        const futureStockEvents =
+          futureLedgerIds.length > 0
+            ? await db.eventStockMovement.findMany({
+                where: {
+                  companyId,
+                  ledgerId: { in: futureLedgerIds }
+                },
+                select: {
+                  ledgerId: true,
+                  payload: true,
+                  createdAt: true
+                },
+                orderBy: { createdAt: 'desc' }
+              })
+            : [];
+        const futureSplitByLedger = new Map<string, InventoryMovementSplit>();
+        for (const row of futureStockEvents) {
+          if (futureSplitByLedger.has(row.ledgerId)) {
+            continue;
+          }
+          futureSplitByLedger.set(row.ledgerId, this.parseMovementSplit(row.payload, undefined, false));
         }
 
-        const isLpgServiceAdjustment = row.reference_type.startsWith('LPG_ITEM_');
-        const isLendingOutEvent = row.movement_type === InventoryMovementType.LENDING_OUT;
-        if (runningQtyAfter === null) {
-          continue;
+        for (const row of futureLedgerRows) {
+          const scopeKey = `${row.locationId}::${row.productId}`;
+          const latestScopeMs = scopeLatestDateByKey.get(scopeKey);
+          if (latestScopeMs === undefined || row.createdAt.getTime() <= latestScopeMs) {
+            continue;
+          }
+          const split =
+            futureSplitByLedger.get(row.id) ??
+            this.parseMovementSplit(undefined, this.roundQty(this.toNumber(row.qtyDelta)), row.product.isLpg);
+          addFutureTotals(
+            scopeKey,
+            this.roundQty(this.toNumber(row.qtyDelta)),
+            split.qty_full_delta,
+            split.qty_empty_delta
+          );
         }
 
-        if (isLpgServiceAdjustment) {
-          runningQtyAfter = this.roundQty(runningQtyAfter + row.qty_delta);
+        const futureActionRows = await db.lpgItemServiceAction.findMany({
+          where: {
+            companyId,
+            OR: scopeEntries.map((entry) => ({
+              locationId: entry.locationId,
+              productId: entry.productId
+            })),
+            createdAt: {
+              gt: minLatestDate
+            }
+          },
+          select: {
+            id: true,
+            actionType: true,
+            createdAt: true,
+            locationId: true,
+            productId: true,
+            qty: true
+          }
+        });
+
+        for (const row of futureActionRows) {
+          const scopeKey = `${row.locationId}::${row.productId}`;
+          const latestScopeMs = scopeLatestDateByKey.get(scopeKey);
+          if (latestScopeMs === undefined || row.createdAt.getTime() <= latestScopeMs) {
+            continue;
+          }
+          const qty = Number(row.qty ?? 0);
+          const qtyDelta = row.actionType === 'DISPOSE' ? -qty : row.actionType === 'REPLACE' ? qty : 0;
+          const qtyEmptyDelta = row.actionType === 'DISPOSE' ? -qty : row.actionType === 'REPLACE' ? qty : 0;
+          addFutureTotals(scopeKey, this.roundQty(qtyDelta), 0, this.roundQty(qtyEmptyDelta));
+        }
+      }
+
+      for (const entry of scopeEntries) {
+        const balance = balanceByScope.get(entry.scopeKey);
+        if (!balance) {
+          continue;
+        }
+        const futureTotals = futureTotalsByScope.get(entry.scopeKey) ?? {
+          qty_delta: 0,
+          qty_full_delta: 0,
+          qty_empty_delta: 0
+        };
+
+        let runningQtyAfter = this.roundQty(balance.qty_on_hand - futureTotals.qty_delta);
+        let runningQtyFullAfter = this.roundQty(balance.qty_full - futureTotals.qty_full_delta);
+        let runningQtyEmptyAfter = this.roundQty(balance.qty_empty - futureTotals.qty_empty_delta);
+
+        const reverseChronological = [...entry.scopedRows].sort((a, b) => {
+          const byCreatedAt = b.created_at.localeCompare(a.created_at);
+          if (byCreatedAt !== 0) {
+            return byCreatedAt;
+          }
+          return b.id.localeCompare(a.id);
+        });
+
+        for (const row of reverseChronological) {
           row.qty_after = runningQtyAfter;
           row.qty_after_known = true;
-          continue;
-        }
+          row.qty_full_after = runningQtyFullAfter;
+          row.qty_full_after_known = true;
+          row.qty_empty_after = runningQtyEmptyAfter;
+          row.qty_empty_after_known = true;
 
-        if (isLendingOutEvent) {
-          row.qty_after = runningQtyAfter;
-          row.qty_after_known = true;
+          const effectiveDelta = this.effectiveAfterDeltas(row);
+          runningQtyAfter = this.roundQty(runningQtyAfter - effectiveDelta.qty_delta);
+          runningQtyFullAfter = this.roundQty(runningQtyFullAfter - effectiveDelta.qty_full_delta);
+          runningQtyEmptyAfter = this.roundQty(runningQtyEmptyAfter - effectiveDelta.qty_empty_delta);
         }
       }
     }
@@ -2664,6 +2871,28 @@ export class ReportsService {
     return {
       qty_full_delta: 0,
       qty_empty_delta: 0
+    };
+  }
+
+  private effectiveAfterDeltas(row: Pick<
+    InventoryMovementRowView,
+    'movement_type' | 'qty_delta' | 'qty_full_delta' | 'qty_empty_delta'
+  >): {
+    qty_delta: number;
+    qty_full_delta: number;
+    qty_empty_delta: number;
+  } {
+    if (row.movement_type === InventoryMovementType.LENDING_OUT) {
+      return {
+        qty_delta: 0,
+        qty_full_delta: 0,
+        qty_empty_delta: 0
+      };
+    }
+    return {
+      qty_delta: this.roundQty(row.qty_delta),
+      qty_full_delta: this.roundQty(row.qty_full_delta),
+      qty_empty_delta: this.roundQty(row.qty_empty_delta)
     };
   }
 

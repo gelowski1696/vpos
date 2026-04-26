@@ -138,6 +138,10 @@ type InventoryMovementRow = {
   qty_empty_delta: number;
   qty_after: number;
   qty_after_known?: boolean;
+  qty_full_after: number;
+  qty_full_after_known?: boolean;
+  qty_empty_after: number;
+  qty_empty_after_known?: boolean;
 };
 
 function yesNo(value: unknown): string {
@@ -1172,7 +1176,9 @@ export default function ProductsPage(): JSX.Element {
                         <th className="px-2 py-2">Qty</th>
                         <th className="px-2 py-2">FULL</th>
                         <th className="px-2 py-2">EMPTY</th>
-                        <th className="px-2 py-2">After</th>
+                        <th className="px-2 py-2">Qty After</th>
+                        <th className="px-2 py-2">FULL After</th>
+                        <th className="px-2 py-2">EMPTY After</th>
                         <th className="px-2 py-2">Reference</th>
                       </tr>
                     </thead>
@@ -1190,6 +1196,12 @@ export default function ProductsPage(): JSX.Element {
                           <td className="px-2 py-2">{formatQty(row.qty_empty_delta)}</td>
                           <td className="px-2 py-2">
                             {row.qty_after_known === false ? '-' : formatQty(row.qty_after)}
+                          </td>
+                          <td className="px-2 py-2">
+                            {row.qty_full_after_known === false ? '-' : formatQty(row.qty_full_after)}
+                          </td>
+                          <td className="px-2 py-2">
+                            {row.qty_empty_after_known === false ? '-' : formatQty(row.qty_empty_after)}
                           </td>
                           <td className="px-2 py-2">
                             {row.reference_type}:{row.reference_id}
