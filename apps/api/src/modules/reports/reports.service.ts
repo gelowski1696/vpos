@@ -1723,6 +1723,7 @@ export class ReportsService {
       });
 
       for (const row of lendingOutRows) {
+        const lentQty = this.roundQty(-this.toNumber(row.quantityLent));
         supplementalRows.push({
           id: `lending-out:${row.id}`,
           created_at: row.createdAt.toISOString(),
@@ -1734,74 +1735,7 @@ export class ReportsService {
           product_id: row.productId,
           product_sku: row.product.sku,
           product_name: row.product.name,
-          qty_delta: 0,
-          qty_full_delta: 0,
-          qty_empty_delta: 0,
-          unit_cost: 0,
-          avg_cost_after: 0,
-          qty_after: 0,
-          qty_after_known: false
-        });
-      }
-    }
-
-    if (!movementType || movementType === InventoryMovementType.LENDING_RETURN) {
-      const lendingReturnRows = await db.lendingReturn.findMany({
-        where: {
-          companyId,
-          lendingLine: {
-            sourceSaleLineId: { not: null },
-            ...(query.product_id?.trim() ? { productId: query.product_id.trim() } : {})
-          },
-          ...(query.location_id?.trim()
-            ? {
-                lendingTransaction: {
-                  locationId: query.location_id.trim()
-                }
-              }
-            : {}),
-          ...(range.since || range.until
-            ? {
-                returnedAt: {
-                  ...(range.since ? { gte: range.since } : {}),
-                  ...(range.until ? { lte: range.until } : {})
-                }
-              }
-            : {})
-        },
-        include: {
-          lendingLine: {
-            select: {
-              id: true,
-              productId: true,
-              product: { select: { id: true, sku: true, name: true } }
-            }
-          },
-          lendingTransaction: {
-            select: {
-              id: true,
-              locationId: true,
-              location: { select: { name: true } }
-            }
-          }
-        },
-        orderBy: { returnedAt: 'desc' },
-        take: limit
-      });
-
-      for (const row of lendingReturnRows) {
-        supplementalRows.push({
-          id: `lending-return:${row.id}`,
-          created_at: row.returnedAt.toISOString(),
-          movement_type: InventoryMovementType.LENDING_RETURN,
-          reference_type: 'LENDING_RETURN',
-          reference_id: `${row.lendingTransactionId}::${row.lendingLineId}::${row.id}`,
-          location_id: row.lendingTransaction.locationId,
-          location_name: row.lendingTransaction.location.name,
-          product_id: row.lendingLine.productId,
-          product_sku: row.lendingLine.product.sku,
-          product_name: row.lendingLine.product.name,
-          qty_delta: 0,
+          qty_delta: lentQty,
           qty_full_delta: 0,
           qty_empty_delta: 0,
           unit_cost: 0,
