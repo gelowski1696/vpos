@@ -1779,13 +1779,22 @@ export class ReportsService {
         }
 
         const isLpgServiceAdjustment = row.reference_type.startsWith('LPG_ITEM_');
-        if (!isLpgServiceAdjustment || runningQtyAfter === null) {
+        const isLendingOutEvent = row.movement_type === InventoryMovementType.LENDING_OUT;
+        if (runningQtyAfter === null) {
           continue;
         }
 
-        runningQtyAfter = this.roundQty(runningQtyAfter + row.qty_delta);
-        row.qty_after = runningQtyAfter;
-        row.qty_after_known = true;
+        if (isLpgServiceAdjustment) {
+          runningQtyAfter = this.roundQty(runningQtyAfter + row.qty_delta);
+          row.qty_after = runningQtyAfter;
+          row.qty_after_known = true;
+          continue;
+        }
+
+        if (isLendingOutEvent) {
+          row.qty_after = runningQtyAfter;
+          row.qty_after_known = true;
+        }
       }
     }
 
