@@ -65,6 +65,7 @@ export class SyncService {
   ): Promise<SyncPushResult> {
     const accepted: string[] = [];
     const rejected: Array<{ id: string; reason: string; review_id?: string }> = [];
+    const lendingIdMap = new Map<string, string>();
 
     this.ensureCompanyState(companyId);
 
@@ -217,7 +218,18 @@ export class SyncService {
         });
         continue;
       }
-      const lendingReturnPosting = await this.tryPostLendingReturnOutbox(companyId, item, actorUserId);
+      const localLendingId =
+        this.asString(item.payload.lending_id ?? item.payload.lendingId ?? item.payload.id) ??
+        this.asString(item.id);
+      if (item.entity === 'lending' && item.action === 'create' && localLendingId && lendingPosting.lending) {
+        lendingIdMap.set(localLendingId, lendingPosting.lending.lending_id);
+      }
+      const lendingReturnPosting = await this.tryPostLendingReturnOutbox(
+        companyId,
+        item,
+        actorUserId,
+        lendingIdMap
+      );
       if (!lendingReturnPosting.ok) {
         const reviewId = this.createReview(
           companyId,
@@ -981,7 +993,8 @@ export class SyncService {
   private async tryPostLendingReturnOutbox(
     companyId: string,
     item: SyncPushRequest['outbox_items'][number],
-    actorUserId?: string
+    actorUserId?: string,
+    lendingIdMap?: Map<string, string>
   ): Promise<{ ok: true; lending?: LendingDetailRecord } | { ok: false; reason: string }> {
     if (item.entity !== 'lending_return' || item.action !== 'create') {
       return { ok: true };
@@ -991,10 +1004,11 @@ export class SyncService {
     }
 
     const payload = item.payload ?? {};
-    const lendingId = this.asString(payload.lending_id ?? payload.lendingId);
-    if (!lendingId) {
+    const rawLendingId = this.asString(payload.lending_id ?? payload.lendingId);
+    if (!rawLendingId) {
       return { ok: false, reason: 'Lending return sync payload is missing lending id' };
     }
+    const lendingId = lendingIdMap?.get(rawLendingId) ?? rawLendingId;
     const linesRaw = Array.isArray(payload.lines) ? payload.lines : [];
     if (linesRaw.length === 0) {
       return { ok: false, reason: 'Lending return sync payload is missing return lines' };
