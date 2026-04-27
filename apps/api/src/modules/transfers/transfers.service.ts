@@ -335,11 +335,18 @@ export class TransfersService {
         emptyDelta: this.roundQty(qtyFull)
       };
     }
-    if (this.isCreateMode(mode) || this.isConvertMode(mode)) {
+    if (this.isCreateMode(mode)) {
       return {
         qtyDelta: 0,
         fullDelta: this.roundQty(qtyEmpty),
         emptyDelta: this.roundQty(-qtyEmpty)
+      };
+    }
+    if (this.isConvertMode(mode)) {
+      return {
+        qtyDelta: 0,
+        fullDelta: 0,
+        emptyDelta: this.roundQty(qtyFull - qtyEmpty)
       };
     }
     return {
@@ -543,10 +550,18 @@ export class TransfersService {
             `Cannot reverse transfer: destination stock is insufficient for ${line.product_id}`
           );
         }
-        if ((isCreate || isConvert) && current.qty_full < line.qty_empty) {
+        if (isCreate && current.qty_full < line.qty_empty) {
           throw new BadRequestException(
             `Cannot reverse transfer: FULL stock is insufficient for ${line.product_id}`
           );
+        }
+        if (isConvert) {
+          const reverseEmptyDelta = this.roundQty(line.qty_full - line.qty_empty);
+          if (reverseEmptyDelta > 0 && current.qty_empty < reverseEmptyDelta) {
+            throw new BadRequestException(
+              `Cannot reverse transfer: EMPTY stock is insufficient for ${line.product_id}`
+            );
+          }
         }
         if (isUsed && current.qty_empty < line.qty_full) {
           throw new BadRequestException(

@@ -7,6 +7,7 @@ import {
   CustomerPaymentsService,
   type CustomerPaymentRecord
 } from '../customer-payments/customer-payments.service';
+import { MasterDataService, type CreateCustomer, type CustomerRecord } from '../master-data/master-data.service';
 import { LendingService, type LendingDetailRecord } from '../lending/lending.service';
 import {
   LpgItemActionsService,
@@ -52,6 +53,7 @@ export class SyncService {
   constructor(
     @Optional() private readonly salesService?: SalesService,
     @Optional() private readonly customerPaymentsService?: CustomerPaymentsService,
+    @Optional() private readonly masterDataService?: MasterDataService,
     @Optional() private readonly lendingService?: LendingService,
     @Optional() private readonly lpgItemActionsService?: LpgItemActionsService,
     @Optional() private readonly transfersService?: TransfersService,
@@ -66,12 +68,33 @@ export class SyncService {
     const accepted: string[] = [];
     const rejected: Array<{ id: string; reason: string; review_id?: string }> = [];
     const lendingIdMap = new Map<string, string>();
+    const customerIdMap = new Map<string, string>();
 
     this.ensureCompanyState(companyId);
 
-    for (const item of request.outbox_items) {
+    const orderedItems = [...request.outbox_items].sort((left, right) => {
+      const priorityDiff = this.outboxPriority(left) - this.outboxPriority(right);
+      if (priorityDiff !== 0) {
+        return priorityDiff;
+      }
+      const leftCreatedAt = this.asString(left.created_at) ?? '';
+      const rightCreatedAt = this.asString(right.created_at) ?? '';
+      if (leftCreatedAt !== rightCreatedAt) {
+        return leftCreatedAt.localeCompare(rightCreatedAt);
+      }
+      return left.id.localeCompare(right.id);
+    });
+
+    for (const item of orderedItems) {
       const idemKey = this.companyScopedKey(companyId, item.idempotency_key);
       const requestHash = this.hashOutboxItem(item);
+      const syncedItem =
+        customerIdMap.size > 0
+          ? {
+              ...item,
+              payload: this.remapCustomerReferencesInPayload(item.payload, customerIdMap)
+            }
+          : item;
       const persistedDecision = await this.lookupPersistedIdempotencyDecision(
         companyId,
         item.idempotency_key,
@@ -112,7 +135,29 @@ export class SyncService {
         continue;
       }
 
-      const salePosting = await this.tryPostSaleOutbox(companyId, item, actorUserId);
+      const customerPosting = await this.tryPostCustomerOutbox(companyId, syncedItem);
+      if (!customerPosting.ok) {
+        const reviewId = this.createReview(companyId, item.id, item.entity, customerPosting.reason, item.payload);
+        rejected.push({
+          id: item.id,
+          reason: customerPosting.reason,
+          review_id: reviewId
+        });
+        await this.persistIdempotencyDecision(companyId, item.idempotency_key, requestHash, {
+          status: 'rejected',
+          reason: customerPosting.reason,
+          review_id: reviewId
+        });
+        continue;
+      }
+      const localCustomerId =
+        this.asString(syncedItem.payload.customer_id ?? syncedItem.payload.customerId ?? syncedItem.payload.id) ??
+        this.asString(syncedItem.id);
+      if (item.entity === 'customer' && item.action === 'create' && localCustomerId && customerPosting.customer) {
+        customerIdMap.set(localCustomerId, customerPosting.customer.id);
+      }
+
+      const salePosting = await this.tryPostSaleOutbox(companyId, syncedItem, actorUserId, customerIdMap);
       if (!salePosting.ok) {
         const reviewId = this.createReview(companyId, item.id, item.entity, salePosting.reason, item.payload);
         rejected.push({
@@ -159,8 +204,9 @@ export class SyncService {
       }
       const customerPaymentPosting = await this.tryPostCustomerPaymentOutbox(
         companyId,
-        item,
-        actorUserId
+        syncedItem,
+        actorUserId,
+        customerIdMap
       );
       if (!customerPaymentPosting.ok) {
         const reviewId = this.createReview(
@@ -182,7 +228,7 @@ export class SyncService {
         });
         continue;
       }
-      const transferPosting = await this.tryPostTransferOutbox(companyId, item, actorUserId);
+      const transferPosting = await this.tryPostTransferOutbox(companyId, syncedItem, actorUserId);
       if (!transferPosting.ok) {
         const reviewId = this.createReview(
           companyId,
@@ -203,7 +249,7 @@ export class SyncService {
         });
         continue;
       }
-      const lendingPosting = await this.tryPostLendingOutbox(companyId, item, actorUserId);
+      const lendingPosting = await this.tryPostLendingOutbox(companyId, syncedItem, actorUserId, customerIdMap);
       if (!lendingPosting.ok) {
         const reviewId = this.createReview(companyId, item.id, item.entity, lendingPosting.reason, item.payload);
         rejected.push({
@@ -219,14 +265,14 @@ export class SyncService {
         continue;
       }
       const localLendingId =
-        this.asString(item.payload.lending_id ?? item.payload.lendingId ?? item.payload.id) ??
-        this.asString(item.id);
-      if (item.entity === 'lending' && item.action === 'create' && localLendingId && lendingPosting.lending) {
+        this.asString(syncedItem.payload.lending_id ?? syncedItem.payload.lendingId ?? syncedItem.payload.id) ??
+        this.asString(syncedItem.id);
+      if (syncedItem.entity === 'lending' && syncedItem.action === 'create' && localLendingId && lendingPosting.lending) {
         lendingIdMap.set(localLendingId, lendingPosting.lending.lending_id);
       }
       const lendingReturnPosting = await this.tryPostLendingReturnOutbox(
         companyId,
-        item,
+        syncedItem,
         actorUserId,
         lendingIdMap
       );
@@ -250,7 +296,7 @@ export class SyncService {
         });
         continue;
       }
-      const lpgItemActionPosting = await this.tryPostLpgItemActionOutbox(companyId, item, actorUserId);
+      const lpgItemActionPosting = await this.tryPostLpgItemActionOutbox(companyId, syncedItem, actorUserId);
       if (!lpgItemActionPosting.ok) {
         const reviewId = this.createReview(
           companyId,
@@ -272,15 +318,15 @@ export class SyncService {
         continue;
       }
       const transferPostedServerSide =
-        item.entity === 'transfer' &&
-        item.action === 'create' &&
+        syncedItem.entity === 'transfer' &&
+        syncedItem.action === 'create' &&
         Boolean(transferPosting.transfer);
       if (!transferPostedServerSide) {
         const validation = await this.validateAndApply(
           companyId,
-          item.entity,
-          item.action,
-          item.payload,
+          syncedItem.entity,
+          syncedItem.action,
+          syncedItem.payload,
           {
             deviceId: request.device_id,
             actorUserId
@@ -308,16 +354,16 @@ export class SyncService {
         status: 'accepted'
       });
       if (
-        item.entity !== 'sale_cancel' &&
-        item.entity !== 'sale_return' &&
-        item.entity !== 'lpg_item_action'
+        syncedItem.entity !== 'sale_cancel' &&
+        syncedItem.entity !== 'sale_return' &&
+        syncedItem.entity !== 'lpg_item_action'
       ) {
         const companyChanges = this.getCompanyChanges(companyId);
         companyChanges.push({
-          entity: item.entity,
-          action: item.action,
+          entity: syncedItem.entity,
+          action: syncedItem.action,
           payload: {
-            ...item.payload,
+            ...syncedItem.payload,
             server_posted: true,
             server_posted_at: new Date().toISOString(),
             ...(salePosting.sale
@@ -344,6 +390,21 @@ export class SyncService {
                     outstanding_balance:
                       customerPaymentPosting.payment.customer_outstanding_balance,
                     posted_at: customerPaymentPosting.payment.posted_at
+                  }
+                }
+              : {}),
+            ...(customerPosting.customer
+              ? {
+                  server_customer_posted: true,
+                  server_customer_result: {
+                    id: customerPosting.customer.id,
+                    code: customerPosting.customer.code,
+                    name: customerPosting.customer.name,
+                    type: customerPosting.customer.type,
+                    tier: customerPosting.customer.tier,
+                    address: customerPosting.customer.address,
+                    contractPrice: customerPosting.customer.contractPrice,
+                    isActive: customerPosting.customer.isActive
                   }
                 }
               : {}),
@@ -567,10 +628,87 @@ export class SyncService {
     }
   }
 
+  private outboxPriority(item: SyncPushRequest['outbox_items'][number]): number {
+    if (item.entity === 'customer' && item.action === 'create') {
+      return 10;
+    }
+    if (item.entity === 'sale' && item.action === 'create') {
+      return 20;
+    }
+    if (item.entity === 'customer_payment' && item.action === 'create') {
+      return 30;
+    }
+    if (item.entity === 'delivery_order' && item.action === 'create') {
+      return 40;
+    }
+    if (item.entity === 'lending' && item.action === 'create') {
+      return 50;
+    }
+    return 100;
+  }
+
+  private remapCustomerReferencesInPayload(
+    payload: Record<string, unknown>,
+    customerIdMap: Map<string, string>
+  ): Record<string, unknown> {
+    const rawCustomerId =
+      this.asString(payload.customer_id ?? payload.customerId) ??
+      null;
+    if (!rawCustomerId) {
+      return payload;
+    }
+    const serverCustomerId = customerIdMap.get(rawCustomerId);
+    if (!serverCustomerId || serverCustomerId === rawCustomerId) {
+      return payload;
+    }
+    return {
+      ...payload,
+      customer_id: serverCustomerId,
+      customerId: serverCustomerId
+    };
+  }
+
+  private async tryPostCustomerOutbox(
+    companyId: string,
+    item: SyncPushRequest['outbox_items'][number]
+  ): Promise<{ ok: true; customer?: CustomerRecord } | { ok: false; reason: string }> {
+    if (item.entity !== 'customer' || item.action !== 'create') {
+      return { ok: true };
+    }
+    if (!this.masterDataService) {
+      return { ok: true };
+    }
+
+    const payload = item.payload ?? {};
+    const name = this.asString(payload.name);
+    if (!name) {
+      return { ok: false, reason: 'Customer sync payload is missing customer name' };
+    }
+
+    const input: CreateCustomer = {
+      code: this.asString(payload.code) ?? '',
+      name,
+      type: this.asString(payload.type)?.toUpperCase() === 'BUSINESS' ? 'BUSINESS' : 'RETAIL',
+      tier: this.asString(payload.tier) ?? undefined,
+      address: this.asString(payload.address) ?? undefined,
+      contractPrice: payload.contractPrice == null ? undefined : this.asNumber(payload.contractPrice),
+      isActive: payload.isActive === false ? false : true
+    };
+
+    try {
+      const customer = await this.masterDataService.createCustomer(input, companyId);
+      return { ok: true, customer };
+    } catch (cause) {
+      const message = cause instanceof Error ? cause.message : 'Customer create failed during sync';
+      return { ok: false, reason: message };
+    }
+  }
+
   private async tryPostSaleOutbox(
     companyId: string,
     item: SyncPushRequest['outbox_items'][number],
-    actorUserId?: string
+    actorUserId?: string,
+    customerIdMap?: Map<string, string>
   ): Promise<
     | { ok: true; sale?: SalePostResponse; inventoryChanges?: SyncPullResponse['changes'] }
     | { ok: false; reason: string }
@@ -596,6 +734,12 @@ export class SyncService {
     if (!saleId) {
       return { ok: false, reason: 'Sale sync payload is missing sale id' };
     }
+    const rawCustomerId =
+      payload.customer_id === null || payload.customerId === null
+        ? null
+        : this.asString(payload.customer_id ?? payload.customerId);
+    const resolvedCustomerId =
+      rawCustomerId && customerIdMap?.has(rawCustomerId) ? customerIdMap.get(rawCustomerId) ?? rawCustomerId : rawCustomerId;
 
     const lines = linesRaw.map((row) => {
       const line = (row as Record<string, unknown>) ?? {};
@@ -628,10 +772,7 @@ export class SyncService {
           branch_id: this.asString(payload.branch_id ?? payload.branchId),
           location_id: this.asString(payload.location_id ?? payload.locationId),
           shift_id: this.asString(payload.shift_id ?? payload.shiftId),
-          customer_id:
-            payload.customer_id === null || payload.customerId === null
-              ? null
-              : this.asString(payload.customer_id ?? payload.customerId),
+          customer_id: resolvedCustomerId,
           recreated_from_sale_id:
             payload.recreated_from_sale_id === null || payload.recreatedFromSaleId === null
               ? null
@@ -881,7 +1022,8 @@ export class SyncService {
   private async tryPostCustomerPaymentOutbox(
     companyId: string,
     item: SyncPushRequest['outbox_items'][number],
-    actorUserId?: string
+    actorUserId?: string,
+    customerIdMap?: Map<string, string>
   ): Promise<{ ok: true; payment?: CustomerPaymentRecord } | { ok: false; reason: string }> {
     if (item.entity !== 'customer_payment' || item.action !== 'create') {
       return { ok: true };
@@ -892,7 +1034,9 @@ export class SyncService {
 
     const payload = item.payload ?? {};
     const paymentId = this.asString(payload.payment_id ?? payload.id) ?? this.asString(item.id);
-    const customerId = this.asString(payload.customer_id ?? payload.customerId);
+    const rawCustomerId = this.asString(payload.customer_id ?? payload.customerId);
+    const customerId =
+      rawCustomerId && customerIdMap?.has(rawCustomerId) ? customerIdMap.get(rawCustomerId) ?? rawCustomerId : rawCustomerId;
     if (!customerId) {
       return { ok: false, reason: 'Customer payment sync payload is missing customer id' };
     }
@@ -934,7 +1078,8 @@ export class SyncService {
   private async tryPostLendingOutbox(
     companyId: string,
     item: SyncPushRequest['outbox_items'][number],
-    actorUserId?: string
+    actorUserId?: string,
+    customerIdMap?: Map<string, string>
   ): Promise<{ ok: true; lending?: LendingDetailRecord } | { ok: false; reason: string }> {
     if (item.entity !== 'lending' || item.action !== 'create') {
       return { ok: true };
