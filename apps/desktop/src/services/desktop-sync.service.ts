@@ -48,6 +48,66 @@ class HttpSyncTransport {
 }
 
 export class DesktopSyncService {
+  private async ensureOfflineCustomerOutboxRows(): Promise<void> {
+    const customerRows = await desktopDb.listMasterData('customer');
+    if (customerRows.length === 0) {
+      return;
+    }
+
+    const outboxRows = await desktopDb.listOutboxItems();
+    const existingLocalCustomerIds = new Set<string>();
+    for (const row of outboxRows) {
+      if (row.entity !== 'customer' || row.action !== 'create') {
+        continue;
+      }
+      existingLocalCustomerIds.add(row.id.replace(/^outbox-customer-/, '').trim());
+      const payload = (row.payload ?? {}) as Record<string, unknown>;
+      const localCustomerId =
+        typeof payload.id === 'string'
+          ? payload.id.trim()
+          : typeof payload.customer_id === 'string'
+            ? payload.customer_id.trim()
+            : typeof payload.customerId === 'string'
+              ? payload.customerId.trim()
+              : '';
+      if (localCustomerId) {
+        existingLocalCustomerIds.add(localCustomerId);
+      }
+    }
+
+    for (const row of customerRows) {
+      let payload: Record<string, unknown>;
+      try {
+        payload = JSON.parse(row.payload) as Record<string, unknown>;
+      } catch {
+        continue;
+      }
+      if (payload.is_local_only !== true) {
+        continue;
+      }
+      const localCustomerId =
+        typeof payload.id === 'string' && payload.id.trim()
+          ? payload.id.trim()
+          : row.recordId.trim();
+      if (!localCustomerId || existingLocalCustomerIds.has(localCustomerId)) {
+        continue;
+      }
+      await desktopDb.enqueueOutboxItem({
+        id: `outbox-customer-${localCustomerId}`,
+        entity: 'customer',
+        action: 'create',
+        payload: {
+          ...payload,
+          id: localCustomerId,
+          customer_id: localCustomerId,
+          customerId: localCustomerId
+        },
+        idempotency_key: `idem-customer-${localCustomerId}`,
+        created_at: row.updatedAt || new Date().toISOString()
+      });
+    }
+  }
+
   private async applyPullChanges(changes: SyncPullResponse['changes']): Promise<void> {
     if (!Array.isArray(changes) || changes.length === 0) {
       return;
@@ -400,6 +460,7 @@ export class DesktopSyncService {
   ): Promise<{ ok: boolean; message: string; timestamp: string }> {
     try {
       const transport = new HttpSyncTransport(state);
+      await this.ensureOfflineCustomerOutboxRows();
       const rows = await desktopDb.listOutboxItems();
       const pending = rows
         .filter((row) => row.status === 'pending' || row.status === 'failed')

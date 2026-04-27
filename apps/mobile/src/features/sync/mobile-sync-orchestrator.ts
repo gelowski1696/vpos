@@ -16,6 +16,7 @@ export class MobileSyncOrchestrator {
 
   async run(): Promise<SyncResult> {
     const repo = new SQLiteOutboxRepository(this.db);
+    await this.ensureOfflineCustomerOutboxRows(repo);
     const applier = new SQLiteSyncChangeApplier(this.db);
     const tokenRow = await this.db.getFirstAsync<{ last_pull_token: string | null }>(
       'SELECT last_pull_token FROM sync_state WHERE id = 1'
@@ -58,6 +59,89 @@ export class MobileSyncOrchestrator {
     );
 
     return result;
+  }
+
+  private async ensureOfflineCustomerOutboxRows(repo: SQLiteOutboxRepository): Promise<void> {
+    const customerRows = await this.db.getAllAsync<{
+      record_id: string;
+      payload: string;
+      updated_at: string | null;
+    }>(
+      `
+      SELECT record_id, payload, updated_at
+      FROM master_data_local
+      WHERE entity = ?
+      `,
+      'customer'
+    );
+    if (customerRows.length === 0) {
+      return;
+    }
+
+    const outboxRows = await this.db.getAllAsync<{
+      id: string;
+      payload: string;
+    }>(
+      `
+      SELECT id, payload
+      FROM outbox
+      WHERE entity = ? AND action = ?
+      `,
+      'customer',
+      'create'
+    );
+
+    const existingLocalCustomerIds = new Set<string>();
+    for (const row of outboxRows) {
+      existingLocalCustomerIds.add(row.id.replace(/^outbox-customer-/, '').trim());
+      try {
+        const payload = JSON.parse(row.payload) as Record<string, unknown>;
+        const localCustomerId =
+          typeof payload.id === 'string'
+            ? payload.id.trim()
+            : typeof payload.customer_id === 'string'
+              ? payload.customer_id.trim()
+              : typeof payload.customerId === 'string'
+                ? payload.customerId.trim()
+                : '';
+        if (localCustomerId) {
+          existingLocalCustomerIds.add(localCustomerId);
+        }
+      } catch {
+        // Ignore malformed legacy payloads and keep scanning.
+      }
+    }
+
+    for (const row of customerRows) {
+      let payload: Record<string, unknown>;
+      try {
+        payload = JSON.parse(row.payload) as Record<string, unknown>;
+      } catch {
+        continue;
+      }
+      if (payload.is_local_only !== true) {
+        continue;
+      }
+      const localCustomerId =
+        typeof payload.id === 'string' && payload.id.trim()
+          ? payload.id.trim()
+          : row.record_id.trim();
+      if (!localCustomerId || existingLocalCustomerIds.has(localCustomerId)) {
+        continue;
+      }
+      await repo.enqueue({
+        id: `outbox-customer-${localCustomerId}`,
+        entity: 'customer',
+        action: 'create',
+        payload: {
+          ...payload,
+          id: localCustomerId,
+          customer_id: localCustomerId,
+          customerId: localCustomerId
+        },
+        idempotencyKey: `idem-customer-${localCustomerId}`
+      });
+    }
   }
 
   private async pullWithPolicy(lastToken: string | null, canSyncPull: boolean): Promise<SyncPullResponse> {

@@ -717,7 +717,7 @@ export class SyncService {
       return { ok: true };
     }
     if (!this.masterDataService) {
-      return { ok: true };
+      return { ok: false, reason: 'Customer sync service unavailable' };
     }
 
     const payload = item.payload ?? {};

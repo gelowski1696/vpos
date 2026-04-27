@@ -9,6 +9,7 @@ import { LpgItemActionsModule } from '../lpg-item-actions/lpg-item-actions.modul
 import { TransfersModule } from '../transfers/transfers.module';
 import { CylindersModule } from '../cylinders/cylinders.module';
 import { PrismaModule } from '../../common/prisma.module';
+import { MasterDataModule } from '../master-data/master-data.module';
 
 @Module({
   imports: [
@@ -16,6 +17,7 @@ import { PrismaModule } from '../../common/prisma.module';
     EntitlementsModule,
     SalesModule,
     CustomerPaymentsModule,
+    MasterDataModule,
     LendingModule,
     LpgItemActionsModule,
     TransfersModule,
