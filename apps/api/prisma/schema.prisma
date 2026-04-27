@@ -912,6 +912,10 @@ model Customer {
   type           CustomerType
   tier           String?
   address        String?
+  contactNumber  String?
+  gas            String?
+  province       String?
+  city           String?
   contractPrice  Decimal?     @db.Decimal(12, 2)
   depositBalance Decimal      @default(0) @db.Decimal(12, 2)
   pointsBalance  Int          @default(0)

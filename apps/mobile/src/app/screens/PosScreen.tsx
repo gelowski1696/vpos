@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { Alert, Modal, Pressable, ScrollView, StyleSheet, Text, TextInput, View, useWindowDimensions } from 'react-native';
 import type { SQLiteDatabase } from 'expo-sqlite';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { OfflineTransactionService } from '../../services/offline-transaction.service';
 import { toastError, toastInfo, toastSuccess } from '../goey-toast';
 import type { AppTheme } from '../theme';
@@ -28,6 +29,7 @@ type Product = {
   unitPrice: number;
   subtitle?: string;
   category?: string | null;
+  cylinderSizeLabel?: string | null;
   qtyFull?: number;
   qtyEmpty?: number;
   qtyOnHand?: number | null;
@@ -106,6 +108,43 @@ type CartLine = Product & {
   cylinderFlow?: CylinderFlowSelection | null;
 };
 
+type HeldCartLine = {
+  lineId: string;
+  productId: string;
+  productName: string;
+  subtitle?: string;
+  quantity: number;
+  unitPrice: number;
+  cylinderFlow?: CylinderFlowSelection | null;
+};
+
+type HeldCartRecord = {
+  id: string;
+  label: string;
+  customerId: string | null;
+  customerName: string | null;
+  driverId: string | null;
+  driverName: string | null;
+  helperId: string | null;
+  helperName: string | null;
+  saleType: 'PICKUP' | 'DELIVERY';
+  paymentMode: 'FULL' | 'PARTIAL';
+  paymentMethod: 'CASH' | 'CARD' | 'E_WALLET';
+  paidAmount: number;
+  discountAmount: number;
+  deliveryFee: number;
+  notes: string | null;
+  lines: HeldCartLine[];
+  createdAt: string;
+  updatedAt: string;
+};
+
+type HeldCartDbRow = {
+  record_id: string;
+  payload: string;
+  updated_at: string;
+};
+
 export type PosRecreateDraft = {
   requestId: string;
   sourceSaleId: string;
@@ -173,6 +212,30 @@ export type PosQueuedSaleReceiptPayload = {
   createdAt: string;
 };
 
+export type PosQueueOrderReceiptPayload = {
+  queueId: string;
+  queueLabel: string;
+  branchId: string;
+  branchName: string;
+  locationId: string;
+  locationName: string;
+  cashierName: string | null;
+  orderType: 'PICKUP' | 'DELIVERY';
+  customerName: string | null;
+  customerAddress?: string | null;
+  personnelName: string | null;
+  helperName: string | null;
+  lines: Array<{ name: string; subtitle?: string; quantity: number; unitPrice: number }>;
+  subtotal: number;
+  discount: number;
+  total: number;
+  paidAmount: number;
+  notes?: string | null;
+  paymentMode: 'FULL' | 'PARTIAL';
+  paymentMethod: 'CASH' | 'CARD' | 'E_WALLET';
+  createdAt: string;
+};
+
 type PosQueuedSaleReceiptResult = {
   printed: boolean;
   receiptNumber?: string;
@@ -189,6 +252,7 @@ type Props = {
   inventoryProjectionVersion?: number;
   onDataChanged?: () => Promise<void> | void;
   onPrintQueuedSaleReceipt?: (payload: PosQueuedSaleReceiptPayload) => Promise<PosQueuedSaleReceiptResult>;
+  onPrintQueueOrderReceipt?: (payload: PosQueueOrderReceiptPayload) => Promise<PosQueuedSaleReceiptResult>;
   onGoToShift?: () => void;
   recreateDraft?: PosRecreateDraft | null;
   onConsumeRecreateDraft?: () => void;
@@ -212,6 +276,10 @@ function formatQty(value: number | null | undefined): string {
     return '-';
   }
   return Number(value).toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 4 });
+}
+
+function normalizeSearchTerm(value: string): string {
+  return value.replace(/[%_]/g, ' ').replace(/\s+/g, ' ').trim().toLowerCase();
 }
 
 function asNumber(value: unknown): number | null {
@@ -254,6 +322,21 @@ function parseCustomerProfile(payload: Record<string, unknown>): CustomerProfile
     contractPrice: asNumber(payload.contractPrice ?? payload.contract_price),
     pointsBalance: Math.max(0, asNumber(payload.pointsBalance ?? payload.points_balance) ?? 0)
   };
+}
+
+function parseCylinderSizeLabel(payload: Record<string, unknown>): string | null {
+  const raw =
+    asNumber(payload.sizeKg ?? payload.size_kg) ??
+    asNumber(payload.size) ??
+    asNumber(payload.cylinderSize ?? payload.cylinder_size);
+  if (raw !== null && raw > 0) {
+    return `${raw} kg`;
+  }
+  const text =
+    asString(payload.sizeKg ?? payload.size_kg) ??
+    asString(payload.size) ??
+    asString(payload.cylinderSize ?? payload.cylinder_size);
+  return text && text.trim().length > 0 ? text.trim() : null;
 }
 
 function isSupportedPosRewardType(value: string | null | undefined): value is PosRewardType {
@@ -513,17 +596,20 @@ type PickerModalProps = {
   onSearch: (value: string) => void;
   onClose: () => void;
   onSelect: (id: string) => void;
+  actionLabel?: string;
+  onAction?: () => void;
+  actionDisabled?: boolean;
   theme: AppTheme;
 };
 
 function PickerModal(props: PickerModalProps): JSX.Element {
   const filtered = useMemo(() => {
-    const q = props.search.trim().toLowerCase();
+    const q = normalizeSearchTerm(props.search);
     if (!q) {
       return props.options.slice(0, 120);
     }
     return props.options.filter((option) => {
-      const blob = `${option.label} ${option.subtitle ?? ''} ${option.id}`.toLowerCase();
+      const blob = `${option.label} ${option.subtitle ?? ''} ${option.address ?? ''} ${option.id}`.toLowerCase();
       return blob.includes(q);
     });
   }, [props.options, props.search]);
@@ -579,15 +665,35 @@ function PickerModal(props: PickerModalProps): JSX.Element {
                     {option.subtitle ? (
                       <Text style={[styles.modalRowSub, { color: props.theme.subtext }]}>{option.subtitle}</Text>
                     ) : null}
+                    {option.address ? (
+                      <Text style={[styles.modalRowSub, { color: props.theme.subtext }]} numberOfLines={2}>
+                        {option.address}
+                      </Text>
+                    ) : null}
                   </Pressable>
                 );
               })
             )}
           </ScrollView>
 
-          <Pressable onPress={props.onClose} style={[styles.modalClose, { backgroundColor: props.theme.pillBg }]}>
-            <Text style={[styles.modalCloseText, { color: props.theme.pillText }]}>Close</Text>
-          </Pressable>
+          <View style={styles.modalFooterActions}>
+            {props.onAction ? (
+              <Pressable
+                onPress={props.onAction}
+                disabled={props.actionDisabled}
+                style={[
+                  styles.modalClose,
+                  styles.modalActionButton,
+                  { backgroundColor: props.actionDisabled ? props.theme.primaryMuted : props.theme.primary }
+                ]}
+              >
+                <Text style={[styles.modalCloseText, { color: '#FFFFFF' }]}>{props.actionLabel ?? 'Add New'}</Text>
+              </Pressable>
+            ) : null}
+            <Pressable onPress={props.onClose} style={[styles.modalClose, { backgroundColor: props.theme.pillBg }]}>
+              <Text style={[styles.modalCloseText, { color: props.theme.pillText }]}>Close</Text>
+            </Pressable>
+          </View>
         </View>
       </View>
     </Modal>
@@ -604,11 +710,13 @@ export function PosScreen({
   inventoryProjectionVersion = 0,
   onDataChanged,
   onPrintQueuedSaleReceipt,
+  onPrintQueueOrderReceipt,
   onGoToShift,
   recreateDraft = null,
   onConsumeRecreateDraft,
   syncBusy = false
 }: Props): JSX.Element {
+  const insets = useSafeAreaInsets();
   const { width, height } = useWindowDimensions();
   const shortEdge = Math.min(width, height);
   const longEdge = Math.max(width, height);
@@ -652,14 +760,28 @@ export function PosScreen({
   const [activeShiftId, setActiveShiftId] = useState<string | null>(null);
 
   const [customerModalOpen, setCustomerModalOpen] = useState(false);
+  const [createCustomerModalOpen, setCreateCustomerModalOpen] = useState(false);
   const [driverModalOpen, setDriverModalOpen] = useState(false);
   const [helperModalOpen, setHelperModalOpen] = useState(false);
   const [itemModalOpen, setItemModalOpen] = useState(false);
+  const [queuePreviewOpen, setQueuePreviewOpen] = useState(false);
+  const [heldCartModalOpen, setHeldCartModalOpen] = useState(false);
   const [customerSearch, setCustomerSearch] = useState('');
+  const [createCustomerName, setCreateCustomerName] = useState('');
+  const [createCustomerAddress, setCreateCustomerAddress] = useState('');
+  const [createCustomerCode, setCreateCustomerCode] = useState('');
+  const [createCustomerContactNumber, setCreateCustomerContactNumber] = useState('');
+  const [createCustomerGas, setCreateCustomerGas] = useState('');
+  const [createCustomerProvince, setCreateCustomerProvince] = useState('');
+  const [createCustomerCity, setCreateCustomerCity] = useState('');
+  const [createCustomerSaving, setCreateCustomerSaving] = useState(false);
   const [driverSearch, setDriverSearch] = useState('');
   const [helperSearch, setHelperSearch] = useState('');
   const [itemSearch, setItemSearch] = useState('');
+  const [heldCartSearch, setHeldCartSearch] = useState('');
+  const [heldCarts, setHeldCarts] = useState<HeldCartRecord[]>([]);
   const [itemCategoryFilter, setItemCategoryFilter] = useState<string>('ALL');
+  const offlineTransactions = useMemo(() => new OfflineTransactionService(db), [db]);
 
   const subtotal = useMemo(() => round2(cart.reduce((sum, line) => sum + line.unitPrice * line.quantity, 0)), [cart]);
   const discountValue = useMemo(() => {
@@ -690,11 +812,59 @@ export function PosScreen({
   const branch = useMemo(() => branches.find((option) => option.id === branchId), [branches, branchId]);
   const location = useMemo(() => scopedLocations.find((option) => option.id === locationId), [scopedLocations, locationId]);
   const selectedCustomer = useMemo(() => customers.find((option) => option.id === customerId), [customers, customerId]);
+  const selectedCustomerAddress = useMemo(() => selectedCustomer?.address?.trim() ?? '', [selectedCustomer]);
   const selectedDriver = useMemo(() => personnels.find((option) => option.id === driverId), [personnels, driverId]);
   const selectedHelper = useMemo(() => personnels.find((option) => option.id === helperId), [personnels, helperId]);
   const personnelLabel = orderType === 'DELIVERY' ? 'Driver' : 'Personnel';
   const currentPointsBalance = customerProfile?.pointsBalance ?? 0;
   const isCustomerReady = customerId.trim().length > 0;
+
+  const closeCreateCustomerModal = (force = false): void => {
+    if (createCustomerSaving && !force) {
+      return;
+    }
+    setCreateCustomerModalOpen(false);
+    setCreateCustomerName('');
+    setCreateCustomerAddress('');
+    setCreateCustomerCode('');
+    setCreateCustomerContactNumber('');
+    setCreateCustomerGas('');
+    setCreateCustomerProvince('');
+    setCreateCustomerCity('');
+  };
+
+  const handleCreateOfflineCustomer = async (): Promise<void> => {
+    const name = createCustomerName.trim();
+    if (!name) {
+      toastError('Customer', 'Customer name is required.');
+      return;
+    }
+
+    setCreateCustomerSaving(true);
+    try {
+      const createdId = await offlineTransactions.createOfflineCustomer({
+        name,
+        address: createCustomerAddress.trim() || undefined,
+        code: createCustomerCode.trim() || undefined,
+        contactNumber: createCustomerContactNumber.trim() || undefined,
+        gas: createCustomerGas.trim() || undefined,
+        province: createCustomerProvince.trim() || undefined,
+        city: createCustomerCity.trim() || undefined
+      });
+      const customerOptions = await loadCustomerOptions(db);
+      setCustomers(customerOptions);
+      setCustomerId(createdId);
+      setCustomerSearch('');
+      await onDataChanged?.();
+      toastSuccess('Customer saved locally', `${name} is ready for this sale and will sync later.`);
+      closeCreateCustomerModal(true);
+      setCustomerModalOpen(false);
+    } catch (cause) {
+      toastError('Customer save failed', cause instanceof Error ? cause.message : 'Unable to save customer locally.');
+    } finally {
+      setCreateCustomerSaving(false);
+    }
+  };
   const isPersonnelReady = driverId.trim().length > 0;
   const hasCart = cart.length > 0;
   const canProceedToPayment = hasCart && isCustomerReady && isPersonnelReady;
@@ -807,7 +977,7 @@ export function PosScreen({
   }, [catalog]);
 
   const filteredCatalog = useMemo(() => {
-    const q = itemSearch.trim().toLowerCase();
+    const q = normalizeSearchTerm(itemSearch);
     return catalog
       .filter((item) => {
         if (itemCategoryFilter !== 'ALL' && (item.category?.trim() ?? '') !== itemCategoryFilter) {
@@ -816,10 +986,22 @@ export function PosScreen({
         if (!q) {
           return true;
         }
-        return `${item.name} ${item.subtitle ?? ''} ${item.id} ${item.category ?? ''}`.toLowerCase().includes(q);
+        return `${item.name} ${item.subtitle ?? ''} ${item.id} ${item.category ?? ''} ${item.cylinderSizeLabel ?? ''}`.toLowerCase().includes(q);
       })
       .slice(0, 120);
   }, [catalog, itemSearch, itemCategoryFilter]);
+
+  const filteredHeldCarts = useMemo(() => {
+    const q = normalizeSearchTerm(heldCartSearch);
+    if (!q) {
+      return heldCarts;
+    }
+    return heldCarts.filter((held) => {
+      const lineNames = held.lines.map((line) => line.productName).join(' ');
+      const blob = `${held.label} ${held.customerName ?? ''} ${lineNames}`.toLowerCase();
+      return blob.includes(q);
+    });
+  }, [heldCartSearch, heldCarts]);
 
   const resolveProjectedStock = (
     product: Pick<Product, 'id' | 'qtyOnHand' | 'qtyFull' | 'qtyEmpty'>
@@ -1039,6 +1221,7 @@ export function PosScreen({
 
   useEffect(() => {
     void refreshMasterData();
+    void refreshHeldCarts();
   }, []);
 
   useEffect(() => {
@@ -1054,6 +1237,7 @@ export function PosScreen({
       void refreshMasterData();
       void refreshActiveShift();
       void refreshCatalog();
+      void refreshHeldCarts();
     }
     prevSyncBusyRef.current = syncBusy;
   }, [syncBusy, branchId, customerId, locationId]);
@@ -1274,7 +1458,8 @@ export function PosScreen({
   };
 
   const refreshCatalog = async (): Promise<void> => {
-    const productRows = await db.getAllAsync<{ payload: string }>(
+    const [productRows, cylinderRows] = await Promise.all([
+      db.getAllAsync<{ payload: string }>(
       `
       SELECT payload
       FROM master_data_local
@@ -1283,7 +1468,20 @@ export function PosScreen({
       `,
       'product',
       'products'
-    );
+      ),
+      db.getAllAsync<{ record_id: string; payload: string }>(
+        `
+        SELECT record_id, payload
+        FROM master_data_local
+        WHERE entity IN (?, ?, ?, ?)
+        ORDER BY updated_at DESC
+        `,
+        'cylinder_type',
+        'cylinder_types',
+        'cylinder-type',
+        'cylinder-types'
+      )
+    ]);
 
     if (!productRows.length) {
       setCatalog(FALLBACK_PRODUCTS);
@@ -1324,6 +1522,18 @@ export function PosScreen({
     const localPriceLists = parsePriceLists(priceListRows);
     setPriceLists(localPriceLists);
     setCustomerProfile(customerProfile);
+    const cylinderSizeById = new Map<string, string>();
+    for (const row of cylinderRows) {
+      const payload = parseRecord<Record<string, unknown>>(row.payload, {});
+      const id = asString(payload.id) ?? asString(row.record_id);
+      if (!id || cylinderSizeById.has(id)) {
+        continue;
+      }
+      const sizeLabel = parseCylinderSizeLabel(payload);
+      if (sizeLabel) {
+        cylinderSizeById.set(id, sizeLabel);
+      }
+    }
     const nowIso = new Date().toISOString();
     const dedupe = new Map<string, Product>();
     const inventoryRows = await db.getAllAsync<{ payload: string }>(
@@ -1378,11 +1588,12 @@ export function PosScreen({
         continue;
       }
       const category = asString(payload.category ?? payload.category_code);
+      const cylinderTypeId = asString(payload.cylinderTypeId ?? payload.cylinder_type_id);
 
       const isLpg =
         payload.isLpg === true ||
         payload.is_lpg === true ||
-        Boolean(asString(payload.cylinderTypeId ?? payload.cylinder_type_id));
+        Boolean(cylinderTypeId);
 
       const resolvedPrice = isLpg
         ? resolveLocalPrice({
@@ -1424,6 +1635,9 @@ export function PosScreen({
         name,
         subtitle: code || id,
         category,
+        cylinderSizeLabel:
+          parseCylinderSizeLabel(payload) ??
+          (cylinderTypeId ? (cylinderSizeById.get(cylinderTypeId) ?? null) : null),
         qtyFull: stock ? stock.qtyFull : undefined,
         qtyEmpty: stock ? stock.qtyEmpty : undefined,
         qtyOnHand: stock ? stock.qtyOnHand : null,
@@ -1438,6 +1652,297 @@ export function PosScreen({
 
   const createLineId = (productId: string, flow?: CylinderFlowSelection | null): string =>
     `${productId}:${flow ?? 'NA'}:${Date.now()}:${Math.random().toString(36).slice(2, 7)}`;
+
+  const createHeldCartId = (): string =>
+    `held-cart-${Date.now()}-${Math.floor(Math.random() * 1_000_000)}`;
+
+  const buildHeldCartLabel = (): string => {
+    if (selectedCustomer?.label?.trim()) {
+      return `${selectedCustomer.label.trim()} ${new Date().toLocaleTimeString()}`;
+    }
+    return `Held Cart ${new Date().toLocaleTimeString()}`;
+  };
+
+  const queuePreviewLines = cart.slice(0, 12).map((line) => ({
+    id: line.lineId,
+    name: line.name,
+    qty: Math.max(1, Math.trunc(line.quantity)),
+    amount: round2(line.unitPrice * line.quantity),
+    subtitle: line.subtitle
+  }));
+
+  const buildQueueOrderReceiptPayload = ({
+    queueId,
+    queueLabel,
+    createdAt,
+    customerName,
+    customerAddress,
+    saleType,
+    paymentMode: queuePaymentMode,
+    paymentMethod: queuePaymentMethod,
+    paidAmount: queuePaidAmount,
+    discountAmount: queueDiscountAmount,
+    deliveryFee: queueDeliveryFee,
+    notes,
+    personnelName,
+    helperName,
+    lines
+  }: {
+    queueId: string;
+    queueLabel: string;
+    createdAt: string;
+    customerName: string | null;
+    customerAddress: string | null;
+    saleType: 'PICKUP' | 'DELIVERY';
+    paymentMode: 'FULL' | 'PARTIAL';
+    paymentMethod: 'CASH' | 'CARD' | 'E_WALLET';
+    paidAmount: number;
+    discountAmount: number;
+    deliveryFee: number;
+    notes: string | null;
+    personnelName: string | null;
+    helperName: string | null;
+    lines: Array<{ name: string; subtitle?: string; quantity: number; unitPrice: number }>;
+  }): PosQueueOrderReceiptPayload => {
+    const subtotalValue = round2(lines.reduce((sum, line) => sum + line.unitPrice * line.quantity, 0));
+    const totalValue = round2(subtotalValue - queueDiscountAmount + queueDeliveryFee);
+    return {
+      queueId,
+      queueLabel,
+      branchId: branchId.trim(),
+      branchName: branch?.label ?? branchId.trim(),
+      locationId: locationId.trim(),
+      locationName: location?.label ?? locationId.trim(),
+      cashierName: cashierName?.trim() ? cashierName.trim() : null,
+      orderType: saleType,
+      customerName,
+      customerAddress,
+      personnelName,
+      helperName,
+      lines: lines.map((line) => ({
+        name: line.name,
+        subtitle: line.subtitle,
+        quantity: Math.max(1, Math.trunc(line.quantity)),
+        unitPrice: round2(line.unitPrice)
+      })),
+      subtotal: subtotalValue,
+      discount: round2(queueDiscountAmount),
+      total: totalValue,
+      paidAmount: round2(queuePaidAmount),
+      notes,
+      paymentMode: queuePaymentMode,
+      paymentMethod: queuePaymentMethod,
+      createdAt
+    };
+  };
+
+  const printQueueOrderReceipt = async (payload: PosQueueOrderReceiptPayload): Promise<void> => {
+    if (!onPrintQueueOrderReceipt) {
+      toastInfo('Queue print unavailable', 'Queue printing is not configured on this device.');
+      return;
+    }
+    try {
+      const result = await onPrintQueueOrderReceipt(payload);
+      if (result.printed) {
+        toastSuccess('Queue slip printed', result.receiptNumber ? `Slip #${result.receiptNumber}` : payload.queueLabel);
+      } else if (result.message) {
+        toastInfo('Queue slip not printed', result.message);
+      }
+    } catch (cause) {
+      toastError('Queue slip failed', cause instanceof Error ? cause.message : 'Unable to print queue slip.');
+    }
+  };
+
+  const refreshHeldCarts = async (): Promise<void> => {
+    const rows = await db.getAllAsync<HeldCartDbRow>(
+      `
+      SELECT record_id, payload, updated_at
+      FROM master_data_local
+      WHERE entity = ?
+      ORDER BY updated_at DESC
+      `,
+      'held_cart'
+    );
+    const next: HeldCartRecord[] = [];
+    for (const row of rows) {
+      const payload = parseRecord<Record<string, unknown>>(row.payload, {});
+      const id = asString(payload.id) ?? row.record_id;
+      const linesRaw = Array.isArray(payload.lines) ? payload.lines : [];
+      const lines: HeldCartLine[] = [];
+      for (const lineRow of linesRaw) {
+        if (!lineRow || typeof lineRow !== 'object') {
+          continue;
+        }
+        const line = lineRow as Record<string, unknown>;
+        const productId = asString(line.productId ?? line.product_id);
+        const productName = asString(line.productName ?? line.product_name);
+        const quantity = asNumber(line.quantity) ?? 0;
+        const unitPrice = asNumber(line.unitPrice ?? line.unit_price) ?? 0;
+        if (!productId || !productName || quantity <= 0) {
+          continue;
+        }
+        const cylinderFlowRaw = asString(line.cylinderFlow ?? line.cylinder_flow)?.toUpperCase();
+        const cylinderFlow: CylinderFlowSelection | null =
+          cylinderFlowRaw === 'REFILL_EXCHANGE' || cylinderFlowRaw === 'NON_REFILL' ? cylinderFlowRaw : null;
+        lines.push({
+          lineId: asString(line.lineId ?? line.line_id) ?? createLineId(productId, cylinderFlow),
+          productId,
+          productName,
+          subtitle: asString(line.subtitle) ?? undefined,
+          quantity: Math.max(1, Math.trunc(quantity)),
+          unitPrice: round2(unitPrice),
+          cylinderFlow
+        });
+      }
+      if (!lines.length) {
+        continue;
+      }
+      next.push({
+        id,
+        label: asString(payload.label) ?? `Held Cart ${new Date(row.updated_at).toLocaleTimeString()}`,
+        customerId: asString(payload.customerId ?? payload.customer_id),
+        customerName: asString(payload.customerName ?? payload.customer_name),
+        driverId: asString(payload.driverId ?? payload.driver_id),
+        driverName: asString(payload.driverName ?? payload.driver_name),
+        helperId: asString(payload.helperId ?? payload.helper_id),
+        helperName: asString(payload.helperName ?? payload.helper_name),
+        saleType: asString(payload.saleType ?? payload.sale_type)?.toUpperCase() === 'DELIVERY' ? 'DELIVERY' : 'PICKUP',
+        paymentMode: asString(payload.paymentMode ?? payload.payment_mode)?.toUpperCase() === 'PARTIAL' ? 'PARTIAL' : 'FULL',
+        paymentMethod:
+          asString(payload.paymentMethod ?? payload.payment_method)?.toUpperCase() === 'CARD'
+            ? 'CARD'
+            : asString(payload.paymentMethod ?? payload.payment_method)?.toUpperCase() === 'E_WALLET'
+              ? 'E_WALLET'
+              : 'CASH',
+        paidAmount: round2(Math.max(0, asNumber(payload.paidAmount ?? payload.paid_amount) ?? 0)),
+        discountAmount: round2(Math.max(0, asNumber(payload.discountAmount ?? payload.discount_amount) ?? 0)),
+        deliveryFee: round2(Math.max(0, asNumber(payload.deliveryFee ?? payload.delivery_fee) ?? 0)),
+        notes: asString(payload.notes),
+        lines,
+        createdAt: asString(payload.createdAt ?? payload.created_at) ?? row.updated_at,
+        updatedAt: asString(payload.updatedAt ?? payload.updated_at) ?? row.updated_at
+      });
+    }
+    next.sort((a, b) => Date.parse(b.updatedAt) - Date.parse(a.updatedAt));
+    setHeldCarts(next);
+  };
+
+  const clearCheckoutForm = (): void => {
+    setCart([]);
+    setDiscount('0');
+    setDeliveryFee('0.00');
+    setPaymentMode('FULL');
+    setPaidAmount('0');
+    setPaymentNotes('');
+    setSelectedRewardId('');
+    setAvailableRewards([]);
+    setShowPaymentStep(false);
+    setCustomerId('');
+    setCustomerSearch('');
+    setDriverId('');
+    setDriverSearch('');
+    setHelperId('');
+    setHelperSearch('');
+    activeRecreatedFromSaleIdRef.current = null;
+  };
+
+  const holdCurrentCart = async (): Promise<void> => {
+    if (!cart.length) {
+      toastError('Hold cart', 'Add item(s) first before holding a cart.');
+      return;
+    }
+    const now = new Date().toISOString();
+    const record: HeldCartRecord = {
+      id: createHeldCartId(),
+      label: buildHeldCartLabel(),
+      customerId: customerId.trim() || null,
+      customerName: selectedCustomer?.label ?? null,
+      driverId: driverId.trim() || null,
+      driverName: selectedDriver?.label ?? null,
+      helperId: helperId.trim() || null,
+      helperName: selectedHelper?.label ?? null,
+      saleType: orderType,
+      paymentMode,
+      paymentMethod,
+      paidAmount: round2(parsedPaidAmount),
+      discountAmount: round2(discountValue),
+      deliveryFee: round2(deliveryFeeValue),
+      notes: paymentNotes.trim() || null,
+      lines: cart.map((line) => ({
+        lineId: line.lineId,
+        productId: line.id,
+        productName: line.name,
+        subtitle: line.subtitle,
+        quantity: Math.max(1, Math.trunc(line.quantity)),
+        unitPrice: round2(line.unitPrice),
+        cylinderFlow: line.cylinderFlow ?? null
+      })),
+      createdAt: now,
+      updatedAt: now
+    };
+    await db.runAsync(
+      `
+      INSERT OR REPLACE INTO master_data_local(entity, record_id, payload, updated_at)
+      VALUES (?, ?, ?, ?)
+      `,
+      'held_cart',
+      record.id,
+      JSON.stringify(record),
+      now
+    );
+    clearCheckoutForm();
+    setQueuePreviewOpen(false);
+    await refreshHeldCarts();
+    toastSuccess('Queued order saved', `${record.label} was added to queue orders.`);
+  };
+
+  const promptHoldCurrentCart = (): void => {
+    if (!hasCart || saving || syncBusy) {
+      return;
+    }
+    setQueuePreviewOpen(true);
+  };
+
+  const removeHeldCart = async (heldId: string): Promise<void> => {
+    await db.runAsync('DELETE FROM master_data_local WHERE entity = ? AND record_id = ?', 'held_cart', heldId);
+    await refreshHeldCarts();
+  };
+
+  const recallHeldCart = async (held: HeldCartRecord): Promise<void> => {
+    const nextCart: CartLine[] = held.lines.map((line) => {
+      const product = catalog.find((entry) => entry.id === line.productId);
+      return {
+        ...(product ?? {
+          id: line.productId,
+          name: line.productName,
+          subtitle: line.subtitle ?? line.productId,
+          unitPrice: line.unitPrice,
+          isLpg: Boolean(line.cylinderFlow)
+        }),
+        lineId: line.lineId || createLineId(line.productId, line.cylinderFlow ?? null),
+        quantity: Math.max(1, Math.trunc(line.quantity)),
+        unitPrice: line.unitPrice,
+        cylinderFlow: line.cylinderFlow ?? null
+      };
+    });
+    setCart(nextCart);
+    setCustomerId(held.customerId ?? '');
+    setDriverId(held.driverId ?? '');
+    setHelperId(held.helperId ?? '');
+    setOrderType(held.saleType);
+    setPaymentMode(held.paymentMode ?? 'FULL');
+    setPaymentMethod(held.paymentMethod ?? 'CASH');
+    setPaidAmount(String(held.paidAmount ?? 0));
+    setDiscount((held.discountAmount ?? 0).toFixed(2));
+    setDeliveryFee((held.deliveryFee ?? 0).toFixed(2));
+    setPaymentNotes(held.notes ?? '');
+    setSelectedRewardId('');
+    setAvailableRewards([]);
+    setShowPaymentStep(false);
+    setHeldCartModalOpen(false);
+    await removeHeldCart(held.id);
+    toastSuccess('Queue order loaded', `${held.label} was restored into POS.`);
+  };
 
   const linkRecreatedSourceSaleLocally = async (sourceSaleId: string, recreatedSaleId: string): Promise<void> => {
     const row = await db.getFirstAsync<{ payload: string }>(
@@ -1605,7 +2110,8 @@ export function PosScreen({
   };
 
   const updateQty = (lineId: string, quantity: number): void => {
-    if (quantity <= 0) {
+    const nextQty = Math.trunc(quantity);
+    if (!Number.isFinite(nextQty) || nextQty <= 0) {
       setCart((prev) => prev.filter((line) => line.lineId !== lineId));
       return;
     }
@@ -1615,18 +2121,18 @@ export function PosScreen({
       if (!target) {
         return prev;
       }
-      if (quantity <= target.quantity) {
-        return prev.map((line) => (line.lineId === lineId ? { ...line, quantity } : line));
+      if (nextQty <= target.quantity) {
+        return prev.map((line) => (line.lineId === lineId ? { ...line, quantity: nextQty } : line));
       }
       const currentTotalQty = prev
         .filter((line) => line.id === target.id)
         .reduce((sum, line) => sum + line.quantity, 0);
-      const nextTotalQty = round2(currentTotalQty - target.quantity + quantity);
+      const nextTotalQty = round2(currentTotalQty - target.quantity + nextQty);
       stockError = validateProductQtyForCart(target, nextTotalQty);
       if (stockError) {
         return prev;
       }
-      return prev.map((line) => (line.lineId === lineId ? { ...line, quantity } : line));
+      return prev.map((line) => (line.lineId === lineId ? { ...line, quantity: nextQty } : line));
     });
     if (stockError) {
       toastError('Insufficient inventory', stockError);
@@ -1761,9 +2267,7 @@ export function PosScreen({
       toastError('POS Inventory', inventoryErrors.slice(0, 2).join('\n'));
       return;
     }
-    if (paymentMode === 'FULL') {
-      setPaidAmount(total.toFixed(2));
-    }
+    setPaidAmount('0');
     setShowPaymentStep(true);
   };
 
@@ -1896,6 +2400,7 @@ export function PosScreen({
           productId: line.id,
           quantity: line.quantity,
           unitPrice: line.unitPrice,
+          isLpg: line.isLpg === true,
           ...(line.isLpg && line.cylinderFlow ? { cylinderFlow: line.cylinderFlow } : {})
         })),
         payments: [{ method: paymentMethod, amount: appliedPaidAmount }]
@@ -1991,22 +2496,7 @@ export function PosScreen({
         }
       }
 
-      setCart([]);
-      setDiscount('0');
-      setDeliveryFee('0.00');
-      setPaymentMode('FULL');
-      setPaidAmount('0');
-      setPaymentNotes('');
-      setSelectedRewardId('');
-      setAvailableRewards([]);
-      setShowPaymentStep(false);
-      setCustomerId('');
-      setCustomerSearch('');
-      setDriverId('');
-      setDriverSearch('');
-      setHelperId('');
-      setHelperSearch('');
-      activeRecreatedFromSaleIdRef.current = null;
+      clearCheckoutForm();
       await refreshCatalog();
       await onDataChanged?.();
     } catch (cause) {
@@ -2058,72 +2548,78 @@ export function PosScreen({
 
   return (
     <View
+      className="gap-2.5 rounded-2xl border px-3.5 py-3.5"
       style={[
-        styles.card,
         isCompactLayout ? { paddingHorizontal: 10, paddingVertical: 10, gap: 8, borderRadius: 14 } : null,
         { backgroundColor: theme.card, borderColor: theme.cardBorder }
       ]}
     >
-      <View style={styles.header}>
-        <Text style={[styles.title, isCompactLayout ? { fontSize: 16 } : null, { color: theme.heading }]}>POS Sales</Text>
-        <Text style={[styles.sub, isCompactLayout ? { fontSize: 12 } : null, { color: theme.subtext }]}>
-          Pickup and delivery in one checkout flow.
-        </Text>
+      <View className="flex-row justify-end">
+        <Pressable
+          className="relative min-h-9 flex-row items-center justify-center gap-2 rounded-full border px-3"
+          style={{
+            borderColor: theme.cardBorder,
+            backgroundColor: theme.pillBg,
+            opacity: heldCarts.length > 0 ? 1 : 0.55
+          }}
+          onPress={() => {
+            setHeldCartSearch('');
+            setHeldCartModalOpen(true);
+          }}
+          disabled={heldCarts.length === 0}
+          accessibilityLabel="Queue Orders"
+        >
+          <Text className="text-sm font-extrabold" style={{ color: theme.pillText }}>{'\uD83D\uDCC2'}</Text>
+          <Text className="text-[11px] font-bold" style={{ color: theme.pillText }}>
+            Queue Orders
+          </Text>
+          {heldCarts.length > 0 ? (
+            <View
+              className="absolute -right-1 -top-1 min-h-[16px] min-w-[16px] items-center justify-center rounded-full px-1"
+              style={{ backgroundColor: theme.primary }}
+            >
+              <Text className="text-[9px] font-extrabold text-white">
+                {heldCarts.length > 99 ? '99+' : heldCarts.length}
+              </Text>
+            </View>
+          ) : null}
+        </Pressable>
       </View>
 
       <View
+        className="gap-0.5 rounded-xl border px-2.5 py-2"
         style={[
-          styles.shiftGuardBar,
           {
             borderColor: theme.cardBorder,
             backgroundColor: activeShiftId ? theme.inputBg : theme.pillBg
           }
         ]}
       >
-        <Text style={[styles.shiftGuardTitle, { color: activeShiftId ? theme.heading : theme.pillText }]}>
+        <Text className="text-xs font-extrabold" style={{ color: activeShiftId ? theme.heading : theme.pillText }}>
           {activeShiftId ? 'Duty Active' : 'Duty Required'}
         </Text>
-        <Text style={[styles.shiftGuardSub, { color: activeShiftId ? theme.subtext : theme.pillText }]}>
+        <Text className="text-[11px]" style={{ color: activeShiftId ? theme.subtext : theme.pillText }}>
           {activeShiftId
             ? `Shift ${activeShiftId} is active.`
             : 'Start Duty in Shift tab before proceeding to payment.'}
         </Text>
         {!activeShiftId ? (
           <Pressable
-            style={[styles.shiftGuardAction, { backgroundColor: theme.primary }]}
+            className="mt-1.5 min-h-8 self-start items-center justify-center rounded-full px-3"
+            style={{ backgroundColor: theme.primary }}
             onPress={onGoToShift}
             disabled={!onGoToShift}
           >
-            <Text style={styles.shiftGuardActionText}>Go to Shift</Text>
+            <Text className="text-[11px] font-extrabold text-white">Go to Shift</Text>
           </Pressable>
         ) : null}
       </View>
 
       <View
-        style={[
-          styles.contextBar,
-          isCompactLayout ? { paddingHorizontal: 8, paddingVertical: 6 } : null,
-          { borderColor: theme.cardBorder, backgroundColor: theme.pillBg }
-        ]}
-      >
-        <Text
-          style={[styles.contextText, isCompactLayout ? { fontSize: 11 } : null, { color: theme.pillText }]}
-          numberOfLines={1}
-        >
-          Branch: {branch?.label ?? branchId}
-        </Text>
-        <Text
-          style={[styles.contextText, isCompactLayout ? { fontSize: 11 } : null, { color: theme.pillText }]}
-          numberOfLines={1}
-        >
-          Location: {location?.label ?? locationId}
-        </Text>
-      </View>
-
-      <View
         ref={tutorialOrderType.ref}
         onLayout={tutorialOrderType.onLayout}
-        style={[styles.row, isCompactLayout ? { gap: 6 } : null]}
+        className="flex-row gap-2"
+        style={isCompactLayout ? { gap: 6 } : null}
       >
         {(['PICKUP', 'DELIVERY'] as const).map((mode) => {
           const selected = orderType === mode;
@@ -2152,40 +2648,44 @@ export function PosScreen({
             setCustomerSearch('');
             setCustomerModalOpen(true);
           }}
+          className="rounded-xl border px-3 py-[11px]"
           style={[
-            styles.selectorButton,
             isCompactLayout ? { paddingHorizontal: 10, paddingVertical: 9 } : null,
             { borderColor: theme.cardBorder, backgroundColor: theme.inputBg },
             tutorialCustomer.active ? styles.tutorialTargetFocus : null
           ]}
         >
-          <Text style={[styles.selectorLabel, { color: theme.subtext }]}>Customer</Text>
-          <Text style={[styles.selectorValue, isCompactLayout ? { fontSize: 13 } : null, { color: theme.inputText }]} numberOfLines={1}>
+          <Text className="text-[11px] font-semibold" style={{ color: theme.subtext }}>Customer</Text>
+          <Text className="text-sm font-bold" style={[isCompactLayout ? { fontSize: 13 } : null, { color: theme.inputText }]} numberOfLines={1}>
             {selectedCustomer?.label ?? 'Select customer'}
           </Text>
           {selectedCustomer ? (
-            <Text style={[styles.selectorMeta, { color: theme.subtext }]}>
+            <Text className="mt-0.5 text-[11px]" style={{ color: theme.subtext }}>
               Points: {currentPointsBalance} | Balance: PHP {selectedCustomerOutstanding.toFixed(2)}
+            </Text>
+          ) : null}
+          {selectedCustomerAddress ? (
+            <Text className="mt-0.5 text-[11px]" style={{ color: theme.subtext }} numberOfLines={2}>
+              {selectedCustomerAddress}
             </Text>
           ) : null}
         </Pressable>
       </View>
 
-      <View style={[styles.row, isCompactLayout ? { flexDirection: 'column', gap: 6 } : null]}>
+      <View className="flex-row gap-2" style={isCompactLayout ? { flexDirection: 'column', gap: 6 } : null}>
         <Pressable
           onPress={() => {
             setDriverSearch('');
             setDriverModalOpen(true);
           }}
+          className="flex-1 rounded-xl border px-3 py-[11px]"
           style={[
-            styles.selectorButton,
-            styles.selectorHalf,
             isCompactLayout ? { paddingHorizontal: 10, paddingVertical: 9 } : null,
             { borderColor: theme.cardBorder, backgroundColor: theme.inputBg }
           ]}
         >
-          <Text style={[styles.selectorLabel, { color: theme.subtext }]}>{personnelLabel} (Required)</Text>
-          <Text style={[styles.selectorValue, isCompactLayout ? { fontSize: 13 } : null, { color: theme.inputText }]} numberOfLines={1}>
+          <Text className="text-[11px] font-semibold" style={{ color: theme.subtext }}>{personnelLabel} (Required)</Text>
+          <Text className="text-sm font-bold" style={[isCompactLayout ? { fontSize: 13 } : null, { color: theme.inputText }]} numberOfLines={1}>
             {selectedDriver?.label ?? `Select ${personnelLabel.toLowerCase()}`}
           </Text>
         </Pressable>
@@ -2194,15 +2694,14 @@ export function PosScreen({
             setHelperSearch('');
             setHelperModalOpen(true);
           }}
+          className="flex-1 rounded-xl border px-3 py-[11px]"
           style={[
-            styles.selectorButton,
-            styles.selectorHalf,
             isCompactLayout ? { paddingHorizontal: 10, paddingVertical: 9 } : null,
             { borderColor: theme.cardBorder, backgroundColor: theme.inputBg }
           ]}
         >
-          <Text style={[styles.selectorLabel, { color: theme.subtext }]}>Helper (Optional)</Text>
-          <Text style={[styles.selectorValue, isCompactLayout ? { fontSize: 13 } : null, { color: theme.inputText }]} numberOfLines={1}>
+          <Text className="text-[11px] font-semibold" style={{ color: theme.subtext }}>Helper (Optional)</Text>
+          <Text className="text-sm font-bold" style={[isCompactLayout ? { fontSize: 13 } : null, { color: theme.inputText }]} numberOfLines={1}>
             {selectedHelper?.label ?? 'Select helper'}
           </Text>
         </Pressable>
@@ -2215,18 +2714,18 @@ export function PosScreen({
             setItemCategoryFilter('ALL');
             setItemModalOpen(true);
           }}
+          className="rounded-xl border px-3 py-[11px]"
           style={[
-            styles.selectorButton,
             isCompactLayout ? { paddingHorizontal: 10, paddingVertical: 9 } : null,
             { borderColor: theme.cardBorder, backgroundColor: theme.inputBg },
             tutorialItemSelector.active ? styles.tutorialTargetFocus : null
           ]}
         >
-          <Text style={[styles.selectorLabel, { color: theme.subtext }]}>Items</Text>
-          <Text style={[styles.selectorValue, { color: theme.inputText }]}>Tap to add item ({cart.length} in cart)</Text>
+          <Text className="text-[11px] font-semibold" style={{ color: theme.subtext }}>Items</Text>
+          <Text className="text-sm font-bold" style={{ color: theme.inputText }}>Tap to add item ({cart.length} in cart)</Text>
         </Pressable>
       </View>
-      <Text style={[styles.sub, { color: theme.subtext }]}>
+      <Text className="text-[13px]" style={{ color: theme.subtext }}>
         Default LPG flow for new item:{' '}
         {defaultLpgFlowForNewItem === 'NONE'
           ? 'Require per item'
@@ -2235,10 +2734,10 @@ export function PosScreen({
             : 'Non-Refill'}
       </Text>
 
-      <View style={[styles.block, { borderColor: theme.cardBorder }]}>
-        <Text style={[styles.blockTitle, { color: theme.heading }]}>Cart</Text>
+      <View className="gap-2 rounded-xl border px-2.5 py-2.5" style={{ borderColor: theme.cardBorder }}>
+        <Text className="text-sm font-bold" style={{ color: theme.heading }}>Cart</Text>
         {cart.length === 0 ? (
-          <Text style={[styles.sub, { color: theme.subtext }]}>No items added yet.</Text>
+          <Text className="text-[13px]" style={{ color: theme.subtext }}>No items added yet.</Text>
         ) : (
           cart.map((line) => (
             <SwipeToDeleteRow
@@ -2248,10 +2747,15 @@ export function PosScreen({
               disabled={saving || syncBusy}
               deleteLabel="Remove"
             >
-              <View style={[styles.cartRow, isCompactLayout ? { alignItems: 'flex-start' } : null]}>
+              <View className="flex-row items-start gap-2" style={isCompactLayout ? { alignItems: 'flex-start' } : null}>
                 <View style={{ flex: 1 }}>
-                  <Text style={[styles.cartName, { color: theme.heading }]}>{line.name}</Text>
+                  <Text className="text-[13px] font-bold" style={{ color: theme.heading }}>{line.name}</Text>
                   <Text style={[styles.cartCode, { color: theme.subtext }]}>{line.subtitle ?? line.id}</Text>
+                  {line.isLpg ? (
+                    <Text style={[styles.cartCode, { color: theme.subtext }]}>
+                      Size: {(line.cylinderSizeLabel ?? '').trim() || '-'}
+                    </Text>
+                  ) : null}
                   {line.isLpg ? (
                     <View style={[styles.row, isCompactLayout ? { flexWrap: 'wrap', gap: 6 } : null]}>
                       {([
@@ -2280,25 +2784,38 @@ export function PosScreen({
                   {line.isLpg && !line.cylinderFlow ? (
                     <Text style={[styles.cartCode, { color: '#B45309' }]}>Select flow to apply exact LPG price.</Text>
                   ) : null}
-                  <Text style={[styles.cartPrice, { color: theme.subtext }]}>PHP {line.unitPrice.toFixed(2)} each</Text>
+                  <Text className="text-[11px]" style={{ color: theme.subtext }}>PHP {line.unitPrice.toFixed(2)} each</Text>
                 </View>
                 <View style={[styles.cartRightRail, isCompactLayout ? { minWidth: 88 } : null]}>
                   <Text
-                    style={[
-                      styles.cartLineTotal,
-                      isCompactLayout ? { minWidth: 0, textAlign: 'right' } : null,
-                      { color: theme.heading }
-                    ]}
+                    className="text-[13px] font-bold"
+                    style={[isCompactLayout ? { minWidth: 0, textAlign: 'right' } : null, { color: theme.heading }]}
                   >
                     PHP {(line.unitPrice * line.quantity).toFixed(2)}
                   </Text>
-                  <View style={styles.qtyWrap}>
-                    <Pressable style={[styles.qtyBtn, { backgroundColor: theme.pillBg }]} onPress={() => updateQty(line.lineId, line.quantity - 1)}>
-                      <Text style={[styles.qtyText, { color: theme.pillText }]}>-</Text>
+                  <View className="flex-row items-center gap-2">
+                    <Pressable className="h-8 w-8 items-center justify-center rounded-full" style={{ backgroundColor: theme.pillBg }} onPress={() => updateQty(line.lineId, line.quantity - 1)}>
+                      <Text className="text-[13px] font-bold" style={{ color: theme.pillText }}>-</Text>
                     </Pressable>
-                    <Text style={[styles.qtyValue, { color: theme.heading }]}>{line.quantity}</Text>
-                    <Pressable style={[styles.qtyBtn, { backgroundColor: theme.pillBg }]} onPress={() => updateQty(line.lineId, line.quantity + 1)}>
-                      <Text style={[styles.qtyText, { color: theme.pillText }]}>+</Text>
+                    <TextInput
+                      value={String(line.quantity)}
+                      onChangeText={(value) => {
+                        const digits = value.replace(/[^0-9]/g, '');
+                        if (!digits) {
+                          return;
+                        }
+                        const parsed = Number.parseInt(digits, 10);
+                        if (!Number.isFinite(parsed)) {
+                          return;
+                        }
+                        updateQty(line.lineId, parsed);
+                      }}
+                      keyboardType="number-pad"
+                      className="min-w-[44px] rounded-md px-1 py-0.5 text-center text-[13px] font-bold"
+                      style={{ backgroundColor: theme.inputBg, color: theme.heading, borderColor: theme.cardBorder, borderWidth: 1 }}
+                    />
+                    <Pressable className="h-8 w-8 items-center justify-center rounded-full" style={{ backgroundColor: theme.pillBg }} onPress={() => updateQty(line.lineId, line.quantity + 1)}>
+                      <Text className="text-[13px] font-bold" style={{ color: theme.pillText }}>+</Text>
                     </Pressable>
                   </View>
                 </View>
@@ -2308,32 +2825,46 @@ export function PosScreen({
         )}
       </View>
 
-      <View style={[styles.summary, { borderColor: theme.cardBorder }]}>
-        <Text style={[styles.summaryText, { color: theme.subtext }]}>Order Type: {orderType}</Text>
-        <Text style={[styles.summaryText, { color: theme.subtext }]}>
+      <View className="gap-0.5 rounded-xl border px-3 py-2.5" style={{ borderColor: theme.cardBorder }}>
+        <Text className="text-xs" style={{ color: theme.subtext }}>Order Type: {orderType}</Text>
+        <Text className="text-xs" style={{ color: theme.subtext }}>
           LPG Mix: Refill {lpgFlowSummary.refill} | Non-Refill {lpgFlowSummary.nonRefill}
         </Text>
-        <Text style={[styles.summaryText, { color: theme.subtext }]}>Customer: {selectedCustomer?.label ?? '-'}</Text>
-        <Text style={[styles.summaryText, { color: theme.subtext }]}>{personnelLabel}: {selectedDriver?.label ?? '-'}</Text>
-        <Text style={[styles.summaryText, { color: theme.subtext }]}>Helper: {selectedHelper?.label ?? '-'}</Text>
-        <Text style={[styles.summaryText, { color: theme.subtext }]}>Items: {cart.length}</Text>
-        <Text style={[styles.summaryText, { color: theme.subtext }]}>Subtotal: PHP {subtotal.toFixed(2)}</Text>
-        <Text style={[styles.summaryText, { color: theme.subtext }]}>Discount: PHP {discountValue.toFixed(2)}</Text>
-        <Text style={[styles.summaryTotal, { color: theme.heading }]}>Total: PHP {total.toFixed(2)}</Text>
+        <Text className="text-xs" style={{ color: theme.subtext }}>Customer: {selectedCustomer?.label ?? '-'}</Text>
+        <Text className="text-xs" style={{ color: theme.subtext }}>Address: {selectedCustomerAddress}</Text>
+        <Text className="text-xs" style={{ color: theme.subtext }}>{personnelLabel}: {selectedDriver?.label ?? '-'}</Text>
+        <Text className="text-xs" style={{ color: theme.subtext }}>Helper: {selectedHelper?.label ?? '-'}</Text>
+        <Text className="text-xs" style={{ color: theme.subtext }}>Items: {cart.length}</Text>
+        <Text className="text-xs" style={{ color: theme.subtext }}>Subtotal: PHP {subtotal.toFixed(2)}</Text>
+        {discountValue > 0 ? (
+          <Text className="text-xs" style={{ color: theme.subtext }}>Discount: PHP {discountValue.toFixed(2)}</Text>
+        ) : null}
+        <Text className="mt-1 text-base font-extrabold" style={{ color: theme.heading }}>Total: PHP {total.toFixed(2)}</Text>
+      </View>
+
+      <View className="flex-row gap-2">
+        <Pressable
+          className="min-h-10 flex-1 items-center justify-center rounded-xl px-3"
+          style={{ backgroundColor: hasCart && !saving && !syncBusy ? theme.pillBg : theme.cardBorder }}
+          onPress={promptHoldCurrentCart}
+          disabled={!hasCart || saving || syncBusy}
+        >
+          <Text className="text-[12px] font-bold" style={{ color: theme.pillText }}>Add to Queue</Text>
+        </Pressable>
       </View>
 
       {!showPaymentStep ? (
         <View ref={tutorialProceedPayment.ref} onLayout={tutorialProceedPayment.onLayout}>
           <Pressable
+            className="min-h-11 items-center justify-center rounded-xl px-3"
             style={[
-              styles.checkoutBtn,
               { backgroundColor: canProceedToPayment && Boolean(activeShiftId) ? theme.primary : theme.primaryMuted },
               tutorialProceedPayment.active ? styles.tutorialTargetFocus : null
             ]}
             onPress={() => void handleProceedToPayment()}
             disabled={!canProceedToPayment || saving || syncBusy || !activeShiftId}
           >
-            <Text style={styles.checkoutText}>Proceed to Payment</Text>
+            <Text className="text-[13px] font-bold text-white">Proceed to Payment</Text>
           </Pressable>
         </View>
       ) : null}
@@ -2347,8 +2878,136 @@ export function PosScreen({
         onSearch={setCustomerSearch}
         onClose={() => setCustomerModalOpen(false)}
         onSelect={setCustomerId}
+        actionLabel="New Customer"
+        onAction={() => setCreateCustomerModalOpen(true)}
+        actionDisabled={createCustomerSaving}
         theme={theme}
       />
+
+      <Modal
+        visible={createCustomerModalOpen}
+        transparent
+        animationType="slide"
+        onRequestClose={() => closeCreateCustomerModal()}
+      >
+        <View className="flex-1 justify-end bg-[rgba(2,8,23,0.55)] pt-3" style={{ paddingBottom: Math.max(insets.bottom + 8, 12) }}>
+          <Pressable style={StyleSheet.absoluteFillObject} onPress={() => closeCreateCustomerModal()} />
+          <View
+            className="w-full gap-2.5 rounded-t-[20px] border px-3 py-3"
+            style={[
+              isCompactLayout ? { minHeight: '44%', maxHeight: '82%', paddingHorizontal: 10, paddingVertical: 10, gap: 8 } : { minHeight: '40%', maxHeight: '74%' },
+              { backgroundColor: theme.card, borderColor: theme.cardBorder }
+            ]}
+          >
+            <View className="gap-1">
+              <Text className="text-base font-extrabold" style={{ color: theme.heading }}>New Customer</Text>
+              <Text className="text-[12px]" style={{ color: theme.subtext }}>
+                Save a customer locally now. We&apos;ll sync it when the device is connected again.
+              </Text>
+            </View>
+
+            <View className="gap-2">
+              <View className="gap-1">
+                <Text className="text-[11px] font-bold uppercase tracking-[0.4px]" style={{ color: theme.subtext }}>Name</Text>
+                <TextInput
+                  value={createCustomerName}
+                  onChangeText={setCreateCustomerName}
+                  placeholder="Customer name"
+                  placeholderTextColor={theme.inputPlaceholder}
+                  className="rounded-xl px-3 py-[11px] text-[13px]"
+                  style={{ backgroundColor: theme.inputBg, color: theme.inputText }}
+                />
+              </View>
+              <View className="gap-1">
+                <Text className="text-[11px] font-bold uppercase tracking-[0.4px]" style={{ color: theme.subtext }}>Address</Text>
+                <TextInput
+                  value={createCustomerAddress}
+                  onChangeText={setCreateCustomerAddress}
+                  placeholder="Customer address"
+                  placeholderTextColor={theme.inputPlaceholder}
+                  className="rounded-xl px-3 py-[11px] text-[13px]"
+                  style={{ backgroundColor: theme.inputBg, color: theme.inputText }}
+                />
+              </View>
+              <View className="gap-1">
+                <Text className="text-[11px] font-bold uppercase tracking-[0.4px]" style={{ color: theme.subtext }}>Code</Text>
+                <TextInput
+                  value={createCustomerCode}
+                  onChangeText={setCreateCustomerCode}
+                  placeholder="Optional code"
+                  placeholderTextColor={theme.inputPlaceholder}
+                  autoCapitalize="characters"
+                  className="rounded-xl px-3 py-[11px] text-[13px]"
+                  style={{ backgroundColor: theme.inputBg, color: theme.inputText }}
+                />
+              </View>
+              <View className="gap-1">
+                <Text className="text-[11px] font-bold uppercase tracking-[0.4px]" style={{ color: theme.subtext }}>Contact Number</Text>
+                <TextInput
+                  value={createCustomerContactNumber}
+                  onChangeText={setCreateCustomerContactNumber}
+                  placeholder="Optional contact number"
+                  placeholderTextColor={theme.inputPlaceholder}
+                  className="rounded-xl px-3 py-[11px] text-[13px]"
+                  style={{ backgroundColor: theme.inputBg, color: theme.inputText }}
+                />
+              </View>
+              <View className="gap-1">
+                <Text className="text-[11px] font-bold uppercase tracking-[0.4px]" style={{ color: theme.subtext }}>Gas</Text>
+                <TextInput
+                  value={createCustomerGas}
+                  onChangeText={setCreateCustomerGas}
+                  placeholder="Optional gas preference"
+                  placeholderTextColor={theme.inputPlaceholder}
+                  className="rounded-xl px-3 py-[11px] text-[13px]"
+                  style={{ backgroundColor: theme.inputBg, color: theme.inputText }}
+                />
+              </View>
+              <View className="gap-1">
+                <Text className="text-[11px] font-bold uppercase tracking-[0.4px]" style={{ color: theme.subtext }}>Province</Text>
+                <TextInput
+                  value={createCustomerProvince}
+                  onChangeText={setCreateCustomerProvince}
+                  placeholder="Optional province"
+                  placeholderTextColor={theme.inputPlaceholder}
+                  className="rounded-xl px-3 py-[11px] text-[13px]"
+                  style={{ backgroundColor: theme.inputBg, color: theme.inputText }}
+                />
+              </View>
+              <View className="gap-1">
+                <Text className="text-[11px] font-bold uppercase tracking-[0.4px]" style={{ color: theme.subtext }}>City</Text>
+                <TextInput
+                  value={createCustomerCity}
+                  onChangeText={setCreateCustomerCity}
+                  placeholder="Optional city"
+                  placeholderTextColor={theme.inputPlaceholder}
+                  className="rounded-xl px-3 py-[11px] text-[13px]"
+                  style={{ backgroundColor: theme.inputBg, color: theme.inputText }}
+                />
+              </View>
+            </View>
+
+            <View className="flex-row gap-2">
+              <Pressable
+                className="min-h-10 flex-1 items-center justify-center rounded-xl px-3"
+                style={{ backgroundColor: theme.pillBg }}
+                onPress={() => closeCreateCustomerModal()}
+                disabled={createCustomerSaving}
+              >
+                <Text className="text-[12px] font-bold" style={{ color: theme.pillText }}>Cancel</Text>
+              </Pressable>
+              <Pressable
+                className="min-h-10 flex-1 items-center justify-center rounded-xl px-3"
+                style={{ backgroundColor: createCustomerSaving ? theme.primaryMuted : theme.primary }}
+                onPress={() => void handleCreateOfflineCustomer()}
+                disabled={createCustomerSaving}
+              >
+                <Text className="text-[12px] font-bold text-white">{createCustomerSaving ? 'Saving...' : 'Save Customer'}</Text>
+              </Pressable>
+            </View>
+          </View>
+        </View>
+      </Modal>
 
       <PickerModal
         visible={driverModalOpen}
@@ -2375,23 +3034,323 @@ export function PosScreen({
         theme={theme}
       />
 
+      <Modal
+        visible={queuePreviewOpen}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setQueuePreviewOpen(false)}
+      >
+        <View className="flex-1 justify-end bg-[rgba(2,8,23,0.55)] pt-3" style={{ paddingBottom: Math.max(insets.bottom + 8, 12) }}>
+          <Pressable style={StyleSheet.absoluteFillObject} onPress={() => setQueuePreviewOpen(false)} />
+          <View
+            className="w-full gap-2.5 rounded-t-[20px] border px-3 py-3"
+            style={[
+              isCompactLayout ? { minHeight: '58%', maxHeight: '90%', paddingHorizontal: 10, paddingVertical: 10, gap: 8 } : { minHeight: '54%', maxHeight: '86%' },
+              { backgroundColor: theme.card, borderColor: theme.cardBorder }
+            ]}
+          >
+            <View className="flex-row items-start justify-between gap-3">
+              <View className="flex-1">
+                <Text className="text-base font-extrabold" style={{ color: theme.heading }}>Add to Queue</Text>
+                <Text className="text-[12px]" style={{ color: theme.subtext }}>
+                  Review the queued order preview before saving it for later recall.
+                </Text>
+              </View>
+              <Pressable
+                className="min-h-10 min-w-[72px] items-center justify-center rounded-xl border px-3"
+                style={{ borderColor: theme.cardBorder, backgroundColor: theme.inputBg }}
+                onPress={() => setQueuePreviewOpen(false)}
+              >
+                <Text className="text-[13px] font-bold" style={{ color: theme.pillText }}>Back</Text>
+              </Pressable>
+            </View>
+
+            <ScrollView className="min-h-0 flex-1" contentContainerStyle={{ gap: 10, paddingBottom: 8 }} keyboardShouldPersistTaps="handled">
+              <View className="gap-2 rounded-xl border px-3 py-3" style={{ borderColor: theme.cardBorder, backgroundColor: theme.inputBg }}>
+                <Text className="text-[11px] font-bold uppercase tracking-[1px]" style={{ color: theme.subtext }}>Print Preview</Text>
+                <View className="flex-row flex-wrap gap-2">
+                  <View className="rounded-full px-3 py-1" style={{ backgroundColor: theme.card }}>
+                    <Text className="text-[11px] font-bold" style={{ color: theme.pillText }}>{orderType}</Text>
+                  </View>
+                  <View className="rounded-full px-3 py-1" style={{ backgroundColor: theme.card }}>
+                    <Text className="text-[11px] font-bold" style={{ color: theme.pillText }}>{cart.length} item(s)</Text>
+                  </View>
+                </View>
+                <View className="gap-1">
+                  <Text className="text-[12px] font-bold" style={{ color: theme.subtext }}>Customer</Text>
+                  <Text className="text-[14px] font-extrabold" style={{ color: theme.heading }}>
+                    {selectedCustomer?.label?.trim() || 'Walk-in customer'}
+                  </Text>
+                </View>
+                <View className="gap-1">
+                  <Text className="text-[12px] font-bold" style={{ color: theme.subtext }}>Address</Text>
+                  <Text className="text-[13px]" style={{ color: theme.heading }}>
+                    {selectedCustomerAddress || ''}
+                  </Text>
+                </View>
+              </View>
+
+              <View className="gap-2 rounded-xl border px-3 py-3" style={{ borderColor: theme.cardBorder, backgroundColor: theme.inputBg }}>
+                <Text className="text-[11px] font-bold uppercase tracking-[1px]" style={{ color: theme.subtext }}>Details</Text>
+                {queuePreviewLines.length === 0 ? (
+                  <Text className="text-[12px]" style={{ color: theme.subtext }}>No items in this order.</Text>
+                ) : (
+                  queuePreviewLines.map((line, index) => (
+                    <View
+                      key={line.id}
+                      className="flex-row items-start justify-between gap-3 rounded-xl border px-3 py-2.5"
+                      style={{ borderColor: theme.cardBorder, backgroundColor: theme.card }}
+                    >
+                      <View className="min-w-0 flex-1 flex-row items-start gap-2.5">
+                        <View className="mt-0.5 h-6 min-w-6 items-center justify-center rounded-full" style={{ backgroundColor: theme.inputBg }}>
+                          <Text className="text-[11px] font-bold" style={{ color: theme.pillText }}>{index + 1}</Text>
+                        </View>
+                        <View className="min-w-0 flex-1 gap-0.5">
+                          <Text className="text-[13px] font-bold" style={{ color: theme.heading }}>{line.name}</Text>
+                          {line.subtitle ? (
+                            <Text className="text-[11px]" style={{ color: theme.subtext }}>{line.subtitle}</Text>
+                          ) : null}
+                        </View>
+                      </View>
+                      <View className="items-end gap-0.5">
+                        <Text className="text-[11px] font-bold" style={{ color: theme.subtext }}>Qty {line.qty}</Text>
+                        <Text className="text-[12px] font-extrabold" style={{ color: theme.heading }}>
+                          PHP {line.amount.toFixed(2)}
+                        </Text>
+                      </View>
+                    </View>
+                  ))
+                )}
+                {cart.length > queuePreviewLines.length ? (
+                  <Text className="text-[11px]" style={{ color: theme.subtext }}>
+                    +{cart.length - queuePreviewLines.length} more item(s)
+                  </Text>
+                ) : null}
+              </View>
+
+              <View className="gap-2 rounded-xl border px-3 py-3" style={{ borderColor: theme.cardBorder, backgroundColor: theme.inputBg }}>
+                <Text className="text-[11px] font-bold uppercase tracking-[1px]" style={{ color: theme.subtext }}>Summary</Text>
+                <View className="flex-row gap-2">
+                  <View className="flex-1 rounded-xl border px-3 py-2.5" style={{ borderColor: theme.cardBorder, backgroundColor: theme.card }}>
+                    <Text className="text-[11px] font-bold" style={{ color: theme.subtext }}>Subtotal</Text>
+                    <Text className="text-[14px] font-extrabold" style={{ color: theme.heading }}>PHP {subtotal.toFixed(2)}</Text>
+                  </View>
+                  <View className="flex-1 rounded-xl border px-3 py-2.5" style={{ borderColor: theme.cardBorder, backgroundColor: theme.card }}>
+                    <Text className="text-[11px] font-bold" style={{ color: theme.subtext }}>Total</Text>
+                    <Text className="text-[14px] font-extrabold" style={{ color: theme.heading }}>PHP {total.toFixed(2)}</Text>
+                  </View>
+                </View>
+              </View>
+
+              <View className="gap-2 rounded-xl border px-3 py-3" style={{ borderColor: theme.cardBorder, backgroundColor: theme.inputBg }}>
+                <Text className="text-[11px] font-bold uppercase tracking-[1px]" style={{ color: theme.subtext }}>Total</Text>
+                <Text className="text-[18px] font-extrabold" style={{ color: theme.heading }}>
+                  PHP {total.toFixed(2)}
+                </Text>
+              </View>
+            </ScrollView>
+
+            <View className="flex-row gap-2">
+              <Pressable
+                className="min-h-11 flex-1 items-center justify-center rounded-xl px-3"
+                style={{ backgroundColor: theme.pillBg }}
+                onPress={() => setQueuePreviewOpen(false)}
+              >
+                <Text className="text-[13px] font-bold" style={{ color: theme.pillText }}>Back</Text>
+              </Pressable>
+              <Pressable
+                className="min-h-11 flex-1 items-center justify-center rounded-xl px-3"
+                style={{ backgroundColor: theme.inputBg, borderColor: theme.cardBorder, borderWidth: 1 }}
+                onPress={() => {
+                  void printQueueOrderReceipt(
+                    buildQueueOrderReceiptPayload({
+                      queueId: `preview-${Date.now()}`,
+                      queueLabel: buildHeldCartLabel(),
+                      createdAt: new Date().toISOString(),
+                      customerName: selectedCustomer?.label ?? null,
+                      customerAddress: selectedCustomerAddress || null,
+                      saleType: orderType,
+                      paymentMode,
+                      paymentMethod,
+                      paidAmount: parsedPaidAmount,
+                      discountAmount: discountValue,
+                      deliveryFee: deliveryFeeValue,
+                      notes: paymentNotes.trim() || null,
+                      personnelName: selectedDriver?.label ?? null,
+                      helperName: selectedHelper?.label ?? null,
+                      lines: cart.map((line) => ({
+                        name: line.name,
+                        subtitle: line.subtitle,
+                        quantity: line.quantity,
+                        unitPrice: line.unitPrice
+                      }))
+                    })
+                  );
+                }}
+              >
+                <Text className="text-[13px] font-bold" style={{ color: theme.pillText }}>Print</Text>
+              </Pressable>
+              <Pressable
+                className="min-h-11 flex-1 items-center justify-center rounded-xl px-3"
+                style={{ backgroundColor: theme.primary }}
+                onPress={() => {
+                  void holdCurrentCart();
+                }}
+              >
+                <Text className="text-[13px] font-bold text-white">Add to Queue</Text>
+              </Pressable>
+            </View>
+          </View>
+        </View>
+      </Modal>
+
+      <Modal
+        visible={heldCartModalOpen}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setHeldCartModalOpen(false)}
+      >
+        <View className="flex-1 justify-end bg-[rgba(2,8,23,0.55)] pt-3" style={{ paddingBottom: Math.max(insets.bottom + 8, 12) }}>
+          <Pressable style={StyleSheet.absoluteFillObject} onPress={() => setHeldCartModalOpen(false)} />
+          <View
+            className="min-h-[70%] max-h-[94%] w-full gap-2.5 rounded-t-[20px] border px-3 py-3"
+            style={[
+              isCompactLayout ? { minHeight: '76%', maxHeight: '96%', paddingHorizontal: 10, paddingVertical: 10, gap: 8 } : null,
+              { backgroundColor: theme.card, borderColor: theme.cardBorder }
+            ]}
+          >
+            <Text className="text-base font-extrabold" style={{ color: theme.heading }}>Queue Orders</Text>
+            <TextInput
+              value={heldCartSearch}
+              onChangeText={setHeldCartSearch}
+              placeholder="Search queued order, customer, or item"
+              placeholderTextColor={theme.inputPlaceholder}
+              className="rounded-xl px-3 py-[11px] text-[13px]"
+              style={{ backgroundColor: theme.inputBg, color: theme.inputText }}
+            />
+            <ScrollView className="min-h-0 flex-1" contentContainerStyle={{ gap: 10, paddingBottom: 8 }} keyboardShouldPersistTaps="handled">
+              {filteredHeldCarts.length === 0 ? (
+                <Text style={[styles.modalEmpty, { color: theme.subtext }]}>
+                  No queued orders yet.
+                </Text>
+              ) : (
+                filteredHeldCarts.map((held) => {
+                  const heldTotal = round2(
+                    held.lines.reduce((sum, line) => sum + line.unitPrice * line.quantity, 0) -
+                      held.discountAmount +
+                      held.deliveryFee
+                  );
+                  return (
+                    <View
+                      key={held.id}
+                      className="gap-2 rounded-xl border px-3 py-3"
+                      style={{ borderColor: theme.cardBorder, backgroundColor: theme.inputBg }}
+                    >
+                      <Text className="text-[13px] font-bold" style={{ color: theme.heading }}>
+                        {held.label}
+                      </Text>
+                      <Text className="text-[12px]" style={{ color: theme.subtext }}>
+                        {held.customerName ?? 'Walk-in customer'} | {held.lines.length} line(s) | PHP {heldTotal.toFixed(2)}
+                      </Text>
+                      <Text className="text-[11px]" style={{ color: theme.subtext }}>
+                        {new Date(held.updatedAt).toLocaleString()}
+                      </Text>
+                      <View className="flex-row gap-2">
+                        <Pressable
+                          className="min-h-10 flex-1 items-center justify-center rounded-xl px-3"
+                          style={{ backgroundColor: theme.primary }}
+                          onPress={() => {
+                            void recallHeldCart(held);
+                          }}
+                        >
+                          <Text className="text-[12px] font-bold text-white">Recall</Text>
+                        </Pressable>
+                        <Pressable
+                          className="min-h-10 flex-1 items-center justify-center rounded-xl px-3"
+                          style={{ backgroundColor: theme.card, borderColor: theme.cardBorder, borderWidth: 1 }}
+                          onPress={() => {
+                            const customerOption = held.customerId ? customers.find((option) => option.id === held.customerId) : undefined;
+                            void printQueueOrderReceipt(
+                              buildQueueOrderReceiptPayload({
+                                queueId: held.id,
+                                queueLabel: held.label,
+                                createdAt: held.createdAt,
+                                customerName: held.customerName,
+                                customerAddress: customerOption?.address?.trim() ?? null,
+                                saleType: held.saleType,
+                                paymentMode: held.paymentMode,
+                                paymentMethod: held.paymentMethod,
+                                paidAmount: held.paidAmount,
+                                discountAmount: held.discountAmount,
+                                deliveryFee: held.deliveryFee,
+                                notes: held.notes,
+                                personnelName: held.driverName ?? null,
+                                helperName: held.helperName ?? null,
+                                lines: held.lines.map((line) => ({
+                                  name: line.productName,
+                                  subtitle: line.subtitle,
+                                  quantity: line.quantity,
+                                  unitPrice: line.unitPrice
+                                }))
+                              })
+                            );
+                          }}
+                        >
+                          <Text className="text-[12px] font-bold" style={{ color: theme.pillText }}>Print</Text>
+                        </Pressable>
+                        <Pressable
+                          className="min-h-10 flex-1 items-center justify-center rounded-xl px-3"
+                          style={{ backgroundColor: theme.pillBg }}
+                          onPress={() => {
+                            Alert.alert('Delete held cart?', `${held.label}`, [
+                              { text: 'Cancel', style: 'cancel' },
+                              {
+                                text: 'Delete',
+                                style: 'destructive',
+                                onPress: () => {
+                                  void removeHeldCart(held.id);
+                                }
+                              }
+                            ]);
+                          }}
+                        >
+                          <Text className="text-[12px] font-bold" style={{ color: theme.pillText }}>Delete</Text>
+                        </Pressable>
+                      </View>
+                    </View>
+                  );
+                })
+              )}
+            </ScrollView>
+            <Pressable
+              onPress={() => setHeldCartModalOpen(false)}
+              className="min-h-10 items-center justify-center rounded-xl px-3"
+              style={{ backgroundColor: theme.pillBg }}
+            >
+              <Text className="text-[13px] font-bold" style={{ color: theme.pillText }}>Close</Text>
+            </Pressable>
+          </View>
+        </View>
+      </Modal>
+
       <Modal visible={itemModalOpen} transparent animationType="fade" onRequestClose={() => setItemModalOpen(false)}>
-        <View style={styles.modalBackdrop}>
+        <View className="flex-1 justify-end bg-[rgba(2,8,23,0.55)] pt-3" style={{ paddingBottom: Math.max(insets.bottom + 8, 12) }}>
           <Pressable style={StyleSheet.absoluteFillObject} onPress={() => setItemModalOpen(false)} />
           <View
+            className="min-h-[82%] max-h-[94%] w-full gap-2.5 rounded-t-[20px] border px-3 py-3"
             style={[
-              styles.itemSelectModalCard,
               isCompactLayout ? { minHeight: '86%', maxHeight: '96%', paddingHorizontal: 10, paddingVertical: 10, gap: 8 } : null,
               { backgroundColor: theme.card, borderColor: theme.cardBorder }
             ]}
           >
-            <Text style={[styles.modalTitle, { color: theme.heading }]}>Select Item</Text>
+            <Text className="text-base font-extrabold" style={{ color: theme.heading }}>Select Item</Text>
             <TextInput
               value={itemSearch}
-              onChangeText={setItemSearch}
+              onChangeText={(value) => setItemSearch(value.replace(/[%_]/g, ''))}
               placeholder="Search item code or name"
               placeholderTextColor={theme.inputPlaceholder}
-              style={[styles.modalSearch, { backgroundColor: theme.inputBg, color: theme.inputText }]}
+              className="rounded-xl px-3 py-[11px] text-[13px]"
+              style={{ backgroundColor: theme.inputBg, color: theme.inputText }}
             />
             <View style={[styles.itemCategoryWrap, isCompactLayout ? { height: 38 } : null]}>
               <ScrollView
@@ -2448,11 +3407,7 @@ export function PosScreen({
                 })}
               </ScrollView>
             </View>
-            <ScrollView
-              style={styles.itemSelectList}
-              contentContainerStyle={styles.itemSelectListContent}
-              keyboardShouldPersistTaps="handled"
-            >
+            <ScrollView className="min-h-0 flex-1" contentContainerStyle={{ gap: 10, paddingBottom: 8 }} keyboardShouldPersistTaps="handled">
               {filteredCatalog.length === 0 ? (
                 <Text style={[styles.modalEmpty, { color: theme.subtext }]}>No matching items.</Text>
               ) : (
@@ -2471,8 +3426,8 @@ export function PosScreen({
                         setItemModalOpen(false);
                       }}
                       disabled={outOfStock}
+                      className="gap-2 rounded-xl border px-3 py-3"
                       style={[
-                        styles.itemSelectCard,
                         isCompactLayout ? { paddingHorizontal: 10, paddingVertical: 10, gap: 6 } : null,
                         outOfStock ? styles.itemSelectCardDisabled : null,
                         { borderColor: theme.cardBorder, backgroundColor: theme.inputBg }
@@ -2486,44 +3441,47 @@ export function PosScreen({
                         <Text style={styles.noStockWatermark}>NO STOCK</Text>
                       </>
                     ) : null}
-                    <View style={styles.itemSelectCardHead}>
-                      <View style={styles.itemSelectCardTitleWrap}>
-                        <Text style={[styles.itemSelectCardTitle, { color: theme.heading }]}>{product.name}</Text>
-                        <Text style={[styles.itemSelectCardSub, { color: theme.subtext }]}>
+                    <View className="flex-row items-start justify-between gap-3">
+                      <View className="min-w-0 flex-1 gap-0.5">
+                        <Text className="text-[14px] font-bold" style={{ color: theme.heading }}>{product.name}</Text>
+                        <Text className="text-[12px]" style={{ color: theme.subtext }}>
                           {product.subtitle ?? product.id}
                         </Text>
+                        {product.isLpg ? (
+                          <Text className="text-[12px]" style={{ color: theme.subtext }}>
+                            Size: {(product.cylinderSizeLabel ?? '').trim() || '-'}
+                          </Text>
+                        ) : null}
                       </View>
-                      <View style={[styles.itemSelectPricePill, isCompactLayout ? { paddingHorizontal: 8, paddingVertical: 4 } : null, { backgroundColor: theme.pillBg }]}>
-                        <Text style={[styles.itemSelectPriceText, { color: theme.pillText }]}>
+                      <View className="rounded-full px-3 py-1" style={[isCompactLayout ? { paddingHorizontal: 8, paddingVertical: 4 } : null, { backgroundColor: theme.pillBg }]}>
+                        <Text className="text-[11px] font-semibold" style={{ color: theme.pillText }}>
                           PHP {product.unitPrice.toFixed(2)}
                         </Text>
                       </View>
                     </View>
                     {product.isLpg ? (
-                      <View style={[styles.itemFlowPriceRow, isCompactLayout ? { flexDirection: 'column', alignItems: 'flex-start', gap: 2 } : null]}>
-                        <Text style={[styles.itemFlowPriceText, { color: theme.subtext }]}>
+                      <View className="flex-row flex-wrap gap-2" style={isCompactLayout ? { flexDirection: 'column', alignItems: 'flex-start', gap: 2 } : null}>
+                        <Text className="text-[12px]" style={{ color: theme.subtext }}>
                           Refill: {flowPrice.refill !== null ? `PHP ${flowPrice.refill.toFixed(2)}` : '-'}
                         </Text>
-                        <Text style={[styles.itemFlowPriceText, { color: theme.subtext }]}>
+                        <Text className="text-[12px]" style={{ color: theme.subtext }}>
                           Non-Refill: {flowPrice.nonRefill !== null ? `PHP ${flowPrice.nonRefill.toFixed(2)}` : '-'}
                         </Text>
                       </View>
                     ) : null}
-                    {product.category ? (
-                      <Text style={[styles.itemSelectCardMeta, { color: theme.subtext }]}>Category: {product.category}</Text>
-                    ) : null}
+                    {product.category ? <Text className="text-[12px]" style={{ color: theme.subtext }}>Category: {product.category}</Text> : null}
                     <View style={[styles.itemStockMetrics, isCompactLayout ? { flexWrap: 'wrap', gap: 6 } : null]}>
-                      <View style={[styles.itemStockChip, isCompactLayout ? { minWidth: '31%', flexBasis: '31%' } : null, { backgroundColor: theme.pillBg }]}>
-                        <Text style={[styles.itemStockChipLabel, { color: theme.subtext }]}>FULL</Text>
-                        <Text style={[styles.itemStockChipValue, { color: theme.heading }]}>{formatQty(product.qtyFull)}</Text>
+                      <View className="min-w-[31%] flex-1 rounded-xl px-3 py-2" style={[isCompactLayout ? { minWidth: '31%', flexBasis: '31%' } : null, { backgroundColor: theme.pillBg }]}>
+                        <Text className="text-[10px] font-semibold uppercase" style={{ color: theme.subtext }}>FULL</Text>
+                        <Text className="text-[13px] font-bold" style={{ color: theme.heading }}>{formatQty(product.qtyFull)}</Text>
                       </View>
-                      <View style={[styles.itemStockChip, isCompactLayout ? { minWidth: '31%', flexBasis: '31%' } : null, { backgroundColor: theme.pillBg }]}>
-                        <Text style={[styles.itemStockChipLabel, { color: theme.subtext }]}>EMPTY</Text>
-                        <Text style={[styles.itemStockChipValue, { color: theme.heading }]}>{formatQty(product.qtyEmpty)}</Text>
+                      <View className="min-w-[31%] flex-1 rounded-xl px-3 py-2" style={[isCompactLayout ? { minWidth: '31%', flexBasis: '31%' } : null, { backgroundColor: theme.pillBg }]}>
+                        <Text className="text-[10px] font-semibold uppercase" style={{ color: theme.subtext }}>EMPTY</Text>
+                        <Text className="text-[13px] font-bold" style={{ color: theme.heading }}>{formatQty(product.qtyEmpty)}</Text>
                       </View>
-                      <View style={[styles.itemStockChip, isCompactLayout ? { minWidth: '31%', flexBasis: '31%' } : null, { backgroundColor: theme.pillBg }]}>
-                        <Text style={[styles.itemStockChipLabel, { color: theme.subtext }]}>QOH</Text>
-                        <Text style={[styles.itemStockChipValue, { color: theme.heading }]}>{formatQty(product.qtyOnHand)}</Text>
+                      <View className="min-w-[31%] flex-1 rounded-xl px-3 py-2" style={[isCompactLayout ? { minWidth: '31%', flexBasis: '31%' } : null, { backgroundColor: theme.pillBg }]}>
+                        <Text className="text-[10px] font-semibold uppercase" style={{ color: theme.subtext }}>QOH</Text>
+                        <Text className="text-[13px] font-bold" style={{ color: theme.heading }}>{formatQty(product.qtyOnHand)}</Text>
                       </View>
                     </View>
                     </Pressable>
@@ -2531,8 +3489,8 @@ export function PosScreen({
                 })
               )}
             </ScrollView>
-            <Pressable onPress={() => setItemModalOpen(false)} style={[styles.modalClose, { backgroundColor: theme.pillBg }]}>
-              <Text style={[styles.modalCloseText, { color: theme.pillText }]}>Close</Text>
+            <Pressable onPress={() => setItemModalOpen(false)} className="min-h-10 items-center justify-center rounded-xl px-3" style={{ backgroundColor: theme.pillBg }}>
+              <Text className="text-[13px] font-bold" style={{ color: theme.pillText }}>Close</Text>
             </Pressable>
           </View>
         </View>
@@ -2548,7 +3506,7 @@ export function PosScreen({
           }
         }}
       >
-        <View style={styles.modalBackdrop}>
+        <View className="flex-1 justify-end bg-[rgba(2,8,23,0.55)] pt-3" style={{ paddingTop: Math.max(insets.top + 8, 16) }}>
           <Pressable
             style={StyleSheet.absoluteFillObject}
             onPress={() => {
@@ -2558,89 +3516,105 @@ export function PosScreen({
             }}
           />
           <View
+            className="w-full self-center rounded-t-[20px] border"
             style={[
               styles.modalCard,
               styles.paymentModalCard,
-              isCompactLayout ? { height: '88%', maxHeight: '92%', paddingHorizontal: 10, paddingVertical: 10, gap: 8 } : null,
+              isCompactLayout ? styles.paymentModalCardCompact : styles.paymentModalCardRegular,
+              shortEdge >= 600 ? styles.paymentModalCardWide : null,
               { backgroundColor: theme.card, borderColor: theme.cardBorder }
             ]}
           >
-            <Text style={[styles.modalTitle, { color: theme.heading }]}>Payment Details</Text>
-            <Text style={[styles.paymentHint, isCompactLayout ? { fontSize: 11 } : null, { color: theme.subtext }]}>
-              {paymentMode === 'FULL'
-                ? 'Full payment: amount tendered can be equal or higher than total (change is auto-calculated).'
-                : 'Partial payment: collect any amount from 0 up to less than total; remaining becomes customer credit.'}
-            </Text>
+            <View style={styles.paymentModalHeader}>
+              <Text className="text-base font-extrabold" style={{ color: theme.heading }}>Payment Details</Text>
+              <Text className="text-[12px]" style={[isCompactLayout ? { fontSize: 11 } : null, { color: theme.subtext }]}>
+                {paymentMode === 'FULL'
+                  ? 'Full payment: amount tendered can be equal or higher than total (change is auto-calculated).'
+                  : 'Partial payment: collect any amount from 0 up to less than total; remaining becomes customer credit.'}
+              </Text>
+            </View>
 
-            <ScrollView style={styles.paymentModalBody} contentContainerStyle={{ gap: 10 }} keyboardShouldPersistTaps="handled">
-              <View style={[styles.summary, { borderColor: theme.cardBorder }]}>
-                <Text style={[styles.summaryText, { color: theme.subtext }]}>Order Type: {orderType}</Text>
-                <Text style={[styles.summaryText, { color: theme.subtext }]}>
+            <View style={styles.paymentModalBodyWrap}>
+              <ScrollView
+                style={styles.paymentModalBody}
+                contentContainerStyle={[
+                  styles.paymentModalBodyContent,
+                  isCompactLayout ? styles.paymentModalBodyContentCompact : null
+                ]}
+                keyboardShouldPersistTaps="handled"
+                nestedScrollEnabled
+                showsVerticalScrollIndicator
+              >
+                <View className="gap-1.5 rounded-xl border px-3 py-3" style={{ borderColor: theme.cardBorder }}>
+                <Text className="text-[12px]" style={{ color: theme.subtext }}>Order Type: {orderType}</Text>
+                <Text className="text-[12px]" style={{ color: theme.subtext }}>
                   LPG Mix: Refill {lpgFlowSummary.refill} | Non-Refill {lpgFlowSummary.nonRefill}
                 </Text>
-                <Text style={[styles.summaryText, { color: theme.subtext }]}>Customer: {selectedCustomer?.label ?? '-'}</Text>
-                <Text style={[styles.summaryText, { color: theme.subtext }]}>
+                <Text className="text-[12px]" style={{ color: theme.subtext }}>Customer: {selectedCustomer?.label ?? '-'}</Text>
+                <Text className="text-[12px]" style={{ color: theme.subtext }}>Customer Address: {selectedCustomerAddress}</Text>
+                <Text className="text-[12px]" style={{ color: theme.subtext }}>
                   Customer Current Balance: PHP {selectedCustomerOutstanding.toFixed(2)}
                 </Text>
-                <Text style={[styles.summaryText, { color: theme.subtext }]}>{personnelLabel}: {selectedDriver?.label ?? '-'}</Text>
-                <Text style={[styles.summaryText, { color: theme.subtext }]}>Helper: {selectedHelper?.label ?? '-'}</Text>
+                <Text className="text-[12px]" style={{ color: theme.subtext }}>{personnelLabel}: {selectedDriver?.label ?? '-'}</Text>
+                <Text className="text-[12px]" style={{ color: theme.subtext }}>Helper: {selectedHelper?.label ?? '-'}</Text>
               </View>
 
-              <View style={[styles.summary, { borderColor: theme.cardBorder }]}>
-                <Text style={[styles.fieldLabel, { color: theme.subtext }]}>Reward Redemption</Text>
-                <Text style={[styles.summaryText, { color: theme.subtext }]}>
-                  Available points: {currentPointsBalance}
-                </Text>
-                <Text style={[styles.summaryText, { color: theme.subtext }]}>
-                  Pick one reward to reserve/apply during checkout. Discount fields can still be adjusted before saving.
-                </Text>
-                {rewardsLoading ? (
-                  <Text style={[styles.summaryText, { color: theme.subtext }]}>Loading rewards...</Text>
-                ) : rewardEligibleOptions.length === 0 ? (
-                  <Text style={[styles.summaryText, { color: theme.subtext }]}>No active checkout rewards available for this customer/branch.</Text>
-                ) : (
-                  <View style={[styles.row, { flexWrap: 'wrap', gap: 6 }]}>
-                    {rewardEligibleOptions.map((reward) => {
-                      const active = reward.id === selectedRewardId;
-                      return (
-                        <Pressable
-                          key={reward.id}
-                          style={[
-                            styles.methodPill,
-                            { flexBasis: '48%', backgroundColor: active ? theme.primary : theme.pillBg }
-                          ]}
-                          onPress={() => handleSelectReward(reward)}
-                          disabled={saving}
-                        >
-                          <Text style={{ color: active ? '#FFFFFF' : theme.pillText, fontWeight: '700', fontSize: 11 }}>
-                            {reward.name}
-                          </Text>
-                          <Text style={{ color: active ? '#FFFFFF' : theme.pillText, fontSize: 10 }}>
-                            {reward.points_cost} pts
-                            {reward.reward_type === 'FREE_PRODUCT' || reward.reward_type === 'FREE_REFILL'
-                              ? ` | Save PHP ${resolveRewardCartDiscount(reward, cart).toFixed(2)}`
-                              : reward.discount_value !== null
-                                ? ` | ${reward.reward_type === 'DISCOUNT_PERCENT' ? `${reward.discount_value}%` : `PHP ${reward.discount_value.toFixed(2)}`}`
-                                : ''}
-                          </Text>
-                        </Pressable>
-                      );
-                    })}
-                    {selectedReward ? (
-                      <Pressable
-                        style={[styles.methodPill, { flexBasis: '48%', backgroundColor: theme.pillBg }]}
-                        onPress={() => setSelectedRewardId('')}
-                        disabled={saving}
-                      >
-                        <Text style={{ color: theme.pillText, fontWeight: '700', fontSize: 11 }}>Clear Reward</Text>
-                      </Pressable>
-                    ) : null}
+                {currentPointsBalance > 0 ? (
+                  <View className="gap-2 rounded-xl border px-3 py-3" style={{ borderColor: theme.cardBorder }}>
+                    <Text className="text-[11px] font-semibold uppercase tracking-[0.4px]" style={{ color: theme.subtext }}>Reward Redemption</Text>
+                    <Text className="text-[12px]" style={{ color: theme.subtext }}>
+                      Available points: {currentPointsBalance}
+                    </Text>
+                    <Text className="text-[12px]" style={{ color: theme.subtext }}>
+                      Pick one reward to reserve/apply during checkout. Discount fields can still be adjusted before saving.
+                    </Text>
+                    {rewardsLoading ? (
+                      <Text className="text-[12px]" style={{ color: theme.subtext }}>Loading rewards...</Text>
+                    ) : rewardEligibleOptions.length === 0 ? (
+                      <Text className="text-[12px]" style={{ color: theme.subtext }}>No active checkout rewards available for this customer/branch.</Text>
+                    ) : (
+                      <View className="flex-row flex-wrap gap-2">
+                        {rewardEligibleOptions.map((reward) => {
+                          const active = reward.id === selectedRewardId;
+                          return (
+                            <Pressable
+                              key={reward.id}
+                              className="min-h-10 basis-[48%] items-center justify-center rounded-xl px-3 py-2"
+                              style={{ backgroundColor: active ? theme.primary : theme.pillBg }}
+                              onPress={() => handleSelectReward(reward)}
+                              disabled={saving}
+                            >
+                              <Text style={{ color: active ? '#FFFFFF' : theme.pillText, fontWeight: '700', fontSize: 11 }}>
+                                {reward.name}
+                              </Text>
+                              <Text style={{ color: active ? '#FFFFFF' : theme.pillText, fontSize: 10 }}>
+                                {reward.points_cost} pts
+                                {reward.reward_type === 'FREE_PRODUCT' || reward.reward_type === 'FREE_REFILL'
+                                  ? ` | Save PHP ${resolveRewardCartDiscount(reward, cart).toFixed(2)}`
+                                  : reward.discount_value !== null
+                                    ? ` | ${reward.reward_type === 'DISCOUNT_PERCENT' ? `${reward.discount_value}%` : `PHP ${reward.discount_value.toFixed(2)}`}`
+                                    : ''}
+                              </Text>
+                            </Pressable>
+                          );
+                        })}
+                        {selectedReward ? (
+                          <Pressable
+                            className="min-h-10 basis-[48%] items-center justify-center rounded-xl px-3 py-2"
+                            style={{ backgroundColor: theme.pillBg }}
+                            onPress={() => setSelectedRewardId('')}
+                            disabled={saving}
+                          >
+                            <Text style={{ color: theme.pillText, fontWeight: '700', fontSize: 11 }}>Clear Reward</Text>
+                          </Pressable>
+                        ) : null}
+                      </View>
+                    )}
                   </View>
-                )}
-              </View>
+                ) : null}
 
-              <Text style={[styles.fieldLabel, { color: theme.subtext }]}>Payment Type</Text>
-              <View style={[styles.row, isCompactLayout ? { gap: 6 } : null]}>
+                <Text className="text-[11px] font-semibold uppercase tracking-[0.4px]" style={{ color: theme.subtext }}>Payment Type</Text>
+                <View className="flex-row gap-2" style={isCompactLayout ? { gap: 6 } : null}>
                 {(['FULL', 'PARTIAL'] as const).map((mode) => {
                   const selected = paymentMode === mode;
                   return (
@@ -2655,9 +3629,7 @@ export function PosScreen({
                       ]}
                       onPress={() => {
                         setPaymentMode(mode);
-                        if (mode === 'FULL') {
-                          setPaidAmount(total.toFixed(2));
-                        }
+                        setPaidAmount('0');
                       }}
                       disabled={saving}
                     >
@@ -2669,8 +3641,8 @@ export function PosScreen({
                 })}
               </View>
 
-              <Text style={[styles.fieldLabel, { color: theme.subtext }]}>Payment Method</Text>
-              <View style={[styles.row, isCompactLayout ? { flexWrap: 'wrap', gap: 6 } : null]}>
+                <Text className="text-[11px] font-semibold uppercase tracking-[0.4px]" style={{ color: theme.subtext }}>Payment Method</Text>
+                <View className="flex-row flex-wrap gap-2" style={isCompactLayout ? { flexWrap: 'wrap', gap: 6 } : null}>
                 {(['CASH', 'CARD', 'E_WALLET'] as const).map((method) => {
                   const selected = method === paymentMethod;
                   return (
@@ -2678,7 +3650,7 @@ export function PosScreen({
                       key={method}
                       style={[
                         styles.methodPill,
-                        isCompactLayout ? { flex: 0, width: '32%', minHeight: 36 } : null,
+                        isCompactLayout ? { flex: 0, width: '48%', minHeight: 38 } : null,
                         {
                           backgroundColor: selected ? theme.primary : theme.pillBg
                         }
@@ -2694,69 +3666,82 @@ export function PosScreen({
                 })}
               </View>
 
-              <Text style={[styles.fieldLabel, { color: theme.subtext }]}>Discount Amount</Text>
-              <TextInput
+                <Text className="text-[11px] font-semibold uppercase tracking-[0.4px]" style={{ color: theme.subtext }}>Discount Amount</Text>
+                <TextInput
                 value={discount}
                 onChangeText={setDiscount}
                 keyboardType="numeric"
                 editable={canProceedToPayment && !saving}
                 placeholder="0.00"
                 placeholderTextColor={theme.inputPlaceholder}
-                style={[styles.input, { backgroundColor: theme.inputBg, color: theme.inputText }]}
+                className="rounded-xl px-3 py-[11px] text-[13px]"
+                style={{ backgroundColor: theme.inputBg, color: theme.inputText }}
               />
 
-              {orderType === 'DELIVERY' ? (
-                <>
-                  <Text style={[styles.fieldLabel, { color: theme.subtext }]}>Delivery Fee</Text>
-                  <TextInput
+                {orderType === 'DELIVERY' ? (
+                  <>
+                    <Text className="text-[11px] font-semibold uppercase tracking-[0.4px]" style={{ color: theme.subtext }}>Delivery Fee</Text>
+                    <TextInput
                     value={deliveryFee}
                     onChangeText={setDeliveryFee}
                     keyboardType="numeric"
                     editable={canProceedToPayment && !saving}
                     placeholder="0.00"
                     placeholderTextColor={theme.inputPlaceholder}
-                    style={[styles.input, { backgroundColor: theme.inputBg, color: theme.inputText }]}
+                    className="rounded-xl px-3 py-[11px] text-[13px]"
+                    style={{ backgroundColor: theme.inputBg, color: theme.inputText }}
                   />
-                </>
-              ) : null}
+                  </>
+                ) : null}
 
-              <Text style={[styles.fieldLabel, { color: theme.subtext }]}>
-                {paymentMode === 'FULL' ? 'Amount Tendered' : 'Amount Collected'}
-              </Text>
-              <TextInput
-                value={paidAmount}
-                onChangeText={setPaidAmount}
-                keyboardType="numeric"
-                editable={canProceedToPayment && !saving}
-                placeholder="0.00"
-                placeholderTextColor={theme.inputPlaceholder}
-                style={[styles.input, { backgroundColor: theme.inputBg, color: theme.inputText }]}
-              />
+                <Text className="text-[11px] font-semibold uppercase tracking-[0.4px]" style={{ color: theme.subtext }}>
+                  {paymentMode === 'FULL' ? 'Amount Tendered' : 'Amount Collected'}
+                </Text>
+                <View className="flex-row items-center gap-2">
+                  <TextInput
+                    value={paidAmount}
+                    onChangeText={setPaidAmount}
+                    keyboardType="numeric"
+                    editable={canProceedToPayment && !saving}
+                    placeholder="0.00"
+                    placeholderTextColor={theme.inputPlaceholder}
+                    className="flex-1 rounded-xl px-3 py-[11px] text-[13px]"
+                    style={{ backgroundColor: theme.inputBg, color: theme.inputText }}
+                  />
+                  <Pressable
+                    className="min-h-[44px] min-w-[68px] items-center justify-center rounded-xl px-3"
+                    style={{ backgroundColor: theme.pillBg }}
+                    onPress={() => setPaidAmount(total.toFixed(2))}
+                    disabled={!canProceedToPayment || saving}
+                  >
+                    <Text className="text-[12px] font-bold" style={{ color: theme.pillText }}>Exact</Text>
+                  </Pressable>
+                </View>
 
-              <View style={[styles.paymentKpiRow, isCompactLayout ? { flexDirection: 'column', gap: 6 } : null]}>
-                <View style={[styles.paymentKpiCard, { borderColor: theme.cardBorder, backgroundColor: theme.inputBg }]}>
-                  <Text style={[styles.paymentKpiLabel, { color: theme.subtext }]}>Total</Text>
-                  <Text style={[styles.paymentKpiValue, { color: theme.heading }]}>PHP {total.toFixed(2)}</Text>
+                <View className="flex-row gap-2" style={isCompactLayout ? { flexDirection: 'column', gap: 6 } : null}>
+                  <View className="flex-1 gap-0.5 rounded-xl border px-2.5 py-2" style={{ borderColor: theme.cardBorder, backgroundColor: theme.inputBg }}>
+                  <Text className="text-[11px] font-semibold" style={{ color: theme.subtext }}>Paid</Text>
+                  <Text className="text-base font-extrabold" style={{ color: theme.heading }}>PHP {parsedPaidAmount.toFixed(2)}</Text>
                 </View>
-                <View style={[styles.paymentKpiCard, { borderColor: theme.cardBorder, backgroundColor: theme.inputBg }]}>
-                  <Text style={[styles.paymentKpiLabel, { color: theme.subtext }]}>Paid</Text>
-                  <Text style={[styles.paymentKpiValue, { color: theme.heading }]}>PHP {parsedPaidAmount.toFixed(2)}</Text>
+                  <View className="flex-1 gap-0.5 rounded-xl border px-2.5 py-2" style={{ borderColor: theme.cardBorder, backgroundColor: theme.inputBg }}>
+                  <Text className="text-[11px] font-semibold" style={{ color: theme.subtext }}>Change</Text>
+                  <Text className="text-base font-extrabold" style={{ color: theme.heading }}>PHP {changeAmount.toFixed(2)}</Text>
                 </View>
-              </View>
+                </View>
 
-              <View style={[styles.paymentKpiRow, isCompactLayout ? { flexDirection: 'column', gap: 6 } : null]}>
-                <View style={[styles.paymentKpiCard, { borderColor: theme.cardBorder, backgroundColor: theme.inputBg }]}>
-                  <Text style={[styles.paymentKpiLabel, { color: theme.subtext }]}>Change</Text>
-                  <Text style={[styles.paymentKpiValue, { color: theme.heading }]}>PHP {changeAmount.toFixed(2)}</Text>
+                <View className="flex-row gap-2" style={isCompactLayout ? { flexDirection: 'column', gap: 6 } : null}>
+                  <View className="flex-1 gap-0.5 rounded-xl border px-2.5 py-2" style={{ borderColor: theme.cardBorder, backgroundColor: theme.inputBg }}>
+                  <Text className="text-[11px] font-semibold" style={{ color: theme.subtext }}>Credit</Text>
+                  <Text className="text-base font-extrabold" style={{ color: theme.heading }}>PHP {creditBalance.toFixed(2)}</Text>
                 </View>
-                <View style={[styles.paymentKpiCard, { borderColor: theme.cardBorder, backgroundColor: theme.inputBg }]}>
-                  <Text style={[styles.paymentKpiLabel, { color: theme.subtext }]}>Credit Due</Text>
-                  <Text style={[styles.paymentKpiValue, { color: theme.heading }]}>PHP {creditBalance.toFixed(2)}</Text>
+                  <View className="flex-1 gap-0.5 rounded-xl border px-2.5 py-2" style={{ borderColor: theme.cardBorder, backgroundColor: theme.inputBg }}>
+                  <Text className="text-[11px] font-semibold" style={{ color: theme.subtext }}>Total</Text>
+                  <Text className="text-base font-extrabold" style={{ color: theme.heading }}>PHP {total.toFixed(2)}</Text>
                 </View>
-              </View>
+                </View>
 
-              <Text style={[styles.fieldLabel, { color: theme.subtext }]}>Notes (Optional)</Text>
-              <TextInput
+                <Text className="text-[11px] font-semibold uppercase tracking-[0.4px]" style={{ color: theme.subtext }}>Notes (Optional)</Text>
+                <TextInput
                 value={paymentNotes}
                 onChangeText={setPaymentNotes}
                 editable={canProceedToPayment && !saving}
@@ -2766,39 +3751,57 @@ export function PosScreen({
                     : 'Reference or cashier note (optional)'
                 }
                 placeholderTextColor={theme.inputPlaceholder}
-                style={[styles.input, { backgroundColor: theme.inputBg, color: theme.inputText }]}
+                className="rounded-xl px-3 py-[11px] text-[13px]"
+                style={{ backgroundColor: theme.inputBg, color: theme.inputText }}
               />
 
-              <View style={[styles.summary, { borderColor: theme.cardBorder }]}>
-                <Text style={[styles.summaryText, { color: theme.subtext }]}>Items: {cart.length}</Text>
-                <Text style={[styles.summaryText, { color: theme.subtext }]}>Subtotal: PHP {subtotal.toFixed(2)}</Text>
-                <Text style={[styles.summaryText, { color: theme.subtext }]}>Discount: PHP {discountValue.toFixed(2)}</Text>
-                {orderType === 'DELIVERY' ? (
-                  <Text style={[styles.summaryText, { color: theme.subtext }]}>Delivery Fee: PHP {deliveryFeeValue.toFixed(2)}</Text>
-                ) : null}
-                {selectedReward ? (
-                  <Text style={[styles.summaryText, { color: theme.subtext }]}>
-                    Reward: {selectedReward.name} ({selectedReward.points_cost} pts)
-                  </Text>
-                ) : null}
-                <Text style={[styles.summaryText, { color: theme.subtext }]}>Applied Payment: PHP {appliedPaidAmount.toFixed(2)}</Text>
-                <Text style={[styles.summaryText, { color: theme.subtext }]}>Credit Due: PHP {creditBalance.toFixed(2)}</Text>
-                <Text style={[styles.summaryText, { color: theme.subtext }]}>Mode: {paymentMode}</Text>
-              </View>
-            </ScrollView>
+                <View className="gap-1.5 rounded-xl border px-3 py-3" style={{ borderColor: theme.cardBorder }}>
+                  <Text className="text-[12px]" style={{ color: theme.subtext }}>Items: {cart.length}</Text>
+                  <Text className="text-[12px]" style={{ color: theme.subtext }}>Subtotal: PHP {subtotal.toFixed(2)}</Text>
+                  {discountValue > 0 ? (
+                    <Text className="text-[12px]" style={{ color: theme.subtext }}>Discount: PHP {discountValue.toFixed(2)}</Text>
+                  ) : null}
+                  {orderType === 'DELIVERY' ? (
+                    <Text className="text-[12px]" style={{ color: theme.subtext }}>Delivery Fee: PHP {deliveryFeeValue.toFixed(2)}</Text>
+                  ) : null}
+                  {selectedReward ? (
+                    <Text className="text-[12px]" style={{ color: theme.subtext }}>
+                      Reward: {selectedReward.name} ({selectedReward.points_cost} pts)
+                    </Text>
+                  ) : null}
+                  <Text className="text-[12px]" style={{ color: theme.subtext }}>Applied Payment: PHP {appliedPaidAmount.toFixed(2)}</Text>
+                  <Text className="text-[12px]" style={{ color: theme.subtext }}>Credit Due: PHP {creditBalance.toFixed(2)}</Text>
+                  <Text className="text-[12px]" style={{ color: theme.subtext }}>Mode: {paymentMode}</Text>
+                </View>
+              </ScrollView>
+            </View>
 
-            <View style={[styles.paymentModalActions, isCompactLayout ? { flexDirection: 'column', gap: 6 } : null]}>
+            <View
+              style={[
+                styles.paymentModalActions,
+                isCompactLayout ? styles.paymentModalActionsCompact : null,
+                {
+                  borderTopColor: theme.cardBorder,
+                  backgroundColor: theme.card,
+                  paddingBottom: Math.max(insets.bottom + 4, 12)
+                }
+              ]}
+            >
               <Pressable
                 onPress={() => setShowPaymentStep(false)}
                 disabled={saving}
-                style={[styles.modalSecondaryBtn, { backgroundColor: saving ? theme.primaryMuted : theme.pillBg }]}
+                style={[
+                  styles.modalSecondaryBtn,
+                  isCompactLayout ? styles.paymentModalSecondaryBtnCompact : null,
+                  { backgroundColor: saving ? theme.primaryMuted : theme.pillBg }
+                ]}
               >
                 <Text style={[styles.modalSecondaryText, { color: saving ? '#FFFFFF' : theme.pillText }]}>Back</Text>
               </Pressable>
               <Pressable
                 style={[
                   styles.modalPrimaryBtn,
-                  isCompactLayout ? { width: '100%' } : null,
+                  isCompactLayout ? styles.paymentModalPrimaryBtnCompact : null,
                   { backgroundColor: saving || !paymentReady ? theme.primaryMuted : theme.primary }
                 ]}
                 onPress={promptQueueSale}
@@ -3048,6 +4051,7 @@ const styles = StyleSheet.create({
     flex: 1,
     backgroundColor: 'rgba(2, 8, 23, 0.55)',
     paddingTop: 12,
+    paddingBottom: 12,
     justifyContent: 'flex-end'
   },
   modalCard: {
@@ -3061,8 +4065,32 @@ const styles = StyleSheet.create({
     gap: 10
   },
   paymentModalCard: {
-    height: '80%',
-    maxHeight: '80%'
+    width: '100%',
+    height: '92%',
+    maxHeight: '95%',
+    minHeight: '90%',
+    paddingBottom: 0,
+    gap: 0,
+    overflow: 'hidden'
+  },
+  paymentModalCardCompact: {
+    paddingHorizontal: 10,
+    paddingTop: 10,
+    height: '90%',
+    maxHeight: '95%',
+    minHeight: '90%'
+  },
+  paymentModalCardRegular: {
+    paddingHorizontal: 14,
+    paddingTop: 14
+  },
+  paymentModalCardWide: {
+    maxWidth: 560
+  },
+  paymentModalHeader: {
+    gap: 6,
+    paddingBottom: 10,
+    flexShrink: 0
   },
   itemSelectModalCard: {
     borderWidth: 1,
@@ -3242,18 +4270,52 @@ const styles = StyleSheet.create({
     minHeight: 40,
     borderRadius: 10,
     alignItems: 'center',
-    justifyContent: 'center'
+    justifyContent: 'center',
+    flex: 1
+  },
+  modalFooterActions: {
+    flexDirection: 'row',
+    gap: 8
+  },
+  modalActionButton: {
+    minWidth: 112
   },
   modalCloseText: {
     fontSize: 12,
     fontWeight: '700'
   },
   paymentModalBody: {
-    flex: 1
+    flex: 1,
+    minHeight: 0
+  },
+  paymentModalBodyWrap: {
+    flex: 1,
+    minHeight: 0,
+    overflow: 'hidden'
+  },
+  paymentModalBodyContent: {
+    gap: 10,
+    paddingBottom: 16
+  },
+  paymentModalBodyContentCompact: {
+    gap: 8,
+    paddingBottom: 12
   },
   paymentModalActions: {
     flexDirection: 'row',
-    gap: 8
+    gap: 8,
+    borderTopWidth: 1,
+    paddingTop: 10,
+    paddingBottom: 10,
+    flexShrink: 0,
+    zIndex: 2,
+    elevation: 2
+  },
+  paymentModalActionsCompact: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    paddingTop: 8
   },
   lendingProductCard: {
     borderWidth: 1,
@@ -3269,6 +4331,11 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center'
   },
+  paymentModalSecondaryBtnCompact: {
+    minHeight: 40,
+    minWidth: 96,
+    paddingHorizontal: 12
+  },
   modalSecondaryText: {
     fontSize: 13,
     fontWeight: '700'
@@ -3279,6 +4346,10 @@ const styles = StyleSheet.create({
     borderRadius: 12,
     alignItems: 'center',
     justifyContent: 'center'
+  },
+  paymentModalPrimaryBtnCompact: {
+    minHeight: 40,
+    flex: 1
   },
   modalPrimaryText: {
     color: '#FFFFFF',

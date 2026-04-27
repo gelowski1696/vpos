@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { SearchField } from '../components/inputs/SearchField';
+import { useDesktopUi } from '../components/feedback/DesktopUiFeedback';
 import { ScreenHeader } from '../components/layout/ScreenHeader';
 import { desktopDb } from '../db/sqlite';
 import type { DesktopOption, DesktopSaleRecord } from '../db/schema';
@@ -27,16 +28,17 @@ type Props = {
 const screenStackClass = 'flex flex-col gap-5';
 const shellCardClass =
   'rounded-[28px] border border-[var(--border-soft)] bg-[rgba(255,255,255,0.95)] p-5 shadow-[0_18px_44px_rgba(17,40,58,0.08)] backdrop-blur';
-const summaryStripClass = 'grid gap-3 sm:grid-cols-2 xl:grid-cols-4';
+const summaryStripClass = 'desktop-summary-strip grid gap-3 sm:grid-cols-2 xl:grid-cols-4';
 const summaryTileClass =
   'rounded-[20px] border border-[var(--border-soft)] bg-[rgba(255,255,255,0.94)] px-4 py-3 shadow-[0_10px_24px_rgba(17,40,58,0.05)]';
 const summaryLabelClass = 'block text-[0.78rem] font-semibold uppercase tracking-[0.08em] text-[var(--muted)]';
 const summaryValueClass = 'mt-1 block text-[1rem] font-extrabold text-[var(--text-strong)]';
-const modalBackdropClass = 'fixed inset-0 z-50 flex items-center justify-center bg-slate-950/45 p-4 backdrop-blur-sm';
+const modalBackdropClass = 'desktop-modal-backdrop';
 const modalCardClass =
-  'flex max-h-[min(90vh,920px)] w-full max-w-6xl flex-col overflow-hidden rounded-[30px] border border-[var(--border-soft)] bg-[rgba(255,255,255,0.97)] shadow-[var(--shadow-strong)]';
+  'desktop-modal-card desktop-modal-card--detail';
 const modalToolbarClass =
-  'flex shrink-0 flex-col gap-4 border-b border-[var(--border-soft)] bg-[rgba(248,251,255,0.98)] px-5 py-4';
+  'desktop-modal-header flex shrink-0 flex-col gap-4';
+const toolbarGridClass = 'customers-toolbar-grid';
 const listRowClass =
   'flex w-full items-center justify-between gap-4 rounded-[20px] border border-[var(--border-soft)] bg-[rgba(255,255,255,0.92)] px-4 py-4 text-left shadow-[0_10px_24px_rgba(17,40,58,0.04)] transition hover:-translate-y-[1px] hover:border-[rgba(25,118,210,0.24)] hover:shadow-[0_14px_28px_rgba(17,40,58,0.08)]';
 const listRowSelectedClass =
@@ -50,7 +52,6 @@ const detailCardClass =
   'grid gap-1 rounded-[20px] border border-[var(--border-soft)] bg-[rgba(248,251,255,0.96)] px-4 py-3 shadow-[inset_0_1px_0_rgba(255,255,255,0.84),0_10px_24px_rgba(17,40,58,0.04)]';
 const detailLabelClass = 'text-[0.75rem] font-semibold uppercase tracking-[0.08em] text-[var(--muted)]';
 const detailValueClass = 'text-[1rem] font-extrabold text-[var(--text-strong)]';
-const infoListClass = 'grid gap-3 md:grid-cols-2';
 const infoListItemClass =
   'grid gap-1 rounded-[18px] border border-[var(--border-soft)] bg-white px-4 py-3 shadow-[0_8px_20px_rgba(17,40,58,0.04)]';
 const sectionCardClass =
@@ -62,20 +63,40 @@ const recentCardSelectedClass =
   'border-[rgba(25,118,210,0.28)] bg-[rgba(236,244,255,0.96)] shadow-[0_14px_28px_rgba(25,118,210,0.12)]';
 const recentCardButtonClass = 'grid w-full gap-3 px-4 py-4 text-left md:grid-cols-[minmax(0,1fr)_auto_auto] md:items-center';
 const saleLineRowClass =
-  'grid gap-3 rounded-[18px] border border-[var(--border-soft)] bg-[rgba(248,251,255,0.96)] px-4 py-3 md:grid-cols-[minmax(0,1fr)_auto_auto] md:items-center';
+  'desktop-line-item-row desktop-line-item-row--compact';
 
 export function CustomersScreen({ onReopenSale }: Props): JSX.Element {
+  const desktopUi = useDesktopUi();
   const [customers, setCustomers] = useState<DesktopOption[]>([]);
   const [sales, setSales] = useState<DesktopSaleRecord[]>([]);
   const [search, setSearch] = useState('');
   const [selectedCustomerId, setSelectedCustomerId] = useState('');
   const [selectedSaleId, setSelectedSaleId] = useState('');
   const [loading, setLoading] = useState(true);
+  const [createModalOpen, setCreateModalOpen] = useState(false);
+  const [createName, setCreateName] = useState('');
+  const [createAddress, setCreateAddress] = useState('');
+  const [createCode, setCreateCode] = useState('');
+  const [createContactNumber, setCreateContactNumber] = useState('');
+  const [createGas, setCreateGas] = useState('');
+  const [createProvince, setCreateProvince] = useState('');
+  const [createCity, setCreateCity] = useState('');
+  const [createSaving, setCreateSaving] = useState(false);
+
+  const refresh = async (): Promise<void> => {
+    setLoading(true);
+    try {
+      const [customerRows, saleRows] = await Promise.all([desktopMasterDataService.loadCustomers(), desktopDb.listSales()]);
+      setCustomers(customerRows);
+      setSales(saleRows);
+    } finally {
+      setLoading(false);
+    }
+  };
 
   useEffect(() => {
     let active = true;
     async function load(): Promise<void> {
-      setLoading(true);
       try {
         const [customerRows, saleRows] = await Promise.all([desktopMasterDataService.loadCustomers(), desktopDb.listSales()]);
         if (!active) {
@@ -100,7 +121,9 @@ export function CustomersScreen({ onReopenSale }: Props): JSX.Element {
     if (!term) {
       return customers;
     }
-    return customers.filter((customer) => [customer.label, customer.subtitle ?? ''].join(' ').toLowerCase().includes(term));
+    return customers.filter((customer) =>
+      [customer.label, customer.address ?? '', customer.subtitle ?? ''].join(' ').toLowerCase().includes(term)
+    );
   }, [customers, search]);
 
   const selectedCustomer =
@@ -126,12 +149,70 @@ export function CustomersScreen({ onReopenSale }: Props): JSX.Element {
     };
   }, [customers]);
 
+  const closeCreateModal = (): void => {
+    if (createSaving) {
+      return;
+    }
+    setCreateModalOpen(false);
+    setCreateName('');
+    setCreateAddress('');
+    setCreateCode('');
+    setCreateContactNumber('');
+    setCreateGas('');
+    setCreateProvince('');
+    setCreateCity('');
+  };
+
+  const handleCreateCustomer = async (): Promise<void> => {
+    const name = createName.trim();
+    if (!name) {
+      desktopUi.showToast({ tone: 'error', message: 'Customer name is required.' });
+      return;
+    }
+    setCreateSaving(true);
+    try {
+      const createdId = await desktopMasterDataService.createOfflineCustomer({
+        name,
+        address: createAddress.trim() || null,
+        code: createCode.trim() || null,
+        contactNumber: createContactNumber.trim() || null,
+        gas: createGas.trim() || null,
+        province: createProvince.trim() || null,
+        city: createCity.trim() || null
+      });
+      await refresh();
+      setSelectedCustomerId(createdId);
+      setCreateModalOpen(false);
+      setCreateName('');
+      setCreateAddress('');
+      setCreateCode('');
+      setCreateContactNumber('');
+      setCreateGas('');
+      setCreateProvince('');
+      setCreateCity('');
+      desktopUi.showToast({ tone: 'success', message: `${name} was saved locally and queued for sync.` });
+    } catch (error) {
+      desktopUi.showToast({
+        tone: 'error',
+        message: error instanceof Error ? error.message : 'Unable to save customer locally.'
+      });
+    } finally {
+      setCreateSaving(false);
+    }
+  };
+
   return (
     <div className={screenStackClass}>
       <ScreenHeader
         routeId="customers"
-        title="Customer lookup"
-        description="Check balances, points, and recent sales from the same branch cache the POS uses."
+        variant="module"
+        title="Customers"
+        description="Check balances, points, and recent transaction activity without leaving the desktop workspace."
+        actions={(
+          <button className="secondary-btn" type="button" onClick={() => void refresh()} disabled={loading}>
+            {loading ? 'Refreshing...' : 'Refresh'}
+          </button>
+        )}
       />
 
       <section className={summaryStripClass}>
@@ -153,20 +234,30 @@ export function CustomersScreen({ onReopenSale }: Props): JSX.Element {
         </div>
       </section>
 
-      <section className={`${shellCardClass} flex flex-col gap-5`}>
-        <div className="panel-head">
+      <section className={`${shellCardClass} desktop-module-section`}>
+        <div className="panel-head items-center !mb-0">
           <div>
-            <div className="eyebrow">Customer list</div>
-            <h3>Cached branch customers</h3>
+            <div className="eyebrow">Customer directory</div>
+            <h3 className="m-0 text-[1.08rem] font-extrabold text-[var(--text-strong)]">Cached branch customers</h3>
+            <p className="mt-2 text-[0.94rem] leading-6 text-[var(--muted)]">
+              Search by name, code, address, or balance due, then open the transaction drawer to inspect recent sales.
+            </p>
           </div>
         </div>
-        <SearchField
-          className="w-full"
-          value={search}
-          onChange={setSearch}
-          placeholder="Search customer, code, balance, or points"
-        />
-        <div className="flex flex-col gap-3">
+
+        <div className={toolbarGridClass}>
+          <SearchField
+            className="w-full"
+            value={search}
+            onChange={setSearch}
+            placeholder="Search customer, code, address, balance, or points"
+          />
+          <button className="secondary-btn" type="button" onClick={() => setCreateModalOpen(true)} disabled={createSaving}>
+            New Customer
+          </button>
+        </div>
+
+        <div className="sales-list">
           {loading ? (
             <div className="empty-state">Loading customers...</div>
           ) : filteredCustomers.length === 0 ? (
@@ -184,6 +275,7 @@ export function CustomersScreen({ onReopenSale }: Props): JSX.Element {
               >
                 <div className={listRowMetaClass}>
                   <strong className={listRowTitleClass}>{customer.label}</strong>
+                  <span className={listRowBodyTextClass}>{customer.address || 'No customer address saved yet.'}</span>
                   <span className={listRowBodyTextClass}>{customer.subtitle ?? 'Branch customer'}</span>
                 </div>
                 <div className={listRowRightClass}>
@@ -199,18 +291,23 @@ export function CustomersScreen({ onReopenSale }: Props): JSX.Element {
       {selectedCustomer ? (
         <div className={modalBackdropClass} role="presentation">
           <div className={modalCardClass}>
-            <div className="desktop-sheet-handle" aria-hidden="true" />
-            <div className={`${modalToolbarClass} panel-head desktop-sheet-head`}>
-              <div>
+            <div className={`${modalToolbarClass} panel-head`}>
+              <div className="sales-detail-header">
                 <div className="eyebrow">Customer detail</div>
                 <h3>{selectedCustomer.label}</h3>
+                <p className={listRowBodyTextClass}>{selectedCustomer.address || 'No customer address saved yet.'}</p>
+                <p className={listRowBodyTextClass}>{selectedCustomer.subtitle ?? 'Branch customer'}</p>
               </div>
-              <button className="secondary-btn mini-btn" type="button" onClick={() => setSelectedCustomerId('')}>
-                Close
-              </button>
+              <div className="sales-detail-actions">
+                <div className="sales-detail-actions-group">
+                  <button className="secondary-btn mini-btn" type="button" onClick={() => setSelectedCustomerId('')}>
+                    Close
+                  </button>
+                </div>
+              </div>
             </div>
 
-            <div className="flex min-h-0 flex-1 flex-col gap-5 overflow-y-auto px-5 py-5">
+            <div className="desktop-modal-body flex min-h-0 flex-1 flex-col gap-5">
               <div className={detailMetricGridClass}>
                 <div className={detailCardClass}>
                   <span className={detailLabelClass}>Points</span>
@@ -230,16 +327,52 @@ export function CustomersScreen({ onReopenSale }: Props): JSX.Element {
                 </div>
               </div>
 
-              <dl className={infoListClass}>
-                <div className={infoListItemClass}>
-                  <dt>Lookup Detail</dt>
-                  <dd>{selectedCustomer.subtitle ?? 'No extra customer detail was cached for this branch record.'}</dd>
+              <section className={sectionCardClass}>
+                <div className="panel-head compact">
+                  <div>
+                    <div className="eyebrow">Customer profile</div>
+                    <h3>Lookup and account context</h3>
+                  </div>
                 </div>
-                <div className={infoListItemClass}>
-                  <dt>Recent Spend</dt>
-                  <dd>{fmtMoney(selectedSales.reduce((sum, sale) => sum + sale.payload.totalAmount, 0))}</dd>
+                <div className="desktop-detail-grid desktop-detail-grid--three">
+                  <div className={infoListItemClass}>
+                    <dt>Lookup Detail</dt>
+                    <dd>{selectedCustomer.subtitle ?? 'No extra customer detail was cached for this branch record.'}</dd>
+                  </div>
+                  <div className={infoListItemClass}>
+                    <dt>Customer Address</dt>
+                    <dd>{selectedCustomer.address ?? 'No customer address saved yet.'}</dd>
+                  </div>
+                  {selectedCustomer.contactNumber ? (
+                    <div className={infoListItemClass}>
+                      <dt>Contact Number</dt>
+                      <dd>{selectedCustomer.contactNumber}</dd>
+                    </div>
+                  ) : null}
+                  {selectedCustomer.gas ? (
+                    <div className={infoListItemClass}>
+                      <dt>Gas</dt>
+                      <dd>{selectedCustomer.gas}</dd>
+                    </div>
+                  ) : null}
+                  {selectedCustomer.province ? (
+                    <div className={infoListItemClass}>
+                      <dt>Province</dt>
+                      <dd>{selectedCustomer.province}</dd>
+                    </div>
+                  ) : null}
+                  {selectedCustomer.city ? (
+                    <div className={infoListItemClass}>
+                      <dt>City</dt>
+                      <dd>{selectedCustomer.city}</dd>
+                    </div>
+                  ) : null}
+                  <div className={infoListItemClass}>
+                    <dt>Recent Spend</dt>
+                    <dd>{fmtMoney(selectedSales.reduce((sum, sale) => sum + sale.payload.totalAmount, 0))}</dd>
+                  </div>
                 </div>
-              </dl>
+              </section>
 
               <section className={sectionCardClass}>
                 <div className="panel-head compact">
@@ -255,11 +388,13 @@ export function CustomersScreen({ onReopenSale }: Props): JSX.Element {
                     selectedSales.map((sale) => (
                       <article key={sale.id} className={`${recentCardClass} ${selectedSale?.id === sale.id ? recentCardSelectedClass : ''}`}>
                         <button type="button" className={recentCardButtonClass} onClick={() => setSelectedSaleId(sale.id)}>
-                          <div className="grid gap-1">
+                          <div className="grid gap-1.5">
+                            <span className={detailLabelClass}>Receipt</span>
                             <strong className={listRowTitleClass}>{sale.receiptNumber}</strong>
                             <span className={listRowBodyTextClass}>{saleMetaText(sale)}</span>
                           </div>
-                          <div className="grid gap-1 md:justify-items-end">
+                          <div className="grid gap-1 rounded-[18px] border border-[rgba(188,210,234,0.45)] bg-[rgba(255,255,255,0.97)] px-4 py-3 shadow-[0_8px_20px_rgba(17,40,58,0.04)] md:justify-items-end">
+                            <span className={detailLabelClass}>Sale Total</span>
                             <strong className={listRowTitleClass}>{fmtMoney(sale.payload.totalAmount)}</strong>
                             <span className={listRowBodyTextClass}>{new Date(sale.createdAt).toLocaleString()}</span>
                           </div>
@@ -295,7 +430,7 @@ export function CustomersScreen({ onReopenSale }: Props): JSX.Element {
                   <div className="empty-state">Choose one of the recent sales above to review its items and totals.</div>
                 ) : (
                   <div className="grid gap-4">
-                    <dl className={infoListClass}>
+                    <div className="desktop-detail-grid">
                       <div className={infoListItemClass}>
                         <dt>Sale Meta</dt>
                         <dd>{saleMetaText(selectedSale)}</dd>
@@ -308,22 +443,135 @@ export function CustomersScreen({ onReopenSale }: Props): JSX.Element {
                         <dt>Notes</dt>
                         <dd>{selectedSale.payload.notes || 'No cashier note recorded.'}</dd>
                       </div>
-                    </dl>
+                    </div>
                     <div className="cart-list">
                       {selectedSale.payload.lines.map((line) => (
-                        <div key={`${selectedSale.id}-${line.productId}-${line.productName}`} className={saleLineRowClass}>
-                          <div className="grid gap-1">
-                            <strong>{line.productName}</strong>
-                            <span className={listRowBodyTextClass}>Qty {line.quantity}</span>
+                        <div
+                          key={`${selectedSale.id}-${line.productId}-${line.productName}`}
+                          className={saleLineRowClass}
+                        >
+                          <div className="grid gap-3 lg:grid-cols-[minmax(0,1.4fr)_minmax(150px,0.72fr)_minmax(150px,0.72fr)] lg:items-start">
+                            <div className="grid gap-1.5">
+                              <span className={detailLabelClass}>Item</span>
+                              <div className="grid gap-2 rounded-[18px] border border-[rgba(188,210,234,0.45)] bg-[rgba(255,255,255,0.97)] px-4 py-3 shadow-[0_8px_20px_rgba(17,40,58,0.04)]">
+                                <strong className="text-[1rem] font-extrabold text-[var(--text-strong)]">{line.productName}</strong>
+                                <span className={listRowBodyTextClass}>Qty {line.quantity}</span>
+                              </div>
+                            </div>
+                            <div className="grid gap-1.5">
+                              <span className={detailLabelClass}>Unit Price</span>
+                              <div className="grid gap-1 rounded-[18px] border border-[rgba(188,210,234,0.45)] bg-[rgba(255,255,255,0.97)] px-4 py-3 shadow-[0_8px_20px_rgba(17,40,58,0.04)]">
+                                <strong className={detailValueClass}>{fmtMoney(line.unitPrice)}</strong>
+                                <span className={listRowBodyTextClass}>Per item</span>
+                              </div>
+                            </div>
+                            <div className="grid gap-1.5">
+                              <span className={detailLabelClass}>Line Total</span>
+                              <div className="grid gap-1 rounded-[18px] border border-[rgba(188,210,234,0.45)] bg-[rgba(255,255,255,0.97)] px-4 py-3 shadow-[0_8px_20px_rgba(17,40,58,0.04)]">
+                                <strong className={detailValueClass}>{fmtMoney(line.lineTotal)}</strong>
+                                <span className={listRowBodyTextClass}>Captured sale amount</span>
+                              </div>
+                            </div>
                           </div>
-                          <strong className={detailValueClass}>{fmtMoney(line.unitPrice)}</strong>
-                          <strong className={detailValueClass}>{fmtMoney(line.lineTotal)}</strong>
                         </div>
                       ))}
                     </div>
                   </div>
                 )}
               </section>
+            </div>
+          </div>
+        </div>
+      ) : null}
+
+      {createModalOpen ? (
+        <div className={modalBackdropClass} role="presentation" onClick={closeCreateModal}>
+          <div className="desktop-modal-card desktop-modal-card--action" onClick={(event) => event.stopPropagation()}>
+            <div className="desktop-modal-header flex shrink-0 flex-col gap-3">
+              <div className="panel-head !mb-0">
+                <div>
+                  <div className="eyebrow">Offline customer</div>
+                  <h3 className="m-0 text-[1.08rem] font-extrabold text-[var(--text-strong)]">New customer</h3>
+                  <p className="mt-2 text-[0.94rem] leading-6 text-[var(--muted)]">
+                    Save this customer locally now. We&apos;ll sync it when desktop connects again.
+                  </p>
+                </div>
+              </div>
+            </div>
+
+            <div className="desktop-modal-body flex min-h-0 flex-1 flex-col gap-4">
+              <label className="grid gap-2">
+                <span className={detailLabelClass}>Name</span>
+                <input
+                  className="app-input"
+                  value={createName}
+                  onChange={(event) => setCreateName(event.target.value)}
+                  placeholder="Customer name"
+                />
+              </label>
+              <label className="grid gap-2">
+                <span className={detailLabelClass}>Address</span>
+                <input
+                  className="app-input"
+                  value={createAddress}
+                  onChange={(event) => setCreateAddress(event.target.value)}
+                  placeholder="Customer address"
+                />
+              </label>
+              <label className="grid gap-2">
+                <span className={detailLabelClass}>Code</span>
+                <input
+                  className="app-input"
+                  value={createCode}
+                  onChange={(event) => setCreateCode(event.target.value.toUpperCase())}
+                  placeholder="Optional code"
+                />
+              </label>
+              <label className="grid gap-2">
+                <span className={detailLabelClass}>Contact Number</span>
+                <input
+                  className="app-input"
+                  value={createContactNumber}
+                  onChange={(event) => setCreateContactNumber(event.target.value)}
+                  placeholder="Optional contact number"
+                />
+              </label>
+              <label className="grid gap-2">
+                <span className={detailLabelClass}>Gas</span>
+                <input
+                  className="app-input"
+                  value={createGas}
+                  onChange={(event) => setCreateGas(event.target.value)}
+                  placeholder="Optional gas preference"
+                />
+              </label>
+              <label className="grid gap-2">
+                <span className={detailLabelClass}>Province</span>
+                <input
+                  className="app-input"
+                  value={createProvince}
+                  onChange={(event) => setCreateProvince(event.target.value)}
+                  placeholder="Optional province"
+                />
+              </label>
+              <label className="grid gap-2">
+                <span className={detailLabelClass}>City</span>
+                <input
+                  className="app-input"
+                  value={createCity}
+                  onChange={(event) => setCreateCity(event.target.value)}
+                  placeholder="Optional city"
+                />
+              </label>
+            </div>
+
+            <div className="desktop-modal-footer">
+              <button className="secondary-btn" type="button" onClick={closeCreateModal} disabled={createSaving}>
+                Cancel
+              </button>
+              <button className="primary-btn" type="button" onClick={() => void handleCreateCustomer()} disabled={createSaving}>
+                {createSaving ? 'Saving...' : 'Save Customer'}
+              </button>
             </div>
           </div>
         </div>

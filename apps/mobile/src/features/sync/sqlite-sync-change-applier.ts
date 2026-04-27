@@ -70,6 +70,22 @@ export class SQLiteSyncChangeApplier {
 
   async applyPullResponse(response: SyncPullResponse): Promise<void> {
     for (const change of response.changes) {
+      if (change.entity === 'lending' && change.action === 'create') {
+        await this.rewritePendingLendingReturnReferences(change.payload, change.updated_at);
+      }
+
+      if (change.entity === 'customer' && change.action === 'create') {
+        await this.rewritePendingCustomerReferences(change.payload, change.updated_at);
+        const serverResult =
+          change.payload.server_customer_result && typeof change.payload.server_customer_result === 'object'
+            ? (change.payload.server_customer_result as Record<string, unknown>)
+            : null;
+        if (serverResult) {
+          await this.upsertMasterData(change.entity, serverResult, change.updated_at);
+          continue;
+        }
+      }
+
       if (change.entity === 'entitlement_policy') {
         await this.applyEntitlementPolicy(change.payload, change.updated_at);
         continue;
@@ -150,6 +166,247 @@ export class SQLiteSyncChangeApplier {
     }
 
     await this.db.runAsync(`UPDATE ${table} SET sync_status = ?, updated_at = ? WHERE id = ?`, status, now, localId);
+  }
+
+  private async rewritePendingLendingReturnReferences(
+    payload: Record<string, unknown>,
+    updatedAt: string
+  ): Promise<void> {
+    const localLendingId =
+      (typeof payload.id === 'string' && payload.id.trim()) ||
+      (typeof payload.lending_id === 'string' && payload.lending_id.trim()) ||
+      (typeof payload.lendingId === 'string' && payload.lendingId.trim()) ||
+      '';
+    const serverResult =
+      payload.server_lending_result && typeof payload.server_lending_result === 'object'
+        ? (payload.server_lending_result as Record<string, unknown>)
+        : null;
+    const serverLendingId =
+      (typeof serverResult?.lending_id === 'string' && serverResult.lending_id.trim()) || '';
+
+    if (!localLendingId || !serverLendingId || localLendingId === serverLendingId) {
+      return;
+    }
+
+    const lendingReturnRows = await this.db.getAllAsync<{ id: string; payload: string; sync_status: string | null }>(
+      `SELECT id, payload, sync_status FROM lending_returns_local WHERE lower(coalesce(sync_status, 'pending')) != 'synced'`
+    );
+    for (const row of lendingReturnRows) {
+      let nextPayload: Record<string, unknown>;
+      try {
+        nextPayload = JSON.parse(row.payload) as Record<string, unknown>;
+      } catch {
+        continue;
+      }
+      const rowLendingId =
+        (typeof nextPayload.lending_id === 'string' && nextPayload.lending_id.trim()) ||
+        (typeof nextPayload.lendingId === 'string' && nextPayload.lendingId.trim()) ||
+        '';
+      if (rowLendingId !== localLendingId) {
+        continue;
+      }
+      nextPayload.lending_id = serverLendingId;
+      nextPayload.lendingId = serverLendingId;
+      await this.db.runAsync(
+        `UPDATE lending_returns_local SET payload = ?, updated_at = ? WHERE id = ?`,
+        JSON.stringify(nextPayload),
+        updatedAt || new Date().toISOString(),
+        row.id
+      );
+    }
+
+    const outboxRows = await this.db.getAllAsync<{ id: string; payload: string; status: string | null }>(
+      `SELECT id, payload, status FROM outbox WHERE entity = 'lending_return' AND lower(coalesce(status, 'pending')) != 'synced'`
+    );
+    for (const row of outboxRows) {
+      let nextPayload: Record<string, unknown>;
+      try {
+        nextPayload = JSON.parse(row.payload) as Record<string, unknown>;
+      } catch {
+        continue;
+      }
+      const rowLendingId =
+        (typeof nextPayload.lending_id === 'string' && nextPayload.lending_id.trim()) ||
+        (typeof nextPayload.lendingId === 'string' && nextPayload.lendingId.trim()) ||
+        '';
+      if (rowLendingId !== localLendingId) {
+        continue;
+      }
+      nextPayload.lending_id = serverLendingId;
+      nextPayload.lendingId = serverLendingId;
+      await this.db.runAsync(
+        `UPDATE outbox SET payload = ?, updated_at = ? WHERE id = ?`,
+        JSON.stringify(nextPayload),
+        updatedAt || new Date().toISOString(),
+        row.id
+      );
+    }
+  }
+
+  private async rewritePendingCustomerReferences(
+    payload: Record<string, unknown>,
+    updatedAt: string
+  ): Promise<void> {
+    const localCustomerId =
+      (typeof payload.id === 'string' && payload.id.trim()) ||
+      (typeof payload.customer_id === 'string' && payload.customer_id.trim()) ||
+      (typeof payload.customerId === 'string' && payload.customerId.trim()) ||
+      '';
+    const serverResult =
+      payload.server_customer_result && typeof payload.server_customer_result === 'object'
+        ? (payload.server_customer_result as Record<string, unknown>)
+        : null;
+    const serverCustomerId =
+      (typeof serverResult?.id === 'string' && serverResult.id.trim()) ||
+      (typeof serverResult?.customer_id === 'string' && serverResult.customer_id.trim()) ||
+      '';
+
+    if (!localCustomerId || !serverCustomerId || localCustomerId === serverCustomerId || !serverResult) {
+      return;
+    }
+
+    const timestamp = updatedAt || new Date().toISOString();
+    const transactionTables = ['sales_local', 'customer_payments_local', 'delivery_orders_local', 'lending_local'] as const;
+    for (const table of transactionTables) {
+      const rows = await this.db.getAllAsync<{ id: string; payload: string; sync_status: string | null }>(
+        `SELECT id, payload, sync_status FROM ${table} WHERE lower(coalesce(sync_status, 'pending')) != 'synced'`
+      );
+      for (const row of rows) {
+        let nextPayload: Record<string, unknown>;
+        try {
+          nextPayload = JSON.parse(row.payload) as Record<string, unknown>;
+        } catch {
+          continue;
+        }
+        const rowCustomerId =
+          (typeof nextPayload.customer_id === 'string' && nextPayload.customer_id.trim()) ||
+          (typeof nextPayload.customerId === 'string' && nextPayload.customerId.trim()) ||
+          '';
+        if (rowCustomerId !== localCustomerId) {
+          continue;
+        }
+        nextPayload.customer_id = serverCustomerId;
+        nextPayload.customerId = serverCustomerId;
+        await this.db.runAsync(
+          `UPDATE ${table} SET payload = ?, updated_at = ? WHERE id = ?`,
+          JSON.stringify(nextPayload),
+          timestamp,
+          row.id
+        );
+      }
+    }
+
+    const outboxRows = await this.db.getAllAsync<{ id: string; payload: string; status: string | null }>(
+      `SELECT id, payload, status FROM outbox WHERE lower(coalesce(status, 'pending')) != 'synced'`
+    );
+    for (const row of outboxRows) {
+      let nextPayload: Record<string, unknown>;
+      try {
+        nextPayload = JSON.parse(row.payload) as Record<string, unknown>;
+      } catch {
+        continue;
+      }
+      const rowCustomerId =
+        (typeof nextPayload.customer_id === 'string' && nextPayload.customer_id.trim()) ||
+        (typeof nextPayload.customerId === 'string' && nextPayload.customerId.trim()) ||
+        '';
+      if (rowCustomerId !== localCustomerId) {
+        continue;
+      }
+      nextPayload.customer_id = serverCustomerId;
+      nextPayload.customerId = serverCustomerId;
+      await this.db.runAsync(
+        `UPDATE outbox SET payload = ?, updated_at = ? WHERE id = ?`,
+        JSON.stringify(nextPayload),
+        timestamp,
+        row.id
+      );
+    }
+
+    const existingLocalRow = await this.db.getFirstAsync<{ payload: string; updated_at: string | null }>(
+      `SELECT payload, updated_at FROM master_data_local WHERE entity = ? AND record_id = ?`,
+      'customer',
+      localCustomerId
+    );
+    if (existingLocalRow) {
+      const nextCustomerPayload = {
+        ...serverResult,
+        address:
+          typeof serverResult.address === 'string'
+            ? serverResult.address
+            : (() => {
+                try {
+                  const current = JSON.parse(existingLocalRow.payload) as Record<string, unknown>;
+                  return current.address ?? null;
+                } catch {
+                  return null;
+                }
+              })(),
+        contactNumber:
+          typeof serverResult.contactNumber === 'string'
+            ? serverResult.contactNumber
+            : (() => {
+                try {
+                  const current = JSON.parse(existingLocalRow.payload) as Record<string, unknown>;
+                  return current.contactNumber ?? null;
+                } catch {
+                  return null;
+                }
+              })(),
+        gas:
+          typeof serverResult.gas === 'string'
+            ? serverResult.gas
+            : (() => {
+                try {
+                  const current = JSON.parse(existingLocalRow.payload) as Record<string, unknown>;
+                  return current.gas ?? null;
+                } catch {
+                  return null;
+                }
+              })(),
+        province:
+          typeof serverResult.province === 'string'
+            ? serverResult.province
+            : (() => {
+                try {
+                  const current = JSON.parse(existingLocalRow.payload) as Record<string, unknown>;
+                  return current.province ?? null;
+                } catch {
+                  return null;
+                }
+              })(),
+        city:
+          typeof serverResult.city === 'string'
+            ? serverResult.city
+            : (() => {
+                try {
+                  const current = JSON.parse(existingLocalRow.payload) as Record<string, unknown>;
+                  return current.city ?? null;
+                } catch {
+                  return null;
+                }
+              })(),
+        is_local_only: false
+      };
+      await this.db.runAsync(
+        `
+        INSERT INTO master_data_local(entity, record_id, payload, updated_at)
+        VALUES (?, ?, ?, ?)
+        ON CONFLICT(entity, record_id) DO UPDATE SET
+          payload = excluded.payload,
+          updated_at = excluded.updated_at
+        `,
+        'customer',
+        serverCustomerId,
+        JSON.stringify(nextCustomerPayload),
+        timestamp
+      );
+      await this.db.runAsync(
+        `DELETE FROM master_data_local WHERE entity = ? AND record_id = ?`,
+        'customer',
+        localCustomerId
+      );
+    }
   }
 
   private async upsertMasterData(entity: string, payload: Record<string, unknown>, updatedAt: string): Promise<void> {

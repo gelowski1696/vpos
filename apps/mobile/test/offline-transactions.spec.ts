@@ -65,6 +65,66 @@ describe('OfflineTransactionService', () => {
     expect(String(db.runAsync.mock.calls[1][0])).toContain('outbox');
   });
 
+  it('stores offline customer locally and enqueues outbox row', async () => {
+    const db = makeDbMock();
+    const service = new OfflineTransactionService(db as never);
+
+    const id = await service.createOfflineCustomer({
+      customerId: 'customer-local-1',
+      name: 'Offline Customer',
+      address: 'Barangay 1',
+      contactNumber: '09171234567',
+      gas: 'Shellane',
+      province: 'Bulacan',
+      city: 'Malolos'
+    });
+
+    expect(id).toBe('customer-local-1');
+    expect(db.runAsync).toHaveBeenCalledTimes(2);
+    expect(String(db.runAsync.mock.calls[0][0])).toContain('master_data_local');
+    expect(String(db.runAsync.mock.calls[1][0])).toContain('outbox');
+    expect(JSON.parse(String(db.runAsync.mock.calls[0][3]))).toMatchObject({
+      id: 'customer-local-1',
+      name: 'Offline Customer',
+      address: 'Barangay 1',
+      contactNumber: '09171234567',
+      gas: 'Shellane',
+      province: 'Bulacan',
+      city: 'Malolos'
+    });
+  });
+
+  it('queues offline sale cancel in outbox', async () => {
+    const db = makeDbMock();
+    const service = new OfflineTransactionService(db as never);
+
+    const id = await service.createOfflineSaleCancel({
+      outboxId: 'sale-cancel-1',
+      saleId: 'sale-100',
+      reason: 'Customer void request'
+    });
+
+    expect(id).toBe('sale-cancel-1');
+    expect(db.runAsync).toHaveBeenCalledTimes(1);
+    expect(String(db.runAsync.mock.calls[0][0])).toContain('outbox');
+  });
+
+  it('queues offline sale return in outbox', async () => {
+    const db = makeDbMock();
+    const service = new OfflineTransactionService(db as never);
+
+    const id = await service.createOfflineSaleReturn({
+      outboxId: 'sale-return-1',
+      saleId: 'sale-100',
+      reason: 'Returned item',
+      lines: [{ productId: 'prod-11', quantity: 1 }]
+    });
+
+    expect(id).toBe('sale-return-1');
+    expect(db.runAsync).toHaveBeenCalledTimes(1);
+    expect(String(db.runAsync.mock.calls[0][0])).toContain('outbox');
+  });
+
   it('stores lending locally and enqueues outbox row', async () => {
     const db = makeDbMock();
     const service = new OfflineTransactionService(db as never);

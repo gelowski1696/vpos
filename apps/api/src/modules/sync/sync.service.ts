@@ -403,6 +403,10 @@ export class SyncService {
                     type: customerPosting.customer.type,
                     tier: customerPosting.customer.tier,
                     address: customerPosting.customer.address,
+                    contactNumber: customerPosting.customer.contactNumber,
+                    gas: customerPosting.customer.gas,
+                    province: customerPosting.customer.province,
+                    city: customerPosting.customer.city,
                     contractPrice: customerPosting.customer.contractPrice,
                     isActive: customerPosting.customer.isActive
                   }
@@ -691,6 +695,10 @@ export class SyncService {
       type: this.asString(payload.type)?.toUpperCase() === 'BUSINESS' ? 'BUSINESS' : 'RETAIL',
       tier: this.asString(payload.tier) ?? undefined,
       address: this.asString(payload.address) ?? undefined,
+      contactNumber: this.asString(payload.contactNumber ?? payload.contact_number) ?? undefined,
+      gas: this.asString(payload.gas) ?? undefined,
+      province: this.asString(payload.province) ?? undefined,
+      city: this.asString(payload.city) ?? undefined,
       contractPrice: payload.contractPrice == null ? undefined : this.asNumber(payload.contractPrice),
       isActive: payload.isActive === false ? false : true
     };

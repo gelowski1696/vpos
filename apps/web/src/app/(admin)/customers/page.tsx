@@ -91,6 +91,11 @@ type SelectedCustomer = {
   id: string;
   code: string;
   name: string;
+  address: string | null;
+  contactNumber: string | null;
+  gas: string | null;
+  province: string | null;
+  city: string | null;
   outstandingBalance: number;
 };
 
@@ -284,6 +289,11 @@ export default function CustomersPage(): JSX.Element {
       id: customerId,
       code: String(row.code ?? customerId),
       name: String(row.name ?? customerId),
+      address: row.address ? String(row.address) : null,
+      contactNumber: row.contactNumber ? String(row.contactNumber) : null,
+      gas: row.gas ? String(row.gas) : null,
+      province: row.province ? String(row.province) : null,
+      city: row.city ? String(row.city) : null,
       outstandingBalance: Number(row.outstandingBalance ?? 0)
     });
     setTransactionsOpen(true);
@@ -341,7 +351,19 @@ export default function CustomersPage(): JSX.Element {
   return (
     <>
       <EntityManager
-      defaultValues={{ code: '', name: '', address: '', type: 'RETAIL', tier: 'REGULAR', contractPrice: null, isActive: true }}
+      defaultValues={{
+        code: '',
+        name: '',
+        address: '',
+        contactNumber: '',
+        gas: '',
+        province: '',
+        city: '',
+        type: 'RETAIL',
+        tier: 'REGULAR',
+        contractPrice: null,
+        isActive: true
+      }}
       endpoint="/master-data/customers?include_balance=true"
       reloadSignal={reloadSignal}
       toolbarActions={
@@ -371,6 +393,30 @@ export default function CustomersPage(): JSX.Element {
           key: 'address',
           label: 'Customer Address',
           helperText: 'Optional address shown in customer detail screens.'
+        },
+        {
+          key: 'contactNumber',
+          label: 'Contact Number',
+          helperText: 'Optional phone or mobile number for this customer.',
+          tableHidden: true
+        },
+        {
+          key: 'gas',
+          label: 'Gas',
+          helperText: 'Optional free-text gas preference or note.',
+          tableHidden: true
+        },
+        {
+          key: 'province',
+          label: 'Province',
+          helperText: 'Optional province shown in customer detail screens.',
+          tableHidden: true
+        },
+        {
+          key: 'city',
+          label: 'City',
+          helperText: 'Optional city shown in customer detail screens.',
+          tableHidden: true
         },
         {
           key: 'type',
@@ -417,6 +463,22 @@ export default function CustomersPage(): JSX.Element {
         },
         address: {
           label: 'Address',
+          render: (value) => (value ? String(value) : '-')
+        },
+        contactNumber: {
+          label: 'Contact Number',
+          render: (value) => (value ? String(value) : '-')
+        },
+        gas: {
+          label: 'Gas',
+          render: (value) => (value ? String(value) : '-')
+        },
+        province: {
+          label: 'Province',
+          render: (value) => (value ? String(value) : '-')
+        },
+        city: {
+          label: 'City',
           render: (value) => (value ? String(value) : '-')
         },
         contractPrice: {
@@ -514,6 +576,22 @@ export default function CustomersPage(): JSX.Element {
             payload.address === null || payload.address === undefined || String(payload.address).trim() === ''
               ? null
               : String(payload.address).trim(),
+          contactNumber:
+            payload.contactNumber === null || payload.contactNumber === undefined || String(payload.contactNumber).trim() === ''
+              ? null
+              : String(payload.contactNumber).trim(),
+          gas:
+            payload.gas === null || payload.gas === undefined || String(payload.gas).trim() === ''
+              ? null
+              : String(payload.gas).trim(),
+          province:
+            payload.province === null || payload.province === undefined || String(payload.province).trim() === ''
+              ? null
+              : String(payload.province).trim(),
+          city:
+            payload.city === null || payload.city === undefined || String(payload.city).trim() === ''
+              ? null
+              : String(payload.city).trim(),
           tier: payload.tier ? String(payload.tier) : null,
           contractPrice:
             payload.contractPrice === null || payload.contractPrice === undefined || payload.contractPrice === ''
@@ -569,6 +647,41 @@ export default function CustomersPage(): JSX.Element {
                 <p className="font-semibold text-slate-900 dark:text-slate-100">{money(latestOutstandingBalance)}</p>
               </div>
             </div>
+
+            {selectedCustomer.address || selectedCustomer.contactNumber || selectedCustomer.gas || selectedCustomer.province || selectedCustomer.city ? (
+              <div className="grid gap-2 border-b border-slate-200 bg-white px-4 py-3 text-xs sm:grid-cols-2 xl:grid-cols-5 dark:border-slate-700 dark:bg-slate-900">
+                {selectedCustomer.address ? (
+                  <div className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 dark:border-slate-700 dark:bg-slate-950/40">
+                    <p className="text-slate-500 dark:text-slate-400">Address</p>
+                    <p className="font-semibold text-slate-900 dark:text-slate-100">{selectedCustomer.address}</p>
+                  </div>
+                ) : null}
+                {selectedCustomer.contactNumber ? (
+                  <div className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 dark:border-slate-700 dark:bg-slate-950/40">
+                    <p className="text-slate-500 dark:text-slate-400">Contact Number</p>
+                    <p className="font-semibold text-slate-900 dark:text-slate-100">{selectedCustomer.contactNumber}</p>
+                  </div>
+                ) : null}
+                {selectedCustomer.gas ? (
+                  <div className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 dark:border-slate-700 dark:bg-slate-950/40">
+                    <p className="text-slate-500 dark:text-slate-400">Gas</p>
+                    <p className="font-semibold text-slate-900 dark:text-slate-100">{selectedCustomer.gas}</p>
+                  </div>
+                ) : null}
+                {selectedCustomer.province ? (
+                  <div className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 dark:border-slate-700 dark:bg-slate-950/40">
+                    <p className="text-slate-500 dark:text-slate-400">Province</p>
+                    <p className="font-semibold text-slate-900 dark:text-slate-100">{selectedCustomer.province}</p>
+                  </div>
+                ) : null}
+                {selectedCustomer.city ? (
+                  <div className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 dark:border-slate-700 dark:bg-slate-950/40">
+                    <p className="text-slate-500 dark:text-slate-400">City</p>
+                    <p className="font-semibold text-slate-900 dark:text-slate-100">{selectedCustomer.city}</p>
+                  </div>
+                ) : null}
+              </div>
+            ) : null}
 
             <div className="overflow-auto p-4">
               {transactionsLoading ? (

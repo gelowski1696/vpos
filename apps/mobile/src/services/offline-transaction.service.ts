@@ -13,6 +13,7 @@ type SaleInput = {
     productId: string;
     quantity: number;
     unitPrice: number;
+    isLpg?: boolean;
     cylinderFlow?: 'REFILL_EXCHANGE' | 'NON_REFILL';
   }>;
   payments: Array<{ method: 'CASH' | 'CARD' | 'E_WALLET'; amount: number }>;
@@ -40,6 +41,21 @@ type CustomerPaymentInput = {
   amount: number;
   referenceNo?: string | null;
   notes?: string | null;
+};
+
+type CustomerInput = {
+  customerId?: string;
+  code?: string | null;
+  name: string;
+  type?: 'RETAIL' | 'BUSINESS';
+  tier?: string | null;
+  address?: string | null;
+  contactNumber?: string | null;
+  gas?: string | null;
+  province?: string | null;
+  city?: string | null;
+  contractPrice?: number | null;
+  isActive?: boolean;
 };
 
 type OfflineLendingLineInput = {
@@ -74,6 +90,8 @@ type OfflineLendingReturnLineInput = {
   lendingLineId: string;
   productId?: string | null;
   productName?: string | null;
+  sourceSaleLineId?: string | null;
+  sourceSaleLineIndex?: number | null;
   returnedQty: number;
   condition?: 'GOOD' | 'DAMAGED' | 'LOST';
 };
@@ -83,6 +101,8 @@ type LendingReturnInput = {
   lendingId: string;
   saleId?: string | null;
   customerId?: string | null;
+  locationId?: string | null;
+  locationName?: string | null;
   remarks?: string | null;
   lines: OfflineLendingReturnLineInput[];
 };
@@ -122,6 +142,7 @@ type TransferInput = {
   supplierName?: string | null;
   sourceLocationLabel?: string | null;
   destinationLocationLabel?: string | null;
+  notes?: string | null;
   lines: Array<{ productId: string; qtyFull: number; qtyEmpty: number }>;
 };
 
@@ -207,7 +228,7 @@ export class OfflineTransactionService {
       shift_id: input.shiftId ?? null,
       customer_id: input.customerId ?? null,
       sale_type: input.saleType ?? 'PICKUP',
-      cylinder_flow: input.cylinderFlow ?? 'REFILL_EXCHANGE',
+      cylinder_flow: input.cylinderFlow ?? null,
       lines: input.lines,
       payments: input.payments,
       discount_amount: input.discountAmount ?? 0,
@@ -278,6 +299,62 @@ export class OfflineTransactionService {
       action: 'create',
       payload,
       idempotencyKey: `idem-customer-payment-${id}`
+    });
+
+    return id;
+  }
+
+  async createOfflineCustomer(input: CustomerInput): Promise<string> {
+    await this.assertCanCreate('customer');
+    const id = input.customerId ?? this.id('customer-local');
+    const now = new Date().toISOString();
+    const name = input.name.trim();
+    if (!name) {
+      throw new Error('Customer name is required.');
+    }
+
+    const payload = {
+      id,
+      code: input.code?.trim() || null,
+      name,
+      type: input.type === 'BUSINESS' ? 'BUSINESS' : 'RETAIL',
+      tier: input.tier?.trim() || null,
+      address: input.address?.trim() || null,
+      contactNumber: input.contactNumber?.trim() || null,
+      gas: input.gas?.trim() || null,
+      province: input.province?.trim() || null,
+      city: input.city?.trim() || null,
+      contractPrice:
+        input.contractPrice === null || input.contractPrice === undefined
+          ? null
+          : Number(input.contractPrice),
+      isActive: input.isActive ?? true,
+      is_local_only: true,
+      local_created_at: now,
+      created_at: now,
+      updated_at: now
+    };
+
+    await this.db.runAsync(
+      `
+      INSERT INTO master_data_local(entity, record_id, payload, updated_at)
+      VALUES (?, ?, ?, ?)
+      ON CONFLICT(entity, record_id) DO UPDATE SET
+        payload = excluded.payload,
+        updated_at = excluded.updated_at
+      `,
+      'customer',
+      id,
+      JSON.stringify(payload),
+      now
+    );
+
+    await new SQLiteOutboxRepository(this.db).enqueue({
+      id: `outbox-customer-${id}`,
+      entity: 'customer',
+      action: 'create',
+      payload,
+      idempotencyKey: `idem-customer-${id}`
     });
 
     return id;
@@ -364,6 +441,11 @@ export class OfflineTransactionService {
         lending_line_id: line.lendingLineId,
         product_id: line.productId ?? null,
         product_name: line.productName ?? null,
+        source_sale_line_id: line.sourceSaleLineId ?? null,
+        source_sale_line_index:
+          Number.isInteger(line.sourceSaleLineIndex) && Number(line.sourceSaleLineIndex) >= 0
+            ? Number(line.sourceSaleLineIndex)
+            : null,
         returned_qty: line.returnedQty,
         condition: line.condition ?? 'GOOD'
       }))
@@ -384,6 +466,8 @@ export class OfflineTransactionService {
       lending_id: input.lendingId,
       sale_id: input.saleId ?? null,
       customer_id: input.customerId ?? null,
+      location_id: input.locationId ?? null,
+      location_name: input.locationName ?? null,
       remarks: input.remarks ?? null,
       lines,
       created_at: now
@@ -478,6 +562,7 @@ export class OfflineTransactionService {
       supplier_name: input.supplierName ?? null,
       source_location_label: input.sourceLocationLabel ?? null,
       destination_location_label: input.destinationLocationLabel ?? null,
+      notes: input.notes?.trim() || null,
       lines: input.lines,
       created_at: now
     };

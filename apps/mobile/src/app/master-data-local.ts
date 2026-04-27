@@ -11,6 +11,11 @@ export type MasterDataOption = {
   id: string;
   label: string;
   subtitle?: string;
+  address?: string;
+  contactNumber?: string;
+  gas?: string;
+  province?: string;
+  city?: string;
   branchId?: string;
   balance?: number;
   pointsBalance?: number;
@@ -115,6 +120,11 @@ function buildOption(args: {
   id: string;
   label: string;
   subtitle?: string;
+  address?: string;
+  contactNumber?: string;
+  gas?: string;
+  province?: string;
+  city?: string;
   branchId?: string;
   group?: string;
   type?: string;
@@ -129,6 +139,21 @@ function buildOption(args: {
   };
   if (args.subtitle) {
     option.subtitle = args.subtitle;
+  }
+  if (args.address) {
+    option.address = args.address;
+  }
+  if (args.contactNumber) {
+    option.contactNumber = args.contactNumber;
+  }
+  if (args.gas) {
+    option.gas = args.gas;
+  }
+  if (args.province) {
+    option.province = args.province;
+  }
+  if (args.city) {
+    option.city = args.city;
   }
   if (args.branchId) {
     option.branchId = args.branchId;
@@ -263,6 +288,11 @@ export async function loadCustomerOptions(db: SQLiteDatabase): Promise<MasterDat
     const code = asString(payload.code);
     const name = asString(payload.name) ?? asString(payload.display_name);
     const tier = asString(payload.tier);
+    const address = asString(payload.address);
+    const contactNumber = asString(payload.contactNumber ?? payload.contact_number);
+    const gas = asString(payload.gas);
+    const province = asString(payload.province);
+    const city = asString(payload.city);
     const outstandingBalance = asNumber(payload.outstandingBalance ?? payload.outstanding_balance) ?? 0;
     const pointsBalance = asNumber(payload.pointsBalance ?? payload.points_balance) ?? 0;
     const balanceText = `Bal: PHP ${outstandingBalance.toFixed(2)}`;
@@ -270,6 +300,11 @@ export async function loadCustomerOptions(db: SQLiteDatabase): Promise<MasterDat
     const built = buildOption({
       id,
       label: name ?? code ?? id,
+      address,
+      contactNumber,
+      gas,
+      province,
+      city,
       subtitle:
         [code, tier, balanceText, pointsText].filter((value): value is string => Boolean(value)).join(' - ') || undefined
     });
@@ -279,6 +314,17 @@ export async function loadCustomerOptions(db: SQLiteDatabase): Promise<MasterDat
   }
   const deduped = dedupe(options);
 
+  const saleRows = await db.getAllAsync<{ payload: string; sync_status: string }>(
+    `
+    SELECT payload, sync_status
+    FROM sales_local
+    WHERE sync_status IN (?, ?, ?)
+    ORDER BY created_at DESC
+    `,
+    'pending',
+    'processing',
+    'synced'
+  );
   const paymentRows = await db.getAllAsync<{ payload: string; sync_status: string }>(
     `
     SELECT payload, sync_status
@@ -291,11 +337,32 @@ export async function loadCustomerOptions(db: SQLiteDatabase): Promise<MasterDat
     'synced'
   );
 
-  if (paymentRows.length === 0) {
+  const receivablesByCustomerId = new Map<string, number>();
+  for (const row of saleRows) {
+    const payload = parsePayload(row.payload);
+    const customerId =
+      asString(payload.customer_id) ??
+      asString(payload.customerId) ??
+      asString(payload.customer_code) ??
+      asString(payload.customerCode);
+    const paymentMode = (
+      asString(payload.payment_mode ?? payload.paymentMode)?.toUpperCase() ?? 'FULL'
+    ) as 'FULL' | 'PARTIAL';
+    const creditBalance = asNumber(payload.credit_balance ?? payload.creditBalance) ?? 0;
+    if (!customerId || paymentMode !== 'PARTIAL' || creditBalance <= 0) {
+      continue;
+    }
+    receivablesByCustomerId.set(
+      customerId,
+      Number(((receivablesByCustomerId.get(customerId) ?? 0) + creditBalance).toFixed(2))
+    );
+  }
+
+  if (receivablesByCustomerId.size === 0 && paymentRows.length === 0) {
     return deduped;
   }
 
-  const creditsByCustomerId = new Map<string, number>();
+  const paymentsByCustomerId = new Map<string, number>();
   for (const row of paymentRows) {
     const payload = parsePayload(row.payload);
     const customerId =
@@ -307,23 +374,24 @@ export async function loadCustomerOptions(db: SQLiteDatabase): Promise<MasterDat
     if (!customerId || amount <= 0) {
       continue;
     }
-    creditsByCustomerId.set(
+    paymentsByCustomerId.set(
       customerId,
-      Number(((creditsByCustomerId.get(customerId) ?? 0) + amount).toFixed(2))
+      Number(((paymentsByCustomerId.get(customerId) ?? 0) + amount).toFixed(2))
     );
   }
 
-  if (creditsByCustomerId.size === 0) {
+  if (receivablesByCustomerId.size === 0 && paymentsByCustomerId.size === 0) {
     return deduped;
   }
 
   return deduped.map((option) => {
-    const credit = creditsByCustomerId.get(option.id) ?? 0;
-    if (credit <= 0) {
+    const receivable = receivablesByCustomerId.get(option.id) ?? 0;
+    const payment = paymentsByCustomerId.get(option.id) ?? 0;
+    if (receivable <= 0 && payment <= 0) {
       return option;
     }
     const baseBalance = option.balance ?? 0;
-    const adjustedBalance = Number(Math.max(0, baseBalance - credit).toFixed(2));
+    const adjustedBalance = Number(Math.max(0, baseBalance + receivable - payment).toFixed(2));
     const cleanedSubtitle = (option.subtitle ?? '')
       .replace(/(?:\s*-\s*)?Bal:\s*PHP\s*\d+(?:\.\d+)?/gi, '')
       .trim()

@@ -80,6 +80,10 @@ export type CustomerRecord = Timestamped & {
   type: 'RETAIL' | 'BUSINESS';
   tier?: string | null;
   address?: string | null;
+  contactNumber?: string | null;
+  gas?: string | null;
+  province?: string | null;
+  city?: string | null;
   contractPrice?: number | null;
   outstandingBalance?: number;
   pointsBalance?: number;
@@ -196,7 +200,13 @@ export type CreatePersonnelRole = Pick<PersonnelRoleRecord, 'code' | 'name'> &
   Partial<Pick<PersonnelRoleRecord, 'isActive'>>;
 export type CreatePersonnel = Pick<PersonnelRecord, 'code' | 'fullName' | 'branchId' | 'roleId'> &
   Partial<Pick<PersonnelRecord, 'phone' | 'email' | 'isActive'>>;
-export type CreateCustomer = Pick<CustomerRecord, 'code' | 'name' | 'type'> & Partial<Pick<CustomerRecord, 'tier' | 'address' | 'contractPrice' | 'isActive'>>;
+export type CreateCustomer = Pick<CustomerRecord, 'code' | 'name' | 'type'> &
+  Partial<
+    Pick<
+      CustomerRecord,
+      'tier' | 'address' | 'contactNumber' | 'gas' | 'province' | 'city' | 'contractPrice' | 'isActive'
+    >
+  >;
 export type CreateCylinderType = Pick<CylinderTypeRecord, 'code' | 'name' | 'sizeKg' | 'depositAmount'> &
   Partial<Pick<CylinderTypeRecord, 'isActive'>>;
 export type CreateProduct = Pick<ProductRecord, 'sku' | 'name' | 'unit'> &
@@ -2080,7 +2090,21 @@ export class MasterDataService {
       async (candidate) => this.customerCodeExists(candidate, companyId ?? undefined)
     );
     if (!binding || !companyId) {
-      const row = { id: uuidv4(), ...this.stamp(), code, name: input.name.trim(), type: input.type, tier: input.tier ?? null, address: input.address?.trim() || null, contractPrice: input.contractPrice ?? null, isActive: input.isActive ?? true };
+      const row = {
+        id: uuidv4(),
+        ...this.stamp(),
+        code,
+        name: input.name.trim(),
+        type: input.type,
+        tier: input.tier ?? null,
+        address: input.address?.trim() || null,
+        contactNumber: input.contactNumber?.trim() || null,
+        gas: input.gas?.trim() || null,
+        province: input.province?.trim() || null,
+        city: input.city?.trim() || null,
+        contractPrice: input.contractPrice ?? null,
+        isActive: input.isActive ?? true
+      };
       this.customers.push(row);
       return row;
     }
@@ -2093,6 +2117,10 @@ export class MasterDataService {
           type: input.type,
           tier: input.tier ?? null,
           address: input.address?.trim() || null,
+          contactNumber: input.contactNumber?.trim() || null,
+          gas: input.gas?.trim() || null,
+          province: input.province?.trim() || null,
+          city: input.city?.trim() || null,
           contractPrice:
             input.contractPrice === null || input.contractPrice === undefined
               ? null
@@ -2105,7 +2133,21 @@ export class MasterDataService {
       if (binding.mode === TenancyDatastoreMode.DEDICATED_DB) {
         throw error;
       }
-      const row = { id: uuidv4(), ...this.stamp(), code, name: input.name.trim(), type: input.type, tier: input.tier ?? null, address: input.address?.trim() || null, contractPrice: input.contractPrice ?? null, isActive: input.isActive ?? true };
+      const row = {
+        id: uuidv4(),
+        ...this.stamp(),
+        code,
+        name: input.name.trim(),
+        type: input.type,
+        tier: input.tier ?? null,
+        address: input.address?.trim() || null,
+        contactNumber: input.contactNumber?.trim() || null,
+        gas: input.gas?.trim() || null,
+        province: input.province?.trim() || null,
+        city: input.city?.trim() || null,
+        contractPrice: input.contractPrice ?? null,
+        isActive: input.isActive ?? true
+      };
       this.customers.push(row);
       return row;
     }
@@ -2151,6 +2193,11 @@ export class MasterDataService {
           type: input.type,
           tier: input.tier,
           address: input.address === undefined ? undefined : input.address?.trim() || null,
+          contactNumber:
+            input.contactNumber === undefined ? undefined : input.contactNumber?.trim() || null,
+          gas: input.gas === undefined ? undefined : input.gas?.trim() || null,
+          province: input.province === undefined ? undefined : input.province?.trim() || null,
+          city: input.city === undefined ? undefined : input.city?.trim() || null,
           contractPrice:
             input.contractPrice === undefined
               ? undefined
@@ -6296,6 +6343,10 @@ export class MasterDataService {
     type: 'RETAIL' | 'BUSINESS';
     tier: string | null;
     address: string | null;
+    contactNumber: string | null;
+    gas: string | null;
+    province: string | null;
+    city: string | null;
     contractPrice: Prisma.Decimal | null;
     pointsBalance: number;
     isActive: boolean;
@@ -6309,6 +6360,10 @@ export class MasterDataService {
       type: row.type,
       tier: row.tier,
       address: row.address,
+      contactNumber: row.contactNumber,
+      gas: row.gas,
+      province: row.province,
+      city: row.city,
       contractPrice: row.contractPrice ? Number(row.contractPrice) : null,
       pointsBalance: Math.max(0, Math.floor(row.pointsBalance ?? 0)),
       isActive: row.isActive,

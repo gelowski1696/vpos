@@ -12,6 +12,7 @@ export type DesktopSetupState = {
   printerName: string;
   printerHost: string;
   printerPort: string;
+  posDefaultLpgFlow: 'NONE' | 'REFILL_EXCHANGE' | 'NON_REFILL';
 };
 
 export type DesktopPrinterProfile = {
@@ -25,6 +26,53 @@ export type DesktopPrinterProfile = {
   lastSuccessAt: string | null;
   lastTestStatus: 'idle' | 'success' | 'error';
   lastTestMessage: string | null;
+};
+
+export type DesktopReceiptLayoutSettings = {
+  showHeaderLogoImage: boolean;
+  headerLogoImageDataUrl: string;
+  headerLogoPlacement: 'LEFT' | 'CENTER' | 'RIGHT';
+  showHeaderLogoText: boolean;
+  headerLogoText: string;
+  showStoreContact: boolean;
+  storeContactInfo: string;
+  showStoreAddress: boolean;
+  storeAddress: string;
+  showBusinessTin: boolean;
+  businessTin: string;
+  showPermitOrInfo: boolean;
+  permitOrInfo: string;
+  showTerminalName: boolean;
+  terminalName: string;
+  showReceiptNumber: boolean;
+  showSaleId: boolean;
+  showDateTime: boolean;
+  showBranch: boolean;
+  showLocation: boolean;
+  showCashier: boolean;
+  showCashierRole: boolean;
+  cashierRoleLabel: string;
+  showOrderType: boolean;
+  showCustomer: boolean;
+  showPersonnel: boolean;
+  showHelper: boolean;
+  showItemCode: boolean;
+  showPaymentMode: boolean;
+  showSubtotal: boolean;
+  showDiscount: boolean;
+  showTotal: boolean;
+  showPaid: boolean;
+  showChange: boolean;
+  showCreditDue: boolean;
+  showFooter: boolean;
+  footerText: string;
+  topPaddingLines: number;
+  bottomPaddingLines: number;
+};
+
+export type DesktopWalkthroughState = {
+  completedAt: string | null;
+  dismissedAt: string | null;
 };
 
 export type DesktopAuthState = {
@@ -43,6 +91,8 @@ export type DesktopAppState = {
   setup: DesktopSetupState;
   auth: DesktopAuthState;
   printerProfiles: DesktopPrinterProfile[];
+  receiptLayout: DesktopReceiptLayoutSettings;
+  walkthrough: DesktopWalkthroughState;
   sync: {
     lastSyncedAt: string | null;
     lastSyncStatus: 'idle' | 'running' | 'success' | 'error';
@@ -52,27 +102,74 @@ export type DesktopAppState = {
 
 export type DesktopPaymentMethod = 'CASH' | 'CARD' | 'E_WALLET';
 export type DesktopSaleType = 'PICKUP' | 'DELIVERY';
+export type DesktopCylinderFlowSelection = 'REFILL_EXCHANGE' | 'NON_REFILL';
+export type DesktopPaymentMode = 'FULL' | 'PARTIAL';
+export type DesktopPosRewardType =
+  | 'DISCOUNT_FIXED'
+  | 'DISCOUNT_PERCENT'
+  | 'FREE_DELIVERY'
+  | 'FREE_PRODUCT'
+  | 'FREE_REFILL';
+
+export type DesktopPosRewardRecord = {
+  id: string;
+  code: string;
+  name: string;
+  description: string | null;
+  rewardType: DesktopPosRewardType;
+  pointsCost: number;
+  productId: string | null;
+  freeQty: number | null;
+  discountValue: number | null;
+  minSpend: number | null;
+  status: 'ACTIVE' | 'DRAFT' | 'INACTIVE' | 'ARCHIVED';
+};
 
 export type DesktopSaleLine = {
+  lineId?: string;
   productId: string;
   productName: string;
   quantity: number;
   unitPrice: number;
   lineTotal: number;
+  cylinderFlow?: DesktopCylinderFlowSelection | null;
 };
 
 export type DesktopSalePayload = {
   id: string;
+  shiftId?: string | null;
   customerId: string | null;
   customerName: string | null;
   recreatedFromSaleId?: string | null;
+  personnelId?: string | null;
+  personnelName?: string | null;
+  helperId?: string | null;
+  helperName?: string | null;
+  personnel?: Array<{ userId: string; role: 'DRIVER' | 'HELPER'; name: string | null }>;
   saleType: DesktopSaleType;
+  paymentMode?: DesktopPaymentMode;
   paymentMethod: DesktopPaymentMethod;
+  branchId?: string | null;
   branchLabel: string;
+  locationId?: string | null;
   locationLabel: string;
   subtotal: number;
   discountAmount: number;
+  deliveryFee?: number;
   totalAmount: number;
+  paidAmount?: number;
+  changeAmount?: number;
+  creditBalance?: number;
+  payments?: Array<{
+    method: DesktopPaymentMethod;
+    amount: number;
+    referenceNo?: string | null;
+  }>;
+  rewardId?: string | null;
+  rewardName?: string | null;
+  rewardPointsCost?: number;
+  rewardDiscountAmount?: number;
+  rewardRedemptionUsed?: boolean;
   notes: string | null;
   lines: DesktopSaleLine[];
   createdAt: string;
@@ -109,6 +206,113 @@ export type DesktopSaleRecord = {
   updatedAt: string;
 };
 
+export type DesktopHeldCartRecord = {
+  id: string;
+  label: string;
+  customerId: string | null;
+  customerName: string | null;
+  personnelId?: string | null;
+  personnelName?: string | null;
+  helperId?: string | null;
+  helperName?: string | null;
+  saleType: DesktopSaleType;
+  paymentMode?: DesktopPaymentMode;
+  paymentMethod: DesktopPaymentMethod;
+  paidAmount?: number;
+  discountAmount: number;
+  deliveryFee?: number;
+  notes: string | null;
+  lines: DesktopSaleLine[];
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type DesktopTransferMode =
+  | 'SUPPLIER_RESTOCK_IN'
+  | 'SUPPLIER_RESTOCK_OUT'
+  | 'CREATE'
+  | 'USED'
+  | 'CONVERT'
+  | 'INTER_STORE_TRANSFER'
+  | 'STORE_TO_WAREHOUSE'
+  | 'WAREHOUSE_TO_STORE'
+  | 'GENERAL';
+
+export type DesktopTransferLine = {
+  productId: string;
+  productName: string;
+  qtyFull: number;
+  qtyEmpty: number;
+};
+
+export type DesktopTransferRecord = {
+  id: string;
+  sourceLocationId: string;
+  sourceLocationLabel: string;
+  destinationLocationId: string;
+  destinationLocationLabel: string;
+  shiftId: string;
+  transferMode: DesktopTransferMode;
+  supplierId?: string | null;
+  supplierName?: string | null;
+  notes?: string | null;
+  lines: DesktopTransferLine[];
+  syncStatus: 'pending' | 'failed' | 'synced';
+  lastError?: string | null;
+  receivedStatus?: 'pending' | 'received';
+  receivedAt?: string | null;
+  receivedBy?: string | null;
+  receivedNotes?: string | null;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type DesktopShiftRecord = {
+  id: string;
+  branchId: string;
+  branchLabel: string;
+  locationId: string;
+  locationLabel: string;
+  userId: string;
+  cashierName: string;
+  openingCash: number;
+  closingCash?: number | null;
+  cashVariance?: number | null;
+  status: 'OPEN' | 'CLOSED';
+  syncStatus: 'pending' | 'failed' | 'synced';
+  lastError?: string | null;
+  openedAt: string;
+  closedAt?: string | null;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type DesktopShiftCashEntry = {
+  id: string;
+  shiftId: string;
+  direction: 'IN' | 'OUT';
+  amount: number;
+  notes?: string | null;
+  syncStatus: 'pending' | 'failed' | 'synced';
+  lastError?: string | null;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type DesktopExpenseRecord = {
+  id: string;
+  shiftId: string;
+  categoryCode: string;
+  categoryLabel: string | null;
+  direction: 'IN' | 'OUT';
+  amount: number;
+  notes?: string | null;
+  syncStatus: 'pending' | 'failed' | 'synced';
+  lastError?: string | null;
+  createdAt: string;
+  updatedAt: string;
+};
+
 export type DesktopMasterDataRow = {
   entity: string;
   recordId: string;
@@ -120,6 +324,11 @@ export type DesktopOption = {
   id: string;
   label: string;
   subtitle?: string;
+  address?: string;
+  contactNumber?: string;
+  gas?: string;
+  province?: string;
+  city?: string;
   branchId?: string;
   balance?: number;
   pointsBalance?: number;
@@ -131,11 +340,50 @@ export type DesktopCatalogProduct = {
   name: string;
   category: string;
   unit: string;
+  cylinderSizeLabel?: string | null;
   unitPrice: number;
   qtyOnHand: number;
   qtyFull: number;
   qtyEmpty: number;
   isLpg: boolean;
+};
+
+export type DesktopDeliveryOrderRecord = {
+  id: string;
+  branchId: string;
+  sourceLocationId: string;
+  customerId: string;
+  customerName?: string | null;
+  saleId?: string | null;
+  orderType: 'PICKUP' | 'DELIVERY';
+  status: 'created' | 'synced' | 'failed';
+  syncStatus: 'pending' | 'failed' | 'synced';
+  personnel: Array<{ userId: string; role: 'DRIVER' | 'HELPER'; name?: string | null }>;
+  notes?: string | null;
+  createdAt: string;
+  updatedAt: string;
+  lastError?: string | null;
+};
+
+export type DesktopLpgItemActionRecord = {
+  id: string;
+  branchId: string;
+  branchCode: string | null;
+  branchName: string | null;
+  locationId: string;
+  locationCode: string | null;
+  locationName: string | null;
+  productId: string;
+  productSku: string | null;
+  productName: string | null;
+  actionType: 'DISPOSE' | 'REPLACE' | 'JUNK';
+  qty: number;
+  reason: string;
+  notes: string | null;
+  referenceActionId: string | null;
+  createdByUserId: string | null;
+  createdAt: string;
+  updatedAt: string;
 };
 
 export type DesktopLendingLine = {
@@ -213,6 +461,48 @@ export type DesktopLendingReturnDraft = {
   lines: DesktopLendingReturnDraftLine[];
 };
 
+export const DEFAULT_DESKTOP_RECEIPT_LAYOUT_SETTINGS: DesktopReceiptLayoutSettings = {
+  showHeaderLogoImage: false,
+  headerLogoImageDataUrl: '',
+  headerLogoPlacement: 'CENTER',
+  showHeaderLogoText: true,
+  headerLogoText: 'VMJAM LPG',
+  showStoreContact: false,
+  storeContactInfo: '',
+  showStoreAddress: false,
+  storeAddress: '',
+  showBusinessTin: false,
+  businessTin: '',
+  showPermitOrInfo: false,
+  permitOrInfo: '',
+  showTerminalName: false,
+  terminalName: '',
+  showReceiptNumber: true,
+  showSaleId: true,
+  showDateTime: true,
+  showBranch: true,
+  showLocation: true,
+  showCashier: true,
+  showCashierRole: false,
+  cashierRoleLabel: '',
+  showOrderType: true,
+  showCustomer: true,
+  showPersonnel: true,
+  showHelper: true,
+  showItemCode: false,
+  showPaymentMode: true,
+  showSubtotal: true,
+  showDiscount: true,
+  showTotal: true,
+  showPaid: true,
+  showChange: true,
+  showCreditDue: true,
+  showFooter: true,
+  footerText: 'Thank you for choosing VPOS LPG.',
+  topPaddingLines: 2,
+  bottomPaddingLines: 3
+};
+
 export const DEFAULT_DESKTOP_APP_STATE: DesktopAppState = {
   version: 1,
   setupCompleted: false,
@@ -229,7 +519,8 @@ export const DEFAULT_DESKTOP_APP_STATE: DesktopAppState = {
     printerMode: 'USB',
     printerName: '',
     printerHost: '',
-    printerPort: '9100'
+    printerPort: '9100',
+    posDefaultLpgFlow: 'NONE'
   },
   auth: {
     accessToken: null,
@@ -241,6 +532,11 @@ export const DEFAULT_DESKTOP_APP_STATE: DesktopAppState = {
     pinSalt: null
   },
   printerProfiles: [],
+  receiptLayout: DEFAULT_DESKTOP_RECEIPT_LAYOUT_SETTINGS,
+  walkthrough: {
+    completedAt: null,
+    dismissedAt: null
+  },
   sync: {
     lastSyncedAt: null,
     lastSyncStatus: 'idle',
