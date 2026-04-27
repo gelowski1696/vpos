@@ -92,7 +92,7 @@ export class SyncService {
         customerIdMap.size > 0
           ? {
               ...item,
-              payload: this.remapCustomerReferencesInPayload(item.payload, customerIdMap)
+              payload: this.remapCustomerReferencesInPayload(companyId, item.payload, customerIdMap)
             }
           : item;
       const persistedDecision = await this.lookupPersistedIdempotencyDecision(
@@ -652,6 +652,7 @@ export class SyncService {
   }
 
   private remapCustomerReferencesInPayload(
+    companyId: string,
     payload: Record<string, unknown>,
     customerIdMap: Map<string, string>
   ): Record<string, unknown> {
@@ -661,7 +662,7 @@ export class SyncService {
     if (!rawCustomerId) {
       return payload;
     }
-    const serverCustomerId = customerIdMap.get(rawCustomerId);
+    const serverCustomerId = this.resolveServerCustomerId(companyId, rawCustomerId, customerIdMap);
     if (!serverCustomerId || serverCustomerId === rawCustomerId) {
       return payload;
     }
@@ -670,6 +671,42 @@ export class SyncService {
       customer_id: serverCustomerId,
       customerId: serverCustomerId
     };
+  }
+
+  private resolveServerCustomerId(
+    companyId: string,
+    rawCustomerId: string,
+    customerIdMap?: Map<string, string>
+  ): string {
+    const currentBatchId = customerIdMap?.get(rawCustomerId);
+    if (currentBatchId) {
+      return currentBatchId;
+    }
+
+    const companyChanges = this.getCompanyChanges(companyId);
+    for (let index = companyChanges.length - 1; index >= 0; index -= 1) {
+      const change = companyChanges[index];
+      if (change.entity !== 'customer' || change.action !== 'create') {
+        continue;
+      }
+      const payload = (change.payload ?? {}) as Record<string, unknown>;
+      const localCustomerId =
+        this.asString(payload.customer_id ?? payload.customerId ?? payload.id) ?? '';
+      if (!localCustomerId || localCustomerId !== rawCustomerId) {
+        continue;
+      }
+      const serverResult =
+        payload.server_customer_result && typeof payload.server_customer_result === 'object'
+          ? (payload.server_customer_result as Record<string, unknown>)
+          : null;
+      const serverCustomerId =
+        this.asString(serverResult?.id ?? serverResult?.customer_id ?? serverResult?.customerId) ?? '';
+      if (serverCustomerId) {
+        return serverCustomerId;
+      }
+    }
+
+    return rawCustomerId;
   }
 
   private async tryPostCustomerOutbox(
@@ -747,7 +784,9 @@ export class SyncService {
         ? null
         : this.asString(payload.customer_id ?? payload.customerId);
     const resolvedCustomerId =
-      rawCustomerId && customerIdMap?.has(rawCustomerId) ? customerIdMap.get(rawCustomerId) ?? rawCustomerId : rawCustomerId;
+      rawCustomerId == null
+        ? null
+        : this.resolveServerCustomerId(companyId, rawCustomerId, customerIdMap);
 
     const lines = linesRaw.map((row) => {
       const line = (row as Record<string, unknown>) ?? {};
@@ -1044,7 +1083,9 @@ export class SyncService {
     const paymentId = this.asString(payload.payment_id ?? payload.id) ?? this.asString(item.id);
     const rawCustomerId = this.asString(payload.customer_id ?? payload.customerId);
     const customerId =
-      rawCustomerId && customerIdMap?.has(rawCustomerId) ? customerIdMap.get(rawCustomerId) ?? rawCustomerId : rawCustomerId;
+      rawCustomerId == null
+        ? null
+        : this.resolveServerCustomerId(companyId, rawCustomerId, customerIdMap);
     if (!customerId) {
       return { ok: false, reason: 'Customer payment sync payload is missing customer id' };
     }
