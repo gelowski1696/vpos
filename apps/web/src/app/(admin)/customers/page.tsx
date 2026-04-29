@@ -210,6 +210,18 @@ export default function CustomersPage(): JSX.Element {
         aliases: ['customer_address']
       },
       {
+        key: 'province',
+        label: 'Province',
+        example: 'Bulacan',
+        aliases: ['customer_province']
+      },
+      {
+        key: 'city',
+        label: 'City',
+        example: 'Malolos',
+        aliases: ['customer_city']
+      },
+      {
         key: 'type',
         label: 'Customer Type',
         example: 'RETAIL',

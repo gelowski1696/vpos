@@ -2284,6 +2284,8 @@ export class MasterDataService {
       const tierRaw = this.toImportNullableString(row.tier);
       const tier = tierRaw ? tierRaw.toUpperCase() : null;
       const address = this.toImportNullableString(row.address);
+      const province = this.toImportNullableString(row.province);
+      const city = this.toImportNullableString(row.city);
       const contractPrice = this.toImportNullableNumber(row.contractPrice ?? row.contract_price);
       const isActive = this.toImportBoolean(row.isActive ?? row.is_active, true);
 
@@ -2323,6 +2325,8 @@ export class MasterDataService {
               type,
               tier,
               address,
+              province,
+              city,
               contractPrice,
               isActive
             };
@@ -2381,6 +2385,8 @@ export class MasterDataService {
               type: row.normalized.type === 'BUSINESS' ? 'BUSINESS' : 'RETAIL',
               tier: (row.normalized.tier as string | null) ?? null,
               address: (row.normalized.address as string | null) ?? null,
+              province: (row.normalized.province as string | null) ?? null,
+              city: (row.normalized.city as string | null) ?? null,
               contractPrice:
                 row.normalized.contractPrice === null
                   ? null
@@ -2398,6 +2404,8 @@ export class MasterDataService {
               type: row.normalized.type === 'BUSINESS' ? 'BUSINESS' : 'RETAIL',
               tier: (row.normalized.tier as string | null) ?? null,
               address: (row.normalized.address as string | null) ?? null,
+              province: (row.normalized.province as string | null) ?? null,
+              city: (row.normalized.city as string | null) ?? null,
               contractPrice:
                 row.normalized.contractPrice === null
                   ? null
