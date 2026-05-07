@@ -14,6 +14,7 @@ describe('VPOS API (integration)', () => {
   beforeAll(async () => {
     process.env.JWT_ACCESS_SECRET = 'test-access-secret';
     process.env.JWT_REFRESH_SECRET = 'test-refresh-secret';
+    process.env.VPOS_AUTH_SEED_LEGACY_DEMO = 'true';
 
     const moduleFixture: TestingModule = await Test.createTestingModule({
       imports: [AppModule]
@@ -682,6 +683,119 @@ describe('VPOS API (integration)', () => {
 
     expect(contract.body.source).toBe('contract');
     expect(contract.body.unit_price).toBe(900);
+  });
+
+  it('12c) supports customer categories and resolves custom pricing before customer tier pricing', async () => {
+    const actor = await loginAs('owner@vpos.local', 'Owner@123', '');
+
+    await request(app.getHttpServer())
+      .post('/api/platform/owner/tenants/comp-demo/addons')
+      .set('Authorization', `Bearer ${actor.access}`)
+      .set('X-Client-Id', actor.clientId ?? 'DEMO')
+      .send({
+        customer_category: true,
+        custom_pricing: true,
+        reason: 'Enable customer category/custom pricing for e2e coverage.'
+      })
+      .expect(201);
+
+    const categoryA = await request(app.getHttpServer())
+      .post('/api/master-data/customer-categories')
+      .set('Authorization', `Bearer ${actor.access}`)
+      .set('X-Client-Id', actor.clientId ?? 'DEMO')
+      .send({
+        code: `CGA${Date.now().toString(36).slice(-4).toUpperCase()}`,
+        name: 'Retail Group A',
+        description: 'First test category',
+        customerIds: ['cust-walkin']
+      })
+      .expect(201);
+
+    const categoryB = await request(app.getHttpServer())
+      .post('/api/master-data/customer-categories')
+      .set('Authorization', `Bearer ${actor.access}`)
+      .set('X-Client-Id', actor.clientId ?? 'DEMO')
+      .send({
+        code: `CGB${Date.now().toString(36).slice(-4).toUpperCase()}`,
+        name: 'Retail Group B',
+        customerIds: ['cust-walkin', 'cust-premium']
+      })
+      .expect(201);
+
+    const categories = await request(app.getHttpServer())
+      .get('/api/master-data/customer-categories')
+      .set('Authorization', `Bearer ${actor.access}`)
+      .set('X-Client-Id', actor.clientId ?? 'DEMO')
+      .expect(200);
+
+    const refreshedA = categories.body.find((row: { id: string }) => row.id === categoryA.body.id);
+    const refreshedB = categories.body.find((row: { id: string }) => row.id === categoryB.body.id);
+    expect(refreshedA.memberCount).toBe(0);
+    expect(refreshedB.memberCount).toBe(2);
+    expect(refreshedB.customerIds).toEqual(expect.arrayContaining(['cust-walkin', 'cust-premium']));
+
+    const updatedB = await request(app.getHttpServer())
+      .put(`/api/master-data/customer-categories/${categoryB.body.id}`)
+      .set('Authorization', `Bearer ${actor.access}`)
+      .set('X-Client-Id', actor.clientId ?? 'DEMO')
+      .send({
+        description: 'Updated group description',
+        customerIds: ['cust-premium']
+      })
+      .expect(200);
+
+    expect(updatedB.body.description).toBe('Updated group description');
+    expect(updatedB.body.memberCount).toBe(1);
+    expect(updatedB.body.customerIds).toEqual(['cust-premium']);
+
+    await request(app.getHttpServer())
+      .post('/api/master-data/price-lists')
+      .set('Authorization', `Bearer ${actor.access}`)
+      .set('X-Client-Id', actor.clientId ?? 'DEMO')
+      .send({
+        code: `PL-CGROUP-${Date.now()}`,
+        name: 'Customer Group Custom Price',
+        scope: 'CUSTOMER_GROUP',
+        customerCategoryId: categoryB.body.id,
+        startsAt: '2026-01-15T00:00:00.000Z',
+        isActive: true,
+        rules: [
+          {
+            productId: 'prod-11',
+            flowMode: 'REFILL_EXCHANGE',
+            unitPrice: 888,
+            discountCapPct: 5,
+            priority: 5
+          }
+        ]
+      })
+      .expect(201);
+
+    const resolved = await request(app.getHttpServer())
+      .post('/api/pricing/resolve')
+      .set('Authorization', `Bearer ${actor.access}`)
+      .set('X-Client-Id', actor.clientId ?? 'DEMO')
+      .send({
+        company_id: 'comp-demo',
+        branch_id: 'branch-warehouse',
+        customer_id: 'cust-premium',
+        product_id: 'prod-11',
+        quantity: 1,
+        requested_at: '2026-06-01T00:00:00.000Z',
+        cylinder_flow: 'REFILL_EXCHANGE'
+      })
+      .expect(201);
+
+    expect(resolved.body.source).toBe('customer_group');
+    expect(resolved.body.unit_price).toBe(888);
+
+    const deleted = await request(app.getHttpServer())
+      .delete(`/api/master-data/customer-categories/${categoryB.body.id}`)
+      .set('Authorization', `Bearer ${actor.access}`)
+      .set('X-Client-Id', actor.clientId ?? 'DEMO')
+      .expect(200);
+
+    expect(deleted.body.isActive).toBe(false);
   });
 
   it('13) updates branding configuration and returns preview-ready fields', async () => {

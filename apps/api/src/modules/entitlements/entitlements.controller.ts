@@ -11,7 +11,7 @@ export class EntitlementsController {
     private readonly auditService: AuditService
   ) {}
 
-  @Roles('admin')
+  @Roles('admin', 'owner', 'platform_owner')
   @Get('entitlements/current')
   getCurrent(
     @Req()
@@ -20,7 +20,7 @@ export class EntitlementsController {
       companyId?: string;
     }
   ) {
-    return this.entitlementsService.getCurrent(this.requireCompanyId(req));
+    return this.entitlementsService.getCurrentWithAddons(this.requireCompanyId(req));
   }
 
   @Roles('admin')
@@ -361,6 +361,8 @@ export class EntitlementsController {
       email_customer_balance?: boolean;
       sms_alerts?: boolean;
       auto_report_digest?: boolean;
+      custom_pricing?: boolean;
+      customer_category?: boolean;
       reason?: string;
     }
   ) {

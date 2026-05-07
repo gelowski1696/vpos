@@ -84,9 +84,10 @@ export interface PriceResolutionInput {
     product_id: string;
     quantity: number;
     requested_at: string;
+    cylinder_flow?: 'REFILL_EXCHANGE' | 'NON_REFILL';
 }
 export interface PriceResolutionOutput {
-    source: 'contract' | 'tier' | 'branch' | 'global';
+    source: 'contract' | 'customer_group' | 'tier' | 'branch' | 'global';
     unit_price: number;
     discount_cap_percent: number;
 }

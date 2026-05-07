@@ -23,6 +23,26 @@ type BrandingTheme = {
   secondaryColor: string;
 };
 
+type TenantAddons = {
+  email_features: boolean;
+  email_report: boolean;
+  email_customer_balance: boolean;
+  custom_pricing: boolean;
+  customer_category: boolean;
+};
+
+type CurrentEntitlement = {
+  addons?: Partial<TenantAddons>;
+};
+
+const DEFAULT_TENANT_ADDONS: TenantAddons = {
+  email_features: false,
+  email_report: false,
+  email_customer_balance: false,
+  custom_pricing: false,
+  customer_category: false
+};
+
 type NavItem = {
   href: Route;
   label: string;
@@ -342,6 +362,15 @@ const ROUTE_SPECIFIC_WALKTHROUGHS: Record<string, AdminTourStep[]> = {
       placement: 'top'
     }
   ],
+  '/customer-categories': [
+    {
+      id: 'customer-categories-overview',
+      title: 'Customer categories',
+      description: 'Create customer groups, assign members, and use them for custom pricing price lists.',
+      selectors: ['[data-tour="header-page-title"]'],
+      placement: 'bottom'
+    }
+  ],
   '/product-categories': buildEntityRouteSteps('/product-categories', 'product-categories', 'Product Categories'),
   '/product-brands': buildEntityRouteSteps('/product-brands', 'product-brands', 'Product Brands'),
   '/lpg-item-actions': [
@@ -388,6 +417,7 @@ const NAV_SECTIONS: Array<{ title: string; items: NavItem[] }> = [
       { href: '/sales-list' as Route, label: 'Sales List', icon: 'sales' },
       { href: '/customer-payments' as Route, label: 'Customer Payments', icon: 'customerPayment' },
       { href: '/customers', label: 'Customers', icon: 'customer' },
+      { href: '/customer-categories' as Route, label: 'Customer Categories', icon: 'customer' },
       { href: '/customer-cards' as Route, label: 'Customer Cards', icon: 'card' }
     ]
   },
@@ -612,6 +642,7 @@ export function AdminShell({ children }: { children: React.ReactNode }): JSX.Ele
   const [brandName, setBrandName] = useState('VPOS');
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [roles, setRoles] = useState<string[]>([]);
+  const [tenantAddons, setTenantAddons] = useState<TenantAddons>(DEFAULT_TENANT_ADDONS);
   const [walkthroughOpen, setWalkthroughOpen] = useState(false);
   const [walkthroughSteps, setWalkthroughSteps] = useState<AdminTourStep[]>(ADMIN_WALKTHROUGH_STEPS);
   const [walkthroughDoneKeys, setWalkthroughDoneKeys] = useState<string[]>([ADMIN_WALKTHROUGH_DONE_KEY]);
@@ -668,6 +699,16 @@ export function AdminShell({ children }: { children: React.ReactNode }): JSX.Ele
       } catch {
         // Keep defaults if branding fetch fails.
       }
+
+      try {
+        const entitlement = await apiRequest<CurrentEntitlement>('/platform/entitlements/current');
+        setTenantAddons({
+          ...DEFAULT_TENANT_ADDONS,
+          ...entitlement.addons
+        });
+      } catch {
+        setTenantAddons(DEFAULT_TENANT_ADDONS);
+      }
     })();
   }, [ready, hasToken]);
 
@@ -706,6 +747,10 @@ export function AdminShell({ children }: { children: React.ReactNode }): JSX.Ele
             return false;
           }
 
+          if (String(item.href) === '/customer-categories' && !tenantAddons.customer_category) {
+            return false;
+          }
+
           if (
             !canViewOrgStructure &&
             (item.href === '/branches' || item.href === '/locations' || item.href === '/users')
@@ -715,7 +760,7 @@ export function AdminShell({ children }: { children: React.ReactNode }): JSX.Ele
           return true;
         })
       })).filter((section) => section.items.length > 0),
-    [canViewOrgStructure, canViewAuditLogs, isPlatformOwner]
+    [canViewOrgStructure, canViewAuditLogs, isPlatformOwner, tenantAddons.customer_category]
   );
 
   const visibleNavItems = useMemo(() => visibleNavSections.flatMap((section) => section.items), [visibleNavSections]);

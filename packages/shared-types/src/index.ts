@@ -86,7 +86,7 @@ export interface PriceResolutionInput {
 }
 
 export interface PriceResolutionOutput {
-  source: 'contract' | 'tier' | 'branch' | 'global';
+  source: 'contract' | 'customer_group' | 'tier' | 'branch' | 'global';
   unit_price: number;
   discount_cap_percent: number;
 }

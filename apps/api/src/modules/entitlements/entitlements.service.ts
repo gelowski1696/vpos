@@ -46,6 +46,10 @@ type EntitlementSnapshot = {
   lastSyncedAt: string;
 };
 
+type CurrentEntitlementSnapshot = EntitlementSnapshot & {
+  addons: TenantAddonFlags;
+};
+
 type NormalizedEntitlementPayload = {
   externalClientId: string;
   status: EntitlementStatus;
@@ -182,6 +186,8 @@ type TenantAddonFlags = {
   email_customer_balance: boolean;
   sms_alerts: boolean;
   auto_report_digest: boolean;
+  custom_pricing: boolean;
+  customer_category: boolean;
 };
 
 type OwnerTenantSummary = {
@@ -352,6 +358,8 @@ type OwnerTenantAddonsInput = {
   email_customer_balance?: boolean;
   sms_alerts?: boolean;
   auto_report_digest?: boolean;
+  custom_pricing?: boolean;
+  customer_category?: boolean;
   reason?: string;
   actor_id?: string | null;
 };
@@ -376,6 +384,7 @@ type OwnerDeleteTenantResult = {
 @Injectable()
 export class EntitlementsService {
   private readonly memoryEntitlements = new Map<string, EntitlementSnapshot>();
+  private readonly memoryTenantAddons = new Map<string, TenantAddonFlags>();
   private readonly processedEventIds = new Set<string>();
   private readonly memoryTenantProvision = new Map<string, ProvisionTenantResult>();
   private readonly memoryTenantProfiles = new Map<string, MemoryTenantProfile>();
@@ -892,6 +901,53 @@ export class EntitlementsService {
     }
   }
 
+  async getTenantAddons(companyId?: string): Promise<TenantAddonFlags> {
+    const resolvedCompanyId = await this.resolveCompanyId(companyId);
+    if (!this.dbEnabled()) {
+      const memoryAddons = this.memoryTenantAddons.get(resolvedCompanyId);
+      if (memoryAddons) {
+        return memoryAddons;
+      }
+      const provisioned = [...this.memoryTenantProvision.values()].find(
+        (row) => row.company_id === resolvedCompanyId
+      );
+      return provisioned?.addons ?? this.defaultTenantAddons();
+    }
+
+    try {
+      const company = await this.prisma!.company.findUnique({
+        where: { id: resolvedCompanyId },
+        select: {
+          addonEmailFeatures: true,
+          addonEmailReport: true,
+          addonEmailCustomerBalance: true,
+          addonSmsAlerts: true,
+          addonAutoReportDigest: true,
+          addonCustomPricing: true,
+          addonCustomerCategory: true
+        }
+      });
+      if (!company) {
+        throw new NotFoundException('Company not found');
+      }
+      return this.mapTenantAddons(company);
+    } catch (error) {
+      if (error instanceof NotFoundException) {
+        throw error;
+      }
+      throw new InternalServerErrorException('Unable to resolve tenant add-ons');
+    }
+  }
+
+  async getCurrentWithAddons(companyId?: string): Promise<CurrentEntitlementSnapshot> {
+    const entitlement = await this.getCurrent(companyId);
+    const addons = await this.getTenantAddons(entitlement.companyId);
+    return {
+      ...entitlement,
+      addons
+    };
+  }
+
   async enforceBranchCreation(companyId?: string, currentCount?: number): Promise<void> {
     const entitlement = await this.getCurrent(companyId);
     const branchCount =
@@ -1131,7 +1187,9 @@ export class EntitlementsService {
       email_report: false,
       email_customer_balance: false,
       sms_alerts: false,
-      auto_report_digest: false
+      auto_report_digest: false,
+      custom_pricing: false,
+      customer_category: false
     };
   }
 
@@ -1141,13 +1199,17 @@ export class EntitlementsService {
     addonEmailCustomerBalance?: boolean;
     addonSmsAlerts?: boolean;
     addonAutoReportDigest?: boolean;
+    addonCustomPricing?: boolean;
+    addonCustomerCategory?: boolean;
   }): TenantAddonFlags {
     return {
       email_features: Boolean(input.addonEmailFeatures),
       email_report: Boolean(input.addonEmailReport),
       email_customer_balance: Boolean(input.addonEmailCustomerBalance),
       sms_alerts: Boolean(input.addonSmsAlerts),
-      auto_report_digest: Boolean(input.addonAutoReportDigest)
+      auto_report_digest: Boolean(input.addonAutoReportDigest),
+      custom_pricing: Boolean(input.addonCustomPricing),
+      customer_category: Boolean(input.addonCustomerCategory)
     };
   }
 
@@ -1160,7 +1222,9 @@ export class EntitlementsService {
       email_report: input.email_report ?? current.email_report,
       email_customer_balance: input.email_customer_balance ?? current.email_customer_balance,
       sms_alerts: input.sms_alerts ?? current.sms_alerts,
-      auto_report_digest: input.auto_report_digest ?? current.auto_report_digest
+      auto_report_digest: input.auto_report_digest ?? current.auto_report_digest,
+      custom_pricing: input.custom_pricing ?? current.custom_pricing,
+      customer_category: input.customer_category ?? current.customer_category
     };
   }
 
@@ -1447,6 +1511,8 @@ export class EntitlementsService {
             addonEmailCustomerBalance: false,
             addonSmsAlerts: false,
             addonAutoReportDigest: false,
+            addonCustomPricing: false,
+            addonCustomerCategory: false,
             datastoreMode,
             datastoreRef,
             datastoreMigrationState
@@ -1975,6 +2041,8 @@ export class EntitlementsService {
         addonEmailCustomerBalance: true,
         addonSmsAlerts: true,
         addonAutoReportDigest: true,
+        addonCustomPricing: true,
+        addonCustomerCategory: true,
         datastoreMode: true,
         datastoreRef: true,
         datastoreMigrationState: true,
@@ -3467,6 +3535,7 @@ export class EntitlementsService {
           addons: next
         });
       }
+      this.memoryTenantAddons.set(targetCompanyId, next);
       const existingProfile =
         this.memoryTenantProfiles.get(targetCompanyId) ??
         this.defaultMemoryTenantProfile(targetCompanyId);
@@ -3483,7 +3552,9 @@ export class EntitlementsService {
           addonEmailReport: true,
           addonEmailCustomerBalance: true,
           addonSmsAlerts: true,
-          addonAutoReportDigest: true
+          addonAutoReportDigest: true,
+          addonCustomPricing: true,
+          addonCustomerCategory: true
         }
       });
       if (!company) {
@@ -3503,14 +3574,18 @@ export class EntitlementsService {
           addonEmailReport: next.email_report,
           addonEmailCustomerBalance: next.email_customer_balance,
           addonSmsAlerts: next.sms_alerts,
-          addonAutoReportDigest: next.auto_report_digest
+          addonAutoReportDigest: next.auto_report_digest,
+          addonCustomPricing: next.custom_pricing,
+          addonCustomerCategory: next.customer_category
         },
         select: {
           addonEmailFeatures: true,
           addonEmailReport: true,
           addonEmailCustomerBalance: true,
           addonSmsAlerts: true,
-          addonAutoReportDigest: true
+          addonAutoReportDigest: true,
+          addonCustomPricing: true,
+          addonCustomerCategory: true
         }
       });
 

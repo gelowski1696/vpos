@@ -23,6 +23,7 @@ enum PriceScope {
   GLOBAL
   BRANCH
   TIER
+  CUSTOMER_GROUP
   CONTRACT
 }
 
@@ -296,6 +297,8 @@ model Company {
   addonEmailCustomerBalance Boolean             @default(false)
   addonSmsAlerts          Boolean               @default(false)
   addonAutoReportDigest   Boolean               @default(false)
+  addonCustomPricing      Boolean               @default(false)
+  addonCustomerCategory   Boolean               @default(false)
   datastoreMode           TenancyDatastoreMode  @default(SHARED_DB)
   datastoreRef            String?
   datastoreMigrationState TenancyMigrationState @default(NONE)
@@ -313,6 +316,7 @@ model Company {
   roles                     Role[]
   priceRules                PriceRule[]
   customers                 Customer[]
+  customerCategories        CustomerCategory[]
   suppliers                 Supplier[]
   products                  Product[]
   productCategories         ProductCategory[]
@@ -907,6 +911,7 @@ model DeviceSession {
 model Customer {
   id             String       @id @default(uuid())
   companyId      String
+  customerCategoryId String?
   code           String
   name           String
   type           CustomerType
@@ -924,6 +929,7 @@ model Customer {
   updatedAt      DateTime     @updatedAt
 
   company             Company                    @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  customerCategory    CustomerCategory?          @relation(fields: [customerCategoryId], references: [id], onDelete: SetNull)
   sales               Sale[]
   customerPayments    CustomerPayment[]
   customerCards       CustomerCard[]
@@ -931,6 +937,25 @@ model Customer {
   rewardRedemptions   CustomerRewardRedemption[]
   lendingTransactions LendingTransaction[]
   saleReturns         SaleReturn[]
+
+  @@unique([companyId, code])
+  @@index([companyId, updatedAt])
+  @@index([companyId, customerCategoryId])
+}
+
+model CustomerCategory {
+  id          String   @id @default(uuid())
+  companyId   String
+  code        String
+  name        String
+  description String?
+  isActive    Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  company    Company     @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  customers  Customer[]
+  priceLists PriceList[]
 
   @@unique([companyId, code])
   @@index([companyId, updatedAt])
@@ -1052,6 +1077,7 @@ model PriceList {
   name         String
   scope        PriceScope
   customerTier String?
+  customerCategoryId String?
   customerId   String?
   startsAt     DateTime
   endsAt       DateTime?
@@ -1059,12 +1085,14 @@ model PriceList {
   createdAt    DateTime   @default(now())
   updatedAt    DateTime   @updatedAt
 
-  company Company     @relation(fields: [companyId], references: [id], onDelete: Cascade)
-  branch  Branch?     @relation(fields: [branchId], references: [id], onDelete: SetNull)
-  rules   PriceRule[]
+  company          Company           @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  branch           Branch?           @relation(fields: [branchId], references: [id], onDelete: SetNull)
+  customerCategory CustomerCategory? @relation(fields: [customerCategoryId], references: [id], onDelete: SetNull)
+  rules            PriceRule[]
 
   @@unique([companyId, code])
   @@index([companyId, startsAt, endsAt])
+  @@index([companyId, customerCategoryId])
 }
 
 model PriceRule {

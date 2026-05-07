@@ -4,7 +4,7 @@ import { type FormEvent, useEffect, useMemo, useState } from 'react';
 import { apiRequest } from '../../../lib/api-client';
 import { toastError, toastInfo, toastSuccess } from '../../../lib/web-toast';
 
-type Scope = 'GLOBAL' | 'BRANCH' | 'TIER' | 'CONTRACT';
+type Scope = 'GLOBAL' | 'BRANCH' | 'TIER' | 'CUSTOMER_GROUP' | 'CONTRACT';
 type FlowMode = 'ANY' | 'REFILL_EXCHANGE' | 'NON_REFILL';
 
 type PriceRule = {
@@ -23,6 +23,7 @@ type PriceListRecord = {
   scope: Scope;
   branchId?: string | null;
   customerTier?: string | null;
+  customerCategoryId?: string | null;
   customerId?: string | null;
   startsAt: string;
   endsAt?: string | null;
@@ -53,7 +54,32 @@ type CustomerRecord = {
   code: string;
   name: string;
   tier?: string | null;
+  customerCategoryId?: string | null;
   isActive: boolean;
+};
+
+type CustomerCategoryRecord = {
+  id: string;
+  code: string;
+  name: string;
+  description?: string | null;
+  memberCount?: number;
+  customerIds?: string[];
+  isActive: boolean;
+};
+
+type TenantAddons = {
+  custom_pricing: boolean;
+  customer_category: boolean;
+};
+
+type CurrentEntitlement = {
+  addons?: Partial<TenantAddons>;
+};
+
+const DEFAULT_TENANT_ADDONS: TenantAddons = {
+  custom_pricing: false,
+  customer_category: false
 };
 
 type FormState = {
@@ -62,6 +88,7 @@ type FormState = {
   scope: Scope;
   branchId: string;
   customerTier: string;
+  customerCategoryId: string;
   customerId: string;
   startsAt: string;
   endsAt: string;
@@ -91,6 +118,12 @@ const SCOPE_INFO: Array<{ scope: Scope; label: string; description: string; prio
     priority: 2
   },
   {
+    scope: 'CUSTOMER_GROUP',
+    label: 'Custom Pricing (Customer Category)',
+    description: 'Applies to customers assigned to one customer category.',
+    priority: 5
+  },
+  {
     scope: 'CONTRACT',
     label: 'Specific Customer Contract',
     description: 'Highest priority. Applies only to one customer.',
@@ -102,6 +135,7 @@ const PRIORITY_BY_SCOPE: Record<Scope, number> = {
   GLOBAL: 4,
   BRANCH: 3,
   TIER: 2,
+  CUSTOMER_GROUP: 5,
   CONTRACT: 1
 };
 
@@ -186,6 +220,7 @@ function buildDefaultForm(defaultProductId: string): FormState {
     scope: 'GLOBAL',
     branchId: '',
     customerTier: '',
+    customerCategoryId: '',
     customerId: '',
     startsAt: toInputDateTime(now.toISOString()),
     endsAt: '',
@@ -221,12 +256,22 @@ function statusLabel(row: PriceListRecord): string {
   return 'Active';
 }
 
-function scopeTarget(row: PriceListRecord, branchById: Map<string, string>, customerById: Map<string, string>): string {
+function scopeTarget(
+  row: PriceListRecord,
+  branchById: Map<string, string>,
+  customerById: Map<string, string>,
+  customerCategoryById: Map<string, string>
+): string {
   if (row.scope === 'BRANCH') {
     return row.branchId ? branchById.get(row.branchId) ?? row.branchId : 'Branch not selected';
   }
   if (row.scope === 'TIER') {
     return row.customerTier || 'Tier not selected';
+  }
+  if (row.scope === 'CUSTOMER_GROUP') {
+    return row.customerCategoryId
+      ? customerCategoryById.get(row.customerCategoryId) ?? row.customerCategoryId
+      : 'Customer category not selected';
   }
   if (row.scope === 'CONTRACT') {
     return row.customerId ? customerById.get(row.customerId) ?? row.customerId : 'Customer not selected';
@@ -239,6 +284,8 @@ export default function PriceListsPage(): JSX.Element {
   const [products, setProducts] = useState<ProductRecord[]>([]);
   const [branches, setBranches] = useState<BranchRecord[]>([]);
   const [customers, setCustomers] = useState<CustomerRecord[]>([]);
+  const [customerCategories, setCustomerCategories] = useState<CustomerCategoryRecord[]>([]);
+  const [tenantAddons, setTenantAddons] = useState<TenantAddons>(DEFAULT_TENANT_ADDONS);
 
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -284,6 +331,11 @@ export default function PriceListsPage(): JSX.Element {
     [customers]
   );
 
+  const customerCategoryById = useMemo(
+    () => new Map(customerCategories.map((item) => [item.id, `${item.name} (${item.code})`])),
+    [customerCategories]
+  );
+
   const tierOptions = useMemo(() => {
     const tiers = new Set<string>();
     for (const customer of customers) {
@@ -297,6 +349,11 @@ export default function PriceListsPage(): JSX.Element {
     }
     return [...tiers].sort();
   }, [customers]);
+
+  const scopeOptions = useMemo(
+    () => SCOPE_INFO.filter((item) => item.scope !== 'CUSTOMER_GROUP' || tenantAddons.custom_pricing),
+    [tenantAddons.custom_pricing]
+  );
 
   const defaultProductId = useMemo(() => products[0]?.id ?? '', [products]);
   const productCategoryOptions = useMemo(() => {
@@ -335,7 +392,7 @@ export default function PriceListsPage(): JSX.Element {
     }
 
     return priceLists.filter((row) => {
-      const target = scopeTarget(row, branchById, customerById);
+      const target = scopeTarget(row, branchById, customerById, customerCategoryById);
       return (
         row.code.toLowerCase().includes(term) ||
         row.name.toLowerCase().includes(term) ||
@@ -343,7 +400,7 @@ export default function PriceListsPage(): JSX.Element {
         target.toLowerCase().includes(term)
       );
     });
-  }, [priceLists, search, branchById, customerById]);
+  }, [priceLists, search, branchById, customerById, customerCategoryById]);
   const copyablePriceLists = useMemo(
     () => priceLists.filter((row) => row.id !== editingId),
     [editingId, priceLists]
@@ -354,16 +411,20 @@ export default function PriceListsPage(): JSX.Element {
       setLoading(true);
       setError(null);
       try {
-        const [listRows, productRows, branchRows, customerRows] = await Promise.all([
+        const [listRows, productRows, branchRows, customerRows, customerCategoryRows, entitlement] = await Promise.all([
           apiRequest<PriceListRecord[]>('/master-data/price-lists'),
           apiRequest<ProductRecord[]>('/master-data/products'),
           apiRequest<BranchRecord[]>('/master-data/branches'),
-          apiRequest<CustomerRecord[]>('/master-data/customers')
+          apiRequest<CustomerRecord[]>('/master-data/customers'),
+          apiRequest<CustomerCategoryRecord[]>('/master-data/customer-categories').catch(() => []),
+          apiRequest<CurrentEntitlement>('/platform/entitlements/current')
         ]);
         setPriceLists(listRows);
       setProducts(productRows.filter((item) => item.isActive));
       setBranches(branchRows.filter((item) => item.isActive));
       setCustomers(customerRows.filter((item) => item.isActive));
+      setCustomerCategories(customerCategoryRows.filter((item) => item.isActive));
+      setTenantAddons({ ...DEFAULT_TENANT_ADDONS, ...entitlement.addons });
     } catch (loadError) {
       const message = loadError instanceof Error ? loadError.message : 'Failed to load price list data.';
       setError(message);
@@ -404,6 +465,7 @@ export default function PriceListsPage(): JSX.Element {
       scope: row.scope,
       branchId: row.branchId ?? '',
       customerTier: row.customerTier ?? '',
+      customerCategoryId: row.customerCategoryId ?? '',
       customerId: row.customerId ?? '',
       startsAt: toInputDateTime(row.startsAt),
       endsAt: toInputDateTime(row.endsAt),
@@ -443,6 +505,7 @@ export default function PriceListsPage(): JSX.Element {
       scope: nextScope,
       branchId: nextScope === 'BRANCH' ? prev.branchId : '',
       customerTier: nextScope === 'TIER' ? prev.customerTier : '',
+      customerCategoryId: nextScope === 'CUSTOMER_GROUP' ? prev.customerCategoryId : '',
       customerId: nextScope === 'CONTRACT' ? prev.customerId : '',
       rules: prev.rules.map((rule) => ({ ...rule, priority: PRIORITY_BY_SCOPE[nextScope] }))
     }));
@@ -625,6 +688,9 @@ export default function PriceListsPage(): JSX.Element {
     if (form.scope === 'TIER' && !form.customerTier.trim()) {
       return 'Please select the customer tier for this price list.';
     }
+    if (form.scope === 'CUSTOMER_GROUP' && !form.customerCategoryId) {
+      return 'Please select the customer category for this custom pricing list.';
+    }
     if (form.scope === 'CONTRACT' && !form.customerId) {
       return 'Please select the customer contract target.';
     }
@@ -672,6 +738,7 @@ export default function PriceListsPage(): JSX.Element {
       scope: form.scope,
       branchId: form.scope === 'BRANCH' ? form.branchId || null : null,
       customerTier: form.scope === 'TIER' ? form.customerTier || null : null,
+      customerCategoryId: form.scope === 'CUSTOMER_GROUP' ? form.customerCategoryId || null : null,
       customerId: form.scope === 'CONTRACT' ? form.customerId || null : null,
       startsAt: toIsoOrNull(form.startsAt) ?? new Date().toISOString(),
       endsAt: toIsoOrNull(form.endsAt),
@@ -787,7 +854,7 @@ export default function PriceListsPage(): JSX.Element {
                           <p className="mt-1 text-xs text-brandPrimary">{scopeLabel(row.scope)}</p>
                         </td>
                         <td className="px-4 py-3 align-top text-slate-700 dark:text-slate-200">
-                          {scopeTarget(row, branchById, customerById)}
+                          {scopeTarget(row, branchById, customerById, customerCategoryById)}
                         </td>
                         <td className="px-4 py-3 align-top text-slate-700 dark:text-slate-200">
                           <p>Start: {formatDateTime(row.startsAt)}</p>
@@ -838,7 +905,7 @@ export default function PriceListsPage(): JSX.Element {
                   </div>
                   <div className="space-y-1 text-xs text-slate-700 dark:text-slate-200">
                     <p><span className="font-semibold">Type:</span> {scopeLabel(row.scope)}</p>
-                    <p><span className="font-semibold">Target:</span> {scopeTarget(row, branchById, customerById)}</p>
+                    <p><span className="font-semibold">Target:</span> {scopeTarget(row, branchById, customerById, customerCategoryById)}</p>
                     <p><span className="font-semibold">Start:</span> {formatDateTime(row.startsAt)}</p>
                     <p><span className="font-semibold">Status:</span> {statusLabel(row)}</p>
                     <p><span className="font-semibold">Products:</span> {row.rules.length}</p>
@@ -897,7 +964,7 @@ export default function PriceListsPage(): JSX.Element {
               <div>
                 <p className="mb-2 text-sm font-medium text-slate-700 dark:text-slate-200">Who gets this price?</p>
                 <div className="grid gap-2 md:grid-cols-2">
-                  {SCOPE_INFO.map((item) => (
+                  {scopeOptions.map((item) => (
                     <button
                       className={`rounded-xl border p-3 text-left ${form.scope === item.scope ? 'border-brandPrimary bg-brandPrimary/10 text-brandPrimary' : 'border-slate-300 text-slate-700 dark:border-slate-600 dark:text-slate-200'}`}
                       key={item.scope}
@@ -948,6 +1015,28 @@ export default function PriceListsPage(): JSX.Element {
                         </option>
                       ))}
                     </select>
+                  </label>
+                ) : null}
+
+                {form.scope === 'CUSTOMER_GROUP' ? (
+                  <label className="text-sm md:col-span-3">
+                    <span className="mb-1 block font-medium text-slate-700 dark:text-slate-200">Customer Category</span>
+                    <select
+                      className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-slate-900 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-100"
+                      onChange={(event) => setField('customerCategoryId', event.target.value)}
+                      required
+                      value={form.customerCategoryId}
+                    >
+                      <option value="">Select customer category</option>
+                      {customerCategories.map((category) => (
+                        <option key={category.id} value={category.id}>
+                          {category.name} ({category.code}) - {category.memberCount ?? 0} member(s)
+                        </option>
+                      ))}
+                    </select>
+                    <span className="mt-1 block text-xs text-slate-500 dark:text-slate-400">
+                      Customers can belong to one category only. Manage members under Customer Categories.
+                    </span>
                   </label>
                 ) : null}
 

@@ -22,6 +22,16 @@ export class PricingService {
       return contractPrice;
     }
 
+    const customerGroupPrice = this.resolveCustomerGroup(
+      input,
+      customer?.customerCategoryId ?? null,
+      activeLists,
+      requestedFlow
+    );
+    if (customerGroupPrice) {
+      return customerGroupPrice;
+    }
+
     const tierPrice = this.resolveTier(input, customer?.tier ?? null, activeLists, requestedFlow);
     if (tierPrice) {
       return tierPrice;
@@ -71,6 +81,31 @@ export class PricingService {
     }
 
     return null;
+  }
+
+  private resolveCustomerGroup(
+    input: PriceResolutionInput,
+    customerCategoryId: string | null,
+    lists: Awaited<ReturnType<MasterDataService['getActivePriceLists']>>,
+    requestedFlow: 'REFILL_EXCHANGE' | 'NON_REFILL' | null
+  ): PriceResolutionOutput | null {
+    if (!customerCategoryId) {
+      return null;
+    }
+
+    const groupLists = lists.filter(
+      (list) => list.scope === 'CUSTOMER_GROUP' && list.customerCategoryId === customerCategoryId
+    );
+    const rule = this.findRule(groupLists, input.product_id, requestedFlow);
+    if (!rule) {
+      return null;
+    }
+
+    return {
+      source: 'customer_group',
+      unit_price: rule.unitPrice,
+      discount_cap_percent: rule.discountCapPct
+    };
   }
 
   private resolveTier(

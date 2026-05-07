@@ -13,8 +13,8 @@ type TenantAddons = {
   email_features: boolean;
   email_report: boolean;
   email_customer_balance: boolean;
-  sms_alerts: boolean;
-  auto_report_digest: boolean;
+  custom_pricing: boolean;
+  customer_category: boolean;
 };
 
 type TenantSummary = {
@@ -305,8 +305,8 @@ export default function TenantsPage(): JSX.Element {
       email_features: row.addons.email_features,
       email_report: row.addons.email_report,
       email_customer_balance: row.addons.email_customer_balance,
-      sms_alerts: row.addons.sms_alerts,
-      auto_report_digest: row.addons.auto_report_digest,
+      custom_pricing: row.addons.custom_pricing,
+      customer_category: row.addons.customer_category,
       reason: ''
     });
   }
@@ -464,8 +464,8 @@ export default function TenantsPage(): JSX.Element {
             email_features: addonsForm.email_features,
             email_report: addonsForm.email_report,
             email_customer_balance: addonsForm.email_customer_balance,
-            sms_alerts: addonsForm.sms_alerts,
-            auto_report_digest: addonsForm.auto_report_digest,
+            custom_pricing: addonsForm.custom_pricing,
+            customer_category: addonsForm.customer_category,
             reason: addonsForm.reason.trim() || undefined
           }
         }
@@ -711,6 +711,8 @@ export default function TenantsPage(): JSX.Element {
                         <p>Email Features: {boolPill(row.addons.email_features)}</p>
                         <p>Email Report: {boolPill(row.addons.email_report)}</p>
                         <p>Email Customer Balance: {boolPill(row.addons.email_customer_balance)}</p>
+                        <p>Custom Pricing: {boolPill(row.addons.custom_pricing)}</p>
+                        <p>Customer Category: {boolPill(row.addons.customer_category)}</p>
                       </td>
                       <td className="px-4 py-3 align-top text-xs">
                         <p>Branches: {row.branch_count}</p>
@@ -793,7 +795,7 @@ export default function TenantsPage(): JSX.Element {
                       {row.datastore_ref || 'N/A'} | State: {row.datastore_migration_state}
                     </p>
                     <p>Delivery/Transfers/Mobile: {boolPill(row.entitlement.allowDelivery)} / {boolPill(row.entitlement.allowTransfers)} / {boolPill(row.entitlement.allowMobile)}</p>
-                    <p>Add-ons (Email/Report/Balance): {boolPill(row.addons.email_features)} / {boolPill(row.addons.email_report)} / {boolPill(row.addons.email_customer_balance)}</p>
+                    <p>Add-ons (Email/Report/Balance/Pricing/Category): {boolPill(row.addons.email_features)} / {boolPill(row.addons.email_report)} / {boolPill(row.addons.email_customer_balance)} / {boolPill(row.addons.custom_pricing)} / {boolPill(row.addons.customer_category)}</p>
                   </div>
                   <div className="mt-3 flex flex-wrap gap-2">
                     <button className="rounded-lg border border-slate-300 px-2.5 py-1 text-xs font-semibold text-slate-700 dark:border-slate-600 dark:text-slate-200" onClick={() => void openBindings(row)} type="button">Bindings</button>
@@ -1001,12 +1003,12 @@ export default function TenantsPage(): JSX.Element {
                 <span>Email Customer Balance</span>
               </label>
               <label className="flex items-center gap-2 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-sm dark:border-slate-700 dark:bg-slate-800/60">
-                <input checked={addonsForm.sms_alerts} onChange={(event) => setAddonsForm((prev) => prev ? { ...prev, sms_alerts: event.target.checked } : prev)} type="checkbox" />
-                <span>SMS Alerts</span>
+                <input checked={addonsForm.custom_pricing} onChange={(event) => setAddonsForm((prev) => prev ? { ...prev, custom_pricing: event.target.checked } : prev)} type="checkbox" />
+                <span>Custom Pricing</span>
               </label>
               <label className="flex items-center gap-2 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-sm dark:border-slate-700 dark:bg-slate-800/60 md:col-span-2">
-                <input checked={addonsForm.auto_report_digest} onChange={(event) => setAddonsForm((prev) => prev ? { ...prev, auto_report_digest: event.target.checked } : prev)} type="checkbox" />
-                <span>Auto Report Digest</span>
+                <input checked={addonsForm.customer_category} onChange={(event) => setAddonsForm((prev) => prev ? { ...prev, customer_category: event.target.checked } : prev)} type="checkbox" />
+                <span>Customer Category</span>
               </label>
               <label className="text-sm md:col-span-2">
                 <span className="mb-1 block font-medium text-slate-700 dark:text-slate-200">Reason (Audit Note)</span>

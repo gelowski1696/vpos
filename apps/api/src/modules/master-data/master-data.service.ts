@@ -1,4 +1,4 @@
-import { BadRequestException, Injectable, NotFoundException, Optional } from '@nestjs/common';
+import { BadRequestException, ForbiddenException, Injectable, NotFoundException, Optional } from '@nestjs/common';
 import {
   CostAllocationBasis,
   CostingMethod,
@@ -84,9 +84,20 @@ export type CustomerRecord = Timestamped & {
   gas?: string | null;
   province?: string | null;
   city?: string | null;
+  customerCategoryId?: string | null;
   contractPrice?: number | null;
   outstandingBalance?: number;
   pointsBalance?: number;
+  isActive: boolean;
+};
+
+export type CustomerCategoryRecord = Timestamped & {
+  id: string;
+  code: string;
+  name: string;
+  description?: string | null;
+  memberCount: number;
+  customerIds: string[];
   isActive: boolean;
 };
 
@@ -180,9 +191,10 @@ export type PriceListRecord = Timestamped & {
   id: string;
   code: string;
   name: string;
-  scope: 'GLOBAL' | 'BRANCH' | 'TIER' | 'CONTRACT';
+  scope: 'GLOBAL' | 'BRANCH' | 'TIER' | 'CUSTOMER_GROUP' | 'CONTRACT';
   branchId?: string | null;
   customerTier?: string | null;
+  customerCategoryId?: string | null;
   customerId?: string | null;
   startsAt: string;
   endsAt?: string | null;
@@ -204,9 +216,11 @@ export type CreateCustomer = Pick<CustomerRecord, 'code' | 'name' | 'type'> &
   Partial<
     Pick<
       CustomerRecord,
-      'tier' | 'address' | 'contactNumber' | 'gas' | 'province' | 'city' | 'contractPrice' | 'isActive'
+      'tier' | 'address' | 'contactNumber' | 'gas' | 'province' | 'city' | 'customerCategoryId' | 'contractPrice' | 'isActive'
     >
   >;
+export type CreateCustomerCategory = Pick<CustomerCategoryRecord, 'code' | 'name'> &
+  Partial<Pick<CustomerCategoryRecord, 'description' | 'customerIds' | 'isActive'>>;
 export type CreateCylinderType = Pick<CylinderTypeRecord, 'code' | 'name' | 'sizeKg' | 'depositAmount'> &
   Partial<Pick<CylinderTypeRecord, 'isActive'>>;
 export type CreateProduct = Pick<ProductRecord, 'sku' | 'name' | 'unit'> &
@@ -343,6 +357,7 @@ export class MasterDataService {
   private readonly personnelRoles: PersonnelRoleRecord[] = [];
   private readonly personnels: PersonnelRecord[] = [];
   private readonly customers: CustomerRecord[] = [];
+  private readonly customerCategories: CustomerCategoryRecord[] = [];
   private readonly cylinderTypes: CylinderTypeRecord[] = [];
   private readonly products: ProductRecord[] = [];
   private readonly expenseCategories: ExpenseCategoryRecord[] = [];
@@ -2079,6 +2094,288 @@ export class MasterDataService {
     return Boolean(existing);
   }
 
+  async listCustomerCategories(targetCompanyId?: string): Promise<CustomerCategoryRecord[]> {
+    const companyId = targetCompanyId ?? (await this.getCompanyIdOrNull());
+    await this.enforceAddonPolicy('customer_category', companyId ?? undefined);
+    const binding = await this.getTenantBinding(companyId);
+    if (!binding || !companyId) {
+      return this.customerCategories.map((row) => this.mapMemoryCustomerCategory(row));
+    }
+    try {
+      await this.ensurePrismaBranchLocationSeed(companyId, binding.client);
+      const rows = await binding.client.customerCategory.findMany({
+        where: { companyId },
+        include: { customers: { select: { id: true }, orderBy: { code: 'asc' } } },
+        orderBy: { code: 'asc' }
+      });
+      return rows.map((row) => this.mapCustomerCategoryFromPrisma(row));
+    } catch (error) {
+      if (binding.mode === TenancyDatastoreMode.DEDICATED_DB) {
+        throw error;
+      }
+      return this.customerCategories.map((row) => this.mapMemoryCustomerCategory(row));
+    }
+  }
+
+  async customerCategoryCodeExists(
+    code: string,
+    targetCompanyId?: string,
+    excludeCategoryId?: string
+  ): Promise<boolean> {
+    const companyId = targetCompanyId ?? (await this.getCompanyIdOrNull());
+    const normalizedCode = this.normalizeEntityCode(code);
+    const excludeId = excludeCategoryId?.trim() || null;
+    const binding = await this.getTenantBinding(companyId);
+    if (!binding || !companyId) {
+      return this.customerCategories.some((row) => {
+        if (excludeId && row.id === excludeId) {
+          return false;
+        }
+        return this.normalizeEntityCode(row.code) === normalizedCode;
+      });
+    }
+    const existing = await binding.client.customerCategory.findFirst({
+      where: {
+        companyId,
+        ...(excludeId ? { id: { not: excludeId } } : {}),
+        code: { equals: normalizedCode, mode: 'insensitive' }
+      },
+      select: { id: true }
+    });
+    return Boolean(existing);
+  }
+
+  async createCustomerCategory(
+    input: CreateCustomerCategory,
+    targetCompanyId?: string
+  ): Promise<CustomerCategoryRecord> {
+    const companyId = targetCompanyId ?? (await this.getCompanyIdOrNull());
+    await this.enforceMasterDataWritePolicy(companyId ?? undefined);
+    await this.enforceAddonPolicy('customer_category', companyId ?? undefined);
+    const binding = await this.getTenantBinding(companyId);
+    const code = await this.resolveCodeForCreate(
+      input.code,
+      'Customer category',
+      'CG',
+      async (candidate) => this.customerCategoryCodeExists(candidate, companyId ?? undefined)
+    );
+    const name = input.name.trim();
+    if (!name) {
+      throw new BadRequestException('Customer category name is required');
+    }
+    const customerIds = this.normalizeIdList(input.customerIds);
+
+    if (!binding || !companyId) {
+      const row: CustomerCategoryRecord = {
+        id: uuidv4(),
+        ...this.stamp(),
+        code,
+        name,
+        description: input.description?.trim() || null,
+        memberCount: 0,
+        customerIds: [],
+        isActive: input.isActive ?? true
+      };
+      this.customerCategories.push(row);
+      this.assignMemoryCustomersToCategory(row.id, customerIds);
+      return this.mapMemoryCustomerCategory(row);
+    }
+
+    try {
+      const row = await binding.client.$transaction(async (tx) => {
+        const created = await tx.customerCategory.create({
+          data: {
+            companyId,
+            code,
+            name,
+            description: input.description?.trim() || null,
+            isActive: input.isActive ?? true
+          }
+        });
+        if (customerIds.length > 0) {
+          await tx.customer.updateMany({
+            where: { companyId, id: { in: customerIds } },
+            data: { customerCategoryId: created.id }
+          });
+        }
+        return tx.customerCategory.findUniqueOrThrow({
+          where: { id: created.id },
+          include: { customers: { select: { id: true }, orderBy: { code: 'asc' } } }
+        });
+      });
+      return this.mapCustomerCategoryFromPrisma(row);
+    } catch (error) {
+      if (binding.mode === TenancyDatastoreMode.DEDICATED_DB) {
+        throw error;
+      }
+      const row: CustomerCategoryRecord = {
+        id: uuidv4(),
+        ...this.stamp(),
+        code,
+        name,
+        description: input.description?.trim() || null,
+        memberCount: 0,
+        customerIds: [],
+        isActive: input.isActive ?? true
+      };
+      this.customerCategories.push(row);
+      this.assignMemoryCustomersToCategory(row.id, customerIds);
+      return this.mapMemoryCustomerCategory(row);
+    }
+  }
+
+  async updateCustomerCategory(
+    id: string,
+    input: Partial<CreateCustomerCategory>,
+    targetCompanyId?: string
+  ): Promise<CustomerCategoryRecord> {
+    const companyId = targetCompanyId ?? (await this.getCompanyIdOrNull());
+    await this.enforceMasterDataWritePolicy(companyId ?? undefined);
+    await this.enforceAddonPolicy('customer_category', companyId ?? undefined);
+    const binding = await this.getTenantBinding(companyId);
+    const customerIds = input.customerIds === undefined ? undefined : this.normalizeIdList(input.customerIds);
+
+    if (!binding || !companyId) {
+      const row = this.find(this.customerCategories, id, 'Customer category');
+      const nextCode = await this.resolveCodeForUpdate(
+        input.code,
+        row.code,
+        'Customer category',
+        'CG',
+        async (candidate) => this.customerCategoryCodeExists(candidate, companyId ?? undefined, row.id)
+      );
+      Object.assign(
+        row,
+        this.clean({
+          code: nextCode,
+          name: input.name === undefined ? undefined : input.name.trim(),
+          description: input.description === undefined ? undefined : input.description?.trim() || null,
+          isActive: input.isActive
+        })
+      );
+      row.updatedAt = this.now();
+      if (customerIds) {
+        this.assignMemoryCustomersToCategory(row.id, customerIds);
+      }
+      return this.mapMemoryCustomerCategory(row);
+    }
+
+    try {
+      const existing = await binding.client.customerCategory.findFirst({
+        where: { id, companyId },
+        select: { id: true, code: true }
+      });
+      if (!existing) {
+        throw new NotFoundException('Customer category not found');
+      }
+      const nextCode = await this.resolveCodeForUpdate(
+        input.code,
+        existing.code,
+        'Customer category',
+        'CG',
+        async (candidate) => this.customerCategoryCodeExists(candidate, companyId ?? undefined, existing.id)
+      );
+      const row = await binding.client.$transaction(async (tx) => {
+        await tx.customerCategory.update({
+          where: { id },
+          data: {
+            code: nextCode,
+            name: input.name === undefined ? undefined : input.name.trim(),
+            description: input.description === undefined ? undefined : input.description?.trim() || null,
+            isActive: input.isActive
+          }
+        });
+        if (customerIds) {
+          await tx.customer.updateMany({
+            where: { companyId, customerCategoryId: id },
+            data: { customerCategoryId: null }
+          });
+          if (customerIds.length > 0) {
+            await tx.customer.updateMany({
+              where: { companyId, id: { in: customerIds } },
+              data: { customerCategoryId: id }
+            });
+          }
+        }
+        return tx.customerCategory.findUniqueOrThrow({
+          where: { id },
+          include: { customers: { select: { id: true }, orderBy: { code: 'asc' } } }
+        });
+      });
+      return this.mapCustomerCategoryFromPrisma(row);
+    } catch (error) {
+      if (binding.mode === TenancyDatastoreMode.DEDICATED_DB) {
+        throw error;
+      }
+      const row = this.find(this.customerCategories, id, 'Customer category');
+      const nextCode = await this.resolveCodeForUpdate(
+        input.code,
+        row.code,
+        'Customer category',
+        'CG',
+        async (candidate) => this.customerCategoryCodeExists(candidate, companyId ?? undefined, row.id)
+      );
+      Object.assign(
+        row,
+        this.clean({
+          code: nextCode,
+          name: input.name === undefined ? undefined : input.name.trim(),
+          description: input.description === undefined ? undefined : input.description?.trim() || null,
+          isActive: input.isActive
+        })
+      );
+      row.updatedAt = this.now();
+      if (customerIds) {
+        this.assignMemoryCustomersToCategory(row.id, customerIds);
+      }
+      return this.mapMemoryCustomerCategory(row);
+    }
+  }
+
+  async safeDeleteCustomerCategory(id: string, targetCompanyId?: string): Promise<CustomerCategoryRecord> {
+    const companyId = targetCompanyId ?? (await this.getCompanyIdOrNull());
+    await this.enforceMasterDataWritePolicy(companyId ?? undefined);
+    await this.enforceAddonPolicy('customer_category', companyId ?? undefined);
+    const binding = await this.getTenantBinding(companyId);
+    if (!binding || !companyId) {
+      const row = this.find(this.customerCategories, id, 'Customer category');
+      row.isActive = false;
+      row.updatedAt = this.now();
+      this.assignMemoryCustomersToCategory(row.id, []);
+      return this.mapMemoryCustomerCategory(row);
+    }
+
+    try {
+      const row = await binding.client.$transaction(async (tx) => {
+        const updated = await tx.customerCategory.updateMany({
+          where: { id, companyId },
+          data: { isActive: false }
+        });
+        if (updated.count === 0) {
+          throw new NotFoundException('Customer category not found');
+        }
+        await tx.customer.updateMany({
+          where: { companyId, customerCategoryId: id },
+          data: { customerCategoryId: null }
+        });
+        return tx.customerCategory.findUniqueOrThrow({
+          where: { id },
+          include: { customers: { select: { id: true }, orderBy: { code: 'asc' } } }
+        });
+      });
+      return this.mapCustomerCategoryFromPrisma(row);
+    } catch (error) {
+      if (binding.mode === TenancyDatastoreMode.DEDICATED_DB) {
+        throw error;
+      }
+      const row = this.find(this.customerCategories, id, 'Customer category');
+      row.isActive = false;
+      row.updatedAt = this.now();
+      this.assignMemoryCustomersToCategory(row.id, []);
+      return this.mapMemoryCustomerCategory(row);
+    }
+  }
+
   async createCustomer(input: CreateCustomer, targetCompanyId?: string): Promise<CustomerRecord> {
     const companyId = targetCompanyId ?? (await this.getCompanyIdOrNull());
     await this.enforceMasterDataWritePolicy(companyId ?? undefined);
@@ -2102,6 +2399,7 @@ export class MasterDataService {
         gas: input.gas?.trim() || null,
         province: input.province?.trim() || null,
         city: input.city?.trim() || null,
+        customerCategoryId: input.customerCategoryId?.trim() || null,
         contractPrice: input.contractPrice ?? null,
         isActive: input.isActive ?? true
       };
@@ -2121,6 +2419,7 @@ export class MasterDataService {
           gas: input.gas?.trim() || null,
           province: input.province?.trim() || null,
           city: input.city?.trim() || null,
+          customerCategoryId: input.customerCategoryId?.trim() || null,
           contractPrice:
             input.contractPrice === null || input.contractPrice === undefined
               ? null
@@ -2145,6 +2444,7 @@ export class MasterDataService {
         gas: input.gas?.trim() || null,
         province: input.province?.trim() || null,
         city: input.city?.trim() || null,
+        customerCategoryId: input.customerCategoryId?.trim() || null,
         contractPrice: input.contractPrice ?? null,
         isActive: input.isActive ?? true
       };
@@ -2198,6 +2498,8 @@ export class MasterDataService {
           gas: input.gas === undefined ? undefined : input.gas?.trim() || null,
           province: input.province === undefined ? undefined : input.province?.trim() || null,
           city: input.city === undefined ? undefined : input.city?.trim() || null,
+          customerCategoryId:
+            input.customerCategoryId === undefined ? undefined : input.customerCategoryId?.trim() || null,
           contractPrice:
             input.contractPrice === undefined
               ? undefined
@@ -5068,9 +5370,10 @@ export class MasterDataService {
 
   async listPriceLists(): Promise<PriceListRecord[]> {
     const companyId = await this.getCompanyIdOrNull();
+    const allowCustomPricing = await this.isAddonEnabled('custom_pricing', companyId ?? undefined);
     const binding = await this.getTenantBinding(companyId);
     if (!binding || !companyId) {
-      return this.priceLists;
+      return this.filterPriceListsByAddons(this.priceLists, allowCustomPricing);
     }
     try {
       await this.ensurePrismaBranchLocationSeed(companyId, binding.client);
@@ -5091,18 +5394,21 @@ export class MasterDataService {
           return true;
         });
         return mapped;
-      });
+      }).filter((row) => allowCustomPricing || row.scope !== 'CUSTOMER_GROUP');
     } catch (error) {
       if (binding.mode === TenancyDatastoreMode.DEDICATED_DB) {
         throw error;
       }
-      return this.priceLists;
+      return this.filterPriceListsByAddons(this.priceLists, allowCustomPricing);
     }
   }
 
   async createPriceList(input: CreatePriceList): Promise<PriceListRecord> {
     const companyId = await this.getCompanyIdOrNull();
     await this.enforceMasterDataWritePolicy(companyId ?? undefined);
+    if (input.scope === 'CUSTOMER_GROUP') {
+      await this.enforceAddonPolicy('custom_pricing', companyId ?? undefined);
+    }
     const binding = await this.getTenantBinding(companyId);
     if (!binding || !companyId) {
       const row: PriceListRecord = {
@@ -5113,6 +5419,7 @@ export class MasterDataService {
         scope: input.scope,
         branchId: input.branchId ?? null,
         customerTier: input.customerTier ?? null,
+        customerCategoryId: input.customerCategoryId ?? null,
         customerId: input.customerId ?? null,
         startsAt: input.startsAt,
         endsAt: input.endsAt ?? null,
@@ -5138,6 +5445,7 @@ export class MasterDataService {
           scope: input.scope,
           branchId: input.branchId ?? null,
           customerTier: input.customerTier ?? null,
+          customerCategoryId: input.customerCategoryId ?? null,
           customerId: input.customerId ?? null,
           startsAt: this.toDate(input.startsAt),
           endsAt: input.endsAt ? this.toDate(input.endsAt) : null,
@@ -5168,6 +5476,7 @@ export class MasterDataService {
         scope: input.scope,
         branchId: input.branchId ?? null,
         customerTier: input.customerTier ?? null,
+        customerCategoryId: input.customerCategoryId ?? null,
         customerId: input.customerId ?? null,
         startsAt: input.startsAt,
         endsAt: input.endsAt ?? null,
@@ -5189,6 +5498,9 @@ export class MasterDataService {
   async updatePriceList(id: string, input: Partial<CreatePriceList>): Promise<PriceListRecord> {
     const companyId = await this.getCompanyIdOrNull();
     await this.enforceMasterDataWritePolicy(companyId ?? undefined);
+    if (input.scope === 'CUSTOMER_GROUP' || input.customerCategoryId !== undefined) {
+      await this.enforceAddonPolicy('custom_pricing', companyId ?? undefined);
+    }
     const binding = await this.getTenantBinding(companyId);
     if (!binding || !companyId) {
       const row = this.find(this.priceLists, id, 'Price list');
@@ -5219,6 +5531,7 @@ export class MasterDataService {
             scope: input.scope,
             branchId: input.branchId,
             customerTier: input.customerTier,
+            customerCategoryId: input.customerCategoryId,
             customerId: input.customerId,
             startsAt: input.startsAt === undefined ? undefined : this.toDate(input.startsAt),
             endsAt: input.endsAt === undefined ? undefined : input.endsAt ? this.toDate(input.endsAt) : null,
@@ -5298,6 +5611,7 @@ export class MasterDataService {
 
   async getActivePriceLists(atIso: string): Promise<PriceListRecord[]> {
     const companyId = await this.getCompanyIdOrNull();
+    const allowCustomPricing = await this.isAddonEnabled('custom_pricing', companyId ?? undefined);
     const binding = await this.getTenantBinding(companyId);
     if (companyId && binding) {
       try {
@@ -5312,7 +5626,9 @@ export class MasterDataService {
           },
           include: { rules: true }
         });
-        return rows.map((row) => this.mapPriceListFromPrisma(row));
+        return rows
+          .map((row) => this.mapPriceListFromPrisma(row))
+          .filter((row) => allowCustomPricing || row.scope !== 'CUSTOMER_GROUP');
       } catch (error) {
         if (binding.mode === TenancyDatastoreMode.DEDICATED_DB) {
           throw error;
@@ -5323,6 +5639,7 @@ export class MasterDataService {
 
     const at = new Date(atIso).getTime();
     return this.priceLists.filter((list) => {
+      if (!allowCustomPricing && list.scope === 'CUSTOMER_GROUP') return false;
       if (!list.isActive) return false;
       const start = new Date(list.startsAt).getTime();
       const end = list.endsAt ? new Date(list.endsAt).getTime() : Number.POSITIVE_INFINITY;
@@ -5357,6 +5674,35 @@ export class MasterDataService {
       return;
     }
     await this.entitlementsService.enforceMasterDataWrite(companyId);
+  }
+
+  private async isAddonEnabled(
+    addon: 'custom_pricing' | 'customer_category',
+    companyId?: string
+  ): Promise<boolean> {
+    if (!this.entitlementsService) {
+      return true;
+    }
+    const addons = await this.entitlementsService.getTenantAddons(companyId);
+    return Boolean(addons[addon]);
+  }
+
+  private async enforceAddonPolicy(
+    addon: 'custom_pricing' | 'customer_category',
+    companyId?: string
+  ): Promise<void> {
+    if (await this.isAddonEnabled(addon, companyId)) {
+      return;
+    }
+    const label = addon === 'custom_pricing' ? 'Custom Pricing' : 'Customer Category';
+    throw new ForbiddenException(`${label} add-on is not enabled for this tenant.`);
+  }
+
+  private filterPriceListsByAddons(
+    rows: PriceListRecord[],
+    allowCustomPricing: boolean
+  ): PriceListRecord[] {
+    return allowCustomPricing ? rows : rows.filter((row) => row.scope !== 'CUSTOMER_GROUP');
   }
 
   private async getCompanyIdOrNull(): Promise<string | null> {
@@ -6344,6 +6690,69 @@ export class MasterDataService {
     return Number(Number(value).toFixed(2));
   }
 
+  private normalizeIdList(value: unknown): string[] {
+    if (!Array.isArray(value)) {
+      return [];
+    }
+    return Array.from(
+      new Set(
+        value
+          .map((entry) => String(entry ?? '').trim())
+          .filter(Boolean)
+      )
+    );
+  }
+
+  private assignMemoryCustomersToCategory(categoryId: string, customerIds: string[]): void {
+    const selected = new Set(customerIds);
+    for (const customer of this.customers) {
+      if (customer.customerCategoryId === categoryId && !selected.has(customer.id)) {
+        customer.customerCategoryId = null;
+        customer.updatedAt = this.now();
+      }
+      if (selected.has(customer.id)) {
+        customer.customerCategoryId = categoryId;
+        customer.updatedAt = this.now();
+      }
+    }
+  }
+
+  private mapMemoryCustomerCategory(row: CustomerCategoryRecord): CustomerCategoryRecord {
+    const customerIds = this.customers
+      .filter((customer) => customer.customerCategoryId === row.id)
+      .sort((a, b) => a.code.localeCompare(b.code))
+      .map((customer) => customer.id);
+    return {
+      ...row,
+      customerIds,
+      memberCount: customerIds.length
+    };
+  }
+
+  private mapCustomerCategoryFromPrisma(row: {
+    id: string;
+    code: string;
+    name: string;
+    description: string | null;
+    isActive: boolean;
+    createdAt: Date;
+    updatedAt: Date;
+    customers?: Array<{ id: string }>;
+  }): CustomerCategoryRecord {
+    const customerIds = (row.customers ?? []).map((customer) => customer.id);
+    return {
+      id: row.id,
+      code: row.code,
+      name: row.name,
+      description: row.description,
+      customerIds,
+      memberCount: customerIds.length,
+      isActive: row.isActive,
+      createdAt: row.createdAt.toISOString(),
+      updatedAt: row.updatedAt.toISOString()
+    };
+  }
+
   private mapCustomerFromPrisma(row: {
     id: string;
     code: string;
@@ -6355,6 +6764,7 @@ export class MasterDataService {
     gas: string | null;
     province: string | null;
     city: string | null;
+    customerCategoryId: string | null;
     contractPrice: Prisma.Decimal | null;
     pointsBalance: number;
     isActive: boolean;
@@ -6372,6 +6782,7 @@ export class MasterDataService {
       gas: row.gas,
       province: row.province,
       city: row.city,
+      customerCategoryId: row.customerCategoryId,
       contractPrice: row.contractPrice ? Number(row.contractPrice) : null,
       pointsBalance: Math.max(0, Math.floor(row.pointsBalance ?? 0)),
       isActive: row.isActive,
@@ -6655,9 +7066,10 @@ export class MasterDataService {
     id: string;
     code: string;
     name: string;
-    scope: 'GLOBAL' | 'BRANCH' | 'TIER' | 'CONTRACT';
+    scope: 'GLOBAL' | 'BRANCH' | 'TIER' | 'CUSTOMER_GROUP' | 'CONTRACT';
     branchId: string | null;
     customerTier: string | null;
+    customerCategoryId: string | null;
     customerId: string | null;
     startsAt: Date;
     endsAt: Date | null;
@@ -6680,6 +7092,7 @@ export class MasterDataService {
       scope: row.scope,
       branchId: row.branchId,
       customerTier: row.customerTier,
+      customerCategoryId: row.customerCategoryId,
       customerId: row.customerId,
       startsAt: row.startsAt.toISOString(),
       endsAt: row.endsAt ? row.endsAt.toISOString() : null,

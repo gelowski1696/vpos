@@ -2,7 +2,7 @@ import { Body, Controller, Delete, ForbiddenException, Get, Param, Post, Put, Qu
 import { Req } from '@nestjs/common';
 import { Request } from 'express';
 import { Roles } from '../auth/decorators/roles.decorator';
-import { CreatePriceList, MasterDataService } from './master-data.service';
+import { CreateCustomerCategory, CreatePriceList, MasterDataService } from './master-data.service';
 import { AuditService } from '../audit/audit.service';
 
 type PrimitivePayload = Record<string, unknown>;
@@ -608,6 +608,7 @@ export class MasterDataController {
       gas: body.gas ? String(body.gas) : null,
       province: body.province ? String(body.province) : null,
       city: body.city ? String(body.city) : null,
+      customerCategoryId: body.customerCategoryId ? String(body.customerCategoryId) : null,
       contractPrice: this.toNumber(body.contractPrice),
       isActive: body.isActive === undefined ? true : Boolean(body.isActive)
     }, targetCompanyId);
@@ -641,6 +642,12 @@ export class MasterDataController {
       gas: body.gas === undefined ? undefined : body.gas ? String(body.gas) : null,
       province: body.province === undefined ? undefined : body.province ? String(body.province) : null,
       city: body.city === undefined ? undefined : body.city ? String(body.city) : null,
+      customerCategoryId:
+        body.customerCategoryId === undefined
+          ? undefined
+          : body.customerCategoryId
+            ? String(body.customerCategoryId)
+            : null,
       contractPrice: body.contractPrice === undefined ? undefined : this.toNumber(body.contractPrice),
       isActive: body.isActive === undefined ? undefined : Boolean(body.isActive)
     }, targetCompanyId);
@@ -661,6 +668,80 @@ export class MasterDataController {
     const targetCompanyId = this.resolveTargetCompanyId(req, companyId);
     const row = await this.masterDataService.safeDeleteCustomer(id, targetCompanyId);
     await this.auditWrite(req, 'MASTER_DATA_CUSTOMER_SAFE_DELETE', 'Customer', row.id, {
+      code: row.code,
+      isActive: row.isActive
+    }, targetCompanyId);
+    return row;
+  }
+
+  @Get('customer-categories')
+  @Roles('admin', 'owner', 'platform_owner', 'supervisor', 'cashier', 'driver', 'helper')
+  listCustomerCategories(
+    @Req() req: RequestWithTenant,
+    @Query('companyId') companyId?: string
+  ): ReturnType<MasterDataService['listCustomerCategories']> {
+    const targetCompanyId = this.resolveTargetCompanyId(req, companyId);
+    return this.masterDataService.listCustomerCategories(targetCompanyId);
+  }
+
+  @Get('customer-categories/code-exists')
+  @Roles('admin', 'owner', 'platform_owner', 'supervisor', 'cashier', 'driver', 'helper')
+  async customerCategoryCodeExists(
+    @Req() req: RequestWithTenant,
+    @Query('code') code?: string,
+    @Query('excludeId') excludeId?: string,
+    @Query('companyId') companyId?: string
+  ): Promise<{ exists: boolean }> {
+    const targetCompanyId = this.resolveTargetCompanyId(req, companyId);
+    const exists = await this.masterDataService.customerCategoryCodeExists(
+      String(code ?? ''),
+      targetCompanyId,
+      excludeId
+    );
+    return { exists };
+  }
+
+  @Post('customer-categories')
+  @Roles('admin', 'owner', 'platform_owner')
+  async createCustomerCategory(
+    @Req() req: RequestWithTenant,
+    @Body() body: PrimitivePayload
+  ): Promise<ReturnType<MasterDataService['createCustomerCategory']>> {
+    const targetCompanyId = this.resolveTargetCompanyId(req, body.companyId);
+    const row = await this.masterDataService.createCustomerCategory(this.parseCustomerCategory(body), targetCompanyId);
+    await this.auditWrite(req, 'MASTER_DATA_CUSTOMER_CATEGORY_CREATE', 'CustomerCategory', row.id, {
+      code: row.code,
+      memberCount: row.memberCount
+    }, targetCompanyId);
+    return row;
+  }
+
+  @Put('customer-categories/:id')
+  @Roles('admin', 'owner', 'platform_owner')
+  async updateCustomerCategory(
+    @Req() req: RequestWithTenant,
+    @Param('id') id: string,
+    @Body() body: PrimitivePayload
+  ): Promise<ReturnType<MasterDataService['updateCustomerCategory']>> {
+    const targetCompanyId = this.resolveTargetCompanyId(req, body.companyId);
+    const row = await this.masterDataService.updateCustomerCategory(id, this.parseCustomerCategoryPartial(body), targetCompanyId);
+    await this.auditWrite(req, 'MASTER_DATA_CUSTOMER_CATEGORY_UPDATE', 'CustomerCategory', row.id, {
+      code: row.code,
+      memberCount: row.memberCount
+    }, targetCompanyId);
+    return row;
+  }
+
+  @Delete('customer-categories/:id')
+  @Roles('admin', 'owner', 'platform_owner')
+  async deleteCustomerCategory(
+    @Req() req: RequestWithTenant,
+    @Param('id') id: string,
+    @Query('companyId') companyId?: string
+  ): Promise<ReturnType<MasterDataService['safeDeleteCustomerCategory']>> {
+    const targetCompanyId = this.resolveTargetCompanyId(req, companyId);
+    const row = await this.masterDataService.safeDeleteCustomerCategory(id, targetCompanyId);
+    await this.auditWrite(req, 'MASTER_DATA_CUSTOMER_CATEGORY_SAFE_DELETE', 'CustomerCategory', row.id, {
       code: row.code,
       isActive: row.isActive
     }, targetCompanyId);
@@ -1532,6 +1613,21 @@ export class MasterDataController {
     return [];
   }
 
+  private parseStringList(value: unknown): string[] {
+    if (Array.isArray(value)) {
+      return value.map((item) => String(item).trim()).filter(Boolean);
+    }
+
+    if (typeof value === 'string') {
+      return value
+        .split(',')
+        .map((item) => item.trim())
+        .filter(Boolean);
+    }
+
+    return [];
+  }
+
   private parseImportRows(value: unknown): Array<Record<string, unknown>> {
     if (!Array.isArray(value)) {
       return [];
@@ -1550,9 +1646,35 @@ export class MasterDataController {
     return Number.isNaN(parsed) ? null : parsed;
   }
 
+  private parseCustomerCategory(body: PrimitivePayload): CreateCustomerCategory {
+    return {
+      code: String(body.code ?? ''),
+      name: String(body.name ?? ''),
+      description: body.description ? String(body.description) : null,
+      customerIds: this.parseStringList(body.customerIds ?? body.customer_ids),
+      isActive: body.isActive === undefined ? true : Boolean(body.isActive)
+    };
+  }
+
+  private parseCustomerCategoryPartial(body: PrimitivePayload): Partial<CreateCustomerCategory> {
+    const payload: Partial<CreateCustomerCategory> = {};
+    if (body.code !== undefined) payload.code = String(body.code);
+    if (body.name !== undefined) payload.name = String(body.name);
+    if (body.description !== undefined) payload.description = body.description ? String(body.description) : null;
+    if (body.customerIds !== undefined || body.customer_ids !== undefined) {
+      payload.customerIds = this.parseStringList(body.customerIds ?? body.customer_ids);
+    }
+    if (body.isActive !== undefined) payload.isActive = Boolean(body.isActive);
+    return payload;
+  }
+
   private parsePriceList(body: PrimitivePayload): CreatePriceList {
     const scope =
-      body.scope === 'GLOBAL' || body.scope === 'BRANCH' || body.scope === 'TIER' || body.scope === 'CONTRACT'
+      body.scope === 'GLOBAL' ||
+      body.scope === 'BRANCH' ||
+      body.scope === 'TIER' ||
+      body.scope === 'CUSTOMER_GROUP' ||
+      body.scope === 'CONTRACT'
         ? body.scope
         : 'GLOBAL';
 
@@ -1562,6 +1684,7 @@ export class MasterDataController {
       scope,
       branchId: body.branchId ? String(body.branchId) : null,
       customerTier: body.customerTier ? String(body.customerTier) : null,
+      customerCategoryId: body.customerCategoryId ? String(body.customerCategoryId) : null,
       customerId: body.customerId ? String(body.customerId) : null,
       startsAt: String(body.startsAt ?? new Date().toISOString()),
       endsAt: body.endsAt ? String(body.endsAt) : null,
@@ -1574,11 +1697,20 @@ export class MasterDataController {
     const payload: Partial<CreatePriceList> = {};
     if (body.code !== undefined) payload.code = String(body.code);
     if (body.name !== undefined) payload.name = String(body.name);
-    if (body.scope === 'GLOBAL' || body.scope === 'BRANCH' || body.scope === 'TIER' || body.scope === 'CONTRACT') {
+    if (
+      body.scope === 'GLOBAL' ||
+      body.scope === 'BRANCH' ||
+      body.scope === 'TIER' ||
+      body.scope === 'CUSTOMER_GROUP' ||
+      body.scope === 'CONTRACT'
+    ) {
       payload.scope = body.scope;
     }
     if (body.branchId !== undefined) payload.branchId = body.branchId ? String(body.branchId) : null;
     if (body.customerTier !== undefined) payload.customerTier = body.customerTier ? String(body.customerTier) : null;
+    if (body.customerCategoryId !== undefined) {
+      payload.customerCategoryId = body.customerCategoryId ? String(body.customerCategoryId) : null;
+    }
     if (body.customerId !== undefined) payload.customerId = body.customerId ? String(body.customerId) : null;
     if (body.startsAt !== undefined) payload.startsAt = String(body.startsAt);
     if (body.endsAt !== undefined) payload.endsAt = body.endsAt ? String(body.endsAt) : null;

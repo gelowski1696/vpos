@@ -47,9 +47,10 @@ type PriceListRecord = {
   id: string;
   code: string;
   name: string;
-  scope: 'GLOBAL' | 'BRANCH' | 'TIER' | 'CONTRACT';
+  scope: 'GLOBAL' | 'BRANCH' | 'TIER' | 'CUSTOMER_GROUP' | 'CONTRACT';
   branchId: string | null;
   customerTier: string | null;
+  customerCategoryId?: string | null;
   customerId: string | null;
   startsAt: string;
   endsAt: string | null;
@@ -63,6 +64,7 @@ type LinkedPriceRow = {
   scope: PriceListRecord['scope'];
   branchId: string | null;
   customerTier: string | null;
+  customerCategoryId?: string | null;
   customerId: string | null;
   flowMode: 'ANY' | 'REFILL_EXCHANGE' | 'NON_REFILL';
   unitPrice: number;
@@ -447,6 +449,7 @@ export default function ProductsPage(): JSX.Element {
           scope: list.scope,
           branchId: list.branchId,
           customerTier: list.customerTier,
+          customerCategoryId: list.customerCategoryId,
           customerId: list.customerId,
           flowMode,
           unitPrice: Number(rule.unitPrice),
@@ -552,6 +555,9 @@ export default function ProductsPage(): JSX.Element {
     }
     if (row.scope === 'TIER') {
       return `Tier: ${row.customerTier ?? 'N/A'}`;
+    }
+    if (row.scope === 'CUSTOMER_GROUP') {
+      return `Customer Category: ${row.customerCategoryId ?? 'N/A'}`;
     }
     return row.customerId
       ? `Customer: ${customerLabelById.get(row.customerId) ?? row.customerId}`
