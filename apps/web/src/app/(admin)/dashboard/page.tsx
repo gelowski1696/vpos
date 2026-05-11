@@ -5,7 +5,17 @@ import { apiRequest, getSessionRoles } from '../../../lib/api-client';
 
 type PeriodPreset = 'TODAY' | 'WEEK' | 'MONTH' | 'YEAR';
 type RoleView = 'OWNER' | 'ADMIN' | 'CASHIER';
-type WidgetKey = 'alerts' | 'kpi' | 'branch' | 'cylinder' | 'credit' | 'heatmap' | 'shift' | 'sync' | 'trend';
+type WidgetKey =
+  | 'alerts'
+  | 'kpi'
+  | 'branch'
+  | 'cylinder'
+  | 'credit'
+  | 'heatmap'
+  | 'shift'
+  | 'sync'
+  | 'trend'
+  | 'kilo';
 
 type Branch = { id: string; code: string; name: string; isActive: boolean };
 type Location = { id: string; branchId?: string | null; name: string };
@@ -27,6 +37,41 @@ type LpgItemActionSummary = {
   counts: { dispose: number; replace: number; junk: number };
   qty: { disposed: number; replaced: number; junked: number };
 };
+type CurrentEntitlement = {
+  addons?: {
+    kilo_overview_chart?: boolean;
+  };
+};
+type KiloOverview = {
+  period: { since: string | null; until: string | null };
+  scope: { branch_id: string | null };
+  summary: {
+    total_kg: number;
+    lpg_kg: number;
+    non_lpg_kg: number;
+    sale_count: number;
+    line_count: number;
+    weighted_line_count: number;
+  };
+  series: Array<{ date: string; total_kg: number; lpg_kg: number; non_lpg_kg: number }>;
+  by_branch: Array<{
+    branch_id: string;
+    branch_code: string;
+    branch_name: string;
+    total_kg: number;
+    lpg_kg: number;
+    non_lpg_kg: number;
+  }>;
+  by_item: Array<{
+    product_id: string;
+    sku: string;
+    name: string;
+    is_lpg: boolean;
+    kg_per_unit: number;
+    qty_sold: number;
+    total_kg: number;
+  }>;
+};
 type TransferStale = Array<{ id: string }>;
 type DashboardAlert = {
   id: string;
@@ -45,8 +90,8 @@ const PERIODS: Array<{ id: PeriodPreset; label: string }> = [
 ];
 
 const ROLE_WIDGETS: Record<RoleView, WidgetKey[]> = {
-  OWNER: ['alerts', 'kpi', 'branch', 'cylinder', 'credit', 'heatmap', 'shift', 'sync', 'trend'],
-  ADMIN: ['alerts', 'kpi', 'branch', 'cylinder', 'credit', 'heatmap', 'shift', 'sync', 'trend'],
+  OWNER: ['alerts', 'kpi', 'branch', 'cylinder', 'credit', 'heatmap', 'shift', 'sync', 'trend', 'kilo'],
+  ADMIN: ['alerts', 'kpi', 'branch', 'cylinder', 'credit', 'heatmap', 'shift', 'sync', 'trend', 'kilo'],
   CASHIER: ['alerts', 'kpi', 'shift', 'sync', 'trend']
 };
 
@@ -185,6 +230,8 @@ export default function DashboardPage(): JSX.Element {
   const [openingRows, setOpeningRows] = useState<Opening['rows']>([]);
   const [products, setProducts] = useState<Product[]>([]);
   const [cylinders, setCylinders] = useState<Cylinder>([]);
+  const [kiloAddonEnabled, setKiloAddonEnabled] = useState(false);
+  const [kiloOverview, setKiloOverview] = useState<KiloOverview | null>(null);
   const [lpgItemActionSummary, setLpgItemActionSummary] = useState<LpgItemActionSummary>({
     counts: { dispose: 0, replace: 0, junk: 0 },
     qty: { disposed: 0, replaced: 0, junked: 0 }
@@ -195,6 +242,22 @@ export default function DashboardPage(): JSX.Element {
   useEffect(() => {
     setRoles(getSessionRoles());
   }, []);
+
+  useEffect(() => {
+    const normalizedRoles = roles.map((entry) => entry.toLowerCase());
+    const canReadEntitlements =
+      normalizedRoles.includes('admin') ||
+      normalizedRoles.includes('owner') ||
+      normalizedRoles.includes('platform_owner');
+    if (!canReadEntitlements) {
+      setKiloAddonEnabled(false);
+      return;
+    }
+    void (async () => {
+      const result = await safeRequest<CurrentEntitlement>('/platform/entitlements/current');
+      setKiloAddonEnabled(result.data?.addons?.kilo_overview_chart === true);
+    })();
+  }, [roles]);
 
   useEffect(() => {
     const range = presetRange(preset);
@@ -212,7 +275,11 @@ export default function DashboardPage(): JSX.Element {
     p.set('until', new Date(`${until}T23:59:59.999`).toISOString());
     if (branchFilter !== 'ALL') p.set('branch_id', branchFilter);
 
-    const [b, l, s, sl, m, fe, mv, x, c, r, a, cp, os, pr, cy, lpgSummary, sc, sa] = await Promise.all([
+    const kiloRequest = kiloAddonEnabled
+      ? safeRequest<KiloOverview>(`/reports/overview/kilo?${p.toString()}`)
+      : Promise.resolve({ data: null, error: null } as { data: KiloOverview | null; error: string | null });
+
+    const [b, l, s, sl, m, fe, mv, x, c, r, a, cp, os, pr, cy, lpgSummary, sc, sa, kilo] = await Promise.all([
       safeRequest<Branch[]>('/master-data/branches'),
       safeRequest<Location[]>('/master-data/locations'),
       safeRequest<SalesSummary>(`/reports/sales/summary?${p.toString()}`),
@@ -230,11 +297,12 @@ export default function DashboardPage(): JSX.Element {
       safeRequest<Cylinder>('/cylinders'),
       safeRequest<LpgItemActionSummary>(`/lpg-item-actions/summary?${p.toString()}`),
       safeRequest<TransferStale>(`/transfers?status=CREATED&min_age_minutes=${STALE_TRANSFER_MINUTES}&age_basis=CREATED_AT&limit=500`),
-      safeRequest<TransferStale>(`/transfers?status=APPROVED&min_age_minutes=${STALE_TRANSFER_MINUTES}&age_basis=UPDATED_AT&limit=500`)
+      safeRequest<TransferStale>(`/transfers?status=APPROVED&min_age_minutes=${STALE_TRANSFER_MINUTES}&age_basis=UPDATED_AT&limit=500`),
+      kiloRequest
     ]);
 
     const ignoredErrorPattern = 'Admin account is not linked to a branch';
-    const errs = [b, l, s, sl, m, fe, mv, x, c, r, a, cp, os, pr, cy, lpgSummary, sc, sa]
+    const errs = [b, l, s, sl, m, fe, mv, x, c, r, a, cp, os, pr, cy, lpgSummary, sc, sa, kilo]
       .map((x1) => x1.error)
       .filter((message): message is string => Boolean(message))
       .filter((message) => !message.includes(ignoredErrorPattern));
@@ -263,17 +331,19 @@ export default function DashboardPage(): JSX.Element {
     );
     setStaleCreatedTransfers(sc.data ?? []);
     setStaleApprovedTransfers(sa.data ?? []);
+    setKiloOverview(kilo.data);
     setLoading(false);
   }
 
   useEffect(() => {
     void load();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [since, until, branchFilter]);
+  }, [since, until, branchFilter, kiloAddonEnabled]);
 
   const roleView = useMemo(() => resolveRole(roles), [roles]);
   const visible = useMemo(() => new Set(ROLE_WIDGETS[roleView]), [roleView]);
   const canView = (k: WidgetKey): boolean => visible.has(k);
+  const canViewKiloWidget = canView('kilo') && kiloAddonEnabled;
 
   const branchOptions = useMemo(() => [{ id: 'ALL', label: 'All Branches' }, ...branches.map((b) => ({ id: b.id, label: `${b.name} (${b.code})` }))], [branches]);
   const locById = useMemo(() => new Map(locations.map((l) => [l.id, l])), [locations]);
@@ -511,6 +581,10 @@ export default function DashboardPage(): JSX.Element {
       .map(([date, amount]) => ({ date, amount }));
   }, [payments]);
   const collectionMax = useMemo(() => Math.max(...collectionByDay.map((row) => row.amount), 1), [collectionByDay]);
+  const kiloSeriesMax = useMemo(
+    () => Math.max(...(kiloOverview?.series ?? []).map((row) => row.total_kg), 1),
+    [kiloOverview?.series]
+  );
 
   const roleLabel = roleView === 'OWNER' ? 'Owner View' : roleView === 'ADMIN' ? 'Admin View' : 'Cashier View';
 
@@ -686,6 +760,68 @@ export default function DashboardPage(): JSX.Element {
                   ))}
                   {branchCompare.length === 0 ? <p className="text-slate-500">No branch rows.</p> : null}
                 </div>
+              </Card>
+            ) : null}
+
+            {canViewKiloWidget ? (
+              <Card title="Total Kilo Overview">
+                {kiloOverview && kiloOverview.series.length > 0 ? (
+                  <div className="space-y-3">
+                    <div className="grid grid-cols-2 gap-2 text-xs">
+                      <div className="rounded-lg border border-slate-200 bg-slate-50 p-2 dark:border-slate-700 dark:bg-slate-900/40">
+                        <p className="text-slate-500">Total KG</p>
+                        <p className="text-sm font-semibold">{qty(kiloOverview.summary.total_kg)}</p>
+                      </div>
+                      <div className="rounded-lg border border-slate-200 bg-slate-50 p-2 dark:border-slate-700 dark:bg-slate-900/40">
+                        <p className="text-slate-500">Weighted Lines</p>
+                        <p className="text-sm font-semibold">{kiloOverview.summary.weighted_line_count}</p>
+                      </div>
+                      <div className="rounded-lg border border-slate-200 bg-slate-50 p-2 dark:border-slate-700 dark:bg-slate-900/40">
+                        <p className="text-slate-500">LPG KG</p>
+                        <p className="text-sm font-semibold">{qty(kiloOverview.summary.lpg_kg)}</p>
+                      </div>
+                      <div className="rounded-lg border border-slate-200 bg-slate-50 p-2 dark:border-slate-700 dark:bg-slate-900/40">
+                        <p className="text-slate-500">Non-LPG KG</p>
+                        <p className="text-sm font-semibold">{qty(kiloOverview.summary.non_lpg_kg)}</p>
+                      </div>
+                    </div>
+                    <div className="h-44 rounded-xl border border-slate-200 bg-slate-50 p-2 dark:border-slate-700 dark:bg-slate-900/50">
+                      <svg className="h-full w-full" preserveAspectRatio="none" viewBox="0 0 100 100">
+                        <polyline
+                          fill="none"
+                          points={kiloOverview.series.map((row, index) => `${(index / Math.max(kiloOverview.series.length - 1, 1)) * 100},${100 - (row.total_kg / kiloSeriesMax) * 100}`).join(' ')}
+                          stroke="#0284c7"
+                          strokeLinecap="round"
+                          strokeLinejoin="round"
+                          strokeWidth="2.5"
+                        />
+                        <polyline
+                          fill="none"
+                          points={kiloOverview.series.map((row, index) => `${(index / Math.max(kiloOverview.series.length - 1, 1)) * 100},${100 - (row.lpg_kg / kiloSeriesMax) * 100}`).join(' ')}
+                          stroke="#0f766e"
+                          strokeLinecap="round"
+                          strokeLinejoin="round"
+                          strokeWidth="1.8"
+                        />
+                      </svg>
+                    </div>
+                    <div className="grid grid-cols-2 text-xs text-slate-500">
+                      <span>{kiloOverview.series[0]?.date}</span>
+                      <span className="text-right">{kiloOverview.series[kiloOverview.series.length - 1]?.date}</span>
+                    </div>
+                    <div className="space-y-1 text-xs">
+                      <p className="font-semibold">Top items by kilo</p>
+                      {kiloOverview.by_item.slice(0, 5).map((row) => (
+                        <div key={row.product_id} className="grid grid-cols-[1fr,80px] gap-2">
+                          <span className="truncate">{row.sku} | {row.name}</span>
+                          <span className="text-right font-semibold">{qty(row.total_kg)}</span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                ) : (
+                  <p className="text-xs text-slate-500">No kilo rows for selected range and branch.</p>
+                )}
               </Card>
             ) : null}
           </section>

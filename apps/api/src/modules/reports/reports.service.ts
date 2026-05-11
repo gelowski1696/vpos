@@ -1,4 +1,5 @@
-import { BadRequestException, Injectable, NotFoundException, Optional } from '@nestjs/common';
+import { BadRequestException, ForbiddenException, Injectable, NotFoundException, Optional } from '@nestjs/common';
+import { readFile } from 'node:fs/promises';
 import {
   AuditActionLevel,
   InventoryMovementType,
@@ -12,6 +13,7 @@ import {
   TenantDatasourceRouterService,
   type TenantPrismaBinding
 } from '../../common/tenant-datasource-router.service';
+import { EntitlementsService } from '../entitlements/entitlements.service';
 import { SyncService } from '../sync/sync.service';
 
 type DbClient = PrismaService | PrismaClient;
@@ -27,6 +29,10 @@ type SalesReportQuery = ReportRangeQuery & {
   user_id?: string;
   shift_id?: string;
   customer_id?: string;
+};
+
+type KiloOverviewQuery = ReportRangeQuery & {
+  branch_id?: string;
 };
 
 type InventoryMovementQuery = ReportRangeQuery & {
@@ -80,7 +86,8 @@ export class ReportsService {
   constructor(
     private readonly syncService: SyncService,
     @Optional() private readonly prisma?: PrismaService,
-    @Optional() private readonly tenantRouter?: TenantDatasourceRouterService
+    @Optional() private readonly tenantRouter?: TenantDatasourceRouterService,
+    @Optional() private readonly entitlementsService?: EntitlementsService
   ) {}
 
   pettyCashSummary(
@@ -102,6 +109,59 @@ export class ReportsService {
       since: query.since,
       until: query.until
     });
+  }
+
+  async getPettyCashAttachmentFile(
+    companyId: string,
+    attachmentId: string
+  ): Promise<{ buffer: Buffer; mimeType: string; fileName: string }> {
+    if (!(await this.isAddonEnabled('petty_cash_attachments', companyId))) {
+      throw new ForbiddenException('Petty Cash Attachments add-on is not enabled for this tenant.');
+    }
+    const binding = await this.getTenantBinding(companyId);
+    if (!binding) {
+      throw new NotFoundException('Attachment not found');
+    }
+    const db = binding.client as DbClient;
+    const row = await db.pettyCashAttachment.findFirst({
+      where: { companyId, id: attachmentId },
+      select: {
+        id: true,
+        fileName: true,
+        mimeType: true,
+        storagePath: true,
+        publicUrl: true
+      }
+    });
+    if (!row) {
+      throw new NotFoundException('Attachment not found');
+    }
+    if (/^https?:\/\//i.test(row.storagePath)) {
+      throw new NotFoundException('Attachment is stored in external location');
+    }
+    let buffer: Buffer;
+    try {
+      buffer = await readFile(row.storagePath);
+    } catch {
+      throw new NotFoundException('Attachment file is missing');
+    }
+    return {
+      buffer,
+      mimeType: row.mimeType,
+      fileName: row.fileName
+    };
+  }
+
+  async enforceInventoryReportAccess(companyId: string, actorRoles: string[]): Promise<void> {
+    if (!(await this.isAddonEnabled('shift_security_controls', companyId))) {
+      return;
+    }
+    if (!this.isCashierOnlyRoleSet(actorRoles)) {
+      return;
+    }
+    throw new ForbiddenException(
+      'Inventory reports are restricted for cashier accounts when Shift Security Controls add-on is enabled.'
+    );
   }
 
   async salesSummary(companyId: string, query: SalesReportQuery): Promise<{
@@ -358,6 +418,225 @@ export class ReportsService {
     };
   }
 
+  async kiloOverview(companyId: string, query: KiloOverviewQuery): Promise<{
+    period: { since: string | null; until: string | null };
+    scope: { branch_id: string | null };
+    summary: {
+      total_kg: number;
+      lpg_kg: number;
+      non_lpg_kg: number;
+      sale_count: number;
+      line_count: number;
+      weighted_line_count: number;
+    };
+    series: Array<{
+      date: string;
+      total_kg: number;
+      lpg_kg: number;
+      non_lpg_kg: number;
+    }>;
+    by_branch: Array<{
+      branch_id: string;
+      branch_code: string;
+      branch_name: string;
+      total_kg: number;
+      lpg_kg: number;
+      non_lpg_kg: number;
+    }>;
+    by_item: Array<{
+      product_id: string;
+      sku: string;
+      name: string;
+      is_lpg: boolean;
+      kg_per_unit: number;
+      qty_sold: number;
+      total_kg: number;
+    }>;
+  }> {
+    await this.enforceAddonPolicy('kilo_overview_chart', companyId, 'Kilo Overview Chart');
+    const binding = await this.getTenantBinding(companyId);
+    const range = this.parseRange(query);
+    const branchId = query.branch_id?.trim() ? query.branch_id.trim() : null;
+    if (!binding) {
+      return {
+        period: {
+          since: range.since?.toISOString() ?? null,
+          until: range.until?.toISOString() ?? null
+        },
+        scope: { branch_id: branchId },
+        summary: {
+          total_kg: 0,
+          lpg_kg: 0,
+          non_lpg_kg: 0,
+          sale_count: 0,
+          line_count: 0,
+          weighted_line_count: 0
+        },
+        series: [],
+        by_branch: [],
+        by_item: []
+      };
+    }
+
+    const db = binding.client as DbClient;
+    const saleWhere: Prisma.SaleWhereInput = {
+      companyId,
+      postedAt: {
+        not: null,
+        ...(range.since ? { gte: range.since } : {}),
+        ...(range.until ? { lte: range.until } : {})
+      },
+      ...(branchId ? { branchId } : {})
+    };
+    const rows = await db.saleLine.findMany({
+      where: {
+        sale: {
+          is: saleWhere
+        }
+      },
+      select: {
+        quantity: true,
+        sale: {
+          select: {
+            id: true,
+            postedAt: true,
+            branchId: true
+          }
+        },
+        product: {
+          select: {
+            id: true,
+            sku: true,
+            name: true,
+            isLpg: true,
+            unit: true,
+            cylinderType: {
+              select: {
+                sizeKg: true
+              }
+            }
+          }
+        }
+      }
+    });
+    const branchMap = await this.fetchBranchMap(
+      db,
+      [...new Set(rows.map((row) => row.sale.branchId).filter((value) => value.trim().length > 0))]
+    );
+    const byDate = new Map<string, { total_kg: number; lpg_kg: number; non_lpg_kg: number }>();
+    const byBranch = new Map<string, { total_kg: number; lpg_kg: number; non_lpg_kg: number }>();
+    const byItem = new Map<
+      string,
+      {
+        product_id: string;
+        sku: string;
+        name: string;
+        is_lpg: boolean;
+        kg_per_unit: number;
+        qty_sold: number;
+        total_kg: number;
+      }
+    >();
+    const saleIds = new Set<string>();
+    let totalKg = 0;
+    let lpgKg = 0;
+    let nonLpgKg = 0;
+    let weightedLineCount = 0;
+
+    for (const row of rows) {
+      const postedAt = row.sale.postedAt ? row.sale.postedAt.toISOString() : null;
+      const dateKey = postedAt ? postedAt.slice(0, 10) : 'unknown';
+      const quantity = this.roundQty(this.toNumber(row.quantity));
+      const cylinderKg = row.product.cylinderType ? this.toNumber(row.product.cylinderType.sizeKg) : 0;
+      const kgPerUnit = cylinderKg > 0 ? cylinderKg : /kg/i.test(row.product.unit) ? 1 : 0;
+      const lineKg = this.roundQty(quantity * kgPerUnit);
+
+      totalKg = this.roundQty(totalKg + lineKg);
+      if (row.product.isLpg) {
+        lpgKg = this.roundQty(lpgKg + lineKg);
+      } else {
+        nonLpgKg = this.roundQty(nonLpgKg + lineKg);
+      }
+      if (lineKg > 0) {
+        weightedLineCount += 1;
+      }
+      saleIds.add(row.sale.id);
+
+      const dateBucket = byDate.get(dateKey) ?? { total_kg: 0, lpg_kg: 0, non_lpg_kg: 0 };
+      dateBucket.total_kg = this.roundQty(dateBucket.total_kg + lineKg);
+      if (row.product.isLpg) {
+        dateBucket.lpg_kg = this.roundQty(dateBucket.lpg_kg + lineKg);
+      } else {
+        dateBucket.non_lpg_kg = this.roundQty(dateBucket.non_lpg_kg + lineKg);
+      }
+      byDate.set(dateKey, dateBucket);
+
+      const branchBucket = byBranch.get(row.sale.branchId) ?? { total_kg: 0, lpg_kg: 0, non_lpg_kg: 0 };
+      branchBucket.total_kg = this.roundQty(branchBucket.total_kg + lineKg);
+      if (row.product.isLpg) {
+        branchBucket.lpg_kg = this.roundQty(branchBucket.lpg_kg + lineKg);
+      } else {
+        branchBucket.non_lpg_kg = this.roundQty(branchBucket.non_lpg_kg + lineKg);
+      }
+      byBranch.set(row.sale.branchId, branchBucket);
+
+      const item = byItem.get(row.product.id) ?? {
+        product_id: row.product.id,
+        sku: row.product.sku,
+        name: row.product.name,
+        is_lpg: row.product.isLpg,
+        kg_per_unit: this.roundQty(kgPerUnit),
+        qty_sold: 0,
+        total_kg: 0
+      };
+      item.qty_sold = this.roundQty(item.qty_sold + quantity);
+      item.total_kg = this.roundQty(item.total_kg + lineKg);
+      byItem.set(row.product.id, item);
+    }
+
+    return {
+      period: {
+        since: range.since?.toISOString() ?? null,
+        until: range.until?.toISOString() ?? null
+      },
+      scope: {
+        branch_id: branchId
+      },
+      summary: {
+        total_kg: totalKg,
+        lpg_kg: lpgKg,
+        non_lpg_kg: nonLpgKg,
+        sale_count: saleIds.size,
+        line_count: rows.length,
+        weighted_line_count: weightedLineCount
+      },
+      series: [...byDate.entries()]
+        .sort((a, b) => a[0].localeCompare(b[0]))
+        .map(([date, bucket]) => ({
+          date,
+          total_kg: this.roundQty(bucket.total_kg),
+          lpg_kg: this.roundQty(bucket.lpg_kg),
+          non_lpg_kg: this.roundQty(bucket.non_lpg_kg)
+        })),
+      by_branch: [...byBranch.entries()]
+        .map(([branch_id, bucket]) => {
+          const branch = branchMap.get(branch_id);
+          return {
+            branch_id,
+            branch_code: branch?.code ?? branch_id,
+            branch_name: branch?.name ?? branch_id,
+            total_kg: this.roundQty(bucket.total_kg),
+            lpg_kg: this.roundQty(bucket.lpg_kg),
+            non_lpg_kg: this.roundQty(bucket.non_lpg_kg)
+          };
+        })
+        .sort((a, b) => b.total_kg - a.total_kg),
+      by_item: [...byItem.values()]
+        .sort((a, b) => b.total_kg - a.total_kg)
+        .slice(0, 20)
+    };
+  }
+
   async salesByCashier(companyId: string, query: SalesReportQuery): Promise<{
     period: { since: string | null; until: string | null };
     rows: Array<{
@@ -452,6 +731,12 @@ export class ReportsService {
       device_id: string | null;
       sale_count: number;
       total_sales: number;
+      item_logs_count: number;
+      posted_sale_count: number;
+      cash_variance: number | null;
+      discrepancy_tolerance: number | null;
+      discrepancy_detected: boolean;
+      discrepancy_reasons: string[];
     }>;
     z_read: Array<{
       shift_id: string;
@@ -463,6 +748,12 @@ export class ReportsService {
       generated_at: string;
       total_sales: number;
       total_cash: number;
+      item_logs_count: number;
+      posted_sale_count: number;
+      cash_variance: number | null;
+      discrepancy_tolerance: number | null;
+      discrepancy_detected: boolean;
+      discrepancy_reasons: string[];
     }>;
   }> {
     const binding = await this.getTenantBinding(companyId);
@@ -584,6 +875,20 @@ export class ReportsService {
           })
         : [];
     const locationMap = new Map(locations.map((row) => [row.id, row]));
+    const openShiftItemLogsMap = new Map<string, number>();
+    const openShiftCounts = await Promise.all(
+      openShifts.map(async (shift) => ({
+        shiftId: shift.id,
+        count: await this.countShiftInventoryLogRows(db, companyId, {
+          branchId: shift.branchId,
+          openedAt: shift.openedAt,
+          closedAt: new Date()
+        })
+      }))
+    );
+    for (const row of openShiftCounts) {
+      openShiftItemLogsMap.set(row.shiftId, row.count);
+    }
 
     const zReadRows = await db.zRead.findMany({
       where: {
@@ -612,6 +917,46 @@ export class ReportsService {
       orderBy: { generatedAt: 'desc' },
       take: limit
     });
+    const zShiftIds = [...new Set(zReadRows.map((row) => row.shift.id).filter((value) => value.trim().length > 0))];
+    const shiftCloseAuditRows =
+      zShiftIds.length > 0
+        ? await db.auditLog.findMany({
+            where: {
+              companyId,
+              entity: 'Shift',
+              entityId: { in: zShiftIds },
+              action: { in: ['SHIFT_CLOSE', 'SHIFT_DISCREPANCY_ALERT'] }
+            },
+            select: {
+              entityId: true,
+              action: true,
+              metadata: true,
+              createdAt: true
+            },
+            orderBy: [{ createdAt: 'desc' }]
+          })
+        : [];
+    const shiftSecurityMap = new Map<
+      string,
+      {
+        item_logs_count: number;
+        posted_sale_count: number;
+        cash_variance: number | null;
+        discrepancy_tolerance: number | null;
+        discrepancy_detected: boolean;
+        discrepancy_reasons: string[];
+      }
+    >();
+    for (const row of shiftCloseAuditRows) {
+      if (!row.entityId || shiftSecurityMap.has(row.entityId)) {
+        continue;
+      }
+      const parsed = this.parseShiftSecurityMetadata(row.metadata);
+      if (!parsed) {
+        continue;
+      }
+      shiftSecurityMap.set(row.entityId, parsed);
+    }
 
     return {
       period: {
@@ -623,6 +968,10 @@ export class ReportsService {
         const context = shiftContextMap.get(shift.id);
         const locationId = context?.location_id ?? null;
         const location = locationId ? locationMap.get(locationId) : undefined;
+        const postedSaleCount = totals?.sale_count ?? 0;
+        const itemLogsCount = openShiftItemLogsMap.get(shift.id) ?? 0;
+        const discrepancyReasons =
+          postedSaleCount > 0 && itemLogsCount === 0 ? ['sales_posted_without_item_logs'] : [];
         return {
           shift_id: shift.id,
           branch_id: shift.branchId,
@@ -633,21 +982,46 @@ export class ReportsService {
           location_name: location?.name ?? null,
           location_code: location?.code ?? null,
           device_id: context?.device_id ?? null,
-          sale_count: totals?.sale_count ?? 0,
-          total_sales: totals?.total_sales ?? 0
+          sale_count: postedSaleCount,
+          total_sales: totals?.total_sales ?? 0,
+          item_logs_count: itemLogsCount,
+          posted_sale_count: postedSaleCount,
+          cash_variance: null,
+          discrepancy_tolerance: null,
+          discrepancy_detected: discrepancyReasons.length > 0,
+          discrepancy_reasons: discrepancyReasons
         };
       }),
-      z_read: zReadRows.map((row) => ({
-        shift_id: row.shift.id,
-        branch_id: row.shift.branchId,
-        branch_name: row.shift.branch.name,
-        cashier_name: row.shift.user.fullName,
-        opened_at: row.shift.openedAt.toISOString(),
-        closed_at: row.shift.closedAt?.toISOString() ?? null,
-        generated_at: row.generatedAt.toISOString(),
-        total_sales: this.roundMoney(this.toNumber(row.totalSales)),
-        total_cash: this.roundMoney(this.toNumber(row.totalCash))
-      }))
+      z_read: zReadRows.map((row) => {
+        const security = shiftSecurityMap.get(row.shift.id);
+        const postedSaleCount = security?.posted_sale_count ?? 0;
+        const itemLogsCount = security?.item_logs_count ?? 0;
+        const discrepancyReasons = security?.discrepancy_reasons ?? [];
+        return {
+          shift_id: row.shift.id,
+          branch_id: row.shift.branchId,
+          branch_name: row.shift.branch.name,
+          cashier_name: row.shift.user.fullName,
+          opened_at: row.shift.openedAt.toISOString(),
+          closed_at: row.shift.closedAt?.toISOString() ?? null,
+          generated_at: row.generatedAt.toISOString(),
+          total_sales: this.roundMoney(this.toNumber(row.totalSales)),
+          total_cash: this.roundMoney(this.toNumber(row.totalCash)),
+          item_logs_count: itemLogsCount,
+          posted_sale_count: postedSaleCount,
+          cash_variance: security?.cash_variance ?? null,
+          discrepancy_tolerance: security?.discrepancy_tolerance ?? null,
+          discrepancy_detected:
+            security?.discrepancy_detected ??
+            (postedSaleCount > 0 && itemLogsCount === 0),
+          discrepancy_reasons:
+            discrepancyReasons.length > 0
+              ? discrepancyReasons
+              : postedSaleCount > 0 && itemLogsCount === 0
+                ? ['sales_posted_without_item_logs']
+                : []
+        };
+      })
     };
   }
 
@@ -668,6 +1042,12 @@ export class ReportsService {
       device_id: string | null;
       sale_count: number;
       total_sales: number;
+      item_logs_count: number;
+      posted_sale_count: number;
+      cash_variance: number | null;
+      discrepancy_tolerance: number | null;
+      discrepancy_detected: boolean;
+      discrepancy_reasons: string[];
     }>;
   }> {
     const result = await this.salesXReadZRead(companyId, {
@@ -2679,6 +3059,165 @@ export class ReportsService {
 
   private isDbRuntimeEnabled(): boolean {
     return process.env.NODE_ENV !== 'test' || process.env.VPOS_TEST_USE_DB === 'true';
+  }
+
+  private async isAddonEnabled(
+    addon: 'petty_cash_attachments' | 'shift_security_controls' | 'kilo_overview_chart',
+    companyId: string
+  ): Promise<boolean> {
+    if (!this.entitlementsService) {
+      return true;
+    }
+    return this.entitlementsService.isTenantAddonEnabled(addon, companyId);
+  }
+
+  private async enforceAddonPolicy(
+    addon: 'petty_cash_attachments' | 'shift_security_controls' | 'kilo_overview_chart',
+    companyId: string,
+    label: string
+  ): Promise<void> {
+    if (await this.isAddonEnabled(addon, companyId)) {
+      return;
+    }
+    throw new ForbiddenException(`${label} add-on is not enabled for this tenant.`);
+  }
+
+  private isCashierOnlyRoleSet(actorRoles: string[]): boolean {
+    const roles = new Set(
+      (Array.isArray(actorRoles) ? actorRoles : [])
+        .map((entry) => String(entry ?? '').trim().toLowerCase())
+        .filter((entry) => entry.length > 0)
+    );
+    if (!roles.has('cashier')) {
+      return false;
+    }
+    return !roles.has('admin') && !roles.has('owner') && !roles.has('platform_owner') && !roles.has('supervisor');
+  }
+
+  private async countShiftInventoryLogRows(
+    db: DbClient,
+    companyId: string,
+    input: { branchId: string; openedAt: Date; closedAt: Date }
+  ): Promise<number> {
+    const ledgers = await db.inventoryLedger.findMany({
+      where: {
+        companyId,
+        location: {
+          branchId: input.branchId
+        },
+        createdAt: {
+          gte: input.openedAt,
+          lte: input.closedAt
+        }
+      },
+      select: {
+        id: true,
+        qtyDelta: true,
+        referenceType: true
+      }
+    });
+    if (ledgers.length === 0) {
+      return 0;
+    }
+
+    const ledgerIds = ledgers.map((row) => row.id);
+    const stockEvents = await db.eventStockMovement.findMany({
+      where: {
+        companyId,
+        ledgerId: { in: ledgerIds }
+      },
+      select: {
+        ledgerId: true,
+        payload: true,
+        createdAt: true
+      },
+      orderBy: { createdAt: 'desc' }
+    });
+    const eventPayloadByLedger = new Map<string, Prisma.JsonValue>();
+    for (const row of stockEvents) {
+      if (eventPayloadByLedger.has(row.ledgerId)) {
+        continue;
+      }
+      eventPayloadByLedger.set(row.ledgerId, row.payload);
+    }
+
+    let count = 0;
+    for (const ledger of ledgers) {
+      const payload = eventPayloadByLedger.get(ledger.id);
+      if (this.isSystemOnlyShiftItemLogRow(ledger.referenceType, payload)) {
+        continue;
+      }
+
+      const qtyDelta = this.roundQty(this.toNumber(ledger.qtyDelta));
+      const split = this.parseMovementSplit(payload, undefined, false);
+      if (Math.abs(qtyDelta) > 0 || Math.abs(split.qty_full_delta) > 0 || Math.abs(split.qty_empty_delta) > 0) {
+        count += 1;
+      }
+    }
+    return count;
+  }
+
+  private isSystemOnlyShiftItemLogRow(referenceType: string, payload: Prisma.JsonValue | undefined): boolean {
+    const normalizedReferenceType = String(referenceType ?? '').trim().toUpperCase();
+    if (normalizedReferenceType.includes('REPLAY') || normalizedReferenceType.includes('SYSTEM')) {
+      return true;
+    }
+    const obj =
+      payload && typeof payload === 'object' && !Array.isArray(payload)
+        ? (payload as Record<string, unknown>)
+        : undefined;
+    const source = this.toFiniteText(obj?.source)?.toUpperCase();
+    if (!source) {
+      return false;
+    }
+    return source.includes('REPLAY') || source === 'SYSTEM' || source.includes('SYSTEM_ONLY');
+  }
+
+  private parseShiftSecurityMetadata(
+    metadata: Prisma.JsonValue | null | undefined
+  ): {
+    item_logs_count: number;
+    posted_sale_count: number;
+    cash_variance: number | null;
+    discrepancy_tolerance: number | null;
+    discrepancy_detected: boolean;
+    discrepancy_reasons: string[];
+  } | null {
+    if (!metadata || typeof metadata !== 'object' || Array.isArray(metadata)) {
+      return null;
+    }
+    const row = metadata as Record<string, unknown>;
+    const hasKnownField =
+      row.item_logs_count !== undefined ||
+      row.posted_sale_count !== undefined ||
+      row.discrepancy_detected !== undefined ||
+      row.discrepancy_reasons !== undefined ||
+      row.cash_variance !== undefined;
+    if (!hasKnownField) {
+      return null;
+    }
+
+    const itemLogsCount = this.toFiniteNumber(row.item_logs_count) ?? 0;
+    const postedSaleCount = this.toFiniteNumber(row.posted_sale_count) ?? 0;
+    const discrepancyReasons = Array.isArray(row.discrepancy_reasons)
+      ? row.discrepancy_reasons
+          .map((entry) => this.toFiniteText(entry))
+          .filter((entry): entry is string => Boolean(entry))
+      : [];
+    const discrepancyDetectedRaw = row.discrepancy_detected;
+    const discrepancyDetected =
+      typeof discrepancyDetectedRaw === 'boolean'
+        ? discrepancyDetectedRaw
+        : discrepancyReasons.length > 0 || (postedSaleCount > 0 && itemLogsCount === 0);
+
+    return {
+      item_logs_count: Math.max(0, Math.trunc(itemLogsCount)),
+      posted_sale_count: Math.max(0, Math.trunc(postedSaleCount)),
+      cash_variance: this.toFiniteNumber(row.cash_variance),
+      discrepancy_tolerance: this.toFiniteNumber(row.discrepancy_tolerance),
+      discrepancy_detected: discrepancyDetected,
+      discrepancy_reasons: discrepancyReasons
+    };
   }
 
   private buildSaleWhere(companyId: string, query: SalesReportQuery): Prisma.SaleWhereInput {

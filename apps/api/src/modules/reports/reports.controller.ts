@@ -1,5 +1,5 @@
-import { Controller, Get, Param, Query, Req, UnauthorizedException } from '@nestjs/common';
-import { Request } from 'express';
+import { Controller, Get, Param, Query, Req, Res, StreamableFile, UnauthorizedException } from '@nestjs/common';
+import { Request, Response } from 'express';
 import { ReportsService } from './reports.service';
 import { TenantRoutingPolicyService } from '../entitlements/tenant-routing-policy.service';
 
@@ -28,6 +28,21 @@ export class ReportsController {
     const companyId = this.requireCompanyId(req);
     await this.tenantRoutingPolicy.assertRoutable(companyId);
     return this.reportsService.pettyCashEntries(companyId, query);
+  }
+
+  @Get('petty-cash/attachments/:attachmentId/view')
+  async pettyCashAttachmentView(
+    @Req() req: Request & { user?: { company_id?: string } },
+    @Param('attachmentId') attachmentId: string,
+    @Res({ passthrough: true }) res: Response
+  ): Promise<StreamableFile> {
+    const companyId = this.requireCompanyId(req);
+    await this.tenantRoutingPolicy.assertRoutable(companyId);
+    const file = await this.reportsService.getPettyCashAttachmentFile(companyId, attachmentId);
+    res.setHeader('Content-Type', file.mimeType);
+    res.setHeader('Content-Disposition', `inline; filename="${file.fileName}"`);
+    res.setHeader('Cache-Control', 'private, max-age=300');
+    return new StreamableFile(file.buffer);
   }
 
   @Get('sales/summary')
@@ -133,6 +148,21 @@ export class ReportsController {
     return this.reportsService.activeShifts(companyId, query);
   }
 
+  @Get('overview/kilo')
+  async kiloOverview(
+    @Req() req: Request & { user?: { company_id?: string } },
+    @Query()
+    query: {
+      since?: string;
+      until?: string;
+      branch_id?: string;
+    }
+  ): Promise<ReturnType<ReportsService['kiloOverview']>> {
+    const companyId = this.requireCompanyId(req);
+    await this.tenantRoutingPolicy.assertRoutable(companyId);
+    return this.reportsService.kiloOverview(companyId, query);
+  }
+
   @Get('sales/list')
   async salesList(
     @Req() req: Request & { user?: { company_id?: string } },
@@ -185,7 +215,7 @@ export class ReportsController {
 
   @Get('inventory/movements')
   async inventoryMovements(
-    @Req() req: Request & { user?: { company_id?: string } },
+    @Req() req: Request & { user?: { company_id?: string; roles?: string[] } },
     @Query()
     query: {
       since?: string;
@@ -198,26 +228,29 @@ export class ReportsController {
   ): Promise<ReturnType<ReportsService['inventoryMovements']>> {
     const companyId = this.requireCompanyId(req);
     await this.tenantRoutingPolicy.assertRoutable(companyId);
+    await this.reportsService.enforceInventoryReportAccess(companyId, req.user?.roles ?? []);
     return this.reportsService.inventoryMovements(companyId, query);
   }
 
   @Get('inventory/full-empty')
   async fullEmptyByLocation(
-    @Req() req: Request & { user?: { company_id?: string } },
+    @Req() req: Request & { user?: { company_id?: string; roles?: string[] } },
     @Query() query: { location_id?: string }
   ): Promise<ReturnType<ReportsService['fullEmptyByLocation']>> {
     const companyId = this.requireCompanyId(req);
     await this.tenantRoutingPolicy.assertRoutable(companyId);
+    await this.reportsService.enforceInventoryReportAccess(companyId, req.user?.roles ?? []);
     return this.reportsService.fullEmptyByLocation(companyId, query);
   }
 
   @Get('inventory/full-empty-by-product')
   async fullEmptyByProduct(
-    @Req() req: Request & { user?: { company_id?: string } },
+    @Req() req: Request & { user?: { company_id?: string; roles?: string[] } },
     @Query() query: { location_id?: string; product_id?: string }
   ): Promise<ReturnType<ReportsService['fullEmptyByProduct']>> {
     const companyId = this.requireCompanyId(req);
     await this.tenantRoutingPolicy.assertRoutable(companyId);
+    await this.reportsService.enforceInventoryReportAccess(companyId, req.user?.roles ?? []);
     return this.reportsService.fullEmptyByProduct(companyId, query);
   }
 
