@@ -93,8 +93,29 @@ type SalesXZResponse = {
     device_id: string | null;
     sale_count: number;
     total_sales: number;
+    item_logs_count: number;
+    posted_sale_count: number;
+    cash_variance: number | null;
+    discrepancy_tolerance: number | null;
+    discrepancy_detected: boolean;
+    discrepancy_reasons: string[];
   }>;
-  z_read: Array<{ shift_id: string; branch_name: string; cashier_name: string; opened_at: string; closed_at: string | null; generated_at: string; total_sales: number; total_cash: number }>;
+  z_read: Array<{
+    shift_id: string;
+    branch_name: string;
+    cashier_name: string;
+    opened_at: string;
+    closed_at: string | null;
+    generated_at: string;
+    total_sales: number;
+    total_cash: number;
+    item_logs_count: number;
+    posted_sale_count: number;
+    cash_variance: number | null;
+    discrepancy_tolerance: number | null;
+    discrepancy_detected: boolean;
+    discrepancy_reasons: string[];
+  }>;
 };
 
 type InventoryMovementResponse = {
@@ -145,6 +166,14 @@ type PettyEntryRow = {
   direction: 'IN' | 'OUT';
   amount: number;
   notes?: string;
+  attachments?: Array<{
+    id: string;
+    file_name: string;
+    mime_type: string;
+    size_bytes: number;
+    public_url?: string | null;
+    uploaded_url?: string | null;
+  }>;
   posted_at: string;
   balance_after: number;
 };
@@ -598,6 +627,16 @@ export default function ReportsPage(): JSX.Element {
     })();
   }, [since, until, branchFilter]);
 
+  const inventoryRestrictedForCashier = useMemo(
+    () =>
+      errors.some((entry) =>
+        entry.includes(
+          'Inventory reports are restricted for cashier accounts when Shift Security Controls add-on is enabled.'
+        )
+      ),
+    [errors]
+  );
+
   const branchOptions = useMemo(
     () => [{ id: 'ALL', label: 'All Branches' }, ...branches.map((branch) => ({ id: branch.id, label: `${branch.name} (${branch.code})` }))],
     [branches]
@@ -824,7 +863,8 @@ export default function ReportsPage(): JSX.Element {
         direction: row.direction,
         amount: row.amount,
         balance_after: row.balance_after,
-        notes: row.notes ?? ''
+        notes: row.notes ?? '',
+        attachment_count: Array.isArray(row.attachments) ? row.attachments.length : 0
       }))
     ],
     [data.deliveryOrders, data.pettyEntries, data.transfers]
@@ -1162,6 +1202,18 @@ export default function ReportsPage(): JSX.Element {
             <>
               <SectionHeader id="inventory-reports" title="Inventory Reports" subtitle="On-hand, movement, valuation, and stock controls." />
               <section className="grid gap-4 xl:grid-cols-2">
+            {inventoryRestrictedForCashier ? (
+              <ReportCard
+                title="8. Inventory Reports Restricted"
+                subtitle="Shift Security Controls is enabled for this tenant."
+              >
+                <p className="text-xs text-slate-600 dark:text-slate-300">
+                  Inventory reporting is hidden for cashier-only accounts. Ask an admin, owner, platform owner, or
+                  supervisor to review this section.
+                </p>
+              </ReportCard>
+            ) : (
+              <>
             <ReportCard title="8. Inventory On Hand by Location + Item Code" subtitle="Current QOH with FULL/EMPTY split and avg cost snapshot">
               <div className="overflow-x-auto">
                 <table className="w-full min-w-[900px] text-xs">
@@ -1203,6 +1255,8 @@ export default function ReportsPage(): JSX.Element {
                 </table>
               </div>
             </ReportCard>
+              </>
+            )}
               </section>
             </>
           ) : null}
@@ -1278,6 +1332,8 @@ export default function ReportsPage(): JSX.Element {
                           <th className="pb-2 pr-2">Location</th>
                           <th className="pb-2 pr-2">Device</th>
                           <th className="pb-2 pr-2">Sales</th>
+                          <th className="pb-2 pr-2">Item Logs</th>
+                          <th className="pb-2 pr-2">Discrepancy</th>
                           <th className="pb-2">Amount</th>
                         </tr>
                       </thead>
@@ -1290,6 +1346,18 @@ export default function ReportsPage(): JSX.Element {
                             <td className="py-1.5 pr-2">{row.location_name ?? row.location_id ?? '-'}</td>
                             <td className="py-1.5 pr-2">{row.device_id ?? '-'}</td>
                             <td className="py-1.5 pr-2">{row.sale_count}</td>
+                            <td className="py-1.5 pr-2">{row.item_logs_count ?? 0}</td>
+                            <td className="py-1.5 pr-2">
+                              {row.discrepancy_detected ? (
+                                <span className="rounded bg-amber-100 px-1.5 py-0.5 font-semibold text-amber-800 dark:bg-amber-900/40 dark:text-amber-300">
+                                  YES
+                                </span>
+                              ) : (
+                                <span className="rounded bg-emerald-100 px-1.5 py-0.5 font-semibold text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-300">
+                                  NO
+                                </span>
+                              )}
+                            </td>
                             <td className="py-1.5">{money(row.total_sales)}</td>
                           </tr>
                         ))}
@@ -1297,7 +1365,16 @@ export default function ReportsPage(): JSX.Element {
                     </table>
                   </div>
                 </div>
-                <div className="rounded-lg border border-slate-200 p-2 dark:border-slate-700"><p className="mb-1 font-semibold">Z-Read</p>{(data.salesXZ?.z_read ?? []).slice(0, 10).map((row) => <p key={`sz-${row.shift_id}-${row.generated_at}`}>{row.shift_id} | {row.cashier_name} | {money(row.total_sales)}</p>)}</div>
+                <div className="rounded-lg border border-slate-200 p-2 dark:border-slate-700">
+                  <p className="mb-1 font-semibold">Z-Read</p>
+                  <div className="space-y-1 text-xs">
+                    {(data.salesXZ?.z_read ?? []).slice(0, 10).map((row) => (
+                      <p key={`sz-${row.shift_id}-${row.generated_at}`}>
+                        {row.shift_id} | {row.cashier_name} | Sales {money(row.total_sales)} | Logs {row.item_logs_count ?? 0} | Discrepancy {row.discrepancy_detected ? 'YES' : 'NO'}
+                      </p>
+                    ))}
+                  </div>
+                </div>
               </div>
             </ReportCard>
 
@@ -1307,7 +1384,43 @@ export default function ReportsPage(): JSX.Element {
                 <p className="rounded-lg bg-slate-50 p-2 dark:bg-slate-900">Cash OUT: <span className="font-semibold">{money(data.pettySummary?.total_out ?? 0)}</span></p>
                 <p className="rounded-lg bg-slate-50 p-2 dark:bg-slate-900">Net: <span className="font-semibold">{money(data.pettySummary?.net ?? 0)}</span></p>
               </div>
-              <div className="mt-2 space-y-1 text-xs">{data.pettyEntries.slice(0, 20).map((row) => <p key={row.id}>{dt(row.posted_at)} | {row.direction} | {row.category_code} | {money(row.amount)} | Shift {row.shift_id}</p>)}</div>
+              <div className="mt-2 space-y-2 text-xs">
+                {data.pettyEntries.slice(0, 20).map((row) => {
+                  const attachments = Array.isArray(row.attachments) ? row.attachments : [];
+                  return (
+                    <div key={row.id} className="rounded-md border border-slate-200 px-2 py-1 dark:border-slate-700">
+                      <p>
+                        {dt(row.posted_at)} | {row.direction} | {row.category_code} | {money(row.amount)} | Shift {row.shift_id} | Attachments {attachments.length}
+                      </p>
+                      {attachments.length > 0 ? (
+                        <div className="mt-1 flex flex-wrap gap-2">
+                          {attachments.slice(0, 3).map((attachment, index) => {
+                            const href = attachment.public_url ?? attachment.uploaded_url ?? null;
+                            if (!href) {
+                              return (
+                                <span key={attachment.id} className="text-[11px] text-slate-400">
+                                  Attachment {index + 1}
+                                </span>
+                              );
+                            }
+                            return (
+                              <a
+                                key={attachment.id}
+                                className="text-[11px] font-semibold text-blue-600 underline underline-offset-2 hover:text-blue-500"
+                                href={href}
+                                target="_blank"
+                                rel="noreferrer"
+                              >
+                                Attachment {index + 1}
+                              </a>
+                            );
+                          })}
+                        </div>
+                      ) : null}
+                    </div>
+                  );
+                })}
+              </div>
             </ReportCard>
               </section>
             </>

@@ -1,6 +1,8 @@
 import { ForbiddenException, Injectable, NotFoundException, Optional } from '@nestjs/common';
 import { SyncPullResponse, SyncPushRequest, SyncPushResult } from '@vpos/shared-types';
 import { createHash } from 'node:crypto';
+import { mkdir, writeFile } from 'node:fs/promises';
+import { resolve as resolvePath } from 'node:path';
 import { v4 as uuidv4 } from 'uuid';
 import { SalesService, type SalePostResponse } from '../sales/sales.service';
 import {
@@ -15,6 +17,7 @@ import {
 } from '../lpg-item-actions/lpg-item-actions.service';
 import { TransfersService, type TransferRecord } from '../transfers/transfers.service';
 import { TenantDatasourceRouterService } from '../../common/tenant-datasource-router.service';
+import { EntitlementsService } from '../entitlements/entitlements.service';
 
 export interface SyncReviewRecord {
   id: string;
@@ -57,7 +60,8 @@ export class SyncService {
     @Optional() private readonly lendingService?: LendingService,
     @Optional() private readonly lpgItemActionsService?: LpgItemActionsService,
     @Optional() private readonly transfersService?: TransfersService,
-    @Optional() private readonly tenantRouter?: TenantDatasourceRouterService
+    @Optional() private readonly tenantRouter?: TenantDatasourceRouterService,
+    @Optional() private readonly entitlementsService?: EntitlementsService
   ) {}
 
   async push(
@@ -1807,25 +1811,462 @@ export class SyncService {
       if (closingCash < 0) {
         return { ok: false, reason: 'Closing cash cannot be negative' };
       }
+      const closedAtIso = new Date().toISOString();
 
       shifts.set(id, {
         ...shift,
         status: 'CLOSED',
         closing_cash: Number(closingCash.toFixed(2)),
         balance: Number(closingCash.toFixed(2)),
-        closed_at: new Date().toISOString()
+        closed_at: closedAtIso
+      });
+      const shiftSecurity = await this.assessShiftCloseSecurity(companyId, {
+        shiftId: id,
+        branchId:
+          shift.branch_id ??
+          this.asString(payload.branch_id ?? payload.branchId) ??
+          null,
+        openedAt: shift.opened_at,
+        closedAt: closedAtIso,
+        payload
       });
       await this.persistShiftCloseToDatastore(
         companyId,
         id,
         payload,
         Number(closingCash.toFixed(2)),
-        context
+        context,
+        shiftSecurity
       );
       return { ok: true };
     }
 
     return { ok: true };
+  }
+
+  private async assessShiftCloseSecurity(
+    companyId: string,
+    input: {
+      shiftId: string;
+      branchId: string | null;
+      openedAt: string | undefined;
+      closedAt: string;
+      payload: Record<string, unknown>;
+    }
+  ): Promise<ShiftCloseSecurityAssessment | null> {
+    if (!(await this.isTenantAddonEnabled('shift_security_controls', companyId))) {
+      return null;
+    }
+    const cashVariance = this.readShiftCashVariance(input.payload);
+    const discrepancyTolerance = this.readShiftDiscrepancyTolerance();
+    const discrepancyReasons: string[] = [];
+    if (cashVariance !== null && Math.abs(cashVariance) > discrepancyTolerance) {
+      discrepancyReasons.push('cash_variance_exceeds_tolerance');
+    }
+
+    const openedAt = this.parseSafeDate(input.openedAt);
+    const closedAt = this.parseSafeDate(input.closedAt) ?? new Date();
+    if (!this.tenantRouter || !input.branchId || !openedAt) {
+      return {
+        cash_variance: cashVariance,
+        discrepancy_tolerance: discrepancyTolerance,
+        item_logs_count: 0,
+        posted_sale_count: 0,
+        discrepancy_detected: discrepancyReasons.length > 0,
+        discrepancy_reasons: discrepancyReasons
+      };
+    }
+
+    try {
+      const binding = await this.tenantRouter.forCompany(companyId);
+      const client = binding.client as unknown as {
+        sale?: {
+          count: (args: {
+            where: { companyId: string; shiftId: string; postedAt: { not: null } };
+          }) => Promise<number>;
+        };
+        inventoryLedger?: {
+          findMany: (args: {
+            where: {
+              companyId: string;
+              location: { branchId: string };
+              createdAt: { gte: Date; lte: Date };
+            };
+            select: {
+              id: true;
+              qtyDelta: true;
+              referenceType: true;
+            };
+          }) => Promise<
+            Array<{
+              id: string;
+              qtyDelta: unknown;
+              referenceType: string;
+            }>
+          >;
+        };
+        eventStockMovement?: {
+          findMany: (args: {
+            where: {
+              companyId: string;
+              ledgerId: { in: string[] };
+            };
+            select: {
+              ledgerId: true;
+              payload: true;
+              createdAt: true;
+            };
+            orderBy: { createdAt: 'desc' };
+          }) => Promise<Array<{ ledgerId: string; payload: unknown; createdAt: Date }>>;
+        };
+      };
+
+      const postedSaleCount =
+        client.sale && typeof client.sale.count === 'function'
+          ? await client.sale.count({
+              where: {
+                companyId,
+                shiftId: input.shiftId,
+                postedAt: { not: null }
+              }
+            })
+          : 0;
+      const itemLogsCount = await this.countShiftItemLogRows(
+        client,
+        companyId,
+        input.branchId,
+        openedAt,
+        closedAt
+      );
+
+      if (postedSaleCount > 0 && itemLogsCount === 0) {
+        discrepancyReasons.push('sales_posted_without_item_logs');
+      }
+
+      return {
+        cash_variance: cashVariance,
+        discrepancy_tolerance: discrepancyTolerance,
+        item_logs_count: itemLogsCount,
+        posted_sale_count: postedSaleCount,
+        discrepancy_detected: discrepancyReasons.length > 0,
+        discrepancy_reasons: discrepancyReasons
+      };
+    } catch {
+      return {
+        cash_variance: cashVariance,
+        discrepancy_tolerance: discrepancyTolerance,
+        item_logs_count: 0,
+        posted_sale_count: 0,
+        discrepancy_detected: discrepancyReasons.length > 0,
+        discrepancy_reasons: discrepancyReasons
+      };
+    }
+  }
+
+  private async countShiftItemLogRows(
+    client: {
+      inventoryLedger?: {
+        findMany: (args: {
+          where: {
+            companyId: string;
+            location: { branchId: string };
+            createdAt: { gte: Date; lte: Date };
+          };
+          select: {
+            id: true;
+            qtyDelta: true;
+            referenceType: true;
+          };
+        }) => Promise<
+          Array<{
+            id: string;
+            qtyDelta: unknown;
+            referenceType: string;
+          }>
+        >;
+      };
+      eventStockMovement?: {
+        findMany: (args: {
+          where: {
+            companyId: string;
+            ledgerId: { in: string[] };
+          };
+          select: {
+            ledgerId: true;
+            payload: true;
+            createdAt: true;
+          };
+          orderBy: { createdAt: 'desc' };
+        }) => Promise<Array<{ ledgerId: string; payload: unknown; createdAt: Date }>>;
+      };
+    },
+    companyId: string,
+    branchId: string,
+    openedAt: Date,
+    closedAt: Date
+  ): Promise<number> {
+    if (!client.inventoryLedger || typeof client.inventoryLedger.findMany !== 'function') {
+      return 0;
+    }
+    const ledgers = await client.inventoryLedger.findMany({
+      where: {
+        companyId,
+        location: { branchId },
+        createdAt: { gte: openedAt, lte: closedAt }
+      },
+      select: {
+        id: true,
+        qtyDelta: true,
+        referenceType: true
+      }
+    });
+    if (ledgers.length === 0) {
+      return 0;
+    }
+
+    const payloadByLedgerId = new Map<string, unknown>();
+    if (client.eventStockMovement && typeof client.eventStockMovement.findMany === 'function') {
+      const stockEvents = await client.eventStockMovement.findMany({
+        where: {
+          companyId,
+          ledgerId: { in: ledgers.map((row) => row.id) }
+        },
+        select: {
+          ledgerId: true,
+          payload: true,
+          createdAt: true
+        },
+        orderBy: { createdAt: 'desc' }
+      });
+      for (const event of stockEvents) {
+        if (payloadByLedgerId.has(event.ledgerId)) {
+          continue;
+        }
+        payloadByLedgerId.set(event.ledgerId, event.payload);
+      }
+    }
+
+    let count = 0;
+    for (const ledger of ledgers) {
+      const payload = payloadByLedgerId.get(ledger.id);
+      if (this.isSystemOnlyShiftItemLogRow(ledger.referenceType, payload)) {
+        continue;
+      }
+      const qtyDelta = this.roundQty(this.asNumber(ledger.qtyDelta));
+      const split = this.parseShiftMovementSplit(payload);
+      if (Math.abs(qtyDelta) > 0 || Math.abs(split.qty_full_delta) > 0 || Math.abs(split.qty_empty_delta) > 0) {
+        count += 1;
+      }
+    }
+    return count;
+  }
+
+  private parseShiftMovementSplit(payload: unknown): { qty_full_delta: number; qty_empty_delta: number } {
+    const obj = payload && typeof payload === 'object' && !Array.isArray(payload)
+      ? (payload as Record<string, unknown>)
+      : undefined;
+    const full =
+      this.toOptionalNumber(obj?.full_delta) ??
+      this.toOptionalNumber(obj?.qty_full_delta) ??
+      this.toOptionalNumber(obj?.qtyFullDelta) ??
+      this.toOptionalNumber(obj?.qty_full) ??
+      0;
+    const empty =
+      this.toOptionalNumber(obj?.empty_delta) ??
+      this.toOptionalNumber(obj?.qty_empty_delta) ??
+      this.toOptionalNumber(obj?.qtyEmptyDelta) ??
+      this.toOptionalNumber(obj?.qty_empty) ??
+      0;
+    return {
+      qty_full_delta: this.roundQty(full),
+      qty_empty_delta: this.roundQty(empty)
+    };
+  }
+
+  private isSystemOnlyShiftItemLogRow(referenceType: string, payload: unknown): boolean {
+    const refType = String(referenceType ?? '').trim().toUpperCase();
+    if (refType.includes('REPLAY') || refType.includes('SYSTEM')) {
+      return true;
+    }
+    const obj = payload && typeof payload === 'object' && !Array.isArray(payload)
+      ? (payload as Record<string, unknown>)
+      : undefined;
+    const source = this.asString(obj?.source)?.toUpperCase();
+    if (!source) {
+      return false;
+    }
+    return source.includes('REPLAY') || source === 'SYSTEM' || source.includes('SYSTEM_ONLY');
+  }
+
+  private readShiftCashVariance(payload: Record<string, unknown>): number | null {
+    const value = payload.cash_variance ?? payload.cashVariance;
+    const parsed = this.toOptionalNumber(value);
+    if (parsed === null) {
+      return null;
+    }
+    return Number(parsed.toFixed(2));
+  }
+
+  private readShiftDiscrepancyTolerance(): number {
+    const raw = process.env.VPOS_SHIFT_DISCREPANCY_TOLERANCE?.trim();
+    if (!raw) {
+      return 0;
+    }
+    const parsed = Number.parseFloat(raw);
+    if (!Number.isFinite(parsed) || parsed < 0) {
+      return 0;
+    }
+    return Number(parsed.toFixed(4));
+  }
+
+  private parseSafeDate(value: unknown): Date | null {
+    if (typeof value !== 'string') {
+      return null;
+    }
+    const normalized = value.trim();
+    if (!normalized) {
+      return null;
+    }
+    const parsed = new Date(normalized);
+    if (Number.isNaN(parsed.getTime())) {
+      return null;
+    }
+    return parsed;
+  }
+
+  private toOptionalNumber(value: unknown): number | null {
+    if (value === null || value === undefined) {
+      return null;
+    }
+    if (typeof value === 'number') {
+      return Number.isFinite(value) ? value : null;
+    }
+    if (typeof value === 'string') {
+      const normalized = value.trim();
+      if (!normalized) {
+        return null;
+      }
+      const parsed = Number.parseFloat(normalized);
+      return Number.isFinite(parsed) ? parsed : null;
+    }
+    if (typeof value === 'object' && value && 'toString' in value) {
+      const parsed = Number.parseFloat(String(value));
+      return Number.isFinite(parsed) ? parsed : null;
+    }
+    return null;
+  }
+
+  private async sendShiftDiscrepancyAlertEmail(
+    companyId: string,
+    shiftId: string,
+    actorUserId: string | null,
+    assessment: ShiftCloseSecurityAssessment
+  ): Promise<void> {
+    const apiKey = process.env.RESEND_API_KEY?.trim();
+    if (!apiKey || !this.tenantRouter) {
+      return;
+    }
+    try {
+      const binding = await this.tenantRouter.forCompany(companyId);
+      const client = binding.client as unknown as {
+        company?: {
+          findUnique: (args: {
+            where: { id: string };
+            select: { code: true; name: true; tenantEmail: true };
+          }) => Promise<{ code: string; name: string; tenantEmail: string | null } | null>;
+        };
+        user?: {
+          findMany: (args: {
+            where: {
+              companyId: string;
+              isActive: boolean;
+              userRoles: {
+                some: {
+                  role: {
+                    name: {
+                      in: string[];
+                    };
+                  };
+                };
+              };
+            };
+            select: { email: true; fullName: true };
+          }) => Promise<Array<{ email: string; fullName: string }>>;
+        };
+      };
+      if (!client.company || !client.user) {
+        return;
+      }
+      const [company, ownerUsers] = await Promise.all([
+        client.company.findUnique({
+          where: { id: companyId },
+          select: { code: true, name: true, tenantEmail: true }
+        }),
+        client.user.findMany({
+          where: {
+            companyId,
+            isActive: true,
+            userRoles: {
+              some: {
+                role: {
+                  name: { in: ['owner', 'admin', 'platform_owner'] }
+                }
+              }
+            }
+          },
+          select: { email: true, fullName: true }
+        })
+      ]);
+      const recipients = new Set<string>();
+      if (company?.tenantEmail && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(company.tenantEmail.trim())) {
+        recipients.add(company.tenantEmail.trim().toLowerCase());
+      }
+      for (const user of ownerUsers) {
+        const email = user.email?.trim().toLowerCase();
+        if (email && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+          recipients.add(email);
+        }
+      }
+      if (recipients.size === 0) {
+        return;
+      }
+
+      const from = process.env.RESEND_FROM_EMAIL?.trim() || 'VPOS <onboarding@vmjamtech.com>';
+      const discrepancyLines = assessment.discrepancy_reasons.length > 0
+        ? assessment.discrepancy_reasons.map((entry) => `- ${entry}`).join('\n')
+        : '- mismatch_detected';
+      const cashVarianceText =
+        assessment.cash_variance === null ? 'n/a' : assessment.cash_variance.toFixed(2);
+      const toleranceText = assessment.discrepancy_tolerance.toFixed(2);
+      const subject = `[VPOS] Shift discrepancy alert - ${company?.code ?? companyId}`;
+      const text = [
+        `Company: ${company?.name ?? companyId}`,
+        `Shift ID: ${shiftId}`,
+        `Actor User ID: ${actorUserId ?? '-'}`,
+        `Cash Variance: ${cashVarianceText}`,
+        `Tolerance: ${toleranceText}`,
+        `Posted Sales Count: ${assessment.posted_sale_count}`,
+        `Item Logs Count: ${assessment.item_logs_count}`,
+        'Discrepancy reasons:',
+        discrepancyLines
+      ].join('\n');
+
+      await fetch('https://api.resend.com/emails', {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${apiKey}`,
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+          from,
+          to: [...recipients],
+          subject,
+          text
+        })
+      });
+    } catch {
+      // Keep discrepancy notification non-blocking.
+    }
   }
 
   private async validatePettyCash(
@@ -1849,6 +2290,12 @@ export class SyncService {
       return { ok: false, reason: 'Petty cash amount must be greater than zero' };
     }
 
+    const attachmentResult = await this.normalizePettyCashAttachmentInputs(companyId, payload);
+    if (!attachmentResult.ok) {
+      return { ok: false, reason: attachmentResult.reason };
+    }
+    const attachments = attachmentResult.attachments;
+
     const shifts = this.getCompanyShifts(companyId);
     const hydratedShift = await this.hydrateShiftFromDatastore(companyId, shiftId);
     const shift = shifts.get(shiftId) ?? hydratedShift;
@@ -1870,10 +2317,11 @@ export class SyncService {
         amount: Number(amount.toFixed(2)),
         notes: this.asString(payload.notes),
         posted_at: new Date().toISOString(),
-        balance_after: updatedBalance
+        balance_after: updatedBalance,
+        attachments: this.stripPettyCashAttachmentBinary(attachments)
       };
       this.recordPettyCashEntry(companyId, entry);
-      await this.persistPettyCashToDatastore(companyId, entry);
+      await this.persistPettyCashToDatastore(companyId, entry, attachments);
       return { ok: true };
     }
 
@@ -1888,10 +2336,11 @@ export class SyncService {
         amount: Number(amount.toFixed(2)),
         notes: this.asString(payload.notes),
         posted_at: new Date().toISOString(),
-        balance_after: updatedBalance
+        balance_after: updatedBalance,
+        attachments: this.stripPettyCashAttachmentBinary(attachments)
       };
       this.recordPettyCashEntry(companyId, entry);
-      await this.persistPettyCashToDatastore(companyId, entry);
+      await this.persistPettyCashToDatastore(companyId, entry, attachments);
       return { ok: true };
     }
 
@@ -2310,7 +2759,8 @@ export class SyncService {
     shiftId: string,
     payload: Record<string, unknown>,
     closingCash: number,
-    context?: { deviceId?: string; actorUserId?: string }
+    context?: { deviceId?: string; actorUserId?: string },
+    shiftSecurity?: ShiftCloseSecurityAssessment | null
   ): Promise<void> {
     if (!this.tenantRouter) {
       return;
@@ -2353,6 +2803,21 @@ export class SyncService {
         }
       });
       if (client.auditLog && typeof client.auditLog.create === 'function') {
+        const closeMetadata: Record<string, unknown> = {
+          closing_cash: Number(closingCash.toFixed(2)),
+          closed_at: Number.isNaN(closedAt.getTime()) ? new Date().toISOString() : closedAt.toISOString(),
+          device_id: context?.deviceId?.trim() || null,
+          source: 'sync_push'
+        };
+        if (shiftSecurity) {
+          closeMetadata.cash_variance = shiftSecurity.cash_variance;
+          closeMetadata.discrepancy_tolerance = shiftSecurity.discrepancy_tolerance;
+          closeMetadata.item_logs_count = shiftSecurity.item_logs_count;
+          closeMetadata.posted_sale_count = shiftSecurity.posted_sale_count;
+          closeMetadata.discrepancy_detected = shiftSecurity.discrepancy_detected;
+          closeMetadata.discrepancy_reasons = shiftSecurity.discrepancy_reasons;
+          closeMetadata.shift_security_controls_enabled = true;
+        }
         await client.auditLog.create({
           data: {
             companyId,
@@ -2361,14 +2826,31 @@ export class SyncService {
             level: 'INFO',
             entity: 'Shift',
             entityId: shiftId,
-            metadata: {
-              closing_cash: Number(closingCash.toFixed(2)),
-              closed_at: Number.isNaN(closedAt.getTime()) ? new Date().toISOString() : closedAt.toISOString(),
-              device_id: context?.deviceId?.trim() || null,
-              source: 'sync_push'
-            }
+            metadata: closeMetadata
           }
         });
+        if (shiftSecurity?.discrepancy_detected) {
+          await client.auditLog.create({
+            data: {
+              companyId,
+              userId: (context?.actorUserId?.trim() || userId) ?? null,
+              action: 'SHIFT_DISCREPANCY_ALERT',
+              level: 'WARNING',
+              entity: 'Shift',
+              entityId: shiftId,
+              metadata: {
+                ...closeMetadata,
+                alert_channel: 'in_app_audit'
+              }
+            }
+          });
+          await this.sendShiftDiscrepancyAlertEmail(
+            companyId,
+            shiftId,
+            (context?.actorUserId?.trim() || userId) ?? null,
+            shiftSecurity
+          );
+        }
       }
     } catch {
       // Keep sync push resilient when persistence is unavailable.
@@ -2377,7 +2859,8 @@ export class SyncService {
 
   private async persistPettyCashToDatastore(
     companyId: string,
-    entry: PettyCashEntryRecord
+    entry: PettyCashEntryRecord,
+    rawAttachments?: PettyCashAttachmentRecord[]
   ): Promise<void> {
     if (!this.tenantRouter) {
       return;
@@ -2418,6 +2901,26 @@ export class SyncService {
               notes: string | null;
               createdAt: Date;
             };
+          }) => Promise<unknown>;
+        };
+        pettyCashAttachment?: {
+          deleteMany: (args: {
+            where: { companyId: string; pettyCashEntryId: string };
+          }) => Promise<unknown>;
+          createMany: (args: {
+            data: Array<{
+              id: string;
+              companyId: string;
+              pettyCashEntryId: string;
+              fileName: string;
+              mimeType: string;
+              fileSizeBytes: number;
+              storagePath: string;
+              publicUrl: string;
+              sourceChannel: string | null;
+              retentionUntil: Date | null;
+              createdAt: Date;
+            }>;
           }) => Promise<unknown>;
         };
       };
@@ -2468,9 +2971,295 @@ export class SyncService {
           createdAt: Number.isNaN(createdAt.getTime()) ? new Date() : createdAt
         }
       });
+      await this.persistPettyCashAttachmentsToDatastore(
+        client,
+        companyId,
+        entry.id,
+        rawAttachments ?? entry.attachments ?? []
+      );
     } catch {
       // Keep sync push resilient when persistence is unavailable.
     }
+  }
+
+  private async normalizePettyCashAttachmentInputs(
+    companyId: string,
+    payload: Record<string, unknown>
+  ): Promise<
+    | { ok: true; attachments: PettyCashAttachmentRecord[] }
+    | { ok: false; reason: string }
+  > {
+    const raw = payload.attachments;
+    if (!Array.isArray(raw) || raw.length === 0) {
+      return { ok: true, attachments: [] };
+    }
+    if (raw.length > 3) {
+      return { ok: false, reason: 'Petty cash allows up to 3 attachments only' };
+    }
+    if (!(await this.isTenantAddonEnabled('petty_cash_attachments', companyId))) {
+      return { ok: false, reason: 'Petty Cash Attachments add-on is not enabled for this tenant' };
+    }
+
+    const nowIso = new Date().toISOString();
+    const attachments: PettyCashAttachmentRecord[] = [];
+    for (const row of raw) {
+      if (!row || typeof row !== 'object') {
+        return { ok: false, reason: 'Petty cash attachment payload is invalid' };
+      }
+      const attachment = row as Record<string, unknown>;
+      const mimeType = (this.asString(attachment.mime_type ?? attachment.mimeType) ?? '')
+        .trim()
+        .toLowerCase();
+      const fileName = this.sanitizeAttachmentFileName(
+        this.asString(attachment.file_name ?? attachment.fileName) ?? ''
+      );
+      const sizeBytes = Math.trunc(
+        this.asNumber(attachment.size_bytes ?? attachment.sizeBytes)
+      );
+      const dataBase64Raw = this.asString(
+        attachment.data_base64 ?? attachment.dataBase64
+      );
+      const dataBase64 = dataBase64Raw ? this.stripDataUrlPrefix(dataBase64Raw.trim()) : null;
+      const uploadedUrl = this.asString(
+        attachment.uploaded_url ?? attachment.uploadedUrl
+      )?.trim() || null;
+      const sourceChannel = this.asString(
+        attachment.source_channel ?? attachment.sourceChannel
+      )?.trim() || null;
+      const createdAtRaw = this.asString(attachment.created_at ?? attachment.createdAt);
+      const createdAt = createdAtRaw && !Number.isNaN(new Date(createdAtRaw).getTime())
+        ? new Date(createdAtRaw).toISOString()
+        : nowIso;
+
+      if (!fileName) {
+        return { ok: false, reason: 'Petty cash attachment file name is required' };
+      }
+      if (!this.isAllowedPettyCashMimeType(mimeType)) {
+        return { ok: false, reason: 'Petty cash attachments must be image files (jpg/jpeg/png/webp)' };
+      }
+      if (!Number.isFinite(sizeBytes) || sizeBytes <= 0 || sizeBytes > 5 * 1024 * 1024) {
+        return { ok: false, reason: 'Petty cash attachment size must be between 1 byte and 5 MB' };
+      }
+      if (!dataBase64 && !uploadedUrl) {
+        return { ok: false, reason: 'Petty cash attachment must include upload data or uploaded URL' };
+      }
+
+      attachments.push({
+        id: this.asString(attachment.id) ?? uuidv4(),
+        file_name: fileName,
+        mime_type: mimeType,
+        size_bytes: sizeBytes,
+        data_base64: dataBase64,
+        uploaded_url: uploadedUrl,
+        source_channel: sourceChannel,
+        created_at: createdAt
+      });
+    }
+    return { ok: true, attachments };
+  }
+
+  private async persistPettyCashAttachmentsToDatastore(
+    client: {
+      pettyCashAttachment?: {
+        deleteMany: (args: {
+          where: { companyId: string; pettyCashEntryId: string };
+        }) => Promise<unknown>;
+        createMany: (args: {
+          data: Array<{
+            id: string;
+            companyId: string;
+            pettyCashEntryId: string;
+            fileName: string;
+            mimeType: string;
+            fileSizeBytes: number;
+            storagePath: string;
+            publicUrl: string;
+            sourceChannel: string | null;
+            retentionUntil: Date | null;
+            createdAt: Date;
+          }>;
+        }) => Promise<unknown>;
+      };
+    },
+    companyId: string,
+    pettyCashEntryId: string,
+    attachments: PettyCashAttachmentRecord[]
+  ): Promise<void> {
+    if (
+      !client.pettyCashAttachment ||
+      typeof client.pettyCashAttachment.deleteMany !== 'function' ||
+      typeof client.pettyCashAttachment.createMany !== 'function'
+    ) {
+      return;
+    }
+
+    await client.pettyCashAttachment.deleteMany({
+      where: { companyId, pettyCashEntryId }
+    });
+
+    if (!attachments.length) {
+      return;
+    }
+
+    const retentionUntil = new Date(
+      Date.now() + 7 * 365 * 24 * 60 * 60 * 1000
+    );
+    const rows: Array<{
+      id: string;
+      companyId: string;
+      pettyCashEntryId: string;
+      fileName: string;
+      mimeType: string;
+      fileSizeBytes: number;
+      storagePath: string;
+      publicUrl: string;
+      sourceChannel: string | null;
+      retentionUntil: Date | null;
+      createdAt: Date;
+    }> = [];
+
+    for (const attachment of attachments) {
+      const stored = await this.materializePettyCashAttachmentFile(
+        companyId,
+        pettyCashEntryId,
+        attachment
+      );
+      if (!stored) {
+        continue;
+      }
+      rows.push({
+        id: attachment.id,
+        companyId,
+        pettyCashEntryId,
+        fileName: stored.fileName,
+        mimeType: attachment.mime_type,
+        fileSizeBytes: attachment.size_bytes,
+        storagePath: stored.storagePath,
+        publicUrl: stored.publicUrl,
+        sourceChannel: attachment.source_channel ?? null,
+        retentionUntil,
+        createdAt: new Date(attachment.created_at)
+      });
+    }
+
+    if (!rows.length) {
+      return;
+    }
+    await client.pettyCashAttachment.createMany({ data: rows });
+  }
+
+  private stripPettyCashAttachmentBinary(
+    attachments: PettyCashAttachmentRecord[]
+  ): PettyCashAttachmentRecord[] {
+    return attachments.map((attachment) => ({
+      id: attachment.id,
+      file_name: attachment.file_name,
+      mime_type: attachment.mime_type,
+      size_bytes: attachment.size_bytes,
+      uploaded_url:
+        attachment.uploaded_url ??
+        `/api/reports/petty-cash/attachments/${attachment.id}/view`,
+      source_channel: attachment.source_channel ?? null,
+      created_at: attachment.created_at
+    }));
+  }
+
+  private async materializePettyCashAttachmentFile(
+    companyId: string,
+    pettyCashEntryId: string,
+    attachment: PettyCashAttachmentRecord
+  ): Promise<{ fileName: string; storagePath: string; publicUrl: string } | null> {
+    const rootDir = this.resolvePettyCashAttachmentRootDir();
+    const ext = this.extensionFromMimeType(attachment.mime_type);
+    const fileName = `${attachment.id}${ext}`;
+    const storagePath = resolvePath(rootDir, companyId, pettyCashEntryId, fileName);
+    const createdAt = Date.now();
+    if (attachment.data_base64) {
+      const buffer = this.decodeBase64Bytes(attachment.data_base64);
+      if (!buffer || buffer.length === 0) {
+        return null;
+      }
+      await mkdir(resolvePath(rootDir, companyId, pettyCashEntryId), { recursive: true });
+      await writeFile(storagePath, buffer);
+    } else if (attachment.uploaded_url) {
+      return {
+        fileName: attachment.file_name,
+        storagePath: attachment.uploaded_url,
+        publicUrl: attachment.uploaded_url
+      };
+    } else {
+      return null;
+    }
+
+    return {
+      fileName: attachment.file_name,
+      storagePath,
+      publicUrl: `/api/reports/petty-cash/attachments/${attachment.id}/view?t=${createdAt}`
+    };
+  }
+
+  private decodeBase64Bytes(value: string): Buffer | null {
+    const normalized = value.trim();
+    if (!normalized) {
+      return null;
+    }
+    try {
+      return Buffer.from(normalized, 'base64');
+    } catch {
+      return null;
+    }
+  }
+
+  private stripDataUrlPrefix(value: string): string {
+    const marker = ';base64,';
+    const index = value.toLowerCase().indexOf(marker);
+    if (index < 0) {
+      return value;
+    }
+    return value.slice(index + marker.length);
+  }
+
+  private sanitizeAttachmentFileName(value: string): string {
+    const trimmed = value.trim();
+    if (!trimmed) {
+      return '';
+    }
+    return trimmed.replace(/[^a-zA-Z0-9._-]/g, '_').slice(0, 120);
+  }
+
+  private isAllowedPettyCashMimeType(value: string): boolean {
+    return value === 'image/jpeg' || value === 'image/jpg' || value === 'image/png' || value === 'image/webp';
+  }
+
+  private extensionFromMimeType(value: string): string {
+    if (value === 'image/jpeg' || value === 'image/jpg') {
+      return '.jpg';
+    }
+    if (value === 'image/png') {
+      return '.png';
+    }
+    if (value === 'image/webp') {
+      return '.webp';
+    }
+    return '.bin';
+  }
+
+  private resolvePettyCashAttachmentRootDir(): string {
+    const configured = process.env.VPOS_PETTY_CASH_ATTACHMENT_DIR?.trim();
+    if (configured) {
+      return resolvePath(configured);
+    }
+    return resolvePath(process.cwd(), 'storage', 'petty-cash-attachments');
+  }
+
+  private async isTenantAddonEnabled(
+    addonKey: 'petty_cash_attachments' | 'shift_security_controls',
+    companyId: string
+  ): Promise<boolean> {
+    if (!this.entitlementsService) {
+      return true;
+    }
+    return this.entitlementsService.isTenantAddonEnabled(addonKey, companyId);
   }
 
   private toNumeric(value: unknown): number {
@@ -2486,6 +3275,13 @@ export class SyncService {
       return Number.isFinite(parsed) ? parsed : 0;
     }
     return 0;
+  }
+
+  private roundQty(value: number): number {
+    if (!Number.isFinite(value)) {
+      return 0;
+    }
+    return Number(value.toFixed(4));
   }
 
   private inventoryKey(locationId: string, productId: string): string {
@@ -2834,6 +3630,14 @@ export class SyncService {
 }
 
 type DeliveryStatus = 'CREATED' | 'ASSIGNED' | 'OUT_FOR_DELIVERY' | 'DELIVERED' | 'FAILED' | 'RETURNED';
+type ShiftCloseSecurityAssessment = {
+  cash_variance: number | null;
+  discrepancy_tolerance: number;
+  item_logs_count: number;
+  posted_sale_count: number;
+  discrepancy_detected: boolean;
+  discrepancy_reasons: string[];
+};
 type ShiftState = {
   id: string;
   status: 'OPEN' | 'CLOSED';
@@ -2856,4 +3660,16 @@ type PettyCashEntryRecord = {
   notes?: string;
   posted_at: string;
   balance_after: number;
+  attachments?: PettyCashAttachmentRecord[];
+};
+
+type PettyCashAttachmentRecord = {
+  id: string;
+  file_name: string;
+  mime_type: string;
+  size_bytes: number;
+  data_base64?: string | null;
+  uploaded_url?: string | null;
+  source_channel?: string | null;
+  created_at: string;
 };
