@@ -22,7 +22,7 @@ import {
   type TenantPrismaClient
 } from '../../common/tenant-datasource-router.service';
 import { AuthService } from '../auth/auth.service';
-import { EntitlementsService } from '../entitlements/entitlements.service';
+import { EntitlementsService, type TenantAddonKey } from '../entitlements/entitlements.service';
 
 type Timestamped = { createdAt: string; updatedAt: string };
 
@@ -258,6 +258,25 @@ export type ProductCostSnapshotRecord = {
     weightedAvgCost: number;
   };
   locations: ProductCostLocationRecord[];
+};
+
+export type ItemPriceCostAuditRecord = {
+  id: string;
+  productId: string;
+  sku: string;
+  name: string;
+  oldPrice: number | null;
+  newPrice: number | null;
+  oldCost: number | null;
+  newCost: number | null;
+  contextType: string;
+  contextId: string | null;
+  changeReason: string | null;
+  changedByUserId: string | null;
+  changedByRole: string | null;
+  sourceChannel: string | null;
+  requestId: string | null;
+  createdAt: string;
 };
 
 export type InventoryOpeningSnapshotRow = {
@@ -3658,7 +3677,26 @@ export class MasterDataService {
           isActive: input.isActive ?? true
         }
       });
-      return this.mapProductFromPrisma(row);
+      const mapped = this.mapProductFromPrisma(row);
+      await this.appendItemPriceCostAuditEntries(
+        binding,
+        companyId,
+        [
+          {
+            productId: mapped.id,
+            skuSnapshot: mapped.sku,
+            nameSnapshot: mapped.name,
+            oldPrice: null,
+            newPrice: null,
+            oldCost: null,
+            newCost: mapped.standardCost ?? null,
+            contextType: 'PRODUCT_CREATE',
+            contextId: mapped.id,
+            sourceChannel: 'api'
+          }
+        ]
+      );
+      return mapped;
     } catch (error) {
       if (error instanceof BadRequestException) {
         throw error;
@@ -3838,7 +3876,27 @@ export class MasterDataService {
           isActive: input.isActive
         }
       });
-      return this.mapProductFromPrisma(row);
+      const mapped = this.mapProductFromPrisma(row);
+      const previousCost = existing.standardCost ? Number(existing.standardCost) : null;
+      await this.appendItemPriceCostAuditEntries(
+        binding,
+        companyId,
+        [
+          {
+            productId: mapped.id,
+            skuSnapshot: mapped.sku,
+            nameSnapshot: mapped.name,
+            oldPrice: null,
+            newPrice: null,
+            oldCost: previousCost,
+            newCost: mapped.standardCost ?? null,
+            contextType: 'PRODUCT_UPDATE',
+            contextId: mapped.id,
+            sourceChannel: 'api'
+          }
+        ]
+      );
+      return mapped;
     } catch (error) {
       if (error instanceof BadRequestException || error instanceof NotFoundException) {
         throw error;
@@ -4266,6 +4324,62 @@ export class MasterDataService {
       }
       const product = this.find(this.products, id, 'Product');
       return this.emptyProductCostSnapshot(product.id);
+    }
+  }
+
+  async listProductPriceCostAudit(
+    id: string,
+    options?: { limit?: number }
+  ): Promise<ItemPriceCostAuditRecord[]> {
+    const companyId = await this.getCompanyIdOrNull();
+    await this.enforceAddonPolicy('item_price_cost_audit', companyId ?? undefined);
+    const binding = await this.getTenantBinding(companyId);
+    if (!binding || !companyId) {
+      return [];
+    }
+
+    const parsedLimit = Number(options?.limit ?? 120);
+    const limit = Number.isFinite(parsedLimit)
+      ? Math.min(500, Math.max(1, Math.trunc(parsedLimit)))
+      : 120;
+
+    try {
+      const rows = await binding.client.itemPriceCostAudit.findMany({
+        where: { companyId, productId: id },
+        orderBy: { createdAt: 'desc' },
+        take: limit
+      });
+      return rows.map((row) => this.mapItemPriceCostAuditFromPrisma(row));
+    } catch (error) {
+      if (binding.mode === TenancyDatastoreMode.DEDICATED_DB) {
+        throw error;
+      }
+      return [];
+    }
+  }
+
+  async enforceInventoryReportAccess(
+    companyId: string | undefined,
+    actorRoles: string[]
+  ): Promise<void> {
+    if (!(await this.isAddonEnabled('shift_security_controls', companyId))) {
+      return;
+    }
+    const roles = new Set(
+      (Array.isArray(actorRoles) ? actorRoles : [])
+        .map((entry) => String(entry ?? '').trim().toLowerCase())
+        .filter((entry) => entry.length > 0)
+    );
+    const isCashierOnly =
+      roles.has('cashier') &&
+      !roles.has('admin') &&
+      !roles.has('owner') &&
+      !roles.has('platform_owner') &&
+      !roles.has('supervisor');
+    if (isCashierOnly) {
+      throw new ForbiddenException(
+        'Inventory reports are restricted for cashier accounts when Shift Security Controls add-on is enabled.'
+      );
     }
   }
 
@@ -5463,7 +5577,9 @@ export class MasterDataService {
         },
         include: { rules: true }
       });
-      return this.mapPriceListFromPrisma(row);
+      const mapped = this.mapPriceListFromPrisma(row);
+      await this.appendPriceListCreateAuditEntries(binding, companyId, mapped);
+      return mapped;
     } catch (error) {
       if (binding.mode === TenancyDatastoreMode.DEDICATED_DB) {
         throw error;
@@ -5519,11 +5635,22 @@ export class MasterDataService {
       return row;
     }
     try {
-      const row = await binding.client.$transaction(async (tx) => {
+      const result = await binding.client.$transaction(async (tx) => {
+        const previousRules = input.rules
+          ? await tx.priceRule.findMany({
+              where: { companyId, priceListId: id },
+              select: {
+                productId: true,
+                flowMode: true,
+                priority: true,
+                unitPrice: true
+              }
+            })
+          : [];
         if (input.rules) {
           await tx.priceRule.deleteMany({ where: { priceListId: id } });
         }
-        return tx.priceList.update({
+        const updated = await tx.priceList.update({
           where: { id },
           data: {
             code: input.code === undefined ? undefined : input.code.trim(),
@@ -5551,8 +5678,24 @@ export class MasterDataService {
           },
           include: { rules: true }
         });
+        return { updated, previousRules };
       });
-      return this.mapPriceListFromPrisma(row);
+      const mapped = this.mapPriceListFromPrisma(result.updated);
+      if (input.rules) {
+        await this.appendPriceListUpdateAuditEntries(
+          binding,
+          companyId,
+          mapped.id,
+          result.previousRules.map((row) => ({
+            productId: row.productId,
+            flowMode: row.flowMode as 'ANY' | 'REFILL_EXCHANGE' | 'NON_REFILL',
+            priority: row.priority,
+            unitPrice: Number(row.unitPrice)
+          })),
+          mapped.rules
+        );
+      }
+      return mapped;
     } catch (error) {
       if (binding.mode === TenancyDatastoreMode.DEDICATED_DB) {
         throw error;
@@ -5647,6 +5790,220 @@ export class MasterDataService {
     });
   }
 
+  private async appendPriceListCreateAuditEntries(
+    binding: TenantPrismaBinding,
+    companyId: string,
+    list: PriceListRecord
+  ): Promise<void> {
+    if (!list.rules.length) {
+      return;
+    }
+    const productIds = Array.from(new Set(list.rules.map((rule) => rule.productId)));
+    const productMap = await this.loadProductSnapshotsForAudit(binding, companyId, productIds);
+    await this.appendItemPriceCostAuditEntries(
+      binding,
+      companyId,
+      list.rules.map((rule) => {
+        const product = productMap.get(rule.productId);
+        const standardCost = product?.standardCost ?? null;
+        return {
+          productId: rule.productId,
+          skuSnapshot: product?.sku ?? rule.productId,
+          nameSnapshot: product?.name ?? rule.productId,
+          oldPrice: null,
+          newPrice: Number(rule.unitPrice),
+          oldCost: standardCost,
+          newCost: standardCost,
+          contextType: 'PRICE_LIST_CREATE',
+          contextId: list.id,
+          sourceChannel: 'api'
+        };
+      })
+    );
+  }
+
+  private async appendPriceListUpdateAuditEntries(
+    binding: TenantPrismaBinding,
+    companyId: string,
+    priceListId: string,
+    previousRules: Array<{
+      productId: string;
+      flowMode: 'ANY' | 'REFILL_EXCHANGE' | 'NON_REFILL';
+      priority: number;
+      unitPrice: number;
+    }>,
+    nextRules: Array<{
+      productId: string;
+      flowMode: 'ANY' | 'REFILL_EXCHANGE' | 'NON_REFILL';
+      priority: number;
+      unitPrice: number;
+    }>
+  ): Promise<void> {
+    const keyOf = (rule: { productId: string; flowMode: string; priority: number }): string =>
+      `${rule.productId}|${rule.flowMode}|${rule.priority}`;
+    const previousByKey = new Map(previousRules.map((rule) => [keyOf(rule), rule]));
+    const nextByKey = new Map(nextRules.map((rule) => [keyOf(rule), rule]));
+
+    const productIds = Array.from(
+      new Set([...previousRules.map((rule) => rule.productId), ...nextRules.map((rule) => rule.productId)])
+    );
+    const productMap = await this.loadProductSnapshotsForAudit(binding, companyId, productIds);
+
+    const entries: Array<{
+      productId: string;
+      skuSnapshot: string;
+      nameSnapshot: string;
+      oldPrice: number | null;
+      newPrice: number | null;
+      oldCost: number | null;
+      newCost: number | null;
+      contextType: string;
+      contextId: string | null;
+      sourceChannel: string | null;
+    }> = [];
+
+    for (const rule of nextRules) {
+      const key = keyOf(rule);
+      const previous = previousByKey.get(key);
+      const product = productMap.get(rule.productId);
+      const standardCost = product?.standardCost ?? null;
+      entries.push({
+        productId: rule.productId,
+        skuSnapshot: product?.sku ?? rule.productId,
+        nameSnapshot: product?.name ?? rule.productId,
+        oldPrice: previous ? Number(previous.unitPrice) : null,
+        newPrice: Number(rule.unitPrice),
+        oldCost: standardCost,
+        newCost: standardCost,
+        contextType: 'PRICE_LIST_UPDATE',
+        contextId: priceListId,
+        sourceChannel: 'api'
+      });
+    }
+
+    for (const previous of previousRules) {
+      const key = keyOf(previous);
+      if (nextByKey.has(key)) {
+        continue;
+      }
+      const product = productMap.get(previous.productId);
+      const standardCost = product?.standardCost ?? null;
+      entries.push({
+        productId: previous.productId,
+        skuSnapshot: product?.sku ?? previous.productId,
+        nameSnapshot: product?.name ?? previous.productId,
+        oldPrice: Number(previous.unitPrice),
+        newPrice: null,
+        oldCost: standardCost,
+        newCost: standardCost,
+        contextType: 'PRICE_LIST_UPDATE',
+        contextId: priceListId,
+        sourceChannel: 'api'
+      });
+    }
+
+    await this.appendItemPriceCostAuditEntries(binding, companyId, entries);
+  }
+
+  private async loadProductSnapshotsForAudit(
+    binding: TenantPrismaBinding,
+    companyId: string,
+    productIds: string[]
+  ): Promise<Map<string, { sku: string; name: string; standardCost: number | null }>> {
+    const ids = Array.from(new Set(productIds.map((id) => String(id).trim()).filter(Boolean)));
+    if (!ids.length) {
+      return new Map();
+    }
+
+    try {
+      const rows = await binding.client.product.findMany({
+        where: { companyId, id: { in: ids } },
+        select: { id: true, sku: true, name: true, standardCost: true }
+      });
+      return new Map(
+        rows.map((row) => [
+          row.id,
+          {
+            sku: row.sku,
+            name: row.name,
+            standardCost: row.standardCost ? Number(row.standardCost) : null
+          }
+        ])
+      );
+    } catch (error) {
+      if (binding.mode === TenancyDatastoreMode.DEDICATED_DB) {
+        throw error;
+      }
+      return new Map();
+    }
+  }
+
+  private async appendItemPriceCostAuditEntries(
+    binding: TenantPrismaBinding,
+    companyId: string,
+    entries: Array<{
+      productId: string;
+      skuSnapshot: string;
+      nameSnapshot: string;
+      oldPrice: number | null;
+      newPrice: number | null;
+      oldCost: number | null;
+      newCost: number | null;
+      contextType: string;
+      contextId: string | null;
+      sourceChannel: string | null;
+      changeReason?: string | null;
+      changedByUserId?: string | null;
+      changedByRole?: string | null;
+      requestId?: string | null;
+    }>
+  ): Promise<void> {
+    if (!entries.length) {
+      return;
+    }
+    if (!(await this.isAddonEnabled('item_price_cost_audit', companyId))) {
+      return;
+    }
+
+    try {
+      await binding.client.itemPriceCostAudit.createMany({
+        data: entries.map((entry) => ({
+          companyId,
+          productId: entry.productId,
+          skuSnapshot: entry.skuSnapshot,
+          nameSnapshot: entry.nameSnapshot,
+          oldPrice:
+            entry.oldPrice === null || entry.oldPrice === undefined
+              ? null
+              : new Prisma.Decimal(entry.oldPrice),
+          newPrice:
+            entry.newPrice === null || entry.newPrice === undefined
+              ? null
+              : new Prisma.Decimal(entry.newPrice),
+          oldCost:
+            entry.oldCost === null || entry.oldCost === undefined
+              ? null
+              : new Prisma.Decimal(entry.oldCost),
+          newCost:
+            entry.newCost === null || entry.newCost === undefined
+              ? null
+              : new Prisma.Decimal(entry.newCost),
+          contextType: entry.contextType,
+          contextId: entry.contextId ?? null,
+          sourceChannel: entry.sourceChannel ?? null,
+          changeReason: entry.changeReason ?? null,
+          changedByUserId: entry.changedByUserId ?? null,
+          changedByRole: entry.changedByRole ?? null,
+          requestId: entry.requestId ?? null
+        }))
+      });
+    } catch (error) {
+      if (binding.mode === TenancyDatastoreMode.DEDICATED_DB) {
+        throw error;
+      }
+    }
+  }
+
   private async enforceBranchCreationPolicy(companyId?: string, localCountOverride?: number): Promise<void> {
     await this.enforceMasterDataWritePolicy(companyId);
     if (!this.entitlementsService) {
@@ -5677,25 +6034,23 @@ export class MasterDataService {
   }
 
   private async isAddonEnabled(
-    addon: 'custom_pricing' | 'customer_category',
+    addon: TenantAddonKey,
     companyId?: string
   ): Promise<boolean> {
     if (!this.entitlementsService) {
       return true;
     }
-    const addons = await this.entitlementsService.getTenantAddons(companyId);
-    return Boolean(addons[addon]);
+    return this.entitlementsService.isTenantAddonEnabled(addon, companyId);
   }
 
   private async enforceAddonPolicy(
-    addon: 'custom_pricing' | 'customer_category',
+    addon: TenantAddonKey,
     companyId?: string
   ): Promise<void> {
-    if (await this.isAddonEnabled(addon, companyId)) {
+    if (!this.entitlementsService) {
       return;
     }
-    const label = addon === 'custom_pricing' ? 'Custom Pricing' : 'Customer Category';
-    throw new ForbiddenException(`${label} add-on is not enabled for this tenant.`);
+    await this.entitlementsService.enforceTenantAddonEnabled(addon, companyId);
   }
 
   private filterPriceListsByAddons(
@@ -6870,6 +7225,44 @@ export class MasterDataService {
       isActive: row.isActive,
       createdAt: row.createdAt.toISOString(),
       updatedAt: row.updatedAt.toISOString()
+    };
+  }
+
+  private mapItemPriceCostAuditFromPrisma(row: {
+    id: string;
+    productId: string;
+    skuSnapshot: string;
+    nameSnapshot: string;
+    oldPrice: Prisma.Decimal | null;
+    newPrice: Prisma.Decimal | null;
+    oldCost: Prisma.Decimal | null;
+    newCost: Prisma.Decimal | null;
+    contextType: string;
+    contextId: string | null;
+    changeReason: string | null;
+    changedByUserId: string | null;
+    changedByRole: string | null;
+    sourceChannel: string | null;
+    requestId: string | null;
+    createdAt: Date;
+  }): ItemPriceCostAuditRecord {
+    return {
+      id: row.id,
+      productId: row.productId,
+      sku: row.skuSnapshot,
+      name: row.nameSnapshot,
+      oldPrice: row.oldPrice ? Number(row.oldPrice) : null,
+      newPrice: row.newPrice ? Number(row.newPrice) : null,
+      oldCost: row.oldCost ? Number(row.oldCost) : null,
+      newCost: row.newCost ? Number(row.newCost) : null,
+      contextType: row.contextType,
+      contextId: row.contextId ?? null,
+      changeReason: row.changeReason ?? null,
+      changedByUserId: row.changedByUserId ?? null,
+      changedByRole: row.changedByRole ?? null,
+      sourceChannel: row.sourceChannel ?? null,
+      requestId: row.requestId ?? null,
+      createdAt: row.createdAt.toISOString()
     };
   }
 

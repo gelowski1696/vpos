@@ -1051,7 +1051,13 @@ export class MasterDataController {
 
   @Get('inventory/opening-stock')
   @Roles('admin', 'owner', 'platform_owner', 'supervisor', 'cashier', 'driver', 'helper')
-  getInventoryOpeningSnapshot(): ReturnType<MasterDataService['getInventoryOpeningSnapshot']> {
+  async getInventoryOpeningSnapshot(
+    @Req() req: RequestWithTenant
+  ): Promise<ReturnType<MasterDataService['getInventoryOpeningSnapshot']>> {
+    await this.masterDataService.enforceInventoryReportAccess(
+      req.user?.company_id ?? undefined,
+      req.user?.roles ?? []
+    );
     return this.masterDataService.getInventoryOpeningSnapshot();
   }
 
@@ -1136,6 +1142,18 @@ export class MasterDataController {
     @Param('id') id: string
   ): ReturnType<MasterDataService['getProductCostSnapshot']> {
     return this.masterDataService.getProductCostSnapshot(id);
+  }
+
+  @Get('products/:id/price-cost-audit')
+  @Roles('admin', 'owner', 'platform_owner', 'supervisor', 'cashier', 'driver', 'helper')
+  listProductPriceCostAudit(
+    @Param('id') id: string,
+    @Query('limit') limit?: string
+  ): ReturnType<MasterDataService['listProductPriceCostAudit']> {
+    const parsedLimit = limit === undefined ? undefined : Number(limit);
+    return this.masterDataService.listProductPriceCostAudit(id, {
+      limit: parsedLimit
+    });
   }
 
   @Post('products')

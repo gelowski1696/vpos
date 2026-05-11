@@ -146,6 +146,25 @@ type InventoryMovementRow = {
   qty_empty_after_known?: boolean;
 };
 
+type PriceCostAuditRow = {
+  id: string;
+  productId: string;
+  sku: string;
+  name: string;
+  oldPrice: number | null;
+  newPrice: number | null;
+  oldCost: number | null;
+  newCost: number | null;
+  contextType: string;
+  contextId: string | null;
+  changeReason: string | null;
+  changedByUserId: string | null;
+  changedByRole: string | null;
+  sourceChannel: string | null;
+  requestId: string | null;
+  createdAt: string;
+};
+
 function yesNo(value: unknown): string {
   if (value === true || value === 'true' || value === 1 || value === '1') {
     return 'Yes';
@@ -202,6 +221,9 @@ export default function ProductsPage(): JSX.Element {
   const [movementRows, setMovementRows] = useState<InventoryMovementRow[]>([]);
   const [movementLoading, setMovementLoading] = useState(false);
   const [movementError, setMovementError] = useState<string | null>(null);
+  const [priceCostAuditRows, setPriceCostAuditRows] = useState<PriceCostAuditRow[]>([]);
+  const [priceCostAuditLoading, setPriceCostAuditLoading] = useState(false);
+  const [priceCostAuditError, setPriceCostAuditError] = useState<string | null>(null);
   const [movementFromDate, setMovementFromDate] = useState(() => toDateInput(new Date()));
   const [movementToDate, setMovementToDate] = useState(() => toDateInput(new Date()));
   const [itemHistoryOpen, setItemHistoryOpen] = useState(false);
@@ -286,6 +308,7 @@ export default function ProductsPage(): JSX.Element {
     setCostError(null);
     void loadCostSnapshot(productId);
     void loadMovementHistory(productId);
+    void loadPriceCostAudit(productId);
     const params = new URLSearchParams(searchParams.toString());
     params.delete('product_id');
     const nextQuery = params.toString();
@@ -338,6 +361,24 @@ export default function ProductsPage(): JSX.Element {
       );
     } finally {
       setMovementLoading(false);
+    }
+  }
+
+  async function loadPriceCostAudit(productId: string): Promise<void> {
+    setPriceCostAuditLoading(true);
+    setPriceCostAuditError(null);
+    try {
+      const payload = await apiRequest<PriceCostAuditRow[]>(
+        `/master-data/products/${productId}/price-cost-audit?limit=180`
+      );
+      setPriceCostAuditRows(Array.isArray(payload) ? payload : []);
+    } catch (error) {
+      setPriceCostAuditRows([]);
+      setPriceCostAuditError(
+        error instanceof Error ? error.message : 'Failed to load price/cost audit history'
+      );
+    } finally {
+      setPriceCostAuditLoading(false);
     }
   }
 
@@ -744,9 +785,12 @@ export default function ProductsPage(): JSX.Element {
               setCostError(null);
               setMovementRows([]);
               setMovementError(null);
+              setPriceCostAuditRows([]);
+              setPriceCostAuditError(null);
               void loadDetailData();
               void loadCostSnapshot(productId);
               void loadMovementHistory(productId);
+              void loadPriceCostAudit(productId);
             },
             buttonClassName:
               'rounded-lg border border-sky-300 px-3 py-1.5 text-xs font-semibold text-sky-700 hover:bg-sky-50 dark:border-sky-700 dark:text-sky-300 dark:hover:bg-sky-950/40',
@@ -832,6 +876,7 @@ export default function ProductsPage(): JSX.Element {
                     if (viewProductId) {
                       void loadCostSnapshot(viewProductId);
                       void loadMovementHistory(viewProductId);
+                      void loadPriceCostAudit(viewProductId);
                     }
                   }}
                   type="button"
@@ -845,6 +890,8 @@ export default function ProductsPage(): JSX.Element {
                     setItemHistoryOpen(false);
                     setCostSnapshot(null);
                     setCostError(null);
+                    setPriceCostAuditRows([]);
+                    setPriceCostAuditError(null);
                   }}
                   type="button"
                 >
@@ -1030,6 +1077,61 @@ export default function ProductsPage(): JSX.Element {
                             </table>
                           </div>
                         )}
+                      </div>
+                    )}
+                  </article>
+
+                  <article className="rounded-xl border border-slate-200 p-3 dark:border-slate-700">
+                    <h3 className="mb-2 text-sm font-semibold text-slate-900 dark:text-slate-100">
+                      Price/Cost Audit History
+                    </h3>
+                    {priceCostAuditLoading ? (
+                      <p className="text-sm text-slate-500 dark:text-slate-400">
+                        Loading price/cost audit history...
+                      </p>
+                    ) : priceCostAuditError ? (
+                      <p className="text-sm text-slate-500 dark:text-slate-400">
+                        {priceCostAuditError.toLowerCase().includes('add-on is not enabled')
+                          ? 'Item Price/Cost Audit add-on is not enabled for this tenant.'
+                          : priceCostAuditError}
+                      </p>
+                    ) : priceCostAuditRows.length === 0 ? (
+                      <p className="text-sm text-slate-500 dark:text-slate-400">
+                        No price/cost audit records yet for this item.
+                      </p>
+                    ) : (
+                      <div className="overflow-x-auto">
+                        <table className="w-full min-w-[900px] text-left text-xs">
+                          <thead>
+                            <tr className="border-b border-slate-200 text-slate-500 dark:border-slate-700 dark:text-slate-400">
+                              <th className="px-2 py-2">Date</th>
+                              <th className="px-2 py-2">Context</th>
+                              <th className="px-2 py-2">Old Price</th>
+                              <th className="px-2 py-2">New Price</th>
+                              <th className="px-2 py-2">Old Cost</th>
+                              <th className="px-2 py-2">New Cost</th>
+                              <th className="px-2 py-2">Source</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {priceCostAuditRows.slice(0, 180).map((row) => (
+                              <tr className="border-b border-slate-100 dark:border-slate-800" key={row.id}>
+                                <td className="px-2 py-2">{formatDate(row.createdAt)}</td>
+                                <td className="px-2 py-2">
+                                  <p>{row.contextType}</p>
+                                  <p className="text-[11px] text-slate-500 dark:text-slate-400">
+                                    {row.contextId ?? 'N/A'}
+                                  </p>
+                                </td>
+                                <td className="px-2 py-2">{row.oldPrice === null ? '-' : formatMoney(row.oldPrice)}</td>
+                                <td className="px-2 py-2">{row.newPrice === null ? '-' : formatMoney(row.newPrice)}</td>
+                                <td className="px-2 py-2">{row.oldCost === null ? '-' : formatQty(row.oldCost)}</td>
+                                <td className="px-2 py-2">{row.newCost === null ? '-' : formatQty(row.newCost)}</td>
+                                <td className="px-2 py-2">{row.sourceChannel ?? 'N/A'}</td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
                       </div>
                     )}
                   </article>
