@@ -15,6 +15,13 @@ type TenantAddons = {
   email_customer_balance: boolean;
   custom_pricing: boolean;
   customer_category: boolean;
+  item_price_cost_audit: boolean;
+  petty_cash_attachments: boolean;
+  shift_security_controls: boolean;
+  kilo_overview_chart: boolean;
+  receipt_amount_privacy: boolean;
+  purchase_order_suite: boolean;
+  delivery_dispatch_suite: boolean;
 };
 
 type TenantSummary = {
@@ -307,6 +314,13 @@ export default function TenantsPage(): JSX.Element {
       email_customer_balance: row.addons.email_customer_balance,
       custom_pricing: row.addons.custom_pricing,
       customer_category: row.addons.customer_category,
+      item_price_cost_audit: row.addons.item_price_cost_audit,
+      petty_cash_attachments: row.addons.petty_cash_attachments,
+      shift_security_controls: row.addons.shift_security_controls,
+      kilo_overview_chart: row.addons.kilo_overview_chart,
+      receipt_amount_privacy: row.addons.receipt_amount_privacy,
+      purchase_order_suite: row.addons.purchase_order_suite,
+      delivery_dispatch_suite: row.addons.delivery_dispatch_suite,
       reason: ''
     });
   }
@@ -466,6 +480,13 @@ export default function TenantsPage(): JSX.Element {
             email_customer_balance: addonsForm.email_customer_balance,
             custom_pricing: addonsForm.custom_pricing,
             customer_category: addonsForm.customer_category,
+            item_price_cost_audit: addonsForm.item_price_cost_audit,
+            petty_cash_attachments: addonsForm.petty_cash_attachments,
+            shift_security_controls: addonsForm.shift_security_controls,
+            kilo_overview_chart: addonsForm.kilo_overview_chart,
+            receipt_amount_privacy: addonsForm.receipt_amount_privacy,
+            purchase_order_suite: addonsForm.purchase_order_suite,
+            delivery_dispatch_suite: addonsForm.delivery_dispatch_suite,
             reason: addonsForm.reason.trim() || undefined
           }
         }
@@ -713,6 +734,13 @@ export default function TenantsPage(): JSX.Element {
                         <p>Email Customer Balance: {boolPill(row.addons.email_customer_balance)}</p>
                         <p>Custom Pricing: {boolPill(row.addons.custom_pricing)}</p>
                         <p>Customer Category: {boolPill(row.addons.customer_category)}</p>
+                        <p>Item Price/Cost Audit: {boolPill(row.addons.item_price_cost_audit)}</p>
+                        <p>Petty Cash Attachments: {boolPill(row.addons.petty_cash_attachments)}</p>
+                        <p>Shift Security Controls: {boolPill(row.addons.shift_security_controls)}</p>
+                        <p>Kilo Overview Chart: {boolPill(row.addons.kilo_overview_chart)}</p>
+                        <p>Receipt Amount Privacy: {boolPill(row.addons.receipt_amount_privacy)}</p>
+                        <p>Purchase Order Suite: {boolPill(row.addons.purchase_order_suite)}</p>
+                        <p>Delivery Dispatch Suite: {boolPill(row.addons.delivery_dispatch_suite)}</p>
                       </td>
                       <td className="px-4 py-3 align-top text-xs">
                         <p>Branches: {row.branch_count}</p>
@@ -796,6 +824,7 @@ export default function TenantsPage(): JSX.Element {
                     </p>
                     <p>Delivery/Transfers/Mobile: {boolPill(row.entitlement.allowDelivery)} / {boolPill(row.entitlement.allowTransfers)} / {boolPill(row.entitlement.allowMobile)}</p>
                     <p>Add-ons (Email/Report/Balance/Pricing/Category): {boolPill(row.addons.email_features)} / {boolPill(row.addons.email_report)} / {boolPill(row.addons.email_customer_balance)} / {boolPill(row.addons.custom_pricing)} / {boolPill(row.addons.customer_category)}</p>
+                    <p>Add-ons (Audit/PettyCash/Shift/Kilo/Receipt/PO/Delivery): {boolPill(row.addons.item_price_cost_audit)} / {boolPill(row.addons.petty_cash_attachments)} / {boolPill(row.addons.shift_security_controls)} / {boolPill(row.addons.kilo_overview_chart)} / {boolPill(row.addons.receipt_amount_privacy)} / {boolPill(row.addons.purchase_order_suite)} / {boolPill(row.addons.delivery_dispatch_suite)}</p>
                   </div>
                   <div className="mt-3 flex flex-wrap gap-2">
                     <button className="rounded-lg border border-slate-300 px-2.5 py-1 text-xs font-semibold text-slate-700 dark:border-slate-600 dark:text-slate-200" onClick={() => void openBindings(row)} type="button">Bindings</button>
@@ -1009,6 +1038,34 @@ export default function TenantsPage(): JSX.Element {
               <label className="flex items-center gap-2 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-sm dark:border-slate-700 dark:bg-slate-800/60 md:col-span-2">
                 <input checked={addonsForm.customer_category} onChange={(event) => setAddonsForm((prev) => prev ? { ...prev, customer_category: event.target.checked } : prev)} type="checkbox" />
                 <span>Customer Category</span>
+              </label>
+              <label className="flex items-center gap-2 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-sm dark:border-slate-700 dark:bg-slate-800/60">
+                <input checked={addonsForm.item_price_cost_audit} onChange={(event) => setAddonsForm((prev) => prev ? { ...prev, item_price_cost_audit: event.target.checked } : prev)} type="checkbox" />
+                <span>Item Price/Cost Audit</span>
+              </label>
+              <label className="flex items-center gap-2 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-sm dark:border-slate-700 dark:bg-slate-800/60">
+                <input checked={addonsForm.petty_cash_attachments} onChange={(event) => setAddonsForm((prev) => prev ? { ...prev, petty_cash_attachments: event.target.checked } : prev)} type="checkbox" />
+                <span>Petty Cash Attachments</span>
+              </label>
+              <label className="flex items-center gap-2 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-sm dark:border-slate-700 dark:bg-slate-800/60">
+                <input checked={addonsForm.shift_security_controls} onChange={(event) => setAddonsForm((prev) => prev ? { ...prev, shift_security_controls: event.target.checked } : prev)} type="checkbox" />
+                <span>Shift Security Controls</span>
+              </label>
+              <label className="flex items-center gap-2 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-sm dark:border-slate-700 dark:bg-slate-800/60">
+                <input checked={addonsForm.kilo_overview_chart} onChange={(event) => setAddonsForm((prev) => prev ? { ...prev, kilo_overview_chart: event.target.checked } : prev)} type="checkbox" />
+                <span>Kilo Overview Chart</span>
+              </label>
+              <label className="flex items-center gap-2 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-sm dark:border-slate-700 dark:bg-slate-800/60">
+                <input checked={addonsForm.receipt_amount_privacy} onChange={(event) => setAddonsForm((prev) => prev ? { ...prev, receipt_amount_privacy: event.target.checked } : prev)} type="checkbox" />
+                <span>Receipt Amount Privacy</span>
+              </label>
+              <label className="flex items-center gap-2 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-sm dark:border-slate-700 dark:bg-slate-800/60">
+                <input checked={addonsForm.purchase_order_suite} onChange={(event) => setAddonsForm((prev) => prev ? { ...prev, purchase_order_suite: event.target.checked } : prev)} type="checkbox" />
+                <span>Purchase Order Suite</span>
+              </label>
+              <label className="flex items-center gap-2 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-sm dark:border-slate-700 dark:bg-slate-800/60 md:col-span-2">
+                <input checked={addonsForm.delivery_dispatch_suite} onChange={(event) => setAddonsForm((prev) => prev ? { ...prev, delivery_dispatch_suite: event.target.checked } : prev)} type="checkbox" />
+                <span>Delivery Dispatch Suite</span>
               </label>
               <label className="text-sm md:col-span-2">
                 <span className="mb-1 block font-medium text-slate-700 dark:text-slate-200">Reason (Audit Note)</span>

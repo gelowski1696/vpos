@@ -27,8 +27,17 @@ type TenantAddons = {
   email_features: boolean;
   email_report: boolean;
   email_customer_balance: boolean;
+  sms_alerts: boolean;
+  auto_report_digest: boolean;
   custom_pricing: boolean;
   customer_category: boolean;
+  item_price_cost_audit: boolean;
+  petty_cash_attachments: boolean;
+  shift_security_controls: boolean;
+  kilo_overview_chart: boolean;
+  receipt_amount_privacy: boolean;
+  purchase_order_suite: boolean;
+  delivery_dispatch_suite: boolean;
 };
 
 type CurrentEntitlement = {
@@ -39,8 +48,23 @@ const DEFAULT_TENANT_ADDONS: TenantAddons = {
   email_features: false,
   email_report: false,
   email_customer_balance: false,
+  sms_alerts: false,
+  auto_report_digest: false,
   custom_pricing: false,
-  customer_category: false
+  customer_category: false,
+  item_price_cost_audit: false,
+  petty_cash_attachments: false,
+  shift_security_controls: false,
+  kilo_overview_chart: false,
+  receipt_amount_privacy: false,
+  purchase_order_suite: false,
+  delivery_dispatch_suite: false
+};
+
+type TenantAddonKey = keyof TenantAddons;
+
+const NAV_ROUTE_ADDON_GUARDS: Partial<Record<string, TenantAddonKey>> = {
+  '/customer-categories': 'customer_category'
 };
 
 type NavItem = {
@@ -747,7 +771,8 @@ export function AdminShell({ children }: { children: React.ReactNode }): JSX.Ele
             return false;
           }
 
-          if (String(item.href) === '/customer-categories' && !tenantAddons.customer_category) {
+          const requiredAddon = NAV_ROUTE_ADDON_GUARDS[item.href];
+          if (requiredAddon && !tenantAddons[requiredAddon]) {
             return false;
           }
 
@@ -760,7 +785,7 @@ export function AdminShell({ children }: { children: React.ReactNode }): JSX.Ele
           return true;
         })
       })).filter((section) => section.items.length > 0),
-    [canViewOrgStructure, canViewAuditLogs, isPlatformOwner, tenantAddons.customer_category]
+    [canViewOrgStructure, canViewAuditLogs, isPlatformOwner, tenantAddons]
   );
 
   const visibleNavItems = useMemo(() => visibleNavSections.flatMap((section) => section.items), [visibleNavSections]);

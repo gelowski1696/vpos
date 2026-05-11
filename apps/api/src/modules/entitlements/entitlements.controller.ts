@@ -363,6 +363,13 @@ export class EntitlementsController {
       auto_report_digest?: boolean;
       custom_pricing?: boolean;
       customer_category?: boolean;
+      item_price_cost_audit?: boolean;
+      petty_cash_attachments?: boolean;
+      shift_security_controls?: boolean;
+      kilo_overview_chart?: boolean;
+      receipt_amount_privacy?: boolean;
+      purchase_order_suite?: boolean;
+      delivery_dispatch_suite?: boolean;
       reason?: string;
     }
   ) {

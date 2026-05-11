@@ -1,0 +1,8 @@
+ALTER TABLE "Company"
+  ADD COLUMN IF NOT EXISTS "addonItemPriceCostAudit" BOOLEAN NOT NULL DEFAULT false,
+  ADD COLUMN IF NOT EXISTS "addonPettyCashAttachments" BOOLEAN NOT NULL DEFAULT false,
+  ADD COLUMN IF NOT EXISTS "addonShiftSecurityControls" BOOLEAN NOT NULL DEFAULT false,
+  ADD COLUMN IF NOT EXISTS "addonKiloOverviewChart" BOOLEAN NOT NULL DEFAULT false,
+  ADD COLUMN IF NOT EXISTS "addonReceiptAmountPrivacy" BOOLEAN NOT NULL DEFAULT false,
+  ADD COLUMN IF NOT EXISTS "addonPurchaseOrderSuite" BOOLEAN NOT NULL DEFAULT false,
+  ADD COLUMN IF NOT EXISTS "addonDeliveryDispatchSuite" BOOLEAN NOT NULL DEFAULT false;

@@ -299,6 +299,13 @@ model Company {
   addonAutoReportDigest   Boolean               @default(false)
   addonCustomPricing      Boolean               @default(false)
   addonCustomerCategory   Boolean               @default(false)
+  addonItemPriceCostAudit Boolean               @default(false)
+  addonPettyCashAttachments Boolean             @default(false)
+  addonShiftSecurityControls Boolean            @default(false)
+  addonKiloOverviewChart  Boolean               @default(false)
+  addonReceiptAmountPrivacy Boolean             @default(false)
+  addonPurchaseOrderSuite Boolean               @default(false)
+  addonDeliveryDispatchSuite Boolean            @default(false)
   datastoreMode           TenancyDatastoreMode  @default(SHARED_DB)
   datastoreRef            String?
   datastoreMigrationState TenancyMigrationState @default(NONE)
@@ -337,6 +344,7 @@ model Company {
   sales                     Sale[]
   deliveryOrders            DeliveryOrder[]
   pettyCashEntries          PettyCashEntry[]
+  pettyCashAttachments      PettyCashAttachment[]
   customerPayments          CustomerPayment[]
   depositLedger             DepositLiabilityLedger[]
   syncCursors               SyncCursor[]
@@ -360,6 +368,7 @@ model Company {
   lendingLines              LendingLine[]
   lendingReturns            LendingReturn[]
   saleReturns               SaleReturn[]
+  itemPriceCostAudits       ItemPriceCostAudit[]
 }
 
 model TenantDatastoreRegistry {
@@ -1015,6 +1024,7 @@ model Product {
   saleReturnLines   SaleReturnLine[]
   redeemableRewards RedeemableReward[]
   lendingLines      LendingLine[]
+  priceCostAudits   ItemPriceCostAudit[]
 
   @@unique([companyId, sku])
   @@index([companyId, updatedAt])
@@ -1671,6 +1681,27 @@ model PettyCashEntry {
   shift           Shift           @relation(fields: [shiftId], references: [id], onDelete: Restrict)
   user            User            @relation(fields: [userId], references: [id], onDelete: Restrict)
   expenseCategory ExpenseCategory @relation(fields: [expenseCategoryId], references: [id], onDelete: Restrict)
+  attachments     PettyCashAttachment[]
+}
+
+model PettyCashAttachment {
+  id             String   @id @default(uuid())
+  companyId      String
+  pettyCashEntryId String
+  fileName       String
+  mimeType       String
+  fileSizeBytes  Int
+  storagePath    String
+  publicUrl      String
+  sourceChannel  String?
+  retentionUntil DateTime?
+  createdAt      DateTime @default(now())
+
+  company        Company        @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  pettyCashEntry PettyCashEntry @relation(fields: [pettyCashEntryId], references: [id], onDelete: Cascade)
+
+  @@index([companyId, pettyCashEntryId, createdAt])
+  @@index([companyId, createdAt])
 }
 
 model DepositLiabilityLedger {
@@ -1743,6 +1774,33 @@ model AuditLog {
   user    User?   @relation(fields: [userId], references: [id], onDelete: SetNull)
 
   @@index([companyId, createdAt])
+}
+
+model ItemPriceCostAudit {
+  id             String   @id @default(uuid())
+  companyId      String
+  productId      String
+  skuSnapshot    String
+  nameSnapshot   String
+  oldPrice       Decimal? @db.Decimal(12, 2)
+  newPrice       Decimal? @db.Decimal(12, 2)
+  oldCost        Decimal? @db.Decimal(14, 4)
+  newCost        Decimal? @db.Decimal(14, 4)
+  changeReason   String?
+  changedByUserId String?
+  changedByRole  String?
+  sourceChannel  String?
+  requestId      String?
+  contextType    String
+  contextId      String?
+  createdAt      DateTime @default(now())
+
+  company Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  product Product @relation(fields: [productId], references: [id], onDelete: Cascade)
+
+  @@index([companyId, productId, createdAt])
+  @@index([companyId, createdAt])
+  @@index([companyId, contextType, createdAt])
 }
 
 model EventSales {

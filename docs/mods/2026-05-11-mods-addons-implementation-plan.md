@@ -169,11 +169,11 @@ Format: `F<feature>-Q<no>: <answer>`.
 - Modify: `apps/api/src/modules/entitlements/entitlements.controller.ts`
 - Modify: `apps/web/src/app/(admin)/tenants/page.tsx`
 
-- [ ] Add new `Company` boolean fields for 7 add-ons (default `false`).
-- [ ] Wire fields into add-on mapping methods (`defaultTenantAddons`, map, update input resolver).
-- [ ] Extend owner add-on update API payload/response.
-- [ ] Add new checkbox controls in Owner Tenant Console add-on modal.
-- [ ] Add audit metadata on add-on toggle changes.
+- [x] Add new `Company` boolean fields for 7 add-ons (default `false`).
+- [x] Wire fields into add-on mapping methods (`defaultTenantAddons`, map, update input resolver).
+- [x] Extend owner add-on update API payload/response.
+- [x] Add new checkbox controls in Owner Tenant Console add-on modal.
+- [x] Add audit metadata on add-on toggle changes.
 
 ### Task 2: Shared Add-on Guard Pattern for API + UI
 
@@ -183,10 +183,10 @@ Format: `F<feature>-Q<no>: <answer>`.
 - Modify: `apps/web/src/components/admin-shell.tsx` (if menu hiding is required)
 - Modify: relevant module screens (web/mobile/desktop) as each add-on is wired
 
-- [ ] Add reusable helper for `isAddonEnabled(companyId, addonKey)`.
-- [ ] Add reusable guard helper `enforceAddonPolicy(addonKey, companyId, label)`.
-- [ ] Define fail-closed behavior: API returns `403` when disabled.
-- [ ] Define UI behavior: hide entry points and show "Add-on not enabled" guard screens where needed.
+- [x] Add reusable helper for `isAddonEnabled(companyId, addonKey)`.
+- [x] Add reusable guard helper `enforceAddonPolicy(addonKey, companyId, label)`.
+- [x] Define fail-closed behavior: API returns `403` when disabled.
+- [x] Define UI behavior: hide entry points and show "Add-on not enabled" guard screens where needed.
 
 ### Task 3: Feature 3 - Item Price/Cost Monitoring
 

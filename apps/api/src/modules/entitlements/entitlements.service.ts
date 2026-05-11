@@ -180,15 +180,40 @@ type MemoryTenantProfile = {
   tenantEmail: string | null;
 };
 
-type TenantAddonFlags = {
-  email_features: boolean;
-  email_report: boolean;
-  email_customer_balance: boolean;
-  sms_alerts: boolean;
-  auto_report_digest: boolean;
-  custom_pricing: boolean;
-  customer_category: boolean;
+export type TenantAddonKey =
+  | 'email_features'
+  | 'email_report'
+  | 'email_customer_balance'
+  | 'sms_alerts'
+  | 'auto_report_digest'
+  | 'custom_pricing'
+  | 'customer_category'
+  | 'item_price_cost_audit'
+  | 'petty_cash_attachments'
+  | 'shift_security_controls'
+  | 'kilo_overview_chart'
+  | 'receipt_amount_privacy'
+  | 'purchase_order_suite'
+  | 'delivery_dispatch_suite';
+
+const TENANT_ADDON_LABELS: Record<TenantAddonKey, string> = {
+  email_features: 'Email Features',
+  email_report: 'Email Report',
+  email_customer_balance: 'Email Customer Balance',
+  sms_alerts: 'SMS Alerts',
+  auto_report_digest: 'Auto Report Digest',
+  custom_pricing: 'Custom Pricing',
+  customer_category: 'Customer Category',
+  item_price_cost_audit: 'Item Price/Cost Audit',
+  petty_cash_attachments: 'Petty Cash Attachments',
+  shift_security_controls: 'Shift Security Controls',
+  kilo_overview_chart: 'Kilo Overview Chart',
+  receipt_amount_privacy: 'Receipt Amount Privacy',
+  purchase_order_suite: 'Purchase Order Suite',
+  delivery_dispatch_suite: 'Delivery Dispatch Suite'
 };
+
+type TenantAddonFlags = Record<TenantAddonKey, boolean>;
 
 type OwnerTenantSummary = {
   company_id: string;
@@ -360,6 +385,13 @@ type OwnerTenantAddonsInput = {
   auto_report_digest?: boolean;
   custom_pricing?: boolean;
   customer_category?: boolean;
+  item_price_cost_audit?: boolean;
+  petty_cash_attachments?: boolean;
+  shift_security_controls?: boolean;
+  kilo_overview_chart?: boolean;
+  receipt_amount_privacy?: boolean;
+  purchase_order_suite?: boolean;
+  delivery_dispatch_suite?: boolean;
   reason?: string;
   actor_id?: string | null;
 };
@@ -924,7 +956,14 @@ export class EntitlementsService {
           addonSmsAlerts: true,
           addonAutoReportDigest: true,
           addonCustomPricing: true,
-          addonCustomerCategory: true
+          addonCustomerCategory: true,
+          addonItemPriceCostAudit: true,
+          addonPettyCashAttachments: true,
+          addonShiftSecurityControls: true,
+          addonKiloOverviewChart: true,
+          addonReceiptAmountPrivacy: true,
+          addonPurchaseOrderSuite: true,
+          addonDeliveryDispatchSuite: true
         }
       });
       if (!company) {
@@ -937,6 +976,23 @@ export class EntitlementsService {
       }
       throw new InternalServerErrorException('Unable to resolve tenant add-ons');
     }
+  }
+
+  async isTenantAddonEnabled(addon: TenantAddonKey, companyId?: string): Promise<boolean> {
+    const addons = await this.getTenantAddons(companyId);
+    return Boolean(addons[addon]);
+  }
+
+  async enforceTenantAddonEnabled(
+    addon: TenantAddonKey,
+    companyId?: string,
+    labelOverride?: string
+  ): Promise<void> {
+    if (await this.isTenantAddonEnabled(addon, companyId)) {
+      return;
+    }
+    const label = labelOverride?.trim() || TENANT_ADDON_LABELS[addon] || addon;
+    throw new ForbiddenException(`${label} add-on is not enabled for this tenant.`);
   }
 
   async getCurrentWithAddons(companyId?: string): Promise<CurrentEntitlementSnapshot> {
@@ -1189,7 +1245,14 @@ export class EntitlementsService {
       sms_alerts: false,
       auto_report_digest: false,
       custom_pricing: false,
-      customer_category: false
+      customer_category: false,
+      item_price_cost_audit: false,
+      petty_cash_attachments: false,
+      shift_security_controls: false,
+      kilo_overview_chart: false,
+      receipt_amount_privacy: false,
+      purchase_order_suite: false,
+      delivery_dispatch_suite: false
     };
   }
 
@@ -1201,6 +1264,13 @@ export class EntitlementsService {
     addonAutoReportDigest?: boolean;
     addonCustomPricing?: boolean;
     addonCustomerCategory?: boolean;
+    addonItemPriceCostAudit?: boolean;
+    addonPettyCashAttachments?: boolean;
+    addonShiftSecurityControls?: boolean;
+    addonKiloOverviewChart?: boolean;
+    addonReceiptAmountPrivacy?: boolean;
+    addonPurchaseOrderSuite?: boolean;
+    addonDeliveryDispatchSuite?: boolean;
   }): TenantAddonFlags {
     return {
       email_features: Boolean(input.addonEmailFeatures),
@@ -1209,7 +1279,14 @@ export class EntitlementsService {
       sms_alerts: Boolean(input.addonSmsAlerts),
       auto_report_digest: Boolean(input.addonAutoReportDigest),
       custom_pricing: Boolean(input.addonCustomPricing),
-      customer_category: Boolean(input.addonCustomerCategory)
+      customer_category: Boolean(input.addonCustomerCategory),
+      item_price_cost_audit: Boolean(input.addonItemPriceCostAudit),
+      petty_cash_attachments: Boolean(input.addonPettyCashAttachments),
+      shift_security_controls: Boolean(input.addonShiftSecurityControls),
+      kilo_overview_chart: Boolean(input.addonKiloOverviewChart),
+      receipt_amount_privacy: Boolean(input.addonReceiptAmountPrivacy),
+      purchase_order_suite: Boolean(input.addonPurchaseOrderSuite),
+      delivery_dispatch_suite: Boolean(input.addonDeliveryDispatchSuite)
     };
   }
 
@@ -1224,7 +1301,14 @@ export class EntitlementsService {
       sms_alerts: input.sms_alerts ?? current.sms_alerts,
       auto_report_digest: input.auto_report_digest ?? current.auto_report_digest,
       custom_pricing: input.custom_pricing ?? current.custom_pricing,
-      customer_category: input.customer_category ?? current.customer_category
+      customer_category: input.customer_category ?? current.customer_category,
+      item_price_cost_audit: input.item_price_cost_audit ?? current.item_price_cost_audit,
+      petty_cash_attachments: input.petty_cash_attachments ?? current.petty_cash_attachments,
+      shift_security_controls: input.shift_security_controls ?? current.shift_security_controls,
+      kilo_overview_chart: input.kilo_overview_chart ?? current.kilo_overview_chart,
+      receipt_amount_privacy: input.receipt_amount_privacy ?? current.receipt_amount_privacy,
+      purchase_order_suite: input.purchase_order_suite ?? current.purchase_order_suite,
+      delivery_dispatch_suite: input.delivery_dispatch_suite ?? current.delivery_dispatch_suite
     };
   }
 
@@ -1513,6 +1597,13 @@ export class EntitlementsService {
             addonAutoReportDigest: false,
             addonCustomPricing: false,
             addonCustomerCategory: false,
+            addonItemPriceCostAudit: false,
+            addonPettyCashAttachments: false,
+            addonShiftSecurityControls: false,
+            addonKiloOverviewChart: false,
+            addonReceiptAmountPrivacy: false,
+            addonPurchaseOrderSuite: false,
+            addonDeliveryDispatchSuite: false,
             datastoreMode,
             datastoreRef,
             datastoreMigrationState
@@ -2043,6 +2134,13 @@ export class EntitlementsService {
         addonAutoReportDigest: true,
         addonCustomPricing: true,
         addonCustomerCategory: true,
+        addonItemPriceCostAudit: true,
+        addonPettyCashAttachments: true,
+        addonShiftSecurityControls: true,
+        addonKiloOverviewChart: true,
+        addonReceiptAmountPrivacy: true,
+        addonPurchaseOrderSuite: true,
+        addonDeliveryDispatchSuite: true,
         datastoreMode: true,
         datastoreRef: true,
         datastoreMigrationState: true,
@@ -3554,7 +3652,14 @@ export class EntitlementsService {
           addonSmsAlerts: true,
           addonAutoReportDigest: true,
           addonCustomPricing: true,
-          addonCustomerCategory: true
+          addonCustomerCategory: true,
+          addonItemPriceCostAudit: true,
+          addonPettyCashAttachments: true,
+          addonShiftSecurityControls: true,
+          addonKiloOverviewChart: true,
+          addonReceiptAmountPrivacy: true,
+          addonPurchaseOrderSuite: true,
+          addonDeliveryDispatchSuite: true
         }
       });
       if (!company) {
@@ -3576,7 +3681,14 @@ export class EntitlementsService {
           addonSmsAlerts: next.sms_alerts,
           addonAutoReportDigest: next.auto_report_digest,
           addonCustomPricing: next.custom_pricing,
-          addonCustomerCategory: next.customer_category
+          addonCustomerCategory: next.customer_category,
+          addonItemPriceCostAudit: next.item_price_cost_audit,
+          addonPettyCashAttachments: next.petty_cash_attachments,
+          addonShiftSecurityControls: next.shift_security_controls,
+          addonKiloOverviewChart: next.kilo_overview_chart,
+          addonReceiptAmountPrivacy: next.receipt_amount_privacy,
+          addonPurchaseOrderSuite: next.purchase_order_suite,
+          addonDeliveryDispatchSuite: next.delivery_dispatch_suite
         },
         select: {
           addonEmailFeatures: true,
@@ -3585,7 +3697,14 @@ export class EntitlementsService {
           addonSmsAlerts: true,
           addonAutoReportDigest: true,
           addonCustomPricing: true,
-          addonCustomerCategory: true
+          addonCustomerCategory: true,
+          addonItemPriceCostAudit: true,
+          addonPettyCashAttachments: true,
+          addonShiftSecurityControls: true,
+          addonKiloOverviewChart: true,
+          addonReceiptAmountPrivacy: true,
+          addonPurchaseOrderSuite: true,
+          addonDeliveryDispatchSuite: true
         }
       });
 
