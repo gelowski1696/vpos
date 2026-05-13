@@ -24,6 +24,26 @@ type TenantAddons = {
   delivery_dispatch_suite: boolean;
 };
 
+type TenantAddonDisplay = {
+  key: keyof TenantAddons;
+  label: string;
+};
+
+const TENANT_ADDON_DISPLAY: TenantAddonDisplay[] = [
+  { key: 'email_features', label: 'Email Features' },
+  { key: 'email_report', label: 'Email Report' },
+  { key: 'email_customer_balance', label: 'Email Customer Balance' },
+  { key: 'custom_pricing', label: 'Custom Pricing' },
+  { key: 'customer_category', label: 'Customer Category' },
+  { key: 'item_price_cost_audit', label: 'Item Price/Cost Audit' },
+  { key: 'petty_cash_attachments', label: 'Petty Cash Attachments' },
+  { key: 'shift_security_controls', label: 'Shift Security Controls' },
+  { key: 'kilo_overview_chart', label: 'Kilo Overview Chart' },
+  { key: 'receipt_amount_privacy', label: 'Receipt Amount Privacy' },
+  { key: 'purchase_order_suite', label: 'Purchase Order Suite' },
+  { key: 'delivery_dispatch_suite', label: 'Delivery Dispatch Suite' }
+];
+
 type TenantSummary = {
   company_id: string;
   company_code: string;
@@ -135,8 +155,17 @@ function statusPill(status: EntitlementStatus): string {
   return 'bg-slate-200 text-slate-700 dark:bg-slate-700 dark:text-slate-200';
 }
 
-function boolPill(value: boolean): string {
-  return value ? 'Yes' : 'No';
+function summarizeTenantAddons(addons: TenantAddons): {
+  enabledLabels: string[];
+  enabledCount: number;
+  totalCount: number;
+} {
+  const enabledLabels = TENANT_ADDON_DISPLAY.filter((entry) => addons[entry.key]).map((entry) => entry.label);
+  return {
+    enabledLabels,
+    enabledCount: enabledLabels.length,
+    totalCount: TENANT_ADDON_DISPLAY.length
+  };
 }
 
 function toDateTimeLocal(isoValue: string | null): string {
@@ -690,7 +719,17 @@ export default function TenantsPage(): JSX.Element {
                   </tr>
                 </thead>
                 <tbody>
-                  {filtered.map((row, index) => (
+                  {filtered.map((row, index) => {
+                    const addonSummary = summarizeTenantAddons(row.addons);
+                    const addonPreview = addonSummary.enabledLabels.slice(0, 3);
+                    const addonOverflow = Math.max(0, addonSummary.enabledCount - addonPreview.length);
+                    const coreFeatureRows: Array<{ label: string; enabled: boolean }> = [
+                      { label: 'Delivery', enabled: row.entitlement.allowDelivery },
+                      { label: 'Transfers', enabled: row.entitlement.allowTransfers },
+                      { label: 'Mobile', enabled: row.entitlement.allowMobile }
+                    ];
+                    const coreEnabledCount = coreFeatureRows.filter((entry) => entry.enabled).length;
+                    return (
                     <tr
                       className={`border-b border-slate-100 text-sm text-slate-800 dark:border-slate-800 dark:text-slate-200 ${index % 2 === 0 ? 'bg-white dark:bg-slate-900' : 'bg-slate-50/60 dark:bg-slate-900/60'}`}
                       key={row.company_id}
@@ -725,22 +764,52 @@ export default function TenantsPage(): JSX.Element {
                         </p>
                       </td>
                       <td className="px-4 py-3 align-top text-xs">
-                        <p>Delivery: {boolPill(row.entitlement.allowDelivery)}</p>
-                        <p>Transfers: {boolPill(row.entitlement.allowTransfers)}</p>
-                        <p>Mobile: {boolPill(row.entitlement.allowMobile)}</p>
-                        <p className="mt-1 font-semibold text-slate-700 dark:text-slate-200">Add-ons</p>
-                        <p>Email Features: {boolPill(row.addons.email_features)}</p>
-                        <p>Email Report: {boolPill(row.addons.email_report)}</p>
-                        <p>Email Customer Balance: {boolPill(row.addons.email_customer_balance)}</p>
-                        <p>Custom Pricing: {boolPill(row.addons.custom_pricing)}</p>
-                        <p>Customer Category: {boolPill(row.addons.customer_category)}</p>
-                        <p>Item Price/Cost Audit: {boolPill(row.addons.item_price_cost_audit)}</p>
-                        <p>Petty Cash Attachments: {boolPill(row.addons.petty_cash_attachments)}</p>
-                        <p>Shift Security Controls: {boolPill(row.addons.shift_security_controls)}</p>
-                        <p>Kilo Overview Chart: {boolPill(row.addons.kilo_overview_chart)}</p>
-                        <p>Receipt Amount Privacy: {boolPill(row.addons.receipt_amount_privacy)}</p>
-                        <p>Purchase Order Suite: {boolPill(row.addons.purchase_order_suite)}</p>
-                        <p>Delivery Dispatch Suite: {boolPill(row.addons.delivery_dispatch_suite)}</p>
+                        <div className="space-y-2">
+                          <div>
+                            <p className="font-semibold text-slate-700 dark:text-slate-200">Core Enabled {coreEnabledCount}/3</p>
+                            <div className="mt-1 flex flex-wrap gap-1">
+                              {coreFeatureRows.map((entry) => (
+                                <span
+                                  className={`rounded-full border px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide ${
+                                    entry.enabled
+                                      ? 'border-emerald-300 bg-emerald-50 text-emerald-700 dark:border-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-300'
+                                      : 'border-slate-300 bg-slate-100 text-slate-500 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-400'
+                                  }`}
+                                  key={entry.label}
+                                >
+                                  {entry.label}
+                                </span>
+                              ))}
+                            </div>
+                          </div>
+                          <div>
+                            <p className="font-semibold text-slate-700 dark:text-slate-200">
+                              Add-ons Enabled {addonSummary.enabledCount}/{addonSummary.totalCount}
+                            </p>
+                            {addonPreview.length > 0 ? (
+                              <div className="mt-1 flex flex-wrap gap-1">
+                                {addonPreview.map((label) => (
+                                  <span
+                                    className="rounded-full border border-indigo-300 bg-indigo-50 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-indigo-700 dark:border-indigo-700 dark:bg-indigo-900/30 dark:text-indigo-300"
+                                    key={label}
+                                  >
+                                    {label}
+                                  </span>
+                                ))}
+                                {addonOverflow > 0 ? (
+                                  <span
+                                    className="rounded-full border border-slate-300 bg-slate-100 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-slate-600 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-300"
+                                    title={addonSummary.enabledLabels.join(', ')}
+                                  >
+                                    +{addonOverflow} more
+                                  </span>
+                                ) : null}
+                              </div>
+                            ) : (
+                              <p className="mt-1 text-[11px] text-slate-500 dark:text-slate-400">No add-ons enabled</p>
+                            )}
+                          </div>
+                        </div>
                       </td>
                       <td className="px-4 py-3 align-top text-xs">
                         <p>Branches: {row.branch_count}</p>
@@ -797,13 +866,24 @@ export default function TenantsPage(): JSX.Element {
                         </div>
                       </td>
                     </tr>
-                  ))}
+                  );
+                  })}
                 </tbody>
               </table>
             </div>
 
             <div className="space-y-3 p-3 md:hidden">
-              {filtered.map((row) => (
+              {filtered.map((row) => {
+                const addonSummary = summarizeTenantAddons(row.addons);
+                const addonPreview = addonSummary.enabledLabels.slice(0, 3);
+                const addonOverflow = Math.max(0, addonSummary.enabledCount - addonPreview.length);
+                const coreFeatureRows: Array<{ label: string; enabled: boolean }> = [
+                  { label: 'Delivery', enabled: row.entitlement.allowDelivery },
+                  { label: 'Transfers', enabled: row.entitlement.allowTransfers },
+                  { label: 'Mobile', enabled: row.entitlement.allowMobile }
+                ];
+                const coreEnabledCount = coreFeatureRows.filter((entry) => entry.enabled).length;
+                return (
                 <article className="rounded-xl border border-slate-200 bg-white p-3 shadow-sm dark:border-slate-700 dark:bg-slate-800/70" key={row.company_id}>
                   <div className="flex items-start justify-between gap-3">
                     <div>
@@ -822,9 +902,46 @@ export default function TenantsPage(): JSX.Element {
                       Tenancy: {row.tenancy_mode === 'DEDICATED_DB' ? 'Dedicated DB' : 'Shared DB'} | Ref:{' '}
                       {row.datastore_ref || 'N/A'} | State: {row.datastore_migration_state}
                     </p>
-                    <p>Delivery/Transfers/Mobile: {boolPill(row.entitlement.allowDelivery)} / {boolPill(row.entitlement.allowTransfers)} / {boolPill(row.entitlement.allowMobile)}</p>
-                    <p>Add-ons (Email/Report/Balance/Pricing/Category): {boolPill(row.addons.email_features)} / {boolPill(row.addons.email_report)} / {boolPill(row.addons.email_customer_balance)} / {boolPill(row.addons.custom_pricing)} / {boolPill(row.addons.customer_category)}</p>
-                    <p>Add-ons (Audit/PettyCash/Shift/Kilo/Receipt/PO/Delivery): {boolPill(row.addons.item_price_cost_audit)} / {boolPill(row.addons.petty_cash_attachments)} / {boolPill(row.addons.shift_security_controls)} / {boolPill(row.addons.kilo_overview_chart)} / {boolPill(row.addons.receipt_amount_privacy)} / {boolPill(row.addons.purchase_order_suite)} / {boolPill(row.addons.delivery_dispatch_suite)}</p>
+                    <p className="font-semibold text-slate-700 dark:text-slate-200">Core Enabled {coreEnabledCount}/3</p>
+                    <div className="flex flex-wrap gap-1">
+                      {coreFeatureRows.map((entry) => (
+                        <span
+                          className={`rounded-full border px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide ${
+                            entry.enabled
+                              ? 'border-emerald-300 bg-emerald-50 text-emerald-700 dark:border-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-300'
+                              : 'border-slate-300 bg-slate-100 text-slate-500 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-400'
+                          }`}
+                          key={entry.label}
+                        >
+                          {entry.label}
+                        </span>
+                      ))}
+                    </div>
+                    <p className="font-semibold text-slate-700 dark:text-slate-200">
+                      Add-ons Enabled {addonSummary.enabledCount}/{addonSummary.totalCount}
+                    </p>
+                    {addonPreview.length > 0 ? (
+                      <div className="flex flex-wrap gap-1">
+                        {addonPreview.map((label) => (
+                          <span
+                            className="rounded-full border border-indigo-300 bg-indigo-50 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-indigo-700 dark:border-indigo-700 dark:bg-indigo-900/30 dark:text-indigo-300"
+                            key={label}
+                          >
+                            {label}
+                          </span>
+                        ))}
+                        {addonOverflow > 0 ? (
+                          <span
+                            className="rounded-full border border-slate-300 bg-slate-100 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-slate-600 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-300"
+                            title={addonSummary.enabledLabels.join(', ')}
+                          >
+                            +{addonOverflow} more
+                          </span>
+                        ) : null}
+                      </div>
+                    ) : (
+                      <p className="text-[11px] text-slate-500 dark:text-slate-400">No add-ons enabled</p>
+                    )}
                   </div>
                   <div className="mt-3 flex flex-wrap gap-2">
                     <button className="rounded-lg border border-slate-300 px-2.5 py-1 text-xs font-semibold text-slate-700 dark:border-slate-600 dark:text-slate-200" onClick={() => void openBindings(row)} type="button">Bindings</button>
@@ -835,7 +952,8 @@ export default function TenantsPage(): JSX.Element {
                     <button className="rounded-lg border border-rose-500 bg-rose-600 px-2.5 py-1 text-xs font-semibold text-white dark:border-rose-700" onClick={() => openDelete(row)} type="button">Delete</button>
                   </div>
                 </article>
-              ))}
+              );
+              })}
             </div>
           </>
         )}
