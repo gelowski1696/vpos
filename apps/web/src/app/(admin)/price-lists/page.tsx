@@ -102,31 +102,31 @@ const SCOPE_INFO: Array<{ scope: Scope; label: string; description: string; prio
   {
     scope: 'GLOBAL',
     label: 'Default Price (All Customers)',
-    description: 'Used when there is no branch, tier, or contract override.',
+    description: 'Used only when no other matching price list is found.',
     priority: 4
   },
   {
     scope: 'BRANCH',
     label: 'Branch Override',
-    description: 'Applies only to one branch. Overrides global default.',
+    description: 'Checked after Customer Tier and before Default Price.',
     priority: 3
   },
   {
     scope: 'TIER',
     label: 'Customer Tier Price',
-    description: 'Applies to a customer group like PREMIUM or REGULAR.',
+    description: 'Checked after Custom Pricing and before Branch.',
     priority: 2
   },
   {
     scope: 'CUSTOMER_GROUP',
     label: 'Custom Pricing (Customer Category)',
-    description: 'Applies to customers assigned to one customer category.',
+    description: 'Checked after Specific Customer and before Customer Tier.',
     priority: 5
   },
   {
     scope: 'CONTRACT',
     label: 'Specific Customer Contract',
-    description: 'Highest priority. Applies only to one customer.',
+    description: 'Checked first. Applies only to one specific customer.',
     priority: 1
   }
 ];
@@ -137,6 +137,14 @@ const PRIORITY_BY_SCOPE: Record<Scope, number> = {
   TIER: 2,
   CUSTOMER_GROUP: 5,
   CONTRACT: 1
+};
+
+const LOOKUP_STEP_BY_SCOPE: Record<Scope, number> = {
+  CONTRACT: 1,
+  CUSTOMER_GROUP: 2,
+  TIER: 3,
+  BRANCH: 4,
+  GLOBAL: 5
 };
 
 const FLOW_OPTIONS: Array<{ value: FlowMode; label: string }> = [
@@ -235,6 +243,11 @@ function scopeLabel(scope: Scope): string {
 
 function flowLabel(flowMode: FlowMode): string {
   return FLOW_OPTIONS.find((entry) => entry.value === flowMode)?.label ?? 'Any Flow';
+}
+
+function lookupStepLabel(scope: Scope): string {
+  const step = LOOKUP_STEP_BY_SCOPE[scope];
+  return `Checked step ${step} of 5`;
 }
 
 function statusLabel(row: PriceListRecord): string {
@@ -354,6 +367,14 @@ export default function PriceListsPage(): JSX.Element {
     () => SCOPE_INFO.filter((item) => item.scope !== 'CUSTOMER_GROUP' || tenantAddons.custom_pricing),
     [tenantAddons.custom_pricing]
   );
+  const visibleScopeInfo = useMemo(
+    () => SCOPE_INFO.filter((item) => item.scope !== 'CUSTOMER_GROUP' || tenantAddons.custom_pricing),
+    [tenantAddons.custom_pricing]
+  );
+  const visiblePriceLists = useMemo(
+    () => priceLists.filter((row) => row.scope !== 'CUSTOMER_GROUP' || tenantAddons.custom_pricing),
+    [priceLists, tenantAddons.custom_pricing]
+  );
 
   const defaultProductId = useMemo(() => products[0]?.id ?? '', [products]);
   const productCategoryOptions = useMemo(() => {
@@ -388,10 +409,10 @@ export default function PriceListsPage(): JSX.Element {
   const filteredRows = useMemo(() => {
     const term = search.trim().toLowerCase();
     if (!term) {
-      return priceLists;
+      return visiblePriceLists;
     }
 
-    return priceLists.filter((row) => {
+    return visiblePriceLists.filter((row) => {
       const target = scopeTarget(row, branchById, customerById, customerCategoryById);
       return (
         row.code.toLowerCase().includes(term) ||
@@ -400,10 +421,10 @@ export default function PriceListsPage(): JSX.Element {
         target.toLowerCase().includes(term)
       );
     });
-  }, [priceLists, search, branchById, customerById, customerCategoryById]);
+  }, [visiblePriceLists, search, branchById, customerById, customerCategoryById]);
   const copyablePriceLists = useMemo(
-    () => priceLists.filter((row) => row.id !== editingId),
-    [editingId, priceLists]
+    () => visiblePriceLists.filter((row) => row.id !== editingId),
+    [editingId, visiblePriceLists]
   );
 
   useEffect(() => {
@@ -440,6 +461,21 @@ export default function PriceListsPage(): JSX.Element {
       setForm((prev) => ({ ...prev, rules: [createEmptyRule(defaultProductId, prev.scope)] }));
     }
   }, [defaultProductId, dialogMode, form.rules.length]);
+
+  useEffect(() => {
+    if (tenantAddons.custom_pricing || form.scope !== 'CUSTOMER_GROUP') {
+      return;
+    }
+    setForm((prev) => ({
+      ...prev,
+      scope: 'GLOBAL',
+      customerCategoryId: '',
+      rules: prev.rules.map((rule) => ({
+        ...rule,
+        priority: PRIORITY_BY_SCOPE.GLOBAL
+      }))
+    }));
+  }, [form.scope, tenantAddons.custom_pricing]);
 
   function setField<K extends keyof FormState>(key: K, value: FormState[K]): void {
     setForm((prev) => ({ ...prev, [key]: value }));
@@ -789,7 +825,10 @@ export default function PriceListsPage(): JSX.Element {
         <div>
           <h1 className="text-2xl font-bold text-brandPrimary">Price Lists</h1>
           <p className="mt-1 text-sm text-slate-600 dark:text-slate-300">
-            Create easy-to-understand pricing rules. Higher priority wins automatically: Contract, Tier, Branch, then Default.
+            Price is chosen in this fixed order: Specific Customer, Custom Pricing, Customer Tier, Branch, then Standard.
+          </p>
+          <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">
+            The order above is always used. Priority number is only a tie-breaker when two lists are in the same type.
           </p>
         </div>
         <div className="flex items-center gap-2">
@@ -810,11 +849,11 @@ export default function PriceListsPage(): JSX.Element {
       </div>
 
       <div className="mb-4 grid gap-3 md:grid-cols-4">
-        {SCOPE_INFO.map((item) => (
+        {visibleScopeInfo.map((item) => (
           <article className="rounded-xl border border-slate-200 bg-white p-3 text-sm dark:border-slate-700 dark:bg-slate-900" key={item.scope}>
             <p className="font-semibold text-slate-900 dark:text-slate-100">{item.label}</p>
             <p className="mt-1 text-slate-600 dark:text-slate-300">{item.description}</p>
-            <p className="mt-2 text-xs font-semibold uppercase tracking-wide text-brandPrimary">Priority {item.priority}</p>
+            <p className="mt-2 text-xs font-semibold uppercase tracking-wide text-brandPrimary">{lookupStepLabel(item.scope)}</p>
           </article>
         ))}
       </div>
@@ -963,6 +1002,9 @@ export default function PriceListsPage(): JSX.Element {
 
               <div>
                 <p className="mb-2 text-sm font-medium text-slate-700 dark:text-slate-200">Who gets this price?</p>
+                <p className="mb-2 text-xs text-slate-500 dark:text-slate-400">
+                  We always check in order: Specific Customer, Custom Pricing, Customer Tier, Branch, then Standard.
+                </p>
                 <div className="grid gap-2 md:grid-cols-2">
                   {scopeOptions.map((item) => (
                     <button
@@ -973,7 +1015,7 @@ export default function PriceListsPage(): JSX.Element {
                     >
                       <p className="font-semibold">{item.label}</p>
                       <p className="text-xs">{item.description}</p>
-                      <p className="mt-1 text-xs font-semibold uppercase">Priority {item.priority}</p>
+                      <p className="mt-1 text-xs font-semibold uppercase">{lookupStepLabel(item.scope)}</p>
                     </button>
                   ))}
                 </div>
@@ -1240,7 +1282,10 @@ export default function PriceListsPage(): JSX.Element {
               <section className="rounded-xl border border-slate-200 bg-slate-50 p-3 text-sm dark:border-slate-700 dark:bg-slate-800/60">
                 <p className="font-semibold text-slate-900 dark:text-slate-100">Summary</p>
                 <p className="text-slate-700 dark:text-slate-200">
-                  {scopeLabel(form.scope)} | Priority {PRIORITY_BY_SCOPE[form.scope]} | {form.rules.length} product rule(s)
+                  {scopeLabel(form.scope)} | {lookupStepLabel(form.scope)} | {form.rules.length} product rule(s)
+                </p>
+                <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">
+                  Tie-breaker: if two lists are the same type, the smaller priority number is used first.
                 </p>
               </section>
 
@@ -1266,7 +1311,7 @@ export default function PriceListsPage(): JSX.Element {
           <section className="w-full max-w-md rounded-2xl border border-slate-200 bg-white p-4 shadow-2xl dark:border-slate-700 dark:bg-slate-900">
             <h3 className="text-lg font-semibold text-slate-900 dark:text-slate-100">Confirm Save</h3>
             <p className="mt-2 text-sm text-slate-600 dark:text-slate-300">
-              This will {editingId ? 'update' : 'create'} the price list and apply the selected priority rules.
+              This will {editingId ? 'update' : 'create'} the price list with the selected customer type and item prices.
             </p>
             <div className="mt-4 flex items-center justify-end gap-2">
               <button

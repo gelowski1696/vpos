@@ -67,6 +67,24 @@ const NAV_ROUTE_ADDON_GUARDS: Partial<Record<string, TenantAddonKey>> = {
   '/customer-categories': 'customer_category'
 };
 
+const NAV_ROUTE_ADDON_BADGES: Partial<Record<string, TenantAddonKey>> = {
+  '/customer-categories': 'customer_category'
+};
+
+const SIDEBAR_ADDON_SECTION_TITLE = 'Add-Ons';
+
+const ADDON_SIDEBAR_SHORTCUTS: Array<{ addon: TenantAddonKey; item: NavItem }> = [
+  {
+    addon: 'custom_pricing',
+    item: {
+      href: '/price-lists' as Route,
+      label: 'Custom Pricing',
+      icon: 'pricing',
+      badge: 'Add-on'
+    }
+  }
+];
+
 type NavItem = {
   href: Route;
   label: string;
@@ -755,36 +773,100 @@ export function AdminShell({ children }: { children: React.ReactNode }): JSX.Ele
   );
 
   const visibleNavSections = useMemo(
-    () =>
-      NAV_SECTIONS.map((section) => ({
+    () => {
+      const visibleSections = NAV_SECTIONS.map((section) => ({
         ...section,
-        items: section.items.filter((item) => {
-          if (isPlatformOwner) {
-            return PLATFORM_OWNER_ALLOWED_ROUTES.includes(item.href);
-          }
+        items: section.items
+          .filter((item) => {
+            if (isPlatformOwner) {
+              return PLATFORM_OWNER_ALLOWED_ROUTES.includes(item.href);
+            }
 
-          if (item.href === '/tenants') {
-            return false;
-          }
+            if (item.href === '/tenants') {
+              return false;
+            }
 
-          if (item.href === '/audit-logs' && !canViewAuditLogs) {
-            return false;
-          }
+            if (item.href === '/audit-logs' && !canViewAuditLogs) {
+              return false;
+            }
 
-          const requiredAddon = NAV_ROUTE_ADDON_GUARDS[item.href];
-          if (requiredAddon && !tenantAddons[requiredAddon]) {
-            return false;
-          }
+            const requiredAddon = NAV_ROUTE_ADDON_GUARDS[item.href];
+            if (requiredAddon && !tenantAddons[requiredAddon]) {
+              return false;
+            }
 
-          if (
-            !canViewOrgStructure &&
-            (item.href === '/branches' || item.href === '/locations' || item.href === '/users')
-          ) {
+            if (
+              !canViewOrgStructure &&
+              (item.href === '/branches' || item.href === '/locations' || item.href === '/users')
+            ) {
+              return false;
+            }
+            return true;
+          })
+          .map((item) => {
+            const badgeAddonKey = NAV_ROUTE_ADDON_BADGES[item.href];
+            if (badgeAddonKey && tenantAddons[badgeAddonKey]) {
+              return { ...item, badge: 'Add-on' };
+            }
+            return item;
+          })
+      })).filter((section) => section.items.length > 0);
+
+      if (isPlatformOwner) {
+        return visibleSections;
+      }
+
+      const addonItems: NavItem[] = [];
+      const sectionsWithoutAddonGroupMembers = visibleSections
+        .map((section) => ({
+          ...section,
+          items: section.items.filter((item) => {
+            const addonKey = NAV_ROUTE_ADDON_GUARDS[item.href];
+            if (!addonKey) {
+              return true;
+            }
+            addonItems.push({ ...item, badge: 'Add-on' });
             return false;
+          })
+        }))
+        .filter((section) => section.items.length > 0);
+
+      if (addonItems.length === 0) {
+        const shortcutItems = ADDON_SIDEBAR_SHORTCUTS
+          .filter((entry) => tenantAddons[entry.addon])
+          .map((entry) => entry.item);
+        if (shortcutItems.length === 0) {
+          return sectionsWithoutAddonGroupMembers;
+        }
+        return [
+          ...sectionsWithoutAddonGroupMembers,
+          {
+            title: SIDEBAR_ADDON_SECTION_TITLE,
+            items: shortcutItems
           }
-          return true;
-        })
-      })).filter((section) => section.items.length > 0),
+        ];
+      }
+
+      const seen = new Set<string>();
+      const dedupedAddonItems = [
+        ...addonItems,
+        ...ADDON_SIDEBAR_SHORTCUTS.filter((entry) => tenantAddons[entry.addon]).map((entry) => entry.item)
+      ].filter((item) => {
+        if (seen.has(item.href)) {
+          return false;
+        }
+        seen.add(item.href);
+        return true;
+      });
+
+      return [
+        ...sectionsWithoutAddonGroupMembers,
+        {
+          title: SIDEBAR_ADDON_SECTION_TITLE,
+          items: dedupedAddonItems
+        }
+      ];
+    },
     [canViewOrgStructure, canViewAuditLogs, isPlatformOwner, tenantAddons]
   );
 
@@ -1475,6 +1557,11 @@ export function AdminShell({ children }: { children: React.ReactNode }): JSX.Ele
                   <span className="flex items-center gap-1.5">
                     <NavIcon className="h-3.5 w-3.5" name={item.icon} />
                     <span>{item.label}</span>
+                    {item.badge ? (
+                      <span className="rounded-full border border-current/40 px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wide">
+                        {item.badge}
+                      </span>
+                    ) : null}
                   </span>
                 </Link>
               );
