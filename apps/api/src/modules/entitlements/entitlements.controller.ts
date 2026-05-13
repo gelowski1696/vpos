@@ -11,7 +11,7 @@ export class EntitlementsController {
     private readonly auditService: AuditService
   ) {}
 
-  @Roles('admin', 'owner', 'platform_owner')
+  @Roles('admin', 'owner', 'platform_owner', 'supervisor', 'cashier', 'driver', 'helper')
   @Get('entitlements/current')
   getCurrent(
     @Req()
