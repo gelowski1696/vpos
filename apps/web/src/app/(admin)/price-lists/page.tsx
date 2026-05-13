@@ -139,13 +139,11 @@ const PRIORITY_BY_SCOPE: Record<Scope, number> = {
   CONTRACT: 1
 };
 
-const LOOKUP_STEP_BY_SCOPE: Record<Scope, number> = {
-  CONTRACT: 1,
-  CUSTOMER_GROUP: 2,
-  TIER: 3,
-  BRANCH: 4,
-  GLOBAL: 5
-};
+function getScopeLookupOrder(customPricingEnabled: boolean): Scope[] {
+  return customPricingEnabled
+    ? ['CONTRACT', 'CUSTOMER_GROUP', 'TIER', 'BRANCH', 'GLOBAL']
+    : ['CONTRACT', 'TIER', 'BRANCH', 'GLOBAL'];
+}
 
 const FLOW_OPTIONS: Array<{ value: FlowMode; label: string }> = [
   { value: 'ANY', label: 'Any Flow' },
@@ -241,13 +239,33 @@ function scopeLabel(scope: Scope): string {
   return SCOPE_INFO.find((entry) => entry.scope === scope)?.label ?? scope;
 }
 
+function isAddonScope(scope: Scope): boolean {
+  return scope === 'CUSTOMER_GROUP';
+}
+
+function scopeLabelWithAddonText(scope: Scope): string {
+  return isAddonScope(scope) ? `${scopeLabel(scope)} (Add-on)` : scopeLabel(scope);
+}
+
+function AddonBadge(): JSX.Element {
+  return (
+    <span className="rounded-full border border-brandPrimary/40 bg-brandPrimary/10 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide text-brandPrimary">
+      Add-on
+    </span>
+  );
+}
+
 function flowLabel(flowMode: FlowMode): string {
   return FLOW_OPTIONS.find((entry) => entry.value === flowMode)?.label ?? 'Any Flow';
 }
 
-function lookupStepLabel(scope: Scope): string {
-  const step = LOOKUP_STEP_BY_SCOPE[scope];
-  return `Checked step ${step} of 5`;
+function lookupStepLabel(scope: Scope, customPricingEnabled: boolean): string {
+  const lookupOrder = getScopeLookupOrder(customPricingEnabled);
+  const step = lookupOrder.indexOf(scope) + 1;
+  if (step <= 0) {
+    return `Checked step - of ${lookupOrder.length}`;
+  }
+  return `Checked step ${step} of ${lookupOrder.length}`;
 }
 
 function statusLabel(row: PriceListRecord): string {
@@ -851,9 +869,14 @@ export default function PriceListsPage(): JSX.Element {
       <div className="mb-4 grid gap-3 md:grid-cols-4">
         {visibleScopeInfo.map((item) => (
           <article className="rounded-xl border border-slate-200 bg-white p-3 text-sm dark:border-slate-700 dark:bg-slate-900" key={item.scope}>
-            <p className="font-semibold text-slate-900 dark:text-slate-100">{item.label}</p>
+            <p className="inline-flex items-center gap-2 font-semibold text-slate-900 dark:text-slate-100">
+              <span>{item.label}</span>
+              {isAddonScope(item.scope) ? <AddonBadge /> : null}
+            </p>
             <p className="mt-1 text-slate-600 dark:text-slate-300">{item.description}</p>
-            <p className="mt-2 text-xs font-semibold uppercase tracking-wide text-brandPrimary">{lookupStepLabel(item.scope)}</p>
+            <p className="mt-2 text-xs font-semibold uppercase tracking-wide text-brandPrimary">
+              {lookupStepLabel(item.scope, tenantAddons.custom_pricing)}
+            </p>
           </article>
         ))}
       </div>
@@ -890,7 +913,10 @@ export default function PriceListsPage(): JSX.Element {
                         <td className="px-4 py-3 align-top">
                           <p className="font-semibold text-slate-900 dark:text-slate-100">{row.name}</p>
                           <p className="text-xs text-slate-500 dark:text-slate-400">{row.code}</p>
-                          <p className="mt-1 text-xs text-brandPrimary">{scopeLabel(row.scope)}</p>
+                          <p className="mt-1 inline-flex items-center gap-2 text-xs text-brandPrimary">
+                            <span>{scopeLabel(row.scope)}</span>
+                            {isAddonScope(row.scope) ? <AddonBadge /> : null}
+                          </p>
                         </td>
                         <td className="px-4 py-3 align-top text-slate-700 dark:text-slate-200">
                           {scopeTarget(row, branchById, customerById, customerCategoryById)}
@@ -943,7 +969,13 @@ export default function PriceListsPage(): JSX.Element {
                     </button>
                   </div>
                   <div className="space-y-1 text-xs text-slate-700 dark:text-slate-200">
-                    <p><span className="font-semibold">Type:</span> {scopeLabel(row.scope)}</p>
+                    <p>
+                      <span className="font-semibold">Type:</span>{' '}
+                      <span className="inline-flex items-center gap-2">
+                        <span>{scopeLabel(row.scope)}</span>
+                        {isAddonScope(row.scope) ? <AddonBadge /> : null}
+                      </span>
+                    </p>
                     <p><span className="font-semibold">Target:</span> {scopeTarget(row, branchById, customerById, customerCategoryById)}</p>
                     <p><span className="font-semibold">Start:</span> {formatDateTime(row.startsAt)}</p>
                     <p><span className="font-semibold">Status:</span> {statusLabel(row)}</p>
@@ -1012,10 +1044,15 @@ export default function PriceListsPage(): JSX.Element {
                       key={item.scope}
                       onClick={() => onScopeChange(item.scope)}
                       type="button"
-                    >
-                      <p className="font-semibold">{item.label}</p>
+                      >
+                      <p className="inline-flex items-center gap-2 font-semibold">
+                        <span>{item.label}</span>
+                        {isAddonScope(item.scope) ? <AddonBadge /> : null}
+                      </p>
                       <p className="text-xs">{item.description}</p>
-                      <p className="mt-1 text-xs font-semibold uppercase">{lookupStepLabel(item.scope)}</p>
+                      <p className="mt-1 text-xs font-semibold uppercase">
+                        {lookupStepLabel(item.scope, tenantAddons.custom_pricing)}
+                      </p>
                     </button>
                   ))}
                 </div>
@@ -1170,7 +1207,7 @@ export default function PriceListsPage(): JSX.Element {
                       <option value="">Select source price list</option>
                       {copyablePriceLists.map((row) => (
                         <option key={row.id} value={row.id}>
-                          {row.name} ({row.code}) - {scopeLabel(row.scope)}
+                          {row.name} ({row.code}) - {scopeLabelWithAddonText(row.scope)}
                         </option>
                       ))}
                     </select>
@@ -1282,7 +1319,7 @@ export default function PriceListsPage(): JSX.Element {
               <section className="rounded-xl border border-slate-200 bg-slate-50 p-3 text-sm dark:border-slate-700 dark:bg-slate-800/60">
                 <p className="font-semibold text-slate-900 dark:text-slate-100">Summary</p>
                 <p className="text-slate-700 dark:text-slate-200">
-                  {scopeLabel(form.scope)} | {lookupStepLabel(form.scope)} | {form.rules.length} product rule(s)
+                  {scopeLabelWithAddonText(form.scope)} | {lookupStepLabel(form.scope, tenantAddons.custom_pricing)} | {form.rules.length} product rule(s)
                 </p>
                 <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">
                   Tie-breaker: if two lists are the same type, the smaller priority number is used first.
