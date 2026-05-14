@@ -12,6 +12,7 @@
         "db:reset:fresh": "node ./scripts/reset-fresh-start.mjs",
         "db:reset:owner-only": "node ./scripts/reset-fresh-start.mjs && node ./scripts/cleanup-seeded-tenants.mjs --all-dedicated",
         "db:migrate:all": "node ./scripts/migrate-all-datastores.mjs",
+        "db:migrate:tenants": "node ./scripts/migrate-all-datastores.mjs --tenants-only",
         "ops:backup": "powershell -ExecutionPolicy Bypass -File ./scripts/backup-postgres.ps1",
         "ops:retention:dry-run": "node ./scripts/retention-maintenance.mjs --years 7",
         "ops:retention:apply": "node ./scripts/retention-maintenance.mjs --years 7 --apply",

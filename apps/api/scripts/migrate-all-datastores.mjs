@@ -36,7 +36,11 @@ function loadDotEnv(envPath) {
 function parseArgs(argv) {
   const createMissing = !argv.includes('--no-create-missing');
   const strict = argv.includes('--strict');
-  return { createMissing, strict };
+  const tenantsOnly =
+    argv.includes('--tenants-only') ||
+    argv.includes('--dedicated-only') ||
+    argv.includes('--skip-shared');
+  return { createMissing, strict, tenantsOnly };
 }
 
 function parseDbName(databaseUrl) {
@@ -297,9 +301,13 @@ async function main() {
     throw new Error('DATABASE_URL is required in apps/api/.env');
   }
 
-  console.log('[migrate-all] Applying shared schema migrations...');
-  await runPrismaMigrateDeploy(apiRoot, sharedUrl);
-  console.log('[migrate-all] Shared schema is up to date.');
+  if (args.tenantsOnly) {
+    console.log('[migrate-all] tenants-only mode enabled: shared/owner schema migration skipped.');
+  } else {
+    console.log('[migrate-all] Applying shared schema migrations...');
+    await runPrismaMigrateDeploy(apiRoot, sharedUrl);
+    console.log('[migrate-all] Shared schema is up to date.');
+  }
 
   const shared = new PrismaClient({
     datasources: {
