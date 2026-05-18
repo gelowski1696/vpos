@@ -213,12 +213,25 @@ type TransferRow = {
 type DeliveryOrderRow = {
   id: string;
   order_type: 'PICKUP' | 'DELIVERY';
-  status: 'CREATED' | 'ASSIGNED' | 'OUT_FOR_DELIVERY' | 'DELIVERED' | 'FAILED' | 'RETURNED';
+  status:
+    | 'CREATED'
+    | 'ASSIGNED'
+    | 'OUT_FOR_DELIVERY'
+    | 'DELIVERED'
+    | 'FAILED'
+    | 'RETURNED'
+    | 'COMPLETE';
   customer_id?: string | null;
   sale_id?: string | null;
   personnel: Array<{ user_id: string; role: string }>;
   created_at: string;
   updated_at: string;
+};
+
+type EntitlementResponse = {
+  addons?: {
+    delivery_dispatch_suite?: boolean;
+  };
 };
 
 type CylinderRow = {
@@ -541,6 +554,10 @@ export default function ReportsPage(): JSX.Element {
       const reviewParams = new URLSearchParams();
       reviewParams.set('limit', '300');
 
+      const entitlementRes = await safeRequest<EntitlementResponse>('/platform/entitlements/current');
+      const deliveryDispatchEnabled =
+        entitlementRes.data?.addons?.delivery_dispatch_suite === true;
+
       const requests = await Promise.all([
         safeRequest<BranchRecord[]>('/master-data/branches'),
         safeRequest<SalesSummary>(`/reports/sales/summary?${baseParams.toString()}`),
@@ -557,7 +574,9 @@ export default function ReportsPage(): JSX.Element {
         safeRequest<CustomerRecord[]>(`/master-data/customers?include_balance=true${branchFilter !== 'ALL' ? `&branch_id=${encodeURIComponent(branchFilter)}` : ''}`),
         safeRequest<CustomerPaymentRow[]>(`/customer-payments?${paymentParams.toString()}`),
         safeRequest<TransferRow[]>('/transfers'),
-        safeRequest<DeliveryOrderRow[]>('/delivery/orders'),
+        deliveryDispatchEnabled
+          ? safeRequest<DeliveryOrderRow[]>('/delivery/orders')
+          : Promise.resolve({ data: [] as DeliveryOrderRow[], error: null }),
         safeRequest<CylinderRow[]>('/cylinders'),
         safeRequest<LpgItemActionSummary>(`/lpg-item-actions/summary?${baseParams.toString()}`),
         safeRequest<{ rows: SyncReviewRow[] }>(`/reviews?${reviewParams.toString()}`),

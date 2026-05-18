@@ -64,11 +64,15 @@ const DEFAULT_TENANT_ADDONS: TenantAddons = {
 type TenantAddonKey = keyof TenantAddons;
 
 const NAV_ROUTE_ADDON_GUARDS: Partial<Record<string, TenantAddonKey>> = {
-  '/customer-categories': 'customer_category'
+  '/customer-categories': 'customer_category',
+  '/purchase-orders': 'purchase_order_suite',
+  '/delivery-dispatch': 'delivery_dispatch_suite'
 };
 
 const NAV_ROUTE_ADDON_BADGES: Partial<Record<string, TenantAddonKey>> = {
-  '/customer-categories': 'customer_category'
+  '/customer-categories': 'customer_category',
+  '/purchase-orders': 'purchase_order_suite',
+  '/delivery-dispatch': 'delivery_dispatch_suite'
 };
 
 const SIDEBAR_ADDON_SECTION_TITLE = 'Add-Ons';
@@ -80,6 +84,24 @@ const ADDON_SIDEBAR_SHORTCUTS: Array<{ addon: TenantAddonKey; item: NavItem }> =
       href: '/price-lists' as Route,
       label: 'Custom Pricing',
       icon: 'pricing',
+      badge: 'Add-on'
+    }
+  },
+  {
+    addon: 'purchase_order_suite',
+    item: {
+      href: '/purchase-orders' as Route,
+      label: 'Purchase Orders',
+      icon: 'supplier',
+      badge: 'Add-on'
+    }
+  },
+  {
+    addon: 'delivery_dispatch_suite',
+    item: {
+      href: '/delivery-dispatch' as Route,
+      label: 'Delivery Dispatch',
+      icon: 'transfer',
       badge: 'Add-on'
     }
   }
@@ -482,6 +504,8 @@ const NAV_SECTIONS: Array<{ title: string; items: NavItem[] }> = [
       { href: '/transfer-list' as Route, label: 'Transfer List', icon: 'transfer' },
       { href: '/lending' as Route, label: 'Lending', icon: 'transfer' },
       { href: '/lending/return-history' as Route, label: 'Return History', icon: 'sales' },
+      { href: '/purchase-orders' as Route, label: 'Purchase Orders', icon: 'supplier' },
+      { href: '/delivery-dispatch' as Route, label: 'Delivery Dispatch', icon: 'transfer' },
       { href: '/branches', label: 'Branches', icon: 'branch' },
       { href: '/locations', label: 'Locations', icon: 'location' },
       { href: '/users', label: 'Users', icon: 'users' },

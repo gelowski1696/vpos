@@ -1,4 +1,4 @@
-import { BadRequestException, Injectable, NotFoundException, Optional } from '@nestjs/common';
+import { BadRequestException, ForbiddenException, Injectable, NotFoundException, Optional } from '@nestjs/common';
 import {
   CylinderStatus,
   CustomerPointsSourceType,
@@ -15,6 +15,7 @@ import {
   TenantDatasourceRouterService,
   type TenantPrismaBinding
 } from '../../common/tenant-datasource-router.service';
+import { EntitlementsService } from '../entitlements/entitlements.service';
 
 type SaleLineInput = {
   product_id: string;
@@ -48,6 +49,8 @@ type SalePostInput = {
   estimate_cogs?: number;
   deposit_amount?: number;
   cylinder_flow?: 'AUTO' | 'REFILL_EXCHANGE' | 'NON_REFILL';
+  hide_amounts?: boolean;
+  hideAmounts?: boolean;
   personnel_id?: string | null;
   personnel_name?: string | null;
   personnelId?: string | null;
@@ -104,6 +107,8 @@ type PostedSale = {
   totalAmount: number;
   finalCogs: number;
   depositLiabilityDelta: number;
+  receiptHideAmounts: boolean;
+  receiptHideReason: string | null;
   receiptNumber: string;
   postedAt: string;
 };
@@ -125,6 +130,7 @@ export type SalePostResponse = {
   total_amount: number;
   final_cogs: number;
   deposit_liability_delta: number;
+  receipt_hide_amounts: boolean;
   receipt_number: string;
   receipt_document: {
     title: string;
@@ -137,6 +143,7 @@ export type SalePostResponse = {
 export type SaleReprintResponse = {
   sale_id: string;
   receipt_number: string;
+  receipt_hide_amounts: boolean;
   is_reprint: true;
   receipt_document: SalePostResponse['receipt_document'];
 };
@@ -208,7 +215,8 @@ export class SalesService {
 
   constructor(
     @Optional() private readonly prisma?: PrismaService,
-    @Optional() private readonly tenantRouter?: TenantDatasourceRouterService
+    @Optional() private readonly tenantRouter?: TenantDatasourceRouterService,
+    @Optional() private readonly entitlementsService?: EntitlementsService
   ) {}
 
   async post(companyId: string, input: SalePostInput, actorUserId?: string): Promise<SalePostResponse> {
@@ -289,7 +297,7 @@ export class SalesService {
     };
   }
 
-  private postInMemory(companyId: string, input: SalePostInput): SalePostResponse {
+  private async postInMemory(companyId: string, input: SalePostInput): Promise<SalePostResponse> {
     if (!input.sale_id?.trim()) {
       throw new BadRequestException('sale_id is required');
     }
@@ -318,6 +326,17 @@ export class SalesService {
       }
     }
     const creditBalance = Number(Math.max(0, totalAmount - paymentTotal).toFixed(2));
+    const requestedHideAmounts = input.hide_amounts === true || input.hideAmounts === true;
+    const receiptPrivacyAddonEnabled =
+      requestedHideAmounts && this.entitlementsService
+        ? await this.entitlementsService.isTenantAddonEnabled('receipt_amount_privacy', companyId)
+        : false;
+    const effectiveHideAmounts = requestedHideAmounts && receiptPrivacyAddonEnabled;
+    if (effectiveHideAmounts && creditBalance > 0.0001) {
+      throw new BadRequestException(
+        'Receipt amount privacy cannot be enabled for sales with balance due.'
+      );
+    }
 
     const estimateCogs = input.estimate_cogs ?? subtotal;
     const finalCogs = Number(estimateCogs.toFixed(2));
@@ -341,6 +360,8 @@ export class SalesService {
       totalAmount,
       finalCogs,
       depositLiabilityDelta,
+      receiptHideAmounts: effectiveHideAmounts,
+      receiptHideReason: effectiveHideAmounts ? 'MANUAL_HIDE' : null,
       receiptNumber,
       postedAt
     };
@@ -354,6 +375,7 @@ export class SalesService {
       total_amount: sale.totalAmount,
       final_cogs: sale.finalCogs,
       deposit_liability_delta: sale.depositLiabilityDelta,
+      receipt_hide_amounts: sale.receiptHideAmounts,
       receipt_number: sale.receiptNumber,
       receipt_document: this.buildReceiptDocument(sale, false)
     };
@@ -368,6 +390,7 @@ export class SalesService {
     return {
       sale_id: sale.saleId,
       receipt_number: sale.receiptNumber,
+      receipt_hide_amounts: sale.receiptHideAmounts,
       is_reprint: true,
       receipt_document: this.buildReceiptDocument(sale, true)
     };
@@ -503,6 +526,13 @@ export class SalesService {
           throw new BadRequestException('partial payment total must be between 0 and net sale total');
         }
         const creditBalance = this.roundMoney(Math.max(0, totalAmount - paymentTotal));
+        const receiptPrivacy = await this.resolveReceiptAmountPrivacyConfig(
+          tx,
+          companyId,
+          actor.id,
+          input,
+          creditBalance
+        );
 
         await this.applyAutoCylinderFlow(tx, {
           companyId,
@@ -655,6 +685,8 @@ export class SalesService {
             discountAmount,
             totalAmount,
             cogsAmount: finalCogs,
+            receiptHideAmounts: receiptPrivacy.hideAmounts,
+            receiptHideReason: receiptPrivacy.hideReason,
             postedAt: now
           }
         });
@@ -762,6 +794,8 @@ export class SalesService {
               recreated_from_sale_id: recreatedFromSaleId,
               total_amount: totalAmount,
               payment_mode: paymentMode,
+              receipt_hide_amounts: receiptPrivacy.hideAmounts,
+              receipt_hide_reason: receiptPrivacy.hideReason,
               paid_amount: paymentTotal,
               credit_balance: creditBalance,
               credit_notes: input.credit_notes ?? null,
@@ -859,6 +893,8 @@ export class SalesService {
           totalAmount,
           finalCogs,
           depositLiabilityDelta,
+          receiptHideAmounts: receiptPrivacy.hideAmounts,
+          receiptHideReason: receiptPrivacy.hideReason,
           receiptNumber,
           postedAt: now.toISOString()
         };
@@ -911,6 +947,7 @@ export class SalesService {
     return {
       sale_id: postedSale.saleId,
       receipt_number: postedSale.receiptNumber,
+      receipt_hide_amounts: postedSale.receiptHideAmounts,
       is_reprint: true,
       receipt_document: this.buildReceiptDocument(postedSale, true)
     };
@@ -2028,6 +2065,7 @@ export class SalesService {
       location_id: input.location_id?.trim(),
       shift_id: input.shift_id?.trim() || input.shiftId?.trim() || null,
       customer_id: input.customer_id?.trim() || null,
+      hide_amounts: input.hide_amounts === true || input.hideAmounts === true,
       recreated_from_sale_id:
         input.recreated_from_sale_id?.trim() || input.recreatedFromSaleId?.trim() || null,
       personnel_id: input.personnel_id?.trim() || input.personnelId?.trim() || null,
@@ -2037,6 +2075,55 @@ export class SalesService {
       helper_id: input.helper_id?.trim() || input.helperId?.trim() || null,
       helper_name: input.helper_name?.trim() || input.helperName?.trim() || null
     };
+  }
+
+  private async resolveReceiptAmountPrivacyConfig(
+    tx: DbTransaction,
+    companyId: string,
+    actorUserId: string,
+    input: SalePostInput,
+    creditBalance: number
+  ): Promise<{ hideAmounts: boolean; hideReason: string | null }> {
+    const requested =
+      input.hide_amounts === true || input.hideAmounts === true;
+    if (!requested) {
+      return { hideAmounts: false, hideReason: null };
+    }
+
+    if (!this.entitlementsService) {
+      return { hideAmounts: false, hideReason: null };
+    }
+
+    const addonEnabled = await this.entitlementsService.isTenantAddonEnabled(
+      'receipt_amount_privacy',
+      companyId
+    );
+    if (!addonEnabled) {
+      return { hideAmounts: false, hideReason: null };
+    }
+
+    if (creditBalance > 0.0001) {
+      throw new BadRequestException(
+        'Receipt amount privacy cannot be enabled for sales with balance due.'
+      );
+    }
+
+    const roleRows = await tx.userRole.findMany({
+      where: { userId: actorUserId },
+      select: { role: { select: { name: true } } }
+    });
+    const actorRoles = roleRows
+      .map((row) => row.role.name.trim().toLowerCase())
+      .filter((value) => value.length > 0);
+    const allowedRoles = new Set(['cashier', 'supervisor', 'admin']);
+    const allowed = actorRoles.some((role) => allowedRoles.has(role));
+    if (!allowed) {
+      throw new ForbiddenException(
+        'Only cashier, supervisor, or admin can hide receipt amounts.'
+      );
+    }
+
+    return { hideAmounts: true, hideReason: 'MANUAL_HIDE' };
   }
 
   private async resolveSaleShift(
@@ -3350,6 +3437,8 @@ export class SalesService {
       discountAmount: Prisma.Decimal;
       totalAmount: Prisma.Decimal;
       cogsAmount: Prisma.Decimal | null;
+      receiptHideAmounts: boolean;
+      receiptHideReason: string | null;
       postedAt: Date | null;
       lines: Array<{
         quantity: Prisma.Decimal;
@@ -3399,6 +3488,8 @@ export class SalesService {
       totalAmount,
       finalCogs: Number(row.cogsAmount ?? 0),
       depositLiabilityDelta: 0,
+      receiptHideAmounts: row.receiptHideAmounts,
+      receiptHideReason: row.receiptHideReason ?? null,
       receiptNumber: row.receipt.receiptNumber,
       postedAt: (row.postedAt ?? new Date()).toISOString()
     };
@@ -3413,6 +3504,7 @@ export class SalesService {
       total_amount: this.roundMoney(sale.totalAmount),
       final_cogs: this.roundMoney(sale.finalCogs),
       deposit_liability_delta: this.roundMoney(sale.depositLiabilityDelta),
+      receipt_hide_amounts: sale.receiptHideAmounts,
       receipt_number: sale.receiptNumber,
       receipt_document: this.buildReceiptDocument(sale, false)
     };
@@ -3484,22 +3576,25 @@ export class SalesService {
 
   private buildReceiptDocument(sale: PostedSale, isReprint: boolean): SalePostResponse['receipt_document'] {
     const paidAmount = this.roundMoney(sale.payments.reduce((sum, payment) => sum + payment.amount, 0));
+    const hideAmounts = sale.receiptHideAmounts === true;
+    const maskedValue = '*** HIDDEN ***';
+    const moneyOrMask = (value: number): string => (hideAmounts ? maskedValue : value.toFixed(2));
+    const linePriceOrMask = (line: { quantity: number; unit_price: number; product_id: string }): string =>
+      hideAmounts ? `${line.quantity} x ${line.product_id}` : `${line.quantity} x ${line.product_id} @ ${line.unit_price.toFixed(2)}`;
     const lines: SalePostResponse['receipt_document']['lines'] = [
       { align: 'center', text: `Receipt #${sale.receiptNumber}`, emphasis: true },
       { align: 'left', text: `Sale ID: ${sale.saleId}` },
       { align: 'left', text: `Type: ${sale.saleType}` },
-      ...sale.lines.map((line) => ({
-        align: 'left' as const,
-        text: `${line.quantity} x ${line.product_id} @ ${line.unit_price.toFixed(2)}`
-      })),
-      { align: 'left', text: `Subtotal: ${sale.subtotal.toFixed(2)}` },
-      { align: 'left', text: `Discount: ${sale.discountAmount.toFixed(2)}` },
-      { align: 'left', text: `Total: ${sale.totalAmount.toFixed(2)}` },
-      { align: 'left', text: `Paid: ${paidAmount.toFixed(2)}` },
-      { align: 'left', text: `Credit Due: ${sale.creditBalance.toFixed(2)}` },
+      ...(hideAmounts ? [{ align: 'left' as const, text: 'Amounts: hidden by cashier' }] : []),
+      ...sale.lines.map((line) => ({ align: 'left' as const, text: linePriceOrMask(line) })),
+      { align: 'left', text: `Subtotal: ${moneyOrMask(sale.subtotal)}` },
+      { align: 'left', text: `Discount: ${moneyOrMask(sale.discountAmount)}` },
+      { align: 'left', text: `Total: ${moneyOrMask(sale.totalAmount)}` },
+      { align: 'left', text: `Paid: ${moneyOrMask(paidAmount)}` },
+      { align: 'left', text: `Credit Due: ${moneyOrMask(sale.creditBalance)}` },
       { align: 'left', text: `Mode: ${sale.paymentMode}` },
-      { align: 'left', text: `COGS: ${sale.finalCogs.toFixed(2)}` },
-      { align: 'left', text: `Deposit Liability: ${sale.depositLiabilityDelta.toFixed(2)}` }
+      { align: 'left', text: `COGS: ${moneyOrMask(sale.finalCogs)}` },
+      { align: 'left', text: `Deposit Liability: ${moneyOrMask(sale.depositLiabilityDelta)}` }
     ];
 
     return {

@@ -2,9 +2,18 @@
 
 import { type FormEvent, useEffect, useMemo, useState } from 'react';
 import { apiRequest } from '../../../lib/api-client';
+import {
+  getScopeLookupOrder,
+  isAddonScope,
+  lookupStepLabel,
+  SCOPE_INFO,
+  scopeLabel,
+  scopeLabelWithAddonText,
+  type PriceListScope
+} from '../../../lib/price-list-addons';
 import { toastError, toastInfo, toastSuccess } from '../../../lib/web-toast';
 
-type Scope = 'GLOBAL' | 'BRANCH' | 'TIER' | 'CUSTOMER_GROUP' | 'CONTRACT';
+type Scope = PriceListScope;
 type FlowMode = 'ANY' | 'REFILL_EXCHANGE' | 'NON_REFILL';
 
 type PriceRule = {
@@ -98,39 +107,6 @@ type FormState = {
 
 type DialogMode = 'create' | 'edit' | null;
 
-const SCOPE_INFO: Array<{ scope: Scope; label: string; description: string; priority: number }> = [
-  {
-    scope: 'GLOBAL',
-    label: 'Default Price (All Customers)',
-    description: 'Used only when no other matching price list is found.',
-    priority: 4
-  },
-  {
-    scope: 'BRANCH',
-    label: 'Branch Override',
-    description: 'Checked after Customer Tier and before Default Price.',
-    priority: 3
-  },
-  {
-    scope: 'TIER',
-    label: 'Customer Tier Price',
-    description: 'Checked after Custom Pricing and before Branch.',
-    priority: 2
-  },
-  {
-    scope: 'CUSTOMER_GROUP',
-    label: 'Custom Pricing (Customer Category)',
-    description: 'Checked after Specific Customer and before Customer Tier.',
-    priority: 5
-  },
-  {
-    scope: 'CONTRACT',
-    label: 'Specific Customer Contract',
-    description: 'Checked first. Applies only to one specific customer.',
-    priority: 1
-  }
-];
-
 const PRIORITY_BY_SCOPE: Record<Scope, number> = {
   GLOBAL: 4,
   BRANCH: 3,
@@ -138,12 +114,6 @@ const PRIORITY_BY_SCOPE: Record<Scope, number> = {
   CUSTOMER_GROUP: 5,
   CONTRACT: 1
 };
-
-function getScopeLookupOrder(customPricingEnabled: boolean): Scope[] {
-  return customPricingEnabled
-    ? ['CONTRACT', 'CUSTOMER_GROUP', 'TIER', 'BRANCH', 'GLOBAL']
-    : ['CONTRACT', 'TIER', 'BRANCH', 'GLOBAL'];
-}
 
 const FLOW_OPTIONS: Array<{ value: FlowMode; label: string }> = [
   { value: 'ANY', label: 'Any Flow' },
@@ -235,18 +205,6 @@ function buildDefaultForm(defaultProductId: string): FormState {
   };
 }
 
-function scopeLabel(scope: Scope): string {
-  return SCOPE_INFO.find((entry) => entry.scope === scope)?.label ?? scope;
-}
-
-function isAddonScope(scope: Scope): boolean {
-  return scope === 'CUSTOMER_GROUP';
-}
-
-function scopeLabelWithAddonText(scope: Scope): string {
-  return isAddonScope(scope) ? `${scopeLabel(scope)} (Add-on)` : scopeLabel(scope);
-}
-
 function AddonBadge(): JSX.Element {
   return (
     <span className="rounded-full border border-brandPrimary/40 bg-brandPrimary/10 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide text-brandPrimary">
@@ -257,15 +215,6 @@ function AddonBadge(): JSX.Element {
 
 function flowLabel(flowMode: FlowMode): string {
   return FLOW_OPTIONS.find((entry) => entry.value === flowMode)?.label ?? 'Any Flow';
-}
-
-function lookupStepLabel(scope: Scope, customPricingEnabled: boolean): string {
-  const lookupOrder = getScopeLookupOrder(customPricingEnabled);
-  const step = lookupOrder.indexOf(scope) + 1;
-  if (step <= 0) {
-    return `Checked step - of ${lookupOrder.length}`;
-  }
-  return `Checked step ${step} of ${lookupOrder.length}`;
 }
 
 function statusLabel(row: PriceListRecord): string {

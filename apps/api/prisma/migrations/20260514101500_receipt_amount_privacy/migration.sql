@@ -1,0 +1,5 @@
+ALTER TABLE "Sale"
+  ADD COLUMN IF NOT EXISTS "receiptHideAmounts" BOOLEAN NOT NULL DEFAULT false;
+
+ALTER TABLE "Sale"
+  ADD COLUMN IF NOT EXISTS "receiptHideReason" TEXT;

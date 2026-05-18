@@ -24,6 +24,7 @@ import { LendingModule } from './modules/lending/lending.module';
 import { VcardModule } from './modules/vcard/vcard.module';
 import { LpgItemActionsModule } from './modules/lpg-item-actions/lpg-item-actions.module';
 import { ChatModule } from './modules/chat/chat.module';
+import { PurchaseOrdersModule } from './modules/purchase-orders/purchase-orders.module';
 
 @Module({
   imports: [
@@ -50,7 +51,8 @@ import { ChatModule } from './modules/chat/chat.module';
     LpgItemActionsModule,
     ReportsModule,
     AiExportModule,
-    ChatModule
+    ChatModule,
+    PurchaseOrdersModule
   ],
   providers: [TenantContextMiddleware]
 })

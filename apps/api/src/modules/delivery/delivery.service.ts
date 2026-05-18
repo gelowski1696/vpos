@@ -1,4 +1,4 @@
-import { BadRequestException, Injectable, NotFoundException, Optional } from '@nestjs/common';
+import { BadRequestException, ForbiddenException, Injectable, NotFoundException, Optional } from '@nestjs/common';
 import { Prisma, type PrismaClient } from '@prisma/client';
 import { PrismaService } from '../../common/prisma.service';
 import { AiEventBufferService } from '../../common/ai-event-buffer.service';
@@ -6,9 +6,31 @@ import {
   TenantDatasourceRouterService,
   type TenantPrismaBinding
 } from '../../common/tenant-datasource-router.service';
+import { EntitlementsService } from '../entitlements/entitlements.service';
 
-type DeliveryStatus = 'CREATED' | 'ASSIGNED' | 'OUT_FOR_DELIVERY' | 'DELIVERED' | 'FAILED' | 'RETURNED';
+type DeliveryStatus =
+  | 'CREATED'
+  | 'ASSIGNED'
+  | 'OUT_FOR_DELIVERY'
+  | 'DELIVERED'
+  | 'FAILED'
+  | 'RETURNED'
+  | 'COMPLETE';
 type OrderType = 'PICKUP' | 'DELIVERY';
+
+export type DeliveryActorContext = {
+  user_id?: string | null;
+  roles?: string[];
+};
+
+export type DeliveryListFilters = {
+  status?: DeliveryStatus;
+  branch_id?: string;
+  rider_user_id?: string;
+  sale_id?: string;
+  order_type?: OrderType;
+  limit?: number;
+};
 
 export type DeliveryOrderRecord = {
   id: string;
@@ -17,6 +39,9 @@ export type DeliveryOrderRecord = {
   customer_id?: string | null;
   sale_id?: string | null;
   personnel: Array<{ user_id: string; role: string }>;
+  cashier_validated_at?: string | null;
+  cashier_validated_by_user_id?: string | null;
+  cashier_validated_by_name?: string | null;
   created_at: string;
   updated_at: string;
 };
@@ -53,7 +78,8 @@ export class DeliveryService {
   constructor(
     @Optional() private readonly prisma?: PrismaService,
     @Optional() private readonly tenantRouter?: TenantDatasourceRouterService,
-    @Optional() private readonly aiEventBuffer?: AiEventBufferService
+    @Optional() private readonly aiEventBuffer?: AiEventBufferService,
+    @Optional() private readonly entitlementsService?: EntitlementsService
   ) {}
 
   async create(
@@ -65,8 +91,12 @@ export class DeliveryService {
       personnel?: Array<{ user_id: string; role: string }>;
       notes?: string;
       actor_user_id?: string;
-    }
+      metadata?: Record<string, unknown>;
+    },
+    actor?: DeliveryActorContext
   ): Promise<DeliveryOrderRecord> {
+    await this.enforceAddonPolicy(companyId);
+    this.assertCanCreateOrAssign(actor);
     const binding = await this.getTenantBinding(companyId);
     if (binding) {
       return this.createWithDatabase(binding, input);
@@ -74,31 +104,41 @@ export class DeliveryService {
     return this.createInMemory(companyId, input);
   }
 
-  async list(companyId: string): Promise<DeliveryOrderRecord[]> {
+  async list(
+    companyId: string,
+    filters: DeliveryListFilters = {},
+    actor?: DeliveryActorContext
+  ): Promise<DeliveryOrderRecord[]> {
+    await this.enforceAddonPolicy(companyId);
     const binding = await this.getTenantBinding(companyId);
     if (binding) {
-      return this.listWithDatabase(binding);
+      return this.listWithDatabase(binding, filters, actor);
     }
-    return [...this.getOrders(companyId).values()].sort((a, b) => b.created_at.localeCompare(a.created_at));
+    return this.filterInMemoryOrders(companyId, filters, actor);
   }
 
-  async get(companyId: string, id: string): Promise<DeliveryOrderRecord> {
+  async get(companyId: string, id: string, actor?: DeliveryActorContext): Promise<DeliveryOrderRecord> {
+    await this.enforceAddonPolicy(companyId);
     const binding = await this.getTenantBinding(companyId);
     if (binding) {
-      return this.getWithDatabase(binding, id);
+      return this.getWithDatabase(binding, id, actor);
     }
     const row = this.getOrders(companyId).get(id);
     if (!row) {
       throw new NotFoundException('Delivery order not found');
     }
+    this.assertInMemoryActorCanAccessOrder(row, actor);
     return row;
   }
 
   async assign(
     companyId: string,
     id: string,
-    input: { personnel: Array<{ user_id: string; role: string }>; actor_user_id?: string; notes?: string }
+    input: { personnel: Array<{ user_id: string; role: string }>; actor_user_id?: string; notes?: string },
+    actor?: DeliveryActorContext
   ): Promise<DeliveryOrderRecord> {
+    await this.enforceAddonPolicy(companyId);
+    this.assertCanCreateOrAssign(actor);
     const binding = await this.getTenantBinding(companyId);
     if (binding) {
       return this.assignWithDatabase(binding, id, input);
@@ -114,25 +154,105 @@ export class DeliveryService {
       notes?: string;
       actor_user_id?: string;
       metadata?: Record<string, unknown>;
-    }
+      cashier_validated_by_user_id?: string;
+    },
+    actor?: DeliveryActorContext
   ): Promise<DeliveryOrderRecord> {
+    await this.enforceAddonPolicy(companyId);
     const binding = await this.getTenantBinding(companyId);
     if (binding) {
-      return this.updateStatusWithDatabase(binding, id, input);
+      return this.updateStatusWithDatabase(binding, id, input, actor);
     }
-    return this.updateStatusInMemory(companyId, id, input);
+    return this.updateStatusInMemory(companyId, id, input, actor);
   }
 
-  async eventsForOrder(companyId: string, id: string): Promise<DeliveryStatusEventRecord[]> {
+  async eventsForOrder(
+    companyId: string,
+    id: string,
+    actor?: DeliveryActorContext
+  ): Promise<DeliveryStatusEventRecord[]> {
+    await this.enforceAddonPolicy(companyId);
     const binding = await this.getTenantBinding(companyId);
     if (binding) {
-      return this.eventsForOrderWithDatabase(binding, id);
+      return this.eventsForOrderWithDatabase(binding, id, actor);
     }
     const row = this.getOrders(companyId).get(id);
     if (!row) {
       throw new NotFoundException('Delivery order not found');
     }
+    this.assertInMemoryActorCanAccessOrder(row, actor);
     return [...(this.getEvents(companyId).get(id) ?? [])];
+  }
+
+  async exportCsv(
+    companyId: string,
+    filters: DeliveryListFilters = {},
+    actor?: DeliveryActorContext
+  ): Promise<string> {
+    await this.enforceAddonPolicy(companyId);
+    const binding = await this.getTenantBinding(companyId);
+    if (!binding) {
+      return this.csvFromRows([]);
+    }
+    const db = binding.client as DbClient;
+    const riderScope = await this.resolveRiderAccessScope(db, companyId, actor);
+    const where = this.buildDatabaseListWhere(companyId, filters, riderScope);
+    const rows = await db.deliveryOrder.findMany({
+      where,
+      include: {
+        branch: {
+          select: {
+            id: true,
+            name: true
+          }
+        },
+        sale: {
+          select: {
+            id: true,
+            customer: {
+              select: {
+                name: true,
+                address: true
+              }
+            },
+            receipt: {
+              select: {
+                receiptNumber: true
+              }
+            }
+          }
+        },
+        assignments: {
+          include: {
+            user: {
+              select: {
+                id: true,
+                fullName: true
+              }
+            }
+          },
+          orderBy: { assignedAt: 'asc' }
+        },
+        events: {
+          orderBy: [{ createdAt: 'asc' }, { id: 'asc' }]
+        },
+        cashierValidatedByUser: {
+          select: {
+            id: true,
+            fullName: true
+          }
+        }
+      },
+      orderBy: { createdAt: 'desc' },
+      take: filters.limit && Number.isFinite(filters.limit) ? Math.max(1, Math.min(1000, Math.floor(filters.limit))) : 500
+    });
+    const company = await db.company.findFirst({
+      where: { id: companyId },
+      select: { timezone: true }
+    });
+    const timezone = company?.timezone?.trim() || 'UTC';
+    const csvRows = rows.map((row) => this.mapDeliveryCsvRow(row, timezone));
+    return this.csvFromRows(csvRows);
   }
 
   private createInMemory(
@@ -144,13 +264,11 @@ export class DeliveryService {
       personnel?: Array<{ user_id: string; role: string }>;
       notes?: string;
       actor_user_id?: string;
+      metadata?: Record<string, unknown>;
     }
   ): DeliveryOrderRecord {
     const order_type = this.normalizeOrderType(input.order_type);
     const personnel = (input.personnel ?? []).filter((row) => row.user_id?.trim() && row.role?.trim());
-    if (order_type === 'DELIVERY' && personnel.length === 0) {
-      throw new BadRequestException('Delivery order requires at least one personnel assignment');
-    }
 
     const id = this.nextOrderId(companyId);
     const now = new Date().toISOString();
@@ -172,14 +290,22 @@ export class DeliveryService {
       to_status: order.status,
       notes: input.notes,
       actor_user_id: input.actor_user_id,
-      metadata: { order_type, personnel_count: personnel.length }
+      metadata: {
+        order_type,
+        personnel_count: personnel.length,
+        ...(input.metadata ?? {})
+      }
     });
     this.emitInMemoryDeliveryEvent(companyId, id, {
       from_status: null,
       to_status: order.status,
       actor_user_id: input.actor_user_id,
       notes: input.notes,
-      metadata: { order_type, personnel_count: personnel.length }
+      metadata: {
+        order_type,
+        personnel_count: personnel.length,
+        ...(input.metadata ?? {})
+      }
     });
 
     return order;
@@ -238,21 +364,34 @@ export class DeliveryService {
       notes?: string;
       actor_user_id?: string;
       metadata?: Record<string, unknown>;
-    }
+      cashier_validated_by_user_id?: string;
+    },
+    actor?: DeliveryActorContext
   ): DeliveryOrderRecord {
     const order = this.getOrders(companyId).get(id);
     if (!order) {
       throw new NotFoundException('Delivery order not found');
     }
+    this.assertInMemoryActorCanAccessOrder(order, actor);
     const next = this.normalizeStatus(input.status);
+    this.assertAllowedRiderStatusUpdate(actor, next);
     const allowed = this.allowedNext(order.status);
     if (!allowed.has(next)) {
       throw new BadRequestException(`Invalid delivery status transition: ${order.status} -> ${next}`);
+    }
+    if (next === 'COMPLETE') {
+      const cashierValidator = this.toNonEmpty(input.cashier_validated_by_user_id);
+      if (!cashierValidator) {
+        throw new BadRequestException('cashier_validated_by_user_id is required for COMPLETE status.');
+      }
     }
 
     const updated: DeliveryOrderRecord = {
       ...order,
       status: next,
+      cashier_validated_at: next === 'COMPLETE' ? new Date().toISOString() : null,
+      cashier_validated_by_user_id:
+        next === 'COMPLETE' ? this.toNonEmpty(input.cashier_validated_by_user_id) : null,
       updated_at: new Date().toISOString()
     };
     this.getOrders(companyId).set(id, updated);
@@ -282,15 +421,13 @@ export class DeliveryService {
       personnel?: Array<{ user_id: string; role: string }>;
       notes?: string;
       actor_user_id?: string;
+      metadata?: Record<string, unknown>;
     }
   ): Promise<DeliveryOrderRecord> {
     const db = binding.client as DbClient;
     const companyId = binding.companyId;
     const orderType = this.normalizeOrderType(input.order_type);
     const personnel = (input.personnel ?? []).filter((row) => row.user_id?.trim() && row.role?.trim());
-    if (orderType === 'DELIVERY' && personnel.length === 0) {
-      throw new BadRequestException('Delivery order requires at least one personnel assignment');
-    }
 
     const now = new Date();
     const status: DeliveryStatus = orderType === 'PICKUP' ? 'DELIVERED' : 'CREATED';
@@ -305,7 +442,7 @@ export class DeliveryService {
           branchId: branch.id,
           saleId: sale?.id ?? null,
           status,
-          completedAt: status === 'DELIVERED' ? now : null
+          completedAt: null
         },
         include: {
           assignments: {
@@ -328,7 +465,12 @@ export class DeliveryService {
         data: {
           deliveryOrderId: order.id,
           status,
-          notes: input.notes?.trim() || null
+          notes: input.notes?.trim() || null,
+          actorUserId: this.toNonEmpty(input.actor_user_id),
+          metadata: this.toEventJson({
+            from_status: null,
+            ...(input.metadata ? { metadata: input.metadata } : {})
+          })
         }
       });
       await tx.eventDeliveryPerformance.create({
@@ -361,33 +503,76 @@ export class DeliveryService {
       actor_user_id: input.actor_user_id,
       metadata: {
         order_type: orderType,
-        personnel_count: personnel.length
+        personnel_count: personnel.length,
+        ...(input.metadata ?? {})
       }
     });
     return this.getWithDatabase(binding, created.orderId);
   }
 
-  private async listWithDatabase(binding: TenantPrismaBinding): Promise<DeliveryOrderRecord[]> {
+  private async listWithDatabase(
+    binding: TenantPrismaBinding,
+    filters: DeliveryListFilters,
+    actor?: DeliveryActorContext
+  ): Promise<DeliveryOrderRecord[]> {
     const db = binding.client as DbClient;
+    const riderScope = await this.resolveRiderAccessScope(db, binding.companyId, actor);
     const rows = await db.deliveryOrder.findMany({
-      where: { companyId: binding.companyId },
+      where: this.buildDatabaseListWhere(binding.companyId, filters, riderScope),
       include: {
         assignments: {
+          include: {
+            user: {
+              select: {
+                id: true,
+                fullName: true
+              }
+            }
+          },
           orderBy: { assignedAt: 'asc' }
+        },
+        cashierValidatedByUser: {
+          select: {
+            id: true,
+            fullName: true
+          }
         }
       },
-      orderBy: { createdAt: 'desc' }
+      orderBy: { createdAt: 'desc' },
+      take: filters.limit && Number.isFinite(filters.limit) ? Math.max(1, Math.min(1000, Math.floor(filters.limit))) : 500
     });
     return rows.map((row) => this.mapOrderFromDb(binding.companyId, row));
   }
 
-  private async getWithDatabase(binding: TenantPrismaBinding, id: string): Promise<DeliveryOrderRecord> {
+  private async getWithDatabase(
+    binding: TenantPrismaBinding,
+    id: string,
+    actor?: DeliveryActorContext
+  ): Promise<DeliveryOrderRecord> {
     const db = binding.client as DbClient;
+    const riderScope = await this.resolveRiderAccessScope(db, binding.companyId, actor);
     const row = await db.deliveryOrder.findFirst({
-      where: { id, companyId: binding.companyId },
+      where: {
+        ...this.buildDatabaseListWhere(binding.companyId, {}, riderScope),
+        id
+      },
       include: {
         assignments: {
+          include: {
+            user: {
+              select: {
+                id: true,
+                fullName: true
+              }
+            }
+          },
           orderBy: { assignedAt: 'asc' }
+        },
+        cashierValidatedByUser: {
+          select: {
+            id: true,
+            fullName: true
+          }
         }
       }
     });
@@ -441,14 +626,20 @@ export class DeliveryService {
         where: { id: order.id },
         data: {
           status: 'ASSIGNED',
-          completedAt: null
+          completedAt: null,
+          cashierValidatedAt: null,
+          cashierValidatedByUserId: null
         }
       });
       const event = await tx.deliveryStatusEvent.create({
         data: {
           deliveryOrderId: order.id,
           status: 'ASSIGNED',
-          notes: input.notes?.trim() || null
+          notes: input.notes?.trim() || null,
+          actorUserId: this.toNonEmpty(input.actor_user_id),
+          metadata: this.toEventJson({
+            from_status: order.status
+          })
         }
       });
       await tx.eventDeliveryPerformance.create({
@@ -486,11 +677,14 @@ export class DeliveryService {
       notes?: string;
       actor_user_id?: string;
       metadata?: Record<string, unknown>;
-    }
+      cashier_validated_by_user_id?: string;
+    },
+    actor?: DeliveryActorContext
   ): Promise<DeliveryOrderRecord> {
     const db = binding.client as DbClient;
     const companyId = binding.companyId;
     const next = this.normalizeStatus(input.status);
+    this.assertAllowedRiderStatusUpdate(actor, next);
     const now = new Date();
 
     const result = await db.$transaction(async (tx) => {
@@ -501,17 +695,37 @@ export class DeliveryService {
       if (!order) {
         throw new NotFoundException('Delivery order not found');
       }
+      await this.assertDbActorCanAccessOrder(tx, companyId, order.id, actor);
 
       const allowed = this.allowedNext(order.status as DeliveryStatus);
       if (!allowed.has(next)) {
         throw new BadRequestException(`Invalid delivery status transition: ${order.status} -> ${next}`);
       }
+      let cashierValidatedByUserId: string | null = null;
+      if (next === 'COMPLETE') {
+        const requestedCashierValidator =
+          this.toNonEmpty(input.cashier_validated_by_user_id) ??
+          this.toNonEmpty(input.actor_user_id);
+        if (!requestedCashierValidator) {
+          throw new BadRequestException('cashier_validated_by_user_id is required for COMPLETE status.');
+        }
+        cashierValidatedByUserId = await this.resolveCashierValidatorUserId(
+          tx,
+          companyId,
+          requestedCashierValidator
+        );
+      }
+      const clearValidation = next !== 'COMPLETE';
+      const reopenQueue = next === 'ASSIGNED';
 
       await tx.deliveryOrder.update({
         where: { id: order.id },
         data: {
           status: next,
-          completedAt: next === 'DELIVERED' || next === 'FAILED' || next === 'RETURNED' ? now : null
+          completedAt: next === 'COMPLETE' ? now : reopenQueue ? null : order.completedAt,
+          cashierValidatedAt: next === 'COMPLETE' ? now : clearValidation ? null : order.cashierValidatedAt,
+          cashierValidatedByUserId:
+            next === 'COMPLETE' ? cashierValidatedByUserId : clearValidation ? null : order.cashierValidatedByUserId
         }
       });
 
@@ -519,7 +733,13 @@ export class DeliveryService {
         data: {
           deliveryOrderId: order.id,
           status: next,
-          notes: input.notes?.trim() || null
+          notes: input.notes?.trim() || null,
+          actorUserId: this.toNonEmpty(input.actor_user_id),
+          metadata: this.toEventJson({
+            from_status: order.status,
+            ...(input.metadata ? { metadata: input.metadata } : {}),
+            ...(cashierValidatedByUserId ? { cashier_validated_by_user_id: cashierValidatedByUserId } : {})
+          })
         }
       });
       await tx.eventDeliveryPerformance.create({
@@ -546,16 +766,21 @@ export class DeliveryService {
       actor_user_id: input.actor_user_id,
       metadata: input.metadata
     });
-    return this.getWithDatabase(binding, id);
+    return this.getWithDatabase(binding, id, actor);
   }
 
   private async eventsForOrderWithDatabase(
     binding: TenantPrismaBinding,
-    id: string
+    id: string,
+    actor?: DeliveryActorContext
   ): Promise<DeliveryStatusEventRecord[]> {
     const db = binding.client as DbClient;
+    const riderScope = await this.resolveRiderAccessScope(db, binding.companyId, actor);
     const order = await db.deliveryOrder.findFirst({
-      where: { id, companyId: binding.companyId },
+      where: {
+        ...this.buildDatabaseListWhere(binding.companyId, {}, riderScope),
+        id
+      },
       select: { id: true }
     });
     if (!order) {
@@ -570,7 +795,10 @@ export class DeliveryService {
     return rows.map((row) => {
       const meta = this.getEventMeta(binding.companyId, row.id);
       const toStatus = row.status as DeliveryStatus;
-      const fromStatus = meta?.from_status ?? previous;
+      const fromStatus =
+        this.readFromStatusFromJson(row.metadata) ??
+        meta?.from_status ??
+        previous;
       previous = toStatus;
       return {
         id: row.id,
@@ -578,8 +806,8 @@ export class DeliveryService {
         from_status: fromStatus,
         to_status: toStatus,
         notes: row.notes ?? undefined,
-        actor_user_id: meta?.actor_user_id,
-        metadata: meta?.metadata,
+        actor_user_id: row.actorUserId ?? meta?.actor_user_id,
+        metadata: this.readMetadataFromJson(row.metadata) ?? meta?.metadata,
         created_at: row.createdAt.toISOString()
       };
     });
@@ -624,7 +852,15 @@ export class DeliveryService {
 
   private normalizeStatus(value: string): DeliveryStatus {
     const normalized = value?.toUpperCase().trim();
-    const known: DeliveryStatus[] = ['CREATED', 'ASSIGNED', 'OUT_FOR_DELIVERY', 'DELIVERED', 'FAILED', 'RETURNED'];
+    const known: DeliveryStatus[] = [
+      'CREATED',
+      'ASSIGNED',
+      'OUT_FOR_DELIVERY',
+      'DELIVERED',
+      'FAILED',
+      'RETURNED',
+      'COMPLETE'
+    ];
     const status = known.find((row) => row === normalized);
     if (!status) {
       throw new BadRequestException('Invalid delivery status');
@@ -635,18 +871,450 @@ export class DeliveryService {
   private allowedNext(status: DeliveryStatus): Set<DeliveryStatus> {
     switch (status) {
       case 'CREATED':
-        return new Set(['ASSIGNED', 'FAILED', 'RETURNED']);
+        return new Set(['ASSIGNED']);
       case 'ASSIGNED':
-        return new Set(['OUT_FOR_DELIVERY', 'FAILED', 'RETURNED']);
+        return new Set(['OUT_FOR_DELIVERY']);
       case 'OUT_FOR_DELIVERY':
         return new Set(['DELIVERED', 'FAILED', 'RETURNED']);
       case 'FAILED':
-        return new Set(['RETURNED']);
-      case 'DELIVERED':
       case 'RETURNED':
+        return new Set(['ASSIGNED']);
+      case 'DELIVERED':
+        return new Set(['COMPLETE']);
+      case 'COMPLETE':
       default:
         return new Set();
     }
+  }
+
+  private toNonEmpty(value: unknown): string | null {
+    if (typeof value !== 'string') {
+      return null;
+    }
+    const normalized = value.trim();
+    return normalized.length > 0 ? normalized : null;
+  }
+
+  private normalizeRoleList(roles: string[] | undefined): Set<string> {
+    return new Set(
+      (Array.isArray(roles) ? roles : [])
+        .map((entry) => String(entry ?? '').trim().toLowerCase())
+        .filter((entry) => entry.length > 0)
+    );
+  }
+
+  private isPrivilegedActor(roles: Set<string>): boolean {
+    return (
+      roles.has('admin') ||
+      roles.has('owner') ||
+      roles.has('platform_owner') ||
+      roles.has('supervisor')
+    );
+  }
+
+  private isRiderScopedActor(roles: Set<string>): boolean {
+    if (this.isPrivilegedActor(roles)) {
+      return false;
+    }
+    return roles.has('rider') || roles.has('driver');
+  }
+
+  private assertCanCreateOrAssign(actor?: DeliveryActorContext): void {
+    const roles = this.normalizeRoleList(actor?.roles);
+    if (!this.isRiderScopedActor(roles)) {
+      return;
+    }
+    throw new ForbiddenException('Rider accounts cannot create or assign delivery orders.');
+  }
+
+  private assertAllowedRiderStatusUpdate(actor: DeliveryActorContext | undefined, next: DeliveryStatus): void {
+    const roles = this.normalizeRoleList(actor?.roles);
+    if (!this.isRiderScopedActor(roles)) {
+      return;
+    }
+    if (next === 'COMPLETE' || next === 'ASSIGNED') {
+      throw new ForbiddenException('Rider accounts cannot mark delivery as COMPLETE or re-assign queue.');
+    }
+  }
+
+  private filterInMemoryOrders(
+    companyId: string,
+    filters: DeliveryListFilters,
+    actor?: DeliveryActorContext
+  ): DeliveryOrderRecord[] {
+    const roles = this.normalizeRoleList(actor?.roles);
+    const isRiderScope = this.isRiderScopedActor(roles);
+    const actorUserId = this.toNonEmpty(actor?.user_id);
+    const statusFilter = filters.status ? this.normalizeStatus(filters.status) : null;
+    const orderTypeFilter = filters.order_type ? this.normalizeOrderType(filters.order_type) : null;
+    const saleIdFilter = this.toNonEmpty(filters.sale_id);
+    const riderUserFilter = this.toNonEmpty(filters.rider_user_id);
+    const rows = [...this.getOrders(companyId).values()].filter((row) => {
+      if (statusFilter && row.status !== statusFilter) {
+        return false;
+      }
+      if (orderTypeFilter && row.order_type !== orderTypeFilter) {
+        return false;
+      }
+      if (saleIdFilter && row.sale_id !== saleIdFilter) {
+        return false;
+      }
+      if (riderUserFilter && !row.personnel.some((entry) => entry.user_id === riderUserFilter)) {
+        return false;
+      }
+      if (isRiderScope) {
+        if (!actorUserId) {
+          return false;
+        }
+        return row.personnel.some((entry) => entry.user_id === actorUserId);
+      }
+      return true;
+    });
+    rows.sort((a, b) => b.created_at.localeCompare(a.created_at));
+    const limit =
+      filters.limit && Number.isFinite(filters.limit)
+        ? Math.max(1, Math.min(1000, Math.floor(filters.limit)))
+        : 500;
+    return rows.slice(0, limit);
+  }
+
+  private assertInMemoryActorCanAccessOrder(order: DeliveryOrderRecord, actor?: DeliveryActorContext): void {
+    const roles = this.normalizeRoleList(actor?.roles);
+    if (!this.isRiderScopedActor(roles)) {
+      return;
+    }
+    const actorUserId = this.toNonEmpty(actor?.user_id);
+    if (!actorUserId) {
+      throw new ForbiddenException('Rider account is missing actor user id.');
+    }
+    if (!order.personnel.some((entry) => entry.user_id === actorUserId)) {
+      throw new ForbiddenException('Rider account can only access assigned deliveries.');
+    }
+  }
+
+  private async resolveRiderAccessScope(
+    db: DbClient | DbTransaction,
+    companyId: string,
+    actor?: DeliveryActorContext
+  ): Promise<{ userId: string; branchId: string | null } | null> {
+    const roles = this.normalizeRoleList(actor?.roles);
+    if (!this.isRiderScopedActor(roles)) {
+      return null;
+    }
+    const actorUserId = this.toNonEmpty(actor?.user_id);
+    if (!actorUserId) {
+      throw new ForbiddenException('Rider account is missing actor user id.');
+    }
+    const actorUser = await db.user.findFirst({
+      where: {
+        companyId,
+        id: actorUserId,
+        isActive: true
+      },
+      select: {
+        id: true,
+        branchId: true
+      }
+    });
+    if (!actorUser) {
+      throw new ForbiddenException('Rider account is inactive or not found.');
+    }
+    return {
+      userId: actorUser.id,
+      branchId: actorUser.branchId ?? null
+    };
+  }
+
+  private buildDatabaseListWhere(
+    companyId: string,
+    filters: DeliveryListFilters,
+    riderScope: { userId: string; branchId: string | null } | null
+  ): Prisma.DeliveryOrderWhereInput {
+    const statusFilter = filters.status ? this.normalizeStatus(filters.status) : undefined;
+    const saleIdFilter = this.toNonEmpty(filters.sale_id);
+    const riderUserFilter = this.toNonEmpty(filters.rider_user_id);
+    const branchFilter = this.toNonEmpty(filters.branch_id);
+    const orderTypeFilter = filters.order_type ? this.normalizeOrderType(filters.order_type) : undefined;
+
+    const andClauses: Prisma.DeliveryOrderWhereInput[] = [];
+    if (orderTypeFilter === 'PICKUP') {
+      andClauses.push({
+        assignments: { none: {} }
+      });
+    } else if (orderTypeFilter === 'DELIVERY') {
+      andClauses.push({
+        assignments: { some: {} }
+      });
+    }
+    if (riderUserFilter) {
+      andClauses.push({
+        assignments: {
+          some: {
+            userId: riderUserFilter
+          }
+        }
+      });
+    }
+    if (riderScope) {
+      andClauses.push({
+        assignments: {
+          some: {
+            userId: riderScope.userId
+          }
+        }
+      });
+    }
+
+    return {
+      companyId,
+      ...(statusFilter ? { status: statusFilter } : {}),
+      ...(saleIdFilter ? { saleId: saleIdFilter } : {}),
+      ...(branchFilter ? { branchId: branchFilter } : {}),
+      ...(andClauses.length > 0 ? { AND: andClauses } : {}),
+      ...(riderScope
+        ? {
+            ...(riderScope.branchId ? { branchId: riderScope.branchId } : {})
+          }
+        : {})
+    };
+  }
+
+  private async assertDbActorCanAccessOrder(
+    db: DbClient | DbTransaction,
+    companyId: string,
+    orderId: string,
+    actor?: DeliveryActorContext
+  ): Promise<void> {
+    const riderScope = await this.resolveRiderAccessScope(db, companyId, actor);
+    if (!riderScope) {
+      return;
+    }
+    const exists = await db.deliveryOrder.findFirst({
+      where: {
+        id: orderId,
+        companyId,
+        assignments: {
+          some: {
+            userId: riderScope.userId
+          }
+        },
+        ...(riderScope.branchId ? { branchId: riderScope.branchId } : {})
+      },
+      select: { id: true }
+    });
+    if (!exists) {
+      throw new ForbiddenException('Rider account can only access assigned deliveries.');
+    }
+  }
+
+  private async resolveCashierValidatorUserId(
+    db: DbClient | DbTransaction,
+    companyId: string,
+    userRef: string
+  ): Promise<string> {
+    const normalized = userRef.trim();
+    if (!normalized) {
+      throw new BadRequestException('cashier_validated_by_user_id is required.');
+    }
+    const mappedEmail = this.mapUserEmail(normalized);
+    const user = await db.user.findFirst({
+      where: {
+        companyId,
+        isActive: true,
+        OR: [{ id: normalized }, { email: { equals: mappedEmail, mode: 'insensitive' } }]
+      },
+      select: {
+        id: true,
+        userRoles: {
+          select: {
+            role: {
+              select: {
+                name: true
+              }
+            }
+          }
+        }
+      }
+    });
+    if (!user) {
+      throw new BadRequestException('Cashier validator user was not found.');
+    }
+    const roles = new Set(
+      user.userRoles
+        .map((entry) => entry.role.name.trim().toLowerCase())
+        .filter((entry) => entry.length > 0)
+    );
+    const allowed =
+      roles.has('cashier') ||
+      roles.has('admin') ||
+      roles.has('owner') ||
+      roles.has('platform_owner') ||
+      roles.has('supervisor');
+    if (!allowed) {
+      throw new BadRequestException('Cashier validator must have cashier/admin/supervisor/owner access.');
+    }
+    return user.id;
+  }
+
+  private readFromStatusFromJson(value: Prisma.JsonValue | null): DeliveryStatus | null {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) {
+      return null;
+    }
+    const parsed = this.normalizeStatusSafe((value as Record<string, unknown>).from_status);
+    return parsed;
+  }
+
+  private readMetadataFromJson(value: Prisma.JsonValue | null): Record<string, unknown> | undefined {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) {
+      return undefined;
+    }
+    const obj = value as Record<string, unknown>;
+    if (obj.metadata && typeof obj.metadata === 'object' && !Array.isArray(obj.metadata)) {
+      return obj.metadata as Record<string, unknown>;
+    }
+    const clone = { ...obj };
+    delete clone.from_status;
+    if (Object.keys(clone).length === 0) {
+      return undefined;
+    }
+    return clone;
+  }
+
+  private normalizeStatusSafe(value: unknown): DeliveryStatus | null {
+    if (typeof value !== 'string') {
+      return null;
+    }
+    try {
+      return this.normalizeStatus(value);
+    } catch {
+      return null;
+    }
+  }
+
+  private mapDeliveryCsvRow(
+    row: {
+      id: string;
+      saleId: string | null;
+      status: string;
+      completedAt: Date | null;
+      cashierValidatedByUser?: { fullName: string } | null;
+      branch: { id: string; name: string };
+      sale: {
+        id: string;
+        customer: { name: string; address: string | null } | null;
+        receipt: { receiptNumber: string } | null;
+      } | null;
+      assignments: Array<{ role: string; user: { id: string; fullName: string } }>;
+      events: Array<{
+        status: string;
+        createdAt: Date;
+        notes: string | null;
+      }>;
+    },
+    timezone: string
+  ): Record<string, unknown> {
+    const assignedAt = this.firstStatusAt(row.events, 'ASSIGNED');
+    const outForDeliveryAt = this.firstStatusAt(row.events, 'OUT_FOR_DELIVERY');
+    const deliveredAt = this.firstStatusAt(row.events, 'DELIVERED');
+    const completedAt = this.firstStatusAt(row.events, 'COMPLETE') ?? row.completedAt?.toISOString() ?? null;
+    const riderNames = [...new Set(
+      row.assignments
+        .filter((entry) => {
+          const normalizedRole = entry.role.trim().toUpperCase();
+          return normalizedRole === 'DRIVER' || normalizedRole === 'HELPER' || normalizedRole === 'PERSONNEL';
+        })
+        .map((entry) => entry.user.fullName)
+        .filter((entry) => entry.trim().length > 0)
+    )];
+    return {
+      delivery_id: row.id,
+      sale_id: row.saleId ?? row.sale?.id ?? '',
+      receipt_no: row.sale?.receipt?.receiptNumber ?? '',
+      customer_name: row.sale?.customer?.name ?? '',
+      customer_address: row.sale?.customer?.address ?? '',
+      rider_name: riderNames.join(', '),
+      branch_name: row.branch.name,
+      status: row.status,
+      assigned_at_utc: assignedAt ?? '',
+      out_for_delivery_at_utc: outForDeliveryAt ?? '',
+      delivered_at_utc: deliveredAt ?? '',
+      completed_at_utc: completedAt ?? '',
+      assigned_at_local: this.formatLocalDateTime(assignedAt, timezone),
+      out_for_delivery_at_local: this.formatLocalDateTime(outForDeliveryAt, timezone),
+      delivered_at_local: this.formatLocalDateTime(deliveredAt, timezone),
+      completed_at_local: this.formatLocalDateTime(completedAt, timezone),
+      cashier_validated_by: row.cashierValidatedByUser?.fullName ?? '',
+      notes: this.latestEventNote(row.events)
+    };
+  }
+
+  private firstStatusAt(
+    events: Array<{ status: string; createdAt: Date }>,
+    status: DeliveryStatus
+  ): string | null {
+    const match = events.find((event) => event.status === status);
+    return match ? match.createdAt.toISOString() : null;
+  }
+
+  private latestEventNote(events: Array<{ notes: string | null }>): string {
+    for (let index = events.length - 1; index >= 0; index -= 1) {
+      const note = events[index]?.notes?.trim();
+      if (note) {
+        return note;
+      }
+    }
+    return '';
+  }
+
+  private formatLocalDateTime(value: string | null, timezone: string): string {
+    if (!value) {
+      return '';
+    }
+    const parsed = new Date(value);
+    if (Number.isNaN(parsed.getTime())) {
+      return '';
+    }
+    return parsed.toLocaleString('en-US', {
+      timeZone: timezone,
+      hour12: false
+    });
+  }
+
+  private csvFromRows(rows: Array<Record<string, unknown>>): string {
+    const headers = [
+      'delivery_id',
+      'sale_id',
+      'receipt_no',
+      'customer_name',
+      'customer_address',
+      'rider_name',
+      'branch_name',
+      'status',
+      'assigned_at_utc',
+      'out_for_delivery_at_utc',
+      'delivered_at_utc',
+      'completed_at_utc',
+      'assigned_at_local',
+      'out_for_delivery_at_local',
+      'delivered_at_local',
+      'completed_at_local',
+      'cashier_validated_by',
+      'notes'
+    ];
+    const lines = [headers.join(',')];
+    for (const row of rows) {
+      lines.push(headers.map((header) => this.csvCell(row[header])).join(','));
+    }
+    return lines.join('\r\n');
+  }
+
+  private csvCell(value: unknown): string {
+    if (value === null || value === undefined) {
+      return '';
+    }
+    const asText = String(value);
+    const escaped = asText.replace(/"/g, '""');
+    return /[",\r\n]/.test(escaped) ? `"${escaped}"` : escaped;
   }
 
   private getOrders(companyId: string): Map<string, DeliveryOrderRecord> {
@@ -695,6 +1363,17 @@ export class DeliveryService {
       return null;
     }
     return this.tenantRouter!.forCompany(companyId);
+  }
+
+  private async enforceAddonPolicy(companyId: string): Promise<void> {
+    if (!this.entitlementsService) {
+      return;
+    }
+    await this.entitlementsService.enforceTenantAddonEnabled(
+      'delivery_dispatch_suite',
+      companyId,
+      'Delivery Dispatch Suite'
+    );
   }
 
   private async resolveBranch(
@@ -794,8 +1473,12 @@ export class DeliveryService {
       status: string;
       saleId: string | null;
       createdAt: Date;
-      assignments: Array<{ userId: string; role: string }>;
+      assignments: Array<{ userId: string; role: string; user?: { id: string; fullName: string } }>;
       completedAt: Date | null;
+      updatedAt?: Date;
+      cashierValidatedAt?: Date | null;
+      cashierValidatedByUserId?: string | null;
+      cashierValidatedByUser?: { id: string; fullName: string } | null;
     }
   ): DeliveryOrderRecord {
     const meta = this.getOrderMeta(companyId, row.id);
@@ -812,8 +1495,11 @@ export class DeliveryService {
         user_id: assignment.userId,
         role: assignment.role
       })),
+      cashier_validated_at: row.cashierValidatedAt ? row.cashierValidatedAt.toISOString() : null,
+      cashier_validated_by_user_id: row.cashierValidatedByUserId ?? null,
+      cashier_validated_by_name: row.cashierValidatedByUser?.fullName ?? null,
       created_at: row.createdAt.toISOString(),
-      updated_at: (row.completedAt ?? row.createdAt).toISOString()
+      updated_at: (row.updatedAt ?? row.completedAt ?? row.createdAt).toISOString()
     };
   }
 
@@ -824,7 +1510,9 @@ export class DeliveryService {
   ): OrderType {
     return (
       this.getOrderMeta(companyId, orderId)?.order_type ??
-      (row.status === 'DELIVERED' && row.assignments.length === 0 ? 'PICKUP' : 'DELIVERY')
+      ((row.status === 'DELIVERED' || row.status === 'COMPLETE') && row.assignments.length === 0
+        ? 'PICKUP'
+        : 'DELIVERY')
     );
   }
 

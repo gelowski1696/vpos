@@ -838,6 +838,9 @@ export class SyncService {
           lines,
           payments,
           discount_amount: this.asNumber(payload.discount_amount ?? payload.discountAmount),
+          hide_amounts:
+            payload.hide_amounts === true ||
+            payload.hideAmounts === true,
           estimate_cogs: this.asNumber(payload.estimate_cogs ?? payload.estimateCogs),
           deposit_amount: this.asNumber(payload.deposit_amount ?? payload.depositAmount),
           cylinder_flow: this.normalizeCylinderFlow(payload.cylinder_flow ?? payload.cylinderFlow),
@@ -1697,11 +1700,11 @@ export class SyncService {
     return { ok: true };
   }
 
-  private validateDeliveryOrder(
+  private async validateDeliveryOrder(
     companyId: string,
     action: string,
     payload: Record<string, unknown>
-  ): { ok: true } | { ok: false; reason: string } {
+  ): Promise<{ ok: true } | { ok: false; reason: string }> {
     const id = this.asString(payload.id ?? payload.delivery_order_id);
     if (!id) {
       return { ok: false, reason: 'Delivery order id is required' };
@@ -1713,11 +1716,6 @@ export class SyncService {
       const orderType = this.normalizeOrderType(payload.order_type ?? payload.orderType);
       if (!orderType) {
         return { ok: false, reason: 'Delivery order type must be PICKUP or DELIVERY' };
-      }
-
-      const personnel = Array.isArray(payload.personnel) ? payload.personnel : [];
-      if (orderType === 'DELIVERY' && personnel.length === 0) {
-        return { ok: false, reason: 'Delivery order requires at least one assigned personnel' };
       }
 
       const status = this.normalizeDeliveryStatus(payload.status) ?? 'CREATED';
@@ -2993,11 +2991,12 @@ export class SyncService {
     if (!Array.isArray(raw) || raw.length === 0) {
       return { ok: true, attachments: [] };
     }
+    if (!(await this.isTenantAddonEnabled('petty_cash_attachments', companyId))) {
+      // Add-on disabled: keep petty-cash create flow working by dropping attachment payload.
+      return { ok: true, attachments: [] };
+    }
     if (raw.length > 3) {
       return { ok: false, reason: 'Petty cash allows up to 3 attachments only' };
-    }
-    if (!(await this.isTenantAddonEnabled('petty_cash_attachments', companyId))) {
-      return { ok: false, reason: 'Petty Cash Attachments add-on is not enabled for this tenant' };
     }
 
     const nowIso = new Date().toISOString();
@@ -3253,7 +3252,7 @@ export class SyncService {
   }
 
   private async isTenantAddonEnabled(
-    addonKey: 'petty_cash_attachments' | 'shift_security_controls',
+    addonKey: 'petty_cash_attachments' | 'shift_security_controls' | 'delivery_dispatch_suite',
     companyId: string
   ): Promise<boolean> {
     if (!this.entitlementsService) {
@@ -3358,22 +3357,32 @@ export class SyncService {
       return undefined;
     }
     const normalized = asString.toUpperCase().replace(/[\s-]+/g, '_');
-    const known: DeliveryStatus[] = ['CREATED', 'ASSIGNED', 'OUT_FOR_DELIVERY', 'DELIVERED', 'FAILED', 'RETURNED'];
+    const known: DeliveryStatus[] = [
+      'CREATED',
+      'ASSIGNED',
+      'OUT_FOR_DELIVERY',
+      'DELIVERED',
+      'FAILED',
+      'RETURNED',
+      'COMPLETE'
+    ];
     return known.find((item) => item === normalized);
   }
 
   private allowedNextDeliveryStatuses(status: DeliveryStatus): Set<DeliveryStatus> {
     switch (status) {
       case 'CREATED':
-        return new Set(['ASSIGNED', 'FAILED', 'RETURNED']);
+        return new Set(['ASSIGNED']);
       case 'ASSIGNED':
-        return new Set(['OUT_FOR_DELIVERY', 'FAILED', 'RETURNED']);
+        return new Set(['OUT_FOR_DELIVERY']);
       case 'OUT_FOR_DELIVERY':
         return new Set(['DELIVERED', 'FAILED', 'RETURNED']);
       case 'FAILED':
-        return new Set(['RETURNED']);
-      case 'DELIVERED':
       case 'RETURNED':
+        return new Set(['ASSIGNED']);
+      case 'DELIVERED':
+        return new Set(['COMPLETE']);
+      case 'COMPLETE':
       default:
         return new Set();
     }
@@ -3629,7 +3638,14 @@ export class SyncService {
   }
 }
 
-type DeliveryStatus = 'CREATED' | 'ASSIGNED' | 'OUT_FOR_DELIVERY' | 'DELIVERED' | 'FAILED' | 'RETURNED';
+type DeliveryStatus =
+  | 'CREATED'
+  | 'ASSIGNED'
+  | 'OUT_FOR_DELIVERY'
+  | 'DELIVERED'
+  | 'FAILED'
+  | 'RETURNED'
+  | 'COMPLETE';
 type ShiftCloseSecurityAssessment = {
   cash_variance: number | null;
   discrepancy_tolerance: number;

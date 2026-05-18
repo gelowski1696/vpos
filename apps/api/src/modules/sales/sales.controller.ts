@@ -47,6 +47,8 @@ export class SalesController {
       estimate_cogs?: number;
       deposit_amount?: number;
       cylinder_flow?: 'AUTO' | 'REFILL_EXCHANGE' | 'NON_REFILL';
+      hide_amounts?: boolean;
+      hideAmounts?: boolean;
     }
   ): Promise<SalePostResponse> {
     const companyId = this.requireCompanyId(req);
@@ -61,7 +63,8 @@ export class SalesController {
       entityId: result.sale_id,
       metadata: {
         totalAmount: result.total_amount,
-        receiptNumber: result.receipt_number
+        receiptNumber: result.receipt_number,
+        receiptHideAmounts: result.receipt_hide_amounts
       }
     });
     return result;
@@ -83,7 +86,8 @@ export class SalesController {
       entityId: result.sale_id,
       metadata: {
         receiptNumber: result.receipt_number,
-        isReprint: result.is_reprint
+        isReprint: result.is_reprint,
+        receiptHideAmounts: result.receipt_hide_amounts
       }
     });
     return result;

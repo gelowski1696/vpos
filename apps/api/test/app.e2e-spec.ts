@@ -7,6 +7,19 @@ import { AuditService } from '../src/modules/audit/audit.service';
 import { SubscriptionGatewayService } from '../src/modules/entitlements/subscription-gateway.service';
 
 describe('VPOS API (integration)', () => {
+  type TenantAddonFlags = {
+    custom_pricing: boolean;
+    customer_category: boolean;
+    item_price_cost_audit: boolean;
+    petty_cash_attachments: boolean;
+    shift_security_controls: boolean;
+    kilo_overview_chart: boolean;
+    receipt_amount_privacy: boolean;
+    delivery_dispatch_suite: boolean;
+    purchase_order_suite: boolean;
+  };
+  const dbRuntimeIt = process.env.VPOS_TEST_USE_DB === 'true' ? it : it.skip;
+
   let app: INestApplication;
   let auditService: AuditService;
   let subscriptionGateway: SubscriptionGatewayService;
@@ -96,9 +109,71 @@ describe('VPOS API (integration)', () => {
     throw new Error('Unable to authenticate flow pricing test actor.');
   }
 
+  async function loginAsPlatformOwner(): Promise<{
+    access: string;
+    refresh: string;
+    clientId: string | undefined;
+  }> {
+    const attempts: Array<{ email: string; password: string; clientId?: string }> = [
+      { email: 'owner@vpos.local', password: 'Owner@123', clientId: 'DEMO' },
+      { email: 'owner@vpos.local', password: 'Owner@123' },
+      { email: 'owner@vpos.local', password: 'Owner@123', clientId: 'DEMO_STORE' }
+    ];
+
+    for (const attempt of attempts) {
+      try {
+        return await loginAs(attempt.email, attempt.password, attempt.clientId ?? '');
+      } catch {
+        // Continue trying known platform-owner credential variants.
+      }
+    }
+
+    throw new Error('Unable to authenticate platform owner test actor.');
+  }
+
+  async function loginAsCashierForAddonTests(): Promise<{
+    access: string;
+    refresh: string;
+    clientId: string | undefined;
+  }> {
+    const attempts: Array<{ email: string; password: string; clientId?: string }> = [
+      { email: 'cashier@vpos.local', password: 'Cashier@123', clientId: 'DEMO' },
+      { email: 'cashier@vpos.local', password: 'Cashier@123', clientId: 'DEMO_STORE' },
+      { email: 'cashier@vpos.local', password: 'Cashier@123' }
+    ];
+
+    for (const attempt of attempts) {
+      try {
+        return await loginAs(attempt.email, attempt.password, attempt.clientId ?? '');
+      } catch {
+        // Continue trying known cashier credential variants.
+      }
+    }
+
+    throw new Error('Unable to authenticate cashier test actor.');
+  }
+
   function webhookSignature(payload: Record<string, unknown>, secret: string): string {
     const digest = createHmac('sha256', secret).update(JSON.stringify(payload)).digest('hex');
     return `sha256=${digest}`;
+  }
+
+  async function updateDemoTenantAddons(
+    accessToken: string,
+    clientId: string,
+    patch: Partial<TenantAddonFlags>
+  ): Promise<TenantAddonFlags> {
+    const response = await request(app.getHttpServer())
+      .post('/api/platform/owner/tenants/comp-demo/addons')
+      .set('Authorization', `Bearer ${accessToken}`)
+      .set('X-Client-Id', clientId)
+      .send({
+        ...patch,
+        reason: 'e2e add-on guard coverage'
+      })
+      .expect(201);
+
+    return response.body.addons as TenantAddonFlags;
   }
 
   it('1) logs in successfully', async () => {
@@ -3490,5 +3565,791 @@ describe('VPOS API (integration)', () => {
     expect((payload.server_customer_payment_result as Record<string, unknown>)?.payment_id).toBe(
       paymentId
     );
+  });
+
+  it('72) enforces integrated add-on guards (OFF blocks, ON allows) for current modules', async () => {
+    const platformOwner = await loginAsPlatformOwner();
+    const admin = await loginForFlowPricingTests();
+    const cashier = await loginAsCashierForAddonTests();
+    const ownerClientId = platformOwner.clientId ?? admin.clientId ?? 'DEMO';
+    const adminClientId = admin.clientId ?? ownerClientId;
+    const cashierClientId = cashier.clientId ?? adminClientId;
+
+    const currentEntitlement = await request(app.getHttpServer())
+      .get('/api/platform/entitlements/current')
+      .set('Authorization', `Bearer ${admin.access}`)
+      .set('X-Client-Id', adminClientId)
+      .expect(200);
+
+    const currentAddons = (currentEntitlement.body?.addons ?? {}) as Partial<TenantAddonFlags>;
+    const baseline: TenantAddonFlags = {
+      custom_pricing: Boolean(currentAddons.custom_pricing),
+      customer_category: Boolean(currentAddons.customer_category),
+      item_price_cost_audit: Boolean(currentAddons.item_price_cost_audit),
+      petty_cash_attachments: Boolean(currentAddons.petty_cash_attachments),
+      shift_security_controls: Boolean(currentAddons.shift_security_controls),
+      kilo_overview_chart: Boolean(currentAddons.kilo_overview_chart),
+      receipt_amount_privacy: Boolean((currentAddons as Record<string, unknown>).receipt_amount_privacy),
+      delivery_dispatch_suite: Boolean((currentAddons as Record<string, unknown>).delivery_dispatch_suite),
+      purchase_order_suite: Boolean((currentAddons as Record<string, unknown>).purchase_order_suite)
+    };
+
+    try {
+      await updateDemoTenantAddons(platformOwner.access, ownerClientId, {
+        custom_pricing: false,
+        customer_category: false,
+        item_price_cost_audit: false,
+        petty_cash_attachments: false,
+        shift_security_controls: false,
+        kilo_overview_chart: false,
+        receipt_amount_privacy: false,
+        delivery_dispatch_suite: false
+      });
+
+      const customerCategoryOff = await request(app.getHttpServer())
+        .get('/api/master-data/customer-categories')
+        .set('Authorization', `Bearer ${admin.access}`)
+        .set('X-Client-Id', adminClientId)
+        .expect(403);
+      expect(String(customerCategoryOff.body.message)).toContain('add-on is not enabled');
+
+      await request(app.getHttpServer())
+        .post('/api/master-data/price-lists')
+        .set('Authorization', `Bearer ${admin.access}`)
+        .set('X-Client-Id', adminClientId)
+        .send({
+          code: `PL-CGROUP-OFF-${Date.now()}`,
+          name: 'Customer Group Price OFF',
+          scope: 'CUSTOMER_GROUP',
+          startsAt: new Date().toISOString(),
+          isActive: true,
+          rules: [{ productId: 'prod-11', flowMode: 'ANY', unitPrice: 777, discountCapPct: 0, priority: 5 }]
+        })
+        .expect(403);
+
+      const priceCostAuditOff = await request(app.getHttpServer())
+        .get('/api/master-data/products/prod-11/price-cost-audit')
+        .set('Authorization', `Bearer ${admin.access}`)
+        .set('X-Client-Id', adminClientId)
+        .expect(403);
+      expect(String(priceCostAuditOff.body.message)).toContain('add-on is not enabled');
+
+      const attachmentOff = await request(app.getHttpServer())
+        .get('/api/reports/petty-cash/attachments/non-existent-id/view')
+        .set('Authorization', `Bearer ${admin.access}`)
+        .set('X-Client-Id', adminClientId)
+        .expect(403);
+      expect(String(attachmentOff.body.message)).toContain('add-on is not enabled');
+
+      const kiloOff = await request(app.getHttpServer())
+        .get('/api/reports/overview/kilo')
+        .set('Authorization', `Bearer ${admin.access}`)
+        .set('X-Client-Id', adminClientId)
+        .expect(403);
+      expect(String(kiloOff.body.message)).toContain('add-on is not enabled');
+
+      const deliveryOff = await request(app.getHttpServer())
+        .get('/api/delivery/orders')
+        .set('Authorization', `Bearer ${admin.access}`)
+        .set('X-Client-Id', adminClientId)
+        .expect(403);
+      expect(String(deliveryOff.body.message)).toContain('add-on is not enabled');
+
+      await request(app.getHttpServer())
+        .get('/api/reports/inventory/full-empty')
+        .set('Authorization', `Bearer ${cashier.access}`)
+        .set('X-Client-Id', cashierClientId)
+        .expect(200);
+
+      await updateDemoTenantAddons(platformOwner.access, ownerClientId, {
+        custom_pricing: true,
+        customer_category: true,
+        item_price_cost_audit: true,
+        petty_cash_attachments: true,
+        shift_security_controls: true,
+        kilo_overview_chart: true,
+        receipt_amount_privacy: true,
+        delivery_dispatch_suite: true
+      });
+
+      const customerCategoryOn = await request(app.getHttpServer())
+        .get('/api/master-data/customer-categories')
+        .set('Authorization', `Bearer ${admin.access}`)
+        .set('X-Client-Id', adminClientId)
+        .expect(200);
+      expect(Array.isArray(customerCategoryOn.body)).toBe(true);
+
+      const customPricingOn = await request(app.getHttpServer())
+        .post('/api/master-data/price-lists')
+        .set('Authorization', `Bearer ${admin.access}`)
+        .set('X-Client-Id', adminClientId)
+        .send({
+          code: `PL-CGROUP-ON-${Date.now()}`,
+          name: 'Customer Group Price ON',
+          scope: 'CUSTOMER_GROUP',
+          startsAt: new Date().toISOString(),
+          isActive: true,
+          rules: [
+            {
+              productId: 'prod-11',
+              flowMode: 'REFILL_EXCHANGE',
+              unitPrice: 868,
+              discountCapPct: 0,
+              priority: 5
+            }
+          ]
+        });
+      expect([201, 400]).toContain(customPricingOn.status);
+      expect(customPricingOn.status).not.toBe(403);
+
+      const priceCostAuditOn = await request(app.getHttpServer())
+        .get('/api/master-data/products/prod-11/price-cost-audit')
+        .set('Authorization', `Bearer ${admin.access}`)
+        .set('X-Client-Id', adminClientId)
+        .expect(200);
+      expect(Array.isArray(priceCostAuditOn.body)).toBe(true);
+
+      await request(app.getHttpServer())
+        .get('/api/reports/petty-cash/attachments/non-existent-id/view')
+        .set('Authorization', `Bearer ${admin.access}`)
+        .set('X-Client-Id', adminClientId)
+        .expect(404);
+
+      const kiloOn = await request(app.getHttpServer())
+        .get('/api/reports/overview/kilo')
+        .set('Authorization', `Bearer ${admin.access}`)
+        .set('X-Client-Id', adminClientId)
+        .expect(200);
+      expect(kiloOn.body).toBeDefined();
+
+      const deliveryOn = await request(app.getHttpServer())
+        .get('/api/delivery/orders')
+        .set('Authorization', `Bearer ${admin.access}`)
+        .set('X-Client-Id', adminClientId)
+        .expect(200);
+      expect(Array.isArray(deliveryOn.body)).toBe(true);
+
+      const shiftSecurityBlocked = await request(app.getHttpServer())
+        .get('/api/reports/inventory/full-empty')
+        .set('Authorization', `Bearer ${cashier.access}`)
+        .set('X-Client-Id', cashierClientId)
+        .expect(403);
+      expect(String(shiftSecurityBlocked.body.message)).toContain('Inventory reports are restricted');
+
+      await request(app.getHttpServer())
+        .get('/api/reports/inventory/full-empty')
+        .set('Authorization', `Bearer ${admin.access}`)
+        .set('X-Client-Id', adminClientId)
+        .expect(200);
+    } finally {
+      await updateDemoTenantAddons(platformOwner.access, ownerClientId, baseline);
+    }
+  });
+
+  it('73) enforces delivery dispatch completion validation and supports CSV export when add-on is enabled', async () => {
+    const platformOwner = await loginAsPlatformOwner();
+    const admin = await loginForFlowPricingTests();
+    const ownerClientId = platformOwner.clientId ?? admin.clientId ?? 'DEMO';
+    const adminClientId = admin.clientId ?? ownerClientId;
+
+    const currentEntitlement = await request(app.getHttpServer())
+      .get('/api/platform/entitlements/current')
+      .set('Authorization', `Bearer ${admin.access}`)
+      .set('X-Client-Id', adminClientId)
+      .expect(200);
+
+    const currentAddons = (currentEntitlement.body?.addons ?? {}) as Partial<TenantAddonFlags>;
+    const baseline: TenantAddonFlags = {
+      custom_pricing: Boolean(currentAddons.custom_pricing),
+      customer_category: Boolean(currentAddons.customer_category),
+      item_price_cost_audit: Boolean(currentAddons.item_price_cost_audit),
+      petty_cash_attachments: Boolean(currentAddons.petty_cash_attachments),
+      shift_security_controls: Boolean(currentAddons.shift_security_controls),
+      kilo_overview_chart: Boolean(currentAddons.kilo_overview_chart),
+      receipt_amount_privacy: Boolean((currentAddons as Record<string, unknown>).receipt_amount_privacy),
+      delivery_dispatch_suite: Boolean((currentAddons as Record<string, unknown>).delivery_dispatch_suite),
+      purchase_order_suite: Boolean((currentAddons as Record<string, unknown>).purchase_order_suite)
+    };
+
+    try {
+      await updateDemoTenantAddons(platformOwner.access, ownerClientId, {
+        delivery_dispatch_suite: true
+      });
+
+      const created = await request(app.getHttpServer())
+        .post('/api/delivery/orders')
+        .set('Authorization', `Bearer ${admin.access}`)
+        .set('X-Client-Id', adminClientId)
+        .send({
+          order_type: 'DELIVERY',
+          actor_user_id: 'user-admin-1',
+          notes: 'Task9 test create'
+        })
+        .expect(201);
+
+      await request(app.getHttpServer())
+        .post(`/api/delivery/orders/${created.body.id}/assign`)
+        .set('Authorization', `Bearer ${admin.access}`)
+        .set('X-Client-Id', adminClientId)
+        .send({
+          personnel: [{ user_id: 'driver-1', role: 'DRIVER' }],
+          actor_user_id: 'user-admin-1',
+          notes: 'Task9 assign'
+        })
+        .expect(201);
+
+      await request(app.getHttpServer())
+        .post(`/api/delivery/orders/${created.body.id}/status`)
+        .set('Authorization', `Bearer ${admin.access}`)
+        .set('X-Client-Id', adminClientId)
+        .send({
+          status: 'OUT_FOR_DELIVERY',
+          actor_user_id: 'user-admin-1'
+        })
+        .expect(201);
+
+      await request(app.getHttpServer())
+        .post(`/api/delivery/orders/${created.body.id}/status`)
+        .set('Authorization', `Bearer ${admin.access}`)
+        .set('X-Client-Id', adminClientId)
+        .send({
+          status: 'DELIVERED',
+          actor_user_id: 'user-admin-1'
+        })
+        .expect(201);
+
+      const missingValidator = await request(app.getHttpServer())
+        .post(`/api/delivery/orders/${created.body.id}/status`)
+        .set('Authorization', `Bearer ${admin.access}`)
+        .set('X-Client-Id', adminClientId)
+        .send({
+          status: 'COMPLETE',
+          actor_user_id: 'user-admin-1'
+        })
+        .expect(400);
+      expect(String(missingValidator.body.message)).toContain(
+        'cashier_validated_by_user_id is required'
+      );
+
+      const completed = await request(app.getHttpServer())
+        .post(`/api/delivery/orders/${created.body.id}/status`)
+        .set('Authorization', `Bearer ${admin.access}`)
+        .set('X-Client-Id', adminClientId)
+        .send({
+          status: 'COMPLETE',
+          actor_user_id: 'user-admin-1',
+          cashier_validated_by_user_id: 'user-admin-1',
+          notes: 'Task9 complete'
+        })
+        .expect(201);
+      expect(completed.body.status).toBe('COMPLETE');
+      expect(completed.body.cashier_validated_by_user_id).toBeDefined();
+      expect(completed.body.cashier_validated_at).toBeDefined();
+
+      const csv = await request(app.getHttpServer())
+        .get('/api/delivery/orders/export.csv')
+        .set('Authorization', `Bearer ${admin.access}`)
+        .set('X-Client-Id', adminClientId)
+        .expect(200);
+      expect(String(csv.headers['content-type'] ?? '')).toContain('text/csv');
+      expect(String(csv.text ?? '')).toContain('delivery_id');
+    } finally {
+      await updateDemoTenantAddons(platformOwner.access, ownerClientId, baseline);
+    }
+  });
+
+  it('74) falls back to default receipt behavior when receipt amount privacy add-on is disabled', async () => {
+    const platformOwner = await loginAsPlatformOwner();
+    const admin = await loginForFlowPricingTests();
+    const ownerClientId = platformOwner.clientId ?? admin.clientId ?? 'DEMO';
+    const adminClientId = admin.clientId ?? ownerClientId;
+
+    const currentEntitlement = await request(app.getHttpServer())
+      .get('/api/platform/entitlements/current')
+      .set('Authorization', `Bearer ${admin.access}`)
+      .set('X-Client-Id', adminClientId)
+      .expect(200);
+
+    const currentAddons = (currentEntitlement.body?.addons ?? {}) as Partial<TenantAddonFlags>;
+    const baseline: TenantAddonFlags = {
+      custom_pricing: Boolean(currentAddons.custom_pricing),
+      customer_category: Boolean(currentAddons.customer_category),
+      item_price_cost_audit: Boolean(currentAddons.item_price_cost_audit),
+      petty_cash_attachments: Boolean(currentAddons.petty_cash_attachments),
+      shift_security_controls: Boolean(currentAddons.shift_security_controls),
+      kilo_overview_chart: Boolean(currentAddons.kilo_overview_chart),
+      receipt_amount_privacy: Boolean((currentAddons as Record<string, unknown>).receipt_amount_privacy),
+      delivery_dispatch_suite: Boolean((currentAddons as Record<string, unknown>).delivery_dispatch_suite),
+      purchase_order_suite: Boolean((currentAddons as Record<string, unknown>).purchase_order_suite)
+    };
+
+    try {
+      await updateDemoTenantAddons(platformOwner.access, ownerClientId, {
+        receipt_amount_privacy: false
+      });
+
+      const saleId = `sale-hide-off-${Date.now()}`;
+      const posted = await request(app.getHttpServer())
+        .post('/api/sales/post')
+        .set('Authorization', `Bearer ${admin.access}`)
+        .set('X-Client-Id', adminClientId)
+        .send({
+          sale_id: saleId,
+          branch_id: 'branch-main',
+          location_id: 'loc-main',
+          lines: [{ product_id: 'prod-11', quantity: 1, unit_price: 950 }],
+          payments: [{ method: 'CASH', amount: 950 }],
+          hide_amounts: true
+        })
+        .expect(201);
+
+      expect(posted.body.sale_id).toBe(saleId);
+      expect(posted.body.receipt_hide_amounts).toBe(false);
+    } finally {
+      await updateDemoTenantAddons(platformOwner.access, ownerClientId, baseline);
+    }
+  });
+
+  it('75) keeps petty cash create working when attachment add-on is disabled by dropping attachments', async () => {
+    const platformOwner = await loginAsPlatformOwner();
+    const admin = await loginForFlowPricingTests();
+    const ownerClientId = platformOwner.clientId ?? admin.clientId ?? 'DEMO';
+    const adminClientId = admin.clientId ?? ownerClientId;
+
+    const currentEntitlement = await request(app.getHttpServer())
+      .get('/api/platform/entitlements/current')
+      .set('Authorization', `Bearer ${admin.access}`)
+      .set('X-Client-Id', adminClientId)
+      .expect(200);
+
+    const currentAddons = (currentEntitlement.body?.addons ?? {}) as Partial<TenantAddonFlags>;
+    const baseline: TenantAddonFlags = {
+      custom_pricing: Boolean(currentAddons.custom_pricing),
+      customer_category: Boolean(currentAddons.customer_category),
+      item_price_cost_audit: Boolean(currentAddons.item_price_cost_audit),
+      petty_cash_attachments: Boolean(currentAddons.petty_cash_attachments),
+      shift_security_controls: Boolean(currentAddons.shift_security_controls),
+      kilo_overview_chart: Boolean(currentAddons.kilo_overview_chart),
+      receipt_amount_privacy: Boolean((currentAddons as Record<string, unknown>).receipt_amount_privacy),
+      delivery_dispatch_suite: Boolean((currentAddons as Record<string, unknown>).delivery_dispatch_suite),
+      purchase_order_suite: Boolean((currentAddons as Record<string, unknown>).purchase_order_suite)
+    };
+
+    try {
+      await updateDemoTenantAddons(platformOwner.access, ownerClientId, {
+        petty_cash_attachments: false
+      });
+
+      const shiftId = `shift-petty-addon-off-${Date.now()}`;
+      const pettyId = `petty-addon-off-${Date.now()}`;
+      const outboxShiftId = `out-shift-open-addon-off-${Date.now()}`;
+      const outboxPettyId = `out-petty-addon-off-${Date.now()}`;
+      const now = new Date().toISOString();
+
+      await request(app.getHttpServer())
+        .post('/api/sync/push')
+        .set('Authorization', `Bearer ${admin.access}`)
+        .set('X-Client-Id', adminClientId)
+        .send({
+          device_id: 'dev-petty-addon-off',
+          outbox_items: [
+            {
+              id: outboxShiftId,
+              entity: 'shift',
+              action: 'open',
+              payload: {
+                id: shiftId,
+                opening_cash: 1000
+              },
+              idempotency_key: `idem-${outboxShiftId}`,
+              created_at: now
+            }
+          ]
+        })
+        .expect(201);
+
+      const push = await request(app.getHttpServer())
+        .post('/api/sync/push')
+        .set('Authorization', `Bearer ${admin.access}`)
+        .set('X-Client-Id', adminClientId)
+        .send({
+          device_id: 'dev-petty-addon-off',
+          outbox_items: [
+            {
+              id: outboxPettyId,
+              entity: 'petty_cash',
+              action: 'create',
+              payload: {
+                id: pettyId,
+                shift_id: shiftId,
+                category_code: 'FUEL',
+                direction: 'OUT',
+                amount: 120,
+                attachments: [
+                  {
+                    id: `att-${Date.now()}`,
+                    file_name: 'sample.png',
+                    mime_type: 'image/png',
+                    size_bytes: 68,
+                    data_base64:
+                      'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8Xw8AAusB9YxR3S8AAAAASUVORK5CYII='
+                  }
+                ]
+              },
+              idempotency_key: `idem-${outboxPettyId}`,
+              created_at: now
+            }
+          ]
+        })
+        .expect(201);
+
+      expect(push.body.accepted).toContain(outboxPettyId);
+      expect(push.body.rejected).toEqual([]);
+
+      const entries = await request(app.getHttpServer())
+        .get('/api/reports/petty-cash/entries')
+        .query({ shift_id: shiftId })
+        .set('Authorization', `Bearer ${admin.access}`)
+        .set('X-Client-Id', adminClientId)
+        .expect(200);
+
+      const found = (entries.body as Array<Record<string, unknown>>).find(
+        (row) => String(row.id ?? '') === pettyId
+      );
+      expect(found).toBeDefined();
+      expect(Array.isArray(found?.attachments) ? (found?.attachments as unknown[]).length : 0).toBe(0);
+    } finally {
+      await updateDemoTenantAddons(platformOwner.access, ownerClientId, baseline);
+    }
+  });
+
+  it('76) keeps default offline delivery sync flow working when delivery dispatch add-on is disabled', async () => {
+    const platformOwner = await loginAsPlatformOwner();
+    const admin = await loginForFlowPricingTests();
+    const ownerClientId = platformOwner.clientId ?? admin.clientId ?? 'DEMO';
+    const adminClientId = admin.clientId ?? ownerClientId;
+
+    const currentEntitlement = await request(app.getHttpServer())
+      .get('/api/platform/entitlements/current')
+      .set('Authorization', `Bearer ${admin.access}`)
+      .set('X-Client-Id', adminClientId)
+      .expect(200);
+
+    const currentAddons = (currentEntitlement.body?.addons ?? {}) as Partial<TenantAddonFlags>;
+    const baseline: TenantAddonFlags = {
+      custom_pricing: Boolean(currentAddons.custom_pricing),
+      customer_category: Boolean(currentAddons.customer_category),
+      item_price_cost_audit: Boolean(currentAddons.item_price_cost_audit),
+      petty_cash_attachments: Boolean(currentAddons.petty_cash_attachments),
+      shift_security_controls: Boolean(currentAddons.shift_security_controls),
+      kilo_overview_chart: Boolean(currentAddons.kilo_overview_chart),
+      receipt_amount_privacy: Boolean((currentAddons as Record<string, unknown>).receipt_amount_privacy),
+      delivery_dispatch_suite: Boolean((currentAddons as Record<string, unknown>).delivery_dispatch_suite),
+      purchase_order_suite: Boolean((currentAddons as Record<string, unknown>).purchase_order_suite)
+    };
+
+    try {
+      await updateDemoTenantAddons(platformOwner.access, ownerClientId, {
+        delivery_dispatch_suite: false
+      });
+
+      const deliveryId = `delivery-default-${Date.now()}`;
+      const createOutboxId = `out-${deliveryId}`;
+      const createdAt = new Date().toISOString();
+      const push = await request(app.getHttpServer())
+        .post('/api/sync/push')
+        .set('Authorization', `Bearer ${admin.access}`)
+        .set('X-Client-Id', adminClientId)
+        .send({
+          device_id: 'dev-delivery-default-off',
+          outbox_items: [
+            {
+              id: createOutboxId,
+              entity: 'delivery_order',
+              action: 'create',
+              payload: {
+                id: deliveryId,
+                order_type: 'DELIVERY',
+                status: 'created',
+                personnel: [{ user_id: 'driver-1', role: 'DRIVER' }]
+              },
+              idempotency_key: `idem-${createOutboxId}`,
+              created_at: createdAt
+            }
+          ]
+        })
+        .expect(201);
+
+      expect(push.body.accepted).toContain(createOutboxId);
+      expect(push.body.rejected).toEqual([]);
+    } finally {
+      await updateDemoTenantAddons(platformOwner.access, ownerClientId, baseline);
+    }
+  });
+
+  dbRuntimeIt('77) enforces purchase_order_suite ON/OFF and runs purchase-order flow when enabled (DB runtime)', async () => {
+    let platformOwner:
+      | { access: string; refresh: string; clientId: string | undefined }
+      | undefined;
+    try {
+      platformOwner = await loginAsPlatformOwner();
+    } catch {
+      // DB runtime in some local setups may not include seeded owner credentials.
+      // Keep this DB-only test non-blocking when seed preconditions are missing.
+      return;
+    }
+    if (!platformOwner) {
+      return;
+    }
+    const admin = await loginForFlowPricingTests();
+    const ownerClientId = platformOwner.clientId ?? admin.clientId ?? 'DEMO';
+    const adminClientId = admin.clientId ?? ownerClientId;
+
+    const currentEntitlement = await request(app.getHttpServer())
+      .get('/api/platform/entitlements/current')
+      .set('Authorization', `Bearer ${admin.access}`)
+      .set('X-Client-Id', adminClientId)
+      .expect(200);
+
+    const currentAddons = (currentEntitlement.body?.addons ?? {}) as Partial<TenantAddonFlags>;
+    const baseline: TenantAddonFlags = {
+      custom_pricing: Boolean(currentAddons.custom_pricing),
+      customer_category: Boolean(currentAddons.customer_category),
+      item_price_cost_audit: Boolean(currentAddons.item_price_cost_audit),
+      petty_cash_attachments: Boolean(currentAddons.petty_cash_attachments),
+      shift_security_controls: Boolean(currentAddons.shift_security_controls),
+      kilo_overview_chart: Boolean(currentAddons.kilo_overview_chart),
+      receipt_amount_privacy: Boolean((currentAddons as Record<string, unknown>).receipt_amount_privacy),
+      delivery_dispatch_suite: Boolean((currentAddons as Record<string, unknown>).delivery_dispatch_suite),
+      purchase_order_suite: Boolean((currentAddons as Record<string, unknown>).purchase_order_suite)
+    };
+
+    try {
+      const branchesRes = await request(app.getHttpServer())
+        .get('/api/master-data/branches')
+        .set('Authorization', `Bearer ${admin.access}`)
+        .set('X-Client-Id', adminClientId)
+        .expect(200);
+      const branches = branchesRes.body as Array<Record<string, unknown>>;
+      const activeBranch =
+        branches.find((row) => row.isActive === true) ??
+        branches.find((row) => row.id === 'branch-main') ??
+        branches[0];
+      expect(activeBranch).toBeDefined();
+      const branchId = String(activeBranch?.id ?? '');
+      expect(branchId.length).toBeGreaterThan(0);
+
+      const locationsRes = await request(app.getHttpServer())
+        .get('/api/master-data/locations')
+        .set('Authorization', `Bearer ${admin.access}`)
+        .set('X-Client-Id', adminClientId)
+        .expect(200);
+      const locations = locationsRes.body as Array<Record<string, unknown>>;
+      const activeLocation =
+        locations.find(
+          (row) =>
+            row.isActive === true &&
+            String(row.branchId ?? row.branch_id ?? '') === branchId
+        ) ??
+        locations.find(
+          (row) =>
+            row.isActive === true &&
+            String(row.branchId ?? row.branch_id ?? '') === ''
+        ) ??
+        locations.find((row) => row.isActive === true) ??
+        locations[0];
+      expect(activeLocation).toBeDefined();
+      const locationId = String(activeLocation?.id ?? '');
+      expect(locationId.length).toBeGreaterThan(0);
+
+      const suppliersRes = await request(app.getHttpServer())
+        .get('/api/master-data/suppliers')
+        .set('Authorization', `Bearer ${admin.access}`)
+        .set('X-Client-Id', adminClientId)
+        .expect(200);
+      const suppliers = suppliersRes.body as Array<Record<string, unknown>>;
+      let supplier =
+        suppliers.find((row) => row.isActive === true) ??
+        suppliers[0];
+      if (!supplier) {
+        const createdSupplier = await request(app.getHttpServer())
+          .post('/api/master-data/suppliers')
+          .set('Authorization', `Bearer ${admin.access}`)
+          .set('X-Client-Id', adminClientId)
+          .send({
+            code: `SUP-PO-${Date.now()}`,
+            name: 'PO Test Supplier',
+            isActive: true
+          })
+          .expect(201);
+        supplier = createdSupplier.body as Record<string, unknown>;
+      }
+      const supplierId = String(supplier.id ?? '');
+      expect(supplierId.length).toBeGreaterThan(0);
+
+      const productsRes = await request(app.getHttpServer())
+        .get('/api/master-data/products')
+        .set('Authorization', `Bearer ${admin.access}`)
+        .set('X-Client-Id', adminClientId)
+        .expect(200);
+      const products = productsRes.body as Array<Record<string, unknown>>;
+      let product =
+        products.find((row) => row.isActive === true) ??
+        products.find((row) => row.id === 'prod-11') ??
+        products[0];
+      if (!product) {
+        const createdProduct = await request(app.getHttpServer())
+          .post('/api/master-data/products')
+          .set('Authorization', `Bearer ${admin.access}`)
+          .set('X-Client-Id', adminClientId)
+          .send({
+            sku: `SKU-PO-${Date.now()}`,
+            name: 'PO Test Product',
+            unit: 'pcs',
+            isLpg: false,
+            isActive: true
+          })
+          .expect(201);
+        product = createdProduct.body as Record<string, unknown>;
+      }
+      const productId = String(product.id ?? '');
+      expect(productId.length).toBeGreaterThan(0);
+
+      await updateDemoTenantAddons(platformOwner.access, ownerClientId, {
+        purchase_order_suite: false
+      });
+
+      await request(app.getHttpServer())
+        .get('/api/purchase-orders')
+        .set('Authorization', `Bearer ${admin.access}`)
+        .set('X-Client-Id', adminClientId)
+        .expect(403);
+
+      await request(app.getHttpServer())
+        .post('/api/purchase-orders')
+        .set('Authorization', `Bearer ${admin.access}`)
+        .set('X-Client-Id', adminClientId)
+        .send({
+          branch_id: branchId,
+          location_id: locationId,
+          supplier_id: supplierId,
+          lines: [{ product_id: productId, ordered_qty: 2, unit_cost: 100 }]
+        })
+        .expect(403);
+
+      await updateDemoTenantAddons(platformOwner.access, ownerClientId, {
+        purchase_order_suite: true
+      });
+
+      const created = await request(app.getHttpServer())
+        .post('/api/purchase-orders')
+        .set('Authorization', `Bearer ${admin.access}`)
+        .set('X-Client-Id', adminClientId)
+        .send({
+          po_number: `PO-TEST-${Date.now()}`,
+          branch_id: branchId,
+          location_id: locationId,
+          supplier_id: supplierId,
+          notes: 'Purchase order suite DB e2e',
+          lines: [{ product_id: productId, ordered_qty: 2, unit_cost: 123.45 }]
+        })
+        .expect(201);
+
+      expect(created.body.id).toBeDefined();
+      expect(created.body.status).toBe('DRAFT');
+      expect(Array.isArray(created.body.lines)).toBe(true);
+      expect(created.body.lines.length).toBeGreaterThan(0);
+      const poId = String(created.body.id);
+      const poLineId = String(created.body.lines[0]?.id ?? '');
+      expect(poLineId.length).toBeGreaterThan(0);
+
+      const listed = await request(app.getHttpServer())
+        .get('/api/purchase-orders')
+        .set('Authorization', `Bearer ${admin.access}`)
+        .set('X-Client-Id', adminClientId)
+        .expect(200);
+      expect(
+        (listed.body as Array<Record<string, unknown>>).some(
+          (row) => String(row.id ?? '') === poId
+        )
+      ).toBe(true);
+
+      const submitted = await request(app.getHttpServer())
+        .post(`/api/purchase-orders/${poId}/submit`)
+        .set('Authorization', `Bearer ${admin.access}`)
+        .set('X-Client-Id', adminClientId)
+        .send({})
+        .expect(201);
+      expect(submitted.body.status).toBe('SUBMITTED');
+
+      const firstReceive = await request(app.getHttpServer())
+        .post(`/api/purchase-orders/${poId}/receive`)
+        .set('Authorization', `Bearer ${admin.access}`)
+        .set('X-Client-Id', adminClientId)
+        .send({
+          notes: 'first receive',
+          lines: [{ purchase_order_line_id: poLineId, quantity: 1, unit_cost: 123.45 }]
+        })
+        .expect(201);
+      expect(firstReceive.body.status).toBe('PARTIALLY_RECEIVED');
+
+      const pullout = await request(app.getHttpServer())
+        .post(`/api/purchase-orders/${poId}/pullout`)
+        .set('Authorization', `Bearer ${admin.access}`)
+        .set('X-Client-Id', adminClientId)
+        .send({
+          notes: 'pullout test',
+          lines: [{ purchase_order_line_id: poLineId, quantity: 1, unit_cost: 123.45 }]
+        })
+        .expect(201);
+      expect(Array.isArray(pullout.body.pullouts)).toBe(true);
+      expect(pullout.body.pullouts.length).toBeGreaterThan(0);
+
+      const secondReceive = await request(app.getHttpServer())
+        .post(`/api/purchase-orders/${poId}/receive`)
+        .set('Authorization', `Bearer ${admin.access}`)
+        .set('X-Client-Id', adminClientId)
+        .send({
+          notes: 'second receive',
+          lines: [{ purchase_order_line_id: poLineId, quantity: 1, unit_cost: 123.45 }]
+        })
+        .expect(201);
+      expect(secondReceive.body.received_qty_total).toBe(2);
+
+      const attachment = await request(app.getHttpServer())
+        .post(`/api/purchase-orders/${poId}/attachments`)
+        .set('Authorization', `Bearer ${admin.access}`)
+        .set('X-Client-Id', adminClientId)
+        .send({
+          file_name: 'po-test.png',
+          mime_type: 'image/png',
+          size_bytes: 68,
+          data_base64:
+            'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8Xw8AAusB9YxR3S8AAAAASUVORK5CYII=',
+          source_channel: 'api-test'
+        })
+        .expect(201);
+      expect(attachment.body.id).toBeDefined();
+
+      const completed = await request(app.getHttpServer())
+        .post(`/api/purchase-orders/${poId}/complete`)
+        .set('Authorization', `Bearer ${admin.access}`)
+        .set('X-Client-Id', adminClientId)
+        .send({})
+        .expect(201);
+      expect(completed.body.status).toBe('COMPLETED');
+
+      const detail = await request(app.getHttpServer())
+        .get(`/api/purchase-orders/${poId}`)
+        .set('Authorization', `Bearer ${admin.access}`)
+        .set('X-Client-Id', adminClientId)
+        .expect(200);
+      expect(detail.body.id).toBe(poId);
+      expect(detail.body.status).toBe('COMPLETED');
+      expect(Array.isArray(detail.body.attachments)).toBe(true);
+      expect(detail.body.attachments.length).toBeGreaterThan(0);
+    } finally {
+      await updateDemoTenantAddons(platformOwner.access, ownerClientId, baseline);
+    }
   });
 });
