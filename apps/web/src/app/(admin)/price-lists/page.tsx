@@ -1291,7 +1291,8 @@ export default function PriceListsPage(): JSX.Element {
               </div>
             </header>
 
-            <div className="grid max-h-[calc(92vh-88px)] gap-0 md:grid-cols-12">
+            <div className="max-h-[calc(92vh-88px)] overflow-y-auto">
+              <div className="grid gap-0 md:grid-cols-12">
               <aside className="border-b border-slate-200 p-3 md:col-span-4 md:border-b-0 md:border-r dark:border-slate-800">
                 <div className="mb-2 flex items-center justify-between">
                   <h3 className="text-sm font-semibold text-slate-900 dark:text-slate-100">Versions</h3>
@@ -1340,7 +1341,7 @@ export default function PriceListsPage(): JSX.Element {
                 )}
               </aside>
 
-              <div className="space-y-3 overflow-y-auto p-3 md:col-span-8">
+              <div className="space-y-3 p-3 md:col-span-8">
                 {versionError ? <p className="text-sm text-rose-700 dark:text-rose-400">{versionError}</p> : null}
 
                 {selectedVersionDetail ? (
@@ -1380,7 +1381,7 @@ export default function PriceListsPage(): JSX.Element {
                         </span>
                       </div>
                       {selectedVersionDetail.rules && selectedVersionDetail.rules.length > 0 ? (
-                        <div className="overflow-x-auto">
+                        <div className="max-h-[45vh] overflow-auto rounded-lg border border-slate-200 dark:border-slate-700">
                           <table className="w-full min-w-[720px] border-collapse text-xs">
                             <thead>
                               <tr className="border-b border-slate-200 text-left uppercase tracking-wide text-slate-500 dark:border-slate-700 dark:text-slate-400">
@@ -1560,6 +1561,7 @@ export default function PriceListsPage(): JSX.Element {
                   </div>
                 </section>
               </div>
+            </div>
             </div>
           </section>
         </div>
