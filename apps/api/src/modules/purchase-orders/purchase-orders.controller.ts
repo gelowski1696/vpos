@@ -1,6 +1,7 @@
 import {
   Body,
   Controller,
+  ForbiddenException,
   Get,
   Param,
   Post,
@@ -11,6 +12,7 @@ import {
   UnauthorizedException
 } from '@nestjs/common';
 import { Request, Response } from 'express';
+import { isWebChannel, resolveRequestChannel } from '../../common/request-channel';
 import { Roles } from '../auth/decorators/roles.decorator';
 import { AuditService } from '../audit/audit.service';
 import { EntitlementsService } from '../entitlements/entitlements.service';
@@ -52,6 +54,7 @@ export class PurchaseOrdersController {
       }>;
     }
   ): Promise<PurchaseOrderRecord> {
+    this.enforcePosWriteChannel(req);
     const companyId = this.requireCompanyId(req);
     await this.tenantRoutingPolicy.assertRoutable(companyId);
     await this.entitlementsService.enforceTransactionalWrite(companyId);
@@ -107,6 +110,7 @@ export class PurchaseOrdersController {
     @Req() req: RequestWithUser,
     @Param('id') id: string
   ): Promise<PurchaseOrderRecord> {
+    this.enforcePosWriteChannel(req);
     const companyId = this.requireCompanyId(req);
     await this.tenantRoutingPolicy.assertRoutable(companyId);
     await this.entitlementsService.enforceTransactionalWrite(companyId);
@@ -138,6 +142,7 @@ export class PurchaseOrdersController {
       }>;
     }
   ): Promise<PurchaseOrderRecord> {
+    this.enforcePosWriteChannel(req);
     const companyId = this.requireCompanyId(req);
     await this.tenantRoutingPolicy.assertRoutable(companyId);
     await this.entitlementsService.enforceTransactionalWrite(companyId);
@@ -169,6 +174,7 @@ export class PurchaseOrdersController {
       }>;
     }
   ): Promise<PurchaseOrderRecord> {
+    this.enforcePosWriteChannel(req);
     const companyId = this.requireCompanyId(req);
     await this.tenantRoutingPolicy.assertRoutable(companyId);
     await this.entitlementsService.enforceTransactionalWrite(companyId);
@@ -191,6 +197,7 @@ export class PurchaseOrdersController {
     @Req() req: RequestWithUser,
     @Param('id') id: string
   ): Promise<PurchaseOrderRecord> {
+    this.enforcePosWriteChannel(req);
     const companyId = this.requireCompanyId(req);
     await this.tenantRoutingPolicy.assertRoutable(companyId);
     await this.entitlementsService.enforceTransactionalWrite(companyId);
@@ -214,6 +221,7 @@ export class PurchaseOrdersController {
     @Param('id') id: string,
     @Body() body: { reason?: string | null }
   ): Promise<PurchaseOrderRecord> {
+    this.enforcePosWriteChannel(req);
     const companyId = this.requireCompanyId(req);
     await this.tenantRoutingPolicy.assertRoutable(companyId);
     await this.entitlementsService.enforceTransactionalWrite(companyId);
@@ -249,6 +257,7 @@ export class PurchaseOrdersController {
       source_channel?: string | null;
     }
   ): Promise<ReturnType<PurchaseOrdersService['addAttachment']>> {
+    this.enforcePosWriteChannel(req);
     const companyId = this.requireCompanyId(req);
     await this.tenantRoutingPolicy.assertRoutable(companyId);
     await this.entitlementsService.enforceTransactionalWrite(companyId);
@@ -303,5 +312,12 @@ export class PurchaseOrdersController {
       return status;
     }
     return undefined;
+  }
+
+  private enforcePosWriteChannel(req: Request): void {
+    const channel = resolveRequestChannel(req);
+    if (isWebChannel(channel)) {
+      throw new ForbiddenException('This action is available from POS channels (mobile/desktop) only.');
+    }
   }
 }

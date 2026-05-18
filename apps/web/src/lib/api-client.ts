@@ -132,7 +132,8 @@ export async function apiRequest<T>(path: string, options: RequestOptions = {}):
   const authEnabled = options.auth ?? true;
   const headers: Record<string, string> = {
     'Content-Type': 'application/json',
-    'X-VPOS-Client': 'web'
+    'X-VPOS-Client': 'web',
+    'X-Client-Channel': 'WEB'
   };
   if (!options.omitClientId) {
     const clientId = options.clientId?.trim() || getSessionClientId() || API_CLIENT_ID;

@@ -90,4 +90,7 @@ export interface PriceResolutionOutput {
     source: 'contract' | 'customer_group' | 'tier' | 'branch' | 'global';
     unit_price: number;
     discount_cap_percent: number;
+    resolved_unit_cost?: number | null;
+    price_list_id?: string;
+    price_rule_id?: string;
 }

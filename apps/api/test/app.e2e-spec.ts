@@ -3776,6 +3776,18 @@ describe('VPOS API (integration)', () => {
         delivery_dispatch_suite: true
       });
 
+      await request(app.getHttpServer())
+        .post('/api/delivery/orders')
+        .set('Authorization', `Bearer ${admin.access}`)
+        .set('X-Client-Id', adminClientId)
+        .set('X-Client-Channel', 'WEB')
+        .send({
+          order_type: 'DELIVERY',
+          actor_user_id: 'user-admin-1',
+          notes: 'Should be blocked for web channel'
+        })
+        .expect(403);
+
       const created = await request(app.getHttpServer())
         .post('/api/delivery/orders')
         .set('Authorization', `Bearer ${admin.access}`)
@@ -4240,6 +4252,21 @@ describe('VPOS API (integration)', () => {
       await updateDemoTenantAddons(platformOwner.access, ownerClientId, {
         purchase_order_suite: true
       });
+
+      await request(app.getHttpServer())
+        .post('/api/purchase-orders')
+        .set('Authorization', `Bearer ${admin.access}`)
+        .set('X-Client-Id', adminClientId)
+        .set('X-Client-Channel', 'WEB')
+        .send({
+          po_number: `PO-WEB-BLOCK-${Date.now()}`,
+          branch_id: branchId,
+          location_id: locationId,
+          supplier_id: supplierId,
+          notes: 'Should be blocked for web channel',
+          lines: [{ product_id: productId, ordered_qty: 1, unit_cost: 100 }]
+        })
+        .expect(403);
 
       const created = await request(app.getHttpServer())
         .post('/api/purchase-orders')

@@ -7,6 +7,7 @@ import { PurchaseOrdersService } from './purchase-orders.service';
 @Module({
   imports: [PrismaModule, EntitlementsModule],
   controllers: [PurchaseOrdersController],
-  providers: [PurchaseOrdersService]
+  providers: [PurchaseOrdersService],
+  exports: [PurchaseOrdersService]
 })
 export class PurchaseOrdersModule {}

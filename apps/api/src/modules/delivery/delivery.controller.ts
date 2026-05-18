@@ -1,5 +1,6 @@
-import { Body, Controller, Get, Param, Post, Query, Req, Res, UnauthorizedException } from '@nestjs/common';
+import { Body, Controller, ForbiddenException, Get, Param, Post, Query, Req, Res, UnauthorizedException } from '@nestjs/common';
 import { Request, Response } from 'express';
+import { isWebChannel, resolveRequestChannel } from '../../common/request-channel';
 import {
   DeliveryListFilters,
   DeliveryActorContext,
@@ -34,6 +35,7 @@ export class DeliveryController {
       actor_user_id?: string;
     }
   ): Promise<DeliveryOrderRecord> {
+    this.enforcePosWriteChannel(req);
     const companyId = this.requireCompanyId(req);
     await this.tenantRoutingPolicy.assertRoutable(companyId);
     await this.entitlementsService.enforceTransactionalWrite(companyId);
@@ -143,6 +145,7 @@ export class DeliveryController {
     @Param('id') id: string,
     @Body() body: { personnel: Array<{ user_id: string; role: string }>; actor_user_id?: string; notes?: string }
   ): Promise<DeliveryOrderRecord> {
+    this.enforcePosWriteChannel(req);
     const companyId = this.requireCompanyId(req);
     await this.tenantRoutingPolicy.assertRoutable(companyId);
     await this.entitlementsService.enforceTransactionalWrite(companyId);
@@ -186,6 +189,7 @@ export class DeliveryController {
       cashier_validated_by_user_id?: string;
     }
   ): Promise<DeliveryOrderRecord> {
+    this.enforcePosWriteChannel(req);
     const companyId = this.requireCompanyId(req);
     await this.tenantRoutingPolicy.assertRoutable(companyId);
     await this.entitlementsService.enforceTransactionalWrite(companyId);
@@ -270,5 +274,12 @@ export class DeliveryController {
       return normalized;
     }
     return undefined;
+  }
+
+  private enforcePosWriteChannel(req: Request): void {
+    const channel = resolveRequestChannel(req);
+    if (isWebChannel(channel)) {
+      throw new ForbiddenException('This action is available from POS channels (mobile/desktop) only.');
+    }
   }
 }

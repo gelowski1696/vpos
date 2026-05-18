@@ -82,6 +82,7 @@ async function bootstrap(): Promise<void> {
       "Content-Type",
       "Authorization",
       "X-VPOS-Client",
+      "X-Client-Channel",
       "X-Client-Id",
       "X-Platform-Owner-Key",
       "X-Vcard-Admin-Key"

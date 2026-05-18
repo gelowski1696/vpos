@@ -33,6 +33,22 @@ enum PriceFlowMode {
   NON_REFILL
 }
 
+enum PriceListVersionStatus {
+  DRAFT
+  PUBLISHED
+  SUPERSEDED
+  ROLLED_BACK
+  CANCELLED
+}
+
+enum ActorChannel {
+  WEB
+  MOBILE
+  DESKTOP
+  SYNC
+  API
+}
+
 enum InventoryMovementType {
   SALE
   TRANSFER_IN
@@ -331,6 +347,9 @@ model Company {
   personnels                Personnel[]
   roles                     Role[]
   priceRules                PriceRule[]
+  priceListVersions         PriceListVersion[]
+  priceListVersionRules     PriceListVersionRule[]
+  priceListRollbackAudits   PriceListRollbackAudit[]
   customers                 Customer[]
   customerCategories        CustomerCategory[]
   suppliers                 Supplier[]
@@ -1039,6 +1058,7 @@ model Product {
   company           Company             @relation(fields: [companyId], references: [id], onDelete: Cascade)
   cylinderType      CylinderType?       @relation(fields: [cylinderTypeId], references: [id], onDelete: SetNull)
   priceRules        PriceRule[]
+  priceListVersionRules PriceListVersionRule[]
   inventoryBalances InventoryBalance[]
   inventoryLedgers  InventoryLedger[]
   lpgItemServiceActions LpgItemServiceAction[]
@@ -1110,6 +1130,7 @@ model PriceList {
   companyId    String
   code         String
   branchId     String?
+  activeVersionId String?
   name         String
   scope        PriceScope
   customerTier String?
@@ -1123,8 +1144,11 @@ model PriceList {
 
   company          Company           @relation(fields: [companyId], references: [id], onDelete: Cascade)
   branch           Branch?           @relation(fields: [branchId], references: [id], onDelete: SetNull)
+  activeVersion    PriceListVersion? @relation("PriceListActiveVersion", fields: [activeVersionId], references: [id], onDelete: SetNull)
   customerCategory CustomerCategory? @relation(fields: [customerCategoryId], references: [id], onDelete: SetNull)
   rules            PriceRule[]
+  versions         PriceListVersion[]
+  rollbackAudits   PriceListRollbackAudit[]
 
   @@unique([companyId, code])
   @@index([companyId, startsAt, endsAt])
@@ -1138,6 +1162,7 @@ model PriceRule {
   productId      String
   flowMode       PriceFlowMode @default(ANY)
   unitPrice      Decimal       @db.Decimal(12, 2)
+  unitCost       Decimal?      @db.Decimal(14, 4)
   discountCapPct Decimal       @default(0) @db.Decimal(5, 2)
   priority       Int
   createdAt      DateTime      @default(now())
@@ -1148,6 +1173,76 @@ model PriceRule {
   product   Product   @relation(fields: [productId], references: [id], onDelete: Cascade)
 
   @@index([companyId, productId, flowMode, priority])
+}
+
+model PriceListVersion {
+  id                     String                 @id @default(uuid())
+  companyId              String
+  priceListId            String
+  versionNo              Int
+  status                 PriceListVersionStatus @default(DRAFT)
+  basedOnVersionId       String?
+  publishedFromVersionId String?
+  effectiveFrom          DateTime
+  effectiveTo            DateTime?
+  notes                  String?                @db.Text
+  rollbackReason         String?                @db.Text
+  createdByUserId        String?
+  publishedByUserId      String?
+  createdAt              DateTime               @default(now())
+  publishedAt            DateTime?
+  updatedAt              DateTime               @updatedAt
+
+  company            Company                  @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  priceList          PriceList                @relation(fields: [priceListId], references: [id], onDelete: Cascade)
+  rules              PriceListVersionRule[]
+  activeForPriceList PriceList[]              @relation("PriceListActiveVersion")
+  rollbackFromRows   PriceListRollbackAudit[] @relation("PriceListRollbackFromVersion")
+  rollbackToRows     PriceListRollbackAudit[] @relation("PriceListRollbackToVersion")
+
+  @@unique([priceListId, versionNo])
+  @@index([companyId, status, effectiveFrom])
+  @@index([companyId, createdAt])
+}
+
+model PriceListVersionRule {
+  id                 String        @id @default(uuid())
+  companyId          String
+  priceListVersionId String
+  productId          String
+  flowMode           PriceFlowMode @default(ANY)
+  unitPrice          Decimal       @db.Decimal(12, 2)
+  unitCost           Decimal?      @db.Decimal(14, 4)
+  discountCapPct     Decimal       @default(0) @db.Decimal(5, 2)
+  priority           Int
+  createdAt          DateTime      @default(now())
+  updatedAt          DateTime      @updatedAt
+
+  company          Company          @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  priceListVersion PriceListVersion @relation(fields: [priceListVersionId], references: [id], onDelete: Cascade)
+  product          Product          @relation(fields: [productId], references: [id], onDelete: Cascade)
+
+  @@index([companyId, productId, flowMode, priority])
+  @@index([priceListVersionId, productId])
+}
+
+model PriceListRollbackAudit {
+  id              String       @id @default(uuid())
+  companyId       String
+  priceListId     String
+  fromVersionId   String
+  toVersionId     String
+  reason          String?      @db.Text
+  triggeredByUserId String?
+  channel         ActorChannel @default(API)
+  createdAt       DateTime     @default(now())
+
+  company     Company          @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  priceList   PriceList        @relation(fields: [priceListId], references: [id], onDelete: Cascade)
+  fromVersion PriceListVersion @relation("PriceListRollbackFromVersion", fields: [fromVersionId], references: [id], onDelete: Restrict)
+  toVersion   PriceListVersion @relation("PriceListRollbackToVersion", fields: [toVersionId], references: [id], onDelete: Restrict)
+
+  @@index([companyId, priceListId, createdAt])
 }
 
 model ExpenseCategory {

@@ -1,5 +1,6 @@
 import { BadRequestException, ForbiddenException, Injectable, NotFoundException, Optional } from '@nestjs/common';
 import {
+  ActorChannel,
   CostAllocationBasis,
   CostingMethod,
   EntitlementBranchMode,
@@ -8,6 +9,7 @@ import {
   LocationType,
   NegativeStockPolicy,
   PriceFlowMode,
+  PriceListVersionStatus,
   PriceScope,
   Prisma,
   TenancyDatastoreMode,
@@ -174,6 +176,7 @@ export type PriceRuleRecord = {
   productId: string;
   flowMode: 'ANY' | 'REFILL_EXCHANGE' | 'NON_REFILL';
   unitPrice: number;
+  unitCost?: number | null;
   discountCapPct: number;
   priority: number;
 };
@@ -183,6 +186,7 @@ export type CreatePriceRuleInput = {
   productId: string;
   flowMode?: 'ANY' | 'REFILL_EXCHANGE' | 'NON_REFILL';
   unitPrice: number;
+  unitCost?: number | null;
   discountCapPct: number;
   priority: number;
 };
@@ -192,6 +196,7 @@ export type PriceListRecord = Timestamped & {
   code: string;
   name: string;
   scope: 'GLOBAL' | 'BRANCH' | 'TIER' | 'CUSTOMER_GROUP' | 'CONTRACT';
+  activeVersionId?: string | null;
   branchId?: string | null;
   customerTier?: string | null;
   customerCategoryId?: string | null;
@@ -200,6 +205,80 @@ export type PriceListRecord = Timestamped & {
   endsAt?: string | null;
   isActive: boolean;
   rules: PriceRuleRecord[];
+};
+
+export type PriceListVersionRuleRecord = Timestamped & {
+  id: string;
+  productId: string;
+  flowMode: 'ANY' | 'REFILL_EXCHANGE' | 'NON_REFILL';
+  unitPrice: number;
+  unitCost?: number | null;
+  discountCapPct: number;
+  priority: number;
+};
+
+export type PriceListVersionRecord = Timestamped & {
+  id: string;
+  priceListId: string;
+  versionNo: number;
+  status: 'DRAFT' | 'PUBLISHED' | 'SUPERSEDED' | 'ROLLED_BACK' | 'CANCELLED';
+  basedOnVersionId?: string | null;
+  publishedFromVersionId?: string | null;
+  effectiveFrom: string;
+  effectiveTo?: string | null;
+  notes?: string | null;
+  rollbackReason?: string | null;
+  createdByUserId?: string | null;
+  publishedByUserId?: string | null;
+  publishedAt?: string | null;
+  rules?: PriceListVersionRuleRecord[];
+};
+
+export type PriceListVersionListFilters = {
+  limit?: number;
+  status?: PriceListVersionRecord['status'];
+  from?: string;
+  to?: string;
+};
+
+export type CreatePriceListVersionInput = {
+  basedOnVersionId?: string | null;
+  notes?: string | null;
+  actorUserId?: string | null;
+};
+
+export type ReplacePriceListVersionRulesInput = {
+  rules: CreatePriceRuleInput[];
+  actorUserId?: string | null;
+};
+
+export type BulkAdjustPriceListVersionInput = {
+  mode: 'PERCENT' | 'FIXED';
+  value: number;
+  applyTo: 'PRICE_ONLY' | 'COST_ONLY' | 'PRICE_AND_COST';
+  productIds?: string[];
+  category?: string | null;
+  brand?: string | null;
+  supplierId?: string | null;
+  isLpg?: boolean | null;
+  flowMode?: 'ANY' | 'REFILL_EXCHANGE' | 'NON_REFILL' | null;
+  actorUserId?: string | null;
+};
+
+export type PublishPriceListVersionInput = {
+  versionId: string;
+  effectiveFrom?: string | null;
+  notes?: string | null;
+  actorUserId?: string | null;
+};
+
+export type RollbackPriceListInput = {
+  targetVersionId: string;
+  reason?: string | null;
+  effectiveFrom?: string | null;
+  notes?: string | null;
+  actorUserId?: string | null;
+  channel?: 'WEB' | 'MOBILE' | 'DESKTOP' | 'SYNC' | 'API';
 };
 
 export type CreateBranch = Pick<BranchRecord, 'code' | 'name' | 'type'> & Partial<Pick<BranchRecord, 'isActive'>>;
@@ -384,6 +463,7 @@ export class MasterDataService {
   private readonly productBrands: ProductBrandRecord[] = [];
   private readonly suppliers: SupplierRecord[] = [];
   private readonly priceLists: PriceListRecord[] = [];
+  private readonly priceListVersions: PriceListVersionRecord[] = [];
   private costingConfig!: CostingConfigRecord;
   private readonly prismaSeededKeys = new Set<string>();
   private readonly prismaSeedInFlight = new Map<string, Promise<void>>();
@@ -5500,7 +5580,7 @@ export class MasterDataService {
         const mapped = this.mapPriceListFromPrisma(row);
         const seen = new Set<string>();
         mapped.rules = mapped.rules.filter((rule) => {
-          const signature = `${rule.productId}|${rule.flowMode}|${rule.unitPrice}|${rule.discountCapPct}|${rule.priority}`;
+          const signature = `${rule.productId}|${rule.flowMode}|${rule.unitPrice}|${rule.unitCost ?? ''}|${rule.discountCapPct}|${rule.priority}`;
           if (seen.has(signature)) {
             return false;
           }
@@ -5525,12 +5605,15 @@ export class MasterDataService {
     }
     const binding = await this.getTenantBinding(companyId);
     if (!binding || !companyId) {
+      const createdAt = this.now();
       const row: PriceListRecord = {
         id: uuidv4(),
-        ...this.stamp(),
+        createdAt,
+        updatedAt: createdAt,
         code: input.code.trim(),
         name: input.name.trim(),
         scope: input.scope,
+        activeVersionId: null,
         branchId: input.branchId ?? null,
         customerTier: input.customerTier ?? null,
         customerCategoryId: input.customerCategoryId ?? null,
@@ -5543,40 +5626,88 @@ export class MasterDataService {
           productId: rule.productId,
           flowMode: rule.flowMode ?? 'ANY',
           unitPrice: Number(rule.unitPrice),
+          unitCost:
+            rule.unitCost === undefined || rule.unitCost === null
+              ? null
+              : Number(rule.unitCost),
           discountCapPct: Number(rule.discountCapPct),
           priority: Number(rule.priority)
         }))
       };
       this.priceLists.push(row);
+      const versionId = uuidv4();
+      this.priceListVersions.push({
+        id: versionId,
+        priceListId: row.id,
+        versionNo: 1,
+        status: 'PUBLISHED',
+        basedOnVersionId: null,
+        publishedFromVersionId: null,
+        effectiveFrom: row.startsAt,
+        effectiveTo: row.endsAt ?? null,
+        notes: null,
+        rollbackReason: null,
+        createdByUserId: null,
+        publishedByUserId: null,
+        createdAt,
+        publishedAt: createdAt,
+        updatedAt: createdAt,
+        rules: row.rules.map((rule) => ({
+          id: uuidv4(),
+          productId: rule.productId,
+          flowMode: rule.flowMode,
+          unitPrice: rule.unitPrice,
+          unitCost: rule.unitCost ?? null,
+          discountCapPct: rule.discountCapPct,
+          priority: rule.priority,
+          createdAt,
+          updatedAt: createdAt
+        }))
+      });
+      row.activeVersionId = versionId;
       return row;
     }
     try {
-      const row = await binding.client.priceList.create({
-        data: {
-          companyId,
-          code: input.code.trim(),
-          name: input.name.trim(),
-          scope: input.scope,
-          branchId: input.branchId ?? null,
-          customerTier: input.customerTier ?? null,
-          customerCategoryId: input.customerCategoryId ?? null,
-          customerId: input.customerId ?? null,
-          startsAt: this.toDate(input.startsAt),
-          endsAt: input.endsAt ? this.toDate(input.endsAt) : null,
-          isActive: input.isActive,
-          rules: {
-            create: input.rules.map((rule) => ({
-              companyId,
-              productId: rule.productId,
-              flowMode: rule.flowMode ?? PriceFlowMode.ANY,
-              unitPrice: new Prisma.Decimal(rule.unitPrice),
-              discountCapPct: new Prisma.Decimal(rule.discountCapPct),
-              priority: rule.priority
-            }))
-          }
-        },
-        include: { rules: true }
+      const row = await binding.client.$transaction(async (tx) => {
+        const created = await tx.priceList.create({
+          data: {
+            companyId,
+            code: input.code.trim(),
+            name: input.name.trim(),
+            scope: input.scope,
+            branchId: input.branchId ?? null,
+            customerTier: input.customerTier ?? null,
+            customerCategoryId: input.customerCategoryId ?? null,
+            customerId: input.customerId ?? null,
+            startsAt: this.toDate(input.startsAt),
+            endsAt: input.endsAt ? this.toDate(input.endsAt) : null,
+            isActive: input.isActive,
+            rules: {
+              create: input.rules.map((rule) => ({
+                companyId,
+                productId: rule.productId,
+                flowMode: rule.flowMode ?? PriceFlowMode.ANY,
+                unitPrice: new Prisma.Decimal(rule.unitPrice),
+                unitCost:
+                  rule.unitCost === undefined || rule.unitCost === null
+                    ? null
+                    : new Prisma.Decimal(rule.unitCost),
+                discountCapPct: new Prisma.Decimal(rule.discountCapPct),
+                priority: rule.priority
+              }))
+            }
+          },
+          include: { rules: true }
+        });
+        await this.ensurePriceListVersionSeedForDb(tx, companyId, created.id);
+        return tx.priceList.findFirst({
+          where: { companyId, id: created.id },
+          include: { rules: true }
+        });
       });
+      if (!row) {
+        throw new NotFoundException('Price list not found');
+      }
       const mapped = this.mapPriceListFromPrisma(row);
       await this.appendPriceListCreateAuditEntries(binding, companyId, mapped);
       return mapped;
@@ -5584,12 +5715,15 @@ export class MasterDataService {
       if (binding.mode === TenancyDatastoreMode.DEDICATED_DB) {
         throw error;
       }
+      const createdAt = this.now();
       const row: PriceListRecord = {
         id: uuidv4(),
-        ...this.stamp(),
+        createdAt,
+        updatedAt: createdAt,
         code: input.code.trim(),
         name: input.name.trim(),
         scope: input.scope,
+        activeVersionId: null,
         branchId: input.branchId ?? null,
         customerTier: input.customerTier ?? null,
         customerCategoryId: input.customerCategoryId ?? null,
@@ -5602,11 +5736,45 @@ export class MasterDataService {
           productId: rule.productId,
           flowMode: rule.flowMode ?? 'ANY',
           unitPrice: Number(rule.unitPrice),
+          unitCost:
+            rule.unitCost === undefined || rule.unitCost === null
+              ? null
+              : Number(rule.unitCost),
           discountCapPct: Number(rule.discountCapPct),
           priority: Number(rule.priority)
         }))
       };
       this.priceLists.push(row);
+      const versionId = uuidv4();
+      this.priceListVersions.push({
+        id: versionId,
+        priceListId: row.id,
+        versionNo: 1,
+        status: 'PUBLISHED',
+        basedOnVersionId: null,
+        publishedFromVersionId: null,
+        effectiveFrom: row.startsAt,
+        effectiveTo: row.endsAt ?? null,
+        notes: null,
+        rollbackReason: null,
+        createdByUserId: null,
+        publishedByUserId: null,
+        createdAt,
+        publishedAt: createdAt,
+        updatedAt: createdAt,
+        rules: row.rules.map((rule) => ({
+          id: uuidv4(),
+          productId: rule.productId,
+          flowMode: rule.flowMode,
+          unitPrice: rule.unitPrice,
+          unitCost: rule.unitCost ?? null,
+          discountCapPct: rule.discountCapPct,
+          priority: rule.priority,
+          createdAt,
+          updatedAt: createdAt
+        }))
+      });
+      row.activeVersionId = versionId;
       return row;
     }
   }
@@ -5626,16 +5794,38 @@ export class MasterDataService {
           productId: rule.productId,
           flowMode: rule.flowMode ?? 'ANY',
           unitPrice: Number(rule.unitPrice),
+          unitCost:
+            rule.unitCost === undefined || rule.unitCost === null
+              ? null
+              : Number(rule.unitCost),
           discountCapPct: Number(rule.discountCapPct),
           priority: Number(rule.priority)
         }));
       }
       Object.assign(row, this.clean({ ...input, rules: undefined }));
       row.updatedAt = this.now();
+      if (input.rules && row.activeVersionId) {
+        const activeVersion = this.priceListVersions.find((version) => version.id === row.activeVersionId);
+        if (activeVersion) {
+          activeVersion.rules = row.rules.map((rule) => ({
+            id: uuidv4(),
+            productId: rule.productId,
+            flowMode: rule.flowMode,
+            unitPrice: rule.unitPrice,
+            unitCost: rule.unitCost ?? null,
+            discountCapPct: rule.discountCapPct,
+            priority: rule.priority,
+            createdAt: this.now(),
+            updatedAt: this.now()
+          }));
+          activeVersion.updatedAt = this.now();
+        }
+      }
       return row;
     }
     try {
       const result = await binding.client.$transaction(async (tx) => {
+        await this.ensurePriceListVersionSeedForDb(tx, companyId, id);
         const previousRules = input.rules
           ? await tx.priceRule.findMany({
               where: { companyId, priceListId: id },
@@ -5670,6 +5860,10 @@ export class MasterDataService {
                     productId: rule.productId,
                     flowMode: rule.flowMode ?? PriceFlowMode.ANY,
                     unitPrice: new Prisma.Decimal(rule.unitPrice),
+                    unitCost:
+                      rule.unitCost === undefined || rule.unitCost === null
+                        ? null
+                        : new Prisma.Decimal(rule.unitCost),
                     discountCapPct: new Prisma.Decimal(rule.discountCapPct),
                     priority: rule.priority
                   }))
@@ -5678,6 +5872,29 @@ export class MasterDataService {
           },
           include: { rules: true }
         });
+        if (input.rules && updated.activeVersionId) {
+          const normalized = await this.normalizePriceListVersionRules(tx, companyId, input.rules);
+          await tx.priceListVersionRule.deleteMany({
+            where: { companyId, priceListVersionId: updated.activeVersionId }
+          });
+          if (normalized.length) {
+            await tx.priceListVersionRule.createMany({
+              data: normalized.map((rule) => ({
+                companyId,
+                priceListVersionId: updated.activeVersionId as string,
+                productId: rule.productId,
+                flowMode: rule.flowMode,
+                unitPrice: new Prisma.Decimal(rule.unitPrice),
+                unitCost:
+                  rule.unitCost === null || rule.unitCost === undefined
+                    ? null
+                    : new Prisma.Decimal(rule.unitCost),
+                discountCapPct: new Prisma.Decimal(rule.discountCapPct),
+                priority: rule.priority
+              }))
+            });
+          }
+        }
         return { updated, previousRules };
       });
       const mapped = this.mapPriceListFromPrisma(result.updated);
@@ -5707,14 +5924,548 @@ export class MasterDataService {
           productId: rule.productId,
           flowMode: rule.flowMode ?? 'ANY',
           unitPrice: Number(rule.unitPrice),
+          unitCost:
+            rule.unitCost === undefined || rule.unitCost === null
+              ? null
+              : Number(rule.unitCost),
           discountCapPct: Number(rule.discountCapPct),
           priority: Number(rule.priority)
         }));
       }
       Object.assign(row, this.clean({ ...input, rules: undefined }));
       row.updatedAt = this.now();
+      if (input.rules && row.activeVersionId) {
+        const activeVersion = this.priceListVersions.find((version) => version.id === row.activeVersionId);
+        if (activeVersion) {
+          activeVersion.rules = row.rules.map((rule) => ({
+            id: uuidv4(),
+            productId: rule.productId,
+            flowMode: rule.flowMode,
+            unitPrice: rule.unitPrice,
+            unitCost: rule.unitCost ?? null,
+            discountCapPct: rule.discountCapPct,
+            priority: rule.priority,
+            createdAt: this.now(),
+            updatedAt: this.now()
+          }));
+          activeVersion.updatedAt = this.now();
+        }
+      }
       return row;
     }
+  }
+
+  async createPriceListVersion(
+    priceListId: string,
+    input: CreatePriceListVersionInput
+  ): Promise<PriceListVersionRecord> {
+    const companyId = await this.getCompanyIdOrNull();
+    await this.enforceMasterDataWritePolicy(companyId ?? undefined);
+    const binding = await this.getTenantBinding(companyId);
+    if (!binding || !companyId) {
+      return this.createLocalPriceListVersion(priceListId, input);
+    }
+
+    const created = await binding.client.$transaction(async (tx) => {
+      await this.ensurePriceListVersionSeedForDb(tx, companyId, priceListId);
+      const priceList = await tx.priceList.findFirst({
+        where: { companyId, id: priceListId },
+        select: { id: true, startsAt: true, endsAt: true, activeVersionId: true }
+      });
+      if (!priceList) {
+        throw new NotFoundException('Price list not found');
+      }
+
+      const versions = await tx.priceListVersion.findMany({
+        where: { companyId, priceListId },
+        include: { rules: true },
+        orderBy: { versionNo: 'desc' }
+      });
+      const baseVersionId =
+        input.basedOnVersionId?.trim() ||
+        priceList.activeVersionId ||
+        versions.find((version) => version.status === PriceListVersionStatus.PUBLISHED)?.id ||
+        versions[0]?.id ||
+        null;
+
+      const baseVersion = baseVersionId ? versions.find((version) => version.id === baseVersionId) ?? null : null;
+      if (!baseVersion) {
+        throw new BadRequestException('Base version not found for draft creation');
+      }
+
+      const nextVersionNo = (versions[0]?.versionNo ?? 0) + 1;
+      const draft = await tx.priceListVersion.create({
+        data: {
+          companyId,
+          priceListId,
+          versionNo: nextVersionNo,
+          status: PriceListVersionStatus.DRAFT,
+          basedOnVersionId: baseVersion.id,
+          effectiveFrom: priceList.startsAt,
+          effectiveTo: priceList.endsAt,
+          notes: input.notes?.trim() || null,
+          createdByUserId: input.actorUserId?.trim() || null
+        }
+      });
+
+      if (baseVersion.rules.length) {
+        await tx.priceListVersionRule.createMany({
+          data: baseVersion.rules.map((rule) => ({
+            companyId,
+            priceListVersionId: draft.id,
+            productId: rule.productId,
+            flowMode: rule.flowMode,
+            unitPrice: rule.unitPrice,
+            unitCost: rule.unitCost,
+            discountCapPct: rule.discountCapPct,
+            priority: rule.priority
+          }))
+        });
+      }
+
+      return tx.priceListVersion.findFirst({
+        where: { companyId, priceListId, id: draft.id },
+        include: { rules: { orderBy: [{ priority: 'asc' }, { productId: 'asc' }] } }
+      });
+    });
+
+    if (!created) {
+      throw new NotFoundException('Price list version not found');
+    }
+    return this.mapPriceListVersionFromPrisma(created, true);
+  }
+
+  async listPriceListVersions(
+    priceListId: string,
+    filters: PriceListVersionListFilters = {}
+  ): Promise<PriceListVersionRecord[]> {
+    const companyId = await this.getCompanyIdOrNull();
+    const binding = await this.getTenantBinding(companyId);
+    if (!binding || !companyId) {
+      return this.listLocalPriceListVersions(priceListId, filters);
+    }
+
+    await this.ensurePriceListVersioningForListIfNeeded(binding, companyId, priceListId);
+
+    const where: Prisma.PriceListVersionWhereInput = {
+      companyId,
+      priceListId,
+      ...(filters.status ? { status: this.toPriceListVersionStatus(filters.status) } : {})
+    };
+    if (filters.from || filters.to) {
+      where.createdAt = {
+        ...(filters.from ? { gte: this.toDate(filters.from) } : {}),
+        ...(filters.to ? { lte: this.toDate(filters.to) } : {})
+      };
+    }
+
+    const rows = await binding.client.priceListVersion.findMany({
+      where,
+      orderBy: { versionNo: 'desc' },
+      take: filters.limit && filters.limit > 0 ? Math.min(filters.limit, 500) : undefined
+    });
+    return rows.map((row) => this.mapPriceListVersionFromPrisma(row, false));
+  }
+
+  async getPriceListVersion(
+    priceListId: string,
+    versionId: string
+  ): Promise<PriceListVersionRecord> {
+    const companyId = await this.getCompanyIdOrNull();
+    const binding = await this.getTenantBinding(companyId);
+    if (!binding || !companyId) {
+      return this.getLocalPriceListVersion(priceListId, versionId);
+    }
+
+    await this.ensurePriceListVersioningForListIfNeeded(binding, companyId, priceListId);
+
+    const row = await binding.client.priceListVersion.findFirst({
+      where: {
+        companyId,
+        priceListId,
+        id: versionId
+      },
+      include: { rules: { orderBy: [{ priority: 'asc' }, { productId: 'asc' }] } }
+    });
+    if (!row) {
+      throw new NotFoundException('Price list version not found');
+    }
+    return this.mapPriceListVersionFromPrisma(row, true);
+  }
+
+  async replacePriceListVersionRules(
+    priceListId: string,
+    versionId: string,
+    input: ReplacePriceListVersionRulesInput
+  ): Promise<PriceListVersionRecord> {
+    const companyId = await this.getCompanyIdOrNull();
+    await this.enforceMasterDataWritePolicy(companyId ?? undefined);
+    const binding = await this.getTenantBinding(companyId);
+    if (!binding || !companyId) {
+      return this.replaceLocalPriceListVersionRules(priceListId, versionId, input.rules);
+    }
+
+    const updated = await binding.client.$transaction(async (tx) => {
+      await this.ensurePriceListVersionSeedForDb(tx, companyId, priceListId);
+      const version = await tx.priceListVersion.findFirst({
+        where: { companyId, priceListId, id: versionId },
+        select: { id: true, status: true }
+      });
+      if (!version) {
+        throw new NotFoundException('Price list version not found');
+      }
+      if (version.status !== PriceListVersionStatus.DRAFT) {
+        throw new BadRequestException('Only draft versions can be edited');
+      }
+
+      const normalized = await this.normalizePriceListVersionRules(
+        tx,
+        companyId,
+        input.rules
+      );
+      await tx.priceListVersionRule.deleteMany({ where: { companyId, priceListVersionId: versionId } });
+      if (normalized.length) {
+        await tx.priceListVersionRule.createMany({
+          data: normalized.map((rule) => ({
+            companyId,
+            priceListVersionId: versionId,
+            productId: rule.productId,
+            flowMode: rule.flowMode,
+            unitPrice: new Prisma.Decimal(rule.unitPrice),
+            unitCost:
+              rule.unitCost === null || rule.unitCost === undefined
+                ? null
+                : new Prisma.Decimal(rule.unitCost),
+            discountCapPct: new Prisma.Decimal(rule.discountCapPct),
+            priority: rule.priority
+          }))
+        });
+      }
+
+      return tx.priceListVersion.findFirst({
+        where: { companyId, priceListId, id: versionId },
+        include: { rules: { orderBy: [{ priority: 'asc' }, { productId: 'asc' }] } }
+      });
+    });
+    if (!updated) {
+      throw new NotFoundException('Price list version not found');
+    }
+    return this.mapPriceListVersionFromPrisma(updated, true);
+  }
+
+  async bulkAdjustPriceListVersion(
+    priceListId: string,
+    versionId: string,
+    input: BulkAdjustPriceListVersionInput
+  ): Promise<{ version: PriceListVersionRecord; affectedCount: number }> {
+    const companyId = await this.getCompanyIdOrNull();
+    await this.enforceMasterDataWritePolicy(companyId ?? undefined);
+    const binding = await this.getTenantBinding(companyId);
+    if (!binding || !companyId) {
+      return this.bulkAdjustLocalPriceListVersion(priceListId, versionId, input);
+    }
+
+    const result = await binding.client.$transaction(async (tx) => {
+      await this.ensurePriceListVersionSeedForDb(tx, companyId, priceListId);
+      const version = await tx.priceListVersion.findFirst({
+        where: { companyId, priceListId, id: versionId },
+        select: { id: true, status: true }
+      });
+      if (!version) {
+        throw new NotFoundException('Price list version not found');
+      }
+      if (version.status !== PriceListVersionStatus.DRAFT) {
+        throw new BadRequestException('Only draft versions can be bulk-adjusted');
+      }
+
+      const rules = await tx.priceListVersionRule.findMany({
+        where: { companyId, priceListVersionId: versionId },
+        include: {
+          product: {
+            select: {
+              id: true,
+              category: true,
+              brand: true,
+              isLpg: true,
+              standardCost: true
+            }
+          }
+        }
+      });
+
+      const normalizedFlowFilter =
+        input.flowMode === 'ANY' || input.flowMode === 'REFILL_EXCHANGE' || input.flowMode === 'NON_REFILL'
+          ? input.flowMode
+          : null;
+      const productIdSet = new Set((input.productIds ?? []).map((id) => String(id).trim()).filter(Boolean));
+      const categoryFilter = input.category?.trim().toLowerCase() || null;
+      const brandFilter = input.brand?.trim().toLowerCase() || null;
+      const isLpgFilter = typeof input.isLpg === 'boolean' ? input.isLpg : null;
+      const applyTo = input.applyTo;
+      const mode = input.mode;
+      const value = Number(input.value ?? 0);
+      if (!Number.isFinite(value)) {
+        throw new BadRequestException('Adjustment value must be a valid number');
+      }
+
+      const targets = rules.filter((rule) => {
+        if (productIdSet.size > 0 && !productIdSet.has(rule.productId)) {
+          return false;
+        }
+        if (categoryFilter && String(rule.product.category ?? '').trim().toLowerCase() !== categoryFilter) {
+          return false;
+        }
+        if (brandFilter && String(rule.product.brand ?? '').trim().toLowerCase() !== brandFilter) {
+          return false;
+        }
+        if (isLpgFilter !== null && Boolean(rule.product.isLpg) !== isLpgFilter) {
+          return false;
+        }
+        if (normalizedFlowFilter && rule.flowMode !== normalizedFlowFilter) {
+          return false;
+        }
+        return true;
+      });
+
+      for (const rule of targets) {
+        const currentPrice = Number(rule.unitPrice);
+        const currentCost =
+          rule.unitCost === null || rule.unitCost === undefined
+            ? rule.product.standardCost === null || rule.product.standardCost === undefined
+              ? null
+              : Number(rule.product.standardCost)
+            : Number(rule.unitCost);
+
+        const nextPrice =
+          applyTo === 'COST_ONLY'
+            ? currentPrice
+            : this.computeBulkAdjustedAmount(currentPrice, mode, value, 2) ?? currentPrice;
+        const nextCost =
+          applyTo === 'PRICE_ONLY'
+            ? currentCost
+            : this.computeBulkAdjustedAmount(currentCost, mode, value, 4);
+
+        await tx.priceListVersionRule.update({
+          where: { id: rule.id },
+          data: {
+            unitPrice: new Prisma.Decimal(nextPrice),
+            unitCost:
+              nextCost === null || nextCost === undefined
+                ? null
+                : new Prisma.Decimal(nextCost)
+          }
+        });
+      }
+
+      const updatedVersion = await tx.priceListVersion.findFirst({
+        where: { companyId, priceListId, id: versionId },
+        include: { rules: { orderBy: [{ priority: 'asc' }, { productId: 'asc' }] } }
+      });
+      if (!updatedVersion) {
+        throw new NotFoundException('Price list version not found');
+      }
+      return {
+        version: updatedVersion,
+        affectedCount: targets.length
+      };
+    });
+
+    return {
+      version: this.mapPriceListVersionFromPrisma(result.version, true),
+      affectedCount: result.affectedCount
+    };
+  }
+
+  async publishPriceListVersion(
+    priceListId: string,
+    input: PublishPriceListVersionInput
+  ): Promise<{ priceList: PriceListRecord; version: PriceListVersionRecord }> {
+    const companyId = await this.getCompanyIdOrNull();
+    await this.enforceMasterDataWritePolicy(companyId ?? undefined);
+    const binding = await this.getTenantBinding(companyId);
+    if (!binding || !companyId) {
+      return this.publishLocalPriceListVersion(priceListId, input);
+    }
+
+    const result = await binding.client.$transaction(async (tx) => {
+      await this.ensurePriceListVersionSeedForDb(tx, companyId, priceListId);
+      const targetVersion = await tx.priceListVersion.findFirst({
+        where: {
+          companyId,
+          priceListId,
+          id: input.versionId
+        },
+        include: { rules: true }
+      });
+      if (!targetVersion) {
+        throw new NotFoundException('Price list version not found');
+      }
+      if (targetVersion.status !== PriceListVersionStatus.DRAFT) {
+        throw new BadRequestException('Only draft versions can be published');
+      }
+
+      const effectiveFrom = input.effectiveFrom ? this.toDate(input.effectiveFrom) : new Date();
+      const currentPublished = await tx.priceListVersion.findFirst({
+        where: {
+          companyId,
+          priceListId,
+          status: PriceListVersionStatus.PUBLISHED,
+          NOT: { id: targetVersion.id }
+        },
+        orderBy: { versionNo: 'desc' }
+      });
+
+      if (currentPublished) {
+        await tx.priceListVersion.update({
+          where: { id: currentPublished.id },
+          data: {
+            status: PriceListVersionStatus.SUPERSEDED,
+            effectiveTo: effectiveFrom
+          }
+        });
+      }
+
+      const published = await tx.priceListVersion.update({
+        where: { id: targetVersion.id },
+        data: {
+          status: PriceListVersionStatus.PUBLISHED,
+          effectiveFrom,
+          effectiveTo: null,
+          notes: input.notes === undefined ? targetVersion.notes : input.notes,
+          publishedAt: new Date(),
+          publishedByUserId: input.actorUserId?.trim() || null
+        },
+        include: { rules: true }
+      });
+
+      await tx.priceRule.deleteMany({ where: { companyId, priceListId } });
+      if (published.rules.length) {
+        await tx.priceRule.createMany({
+          data: published.rules.map((rule) => ({
+            companyId,
+            priceListId,
+            productId: rule.productId,
+            flowMode: rule.flowMode,
+            unitPrice: rule.unitPrice,
+            unitCost: rule.unitCost,
+            discountCapPct: rule.discountCapPct,
+            priority: rule.priority
+          }))
+        });
+      }
+
+      const priceList = await tx.priceList.update({
+        where: { id: priceListId },
+        data: { activeVersionId: published.id },
+        include: { rules: true }
+      });
+
+      return { priceList, version: published };
+    });
+
+    return {
+      priceList: this.mapPriceListFromPrisma(result.priceList),
+      version: this.mapPriceListVersionFromPrisma(result.version, true)
+    };
+  }
+
+  async rollbackPriceList(
+    priceListId: string,
+    input: RollbackPriceListInput
+  ): Promise<{ priceList: PriceListRecord; version: PriceListVersionRecord; rollbackAuditId: string }> {
+    const companyId = await this.getCompanyIdOrNull();
+    await this.enforceMasterDataWritePolicy(companyId ?? undefined);
+    const binding = await this.getTenantBinding(companyId);
+    if (!binding || !companyId) {
+      return this.rollbackLocalPriceList(priceListId, input);
+    }
+
+    const result = await binding.client.$transaction(async (tx) => {
+      await this.ensurePriceListVersionSeedForDb(tx, companyId, priceListId);
+      const priceList = await tx.priceList.findFirst({
+        where: { companyId, id: priceListId },
+        select: { id: true, activeVersionId: true, startsAt: true, endsAt: true }
+      });
+      if (!priceList) {
+        throw new NotFoundException('Price list not found');
+      }
+
+      const targetVersion = await tx.priceListVersion.findFirst({
+        where: { companyId, priceListId, id: input.targetVersionId },
+        include: { rules: true }
+      });
+      if (!targetVersion) {
+        throw new NotFoundException('Rollback target version not found');
+      }
+
+      const latestVersion = await tx.priceListVersion.findFirst({
+        where: { companyId, priceListId },
+        orderBy: { versionNo: 'desc' },
+        select: { versionNo: true }
+      });
+      const newVersionNo = (latestVersion?.versionNo ?? 0) + 1;
+      const draftRollback = await tx.priceListVersion.create({
+        data: {
+          companyId,
+          priceListId,
+          versionNo: newVersionNo,
+          status: PriceListVersionStatus.DRAFT,
+          basedOnVersionId: targetVersion.id,
+          publishedFromVersionId: targetVersion.id,
+          effectiveFrom: input.effectiveFrom ? this.toDate(input.effectiveFrom) : new Date(),
+          effectiveTo: priceList.endsAt,
+          notes: input.notes?.trim() || targetVersion.notes,
+          rollbackReason: input.reason?.trim() || null,
+          createdByUserId: input.actorUserId?.trim() || null
+        }
+      });
+
+      if (targetVersion.rules.length) {
+        await tx.priceListVersionRule.createMany({
+          data: targetVersion.rules.map((rule) => ({
+            companyId,
+            priceListVersionId: draftRollback.id,
+            productId: rule.productId,
+            flowMode: rule.flowMode,
+            unitPrice: rule.unitPrice,
+            unitCost: rule.unitCost,
+            discountCapPct: rule.discountCapPct,
+            priority: rule.priority
+          }))
+        });
+      }
+
+      const publishedResult = await this.publishPriceListVersionForTransaction(tx, companyId, priceListId, {
+        versionId: draftRollback.id,
+        effectiveFrom: input.effectiveFrom ?? null,
+        notes: input.notes ?? null,
+        actorUserId: input.actorUserId ?? null
+      });
+
+      const rollbackAudit = await tx.priceListRollbackAudit.create({
+        data: {
+          companyId,
+          priceListId,
+          fromVersionId: priceList.activeVersionId ?? publishedResult.version.id,
+          toVersionId: publishedResult.version.id,
+          reason: input.reason?.trim() || null,
+          triggeredByUserId: input.actorUserId?.trim() || null,
+          channel: this.toActorChannel(input.channel)
+        }
+      });
+
+      return {
+        rollbackAuditId: rollbackAudit.id,
+        priceList: publishedResult.priceList,
+        version: publishedResult.version
+      };
+    });
+
+    return {
+      rollbackAuditId: result.rollbackAuditId,
+      priceList: this.mapPriceListFromPrisma(result.priceList),
+      version: this.mapPriceListVersionFromPrisma(result.version, true)
+    };
   }
 
   async getCustomerById(id?: string): Promise<CustomerRecord | undefined> {
@@ -5790,6 +6541,584 @@ export class MasterDataService {
     });
   }
 
+  private async ensurePriceListVersioningForListIfNeeded(
+    binding: TenantPrismaBinding,
+    companyId: string,
+    priceListId: string
+  ): Promise<void> {
+    await binding.client.$transaction(async (tx) => {
+      await this.ensurePriceListVersionSeedForDb(tx, companyId, priceListId);
+    });
+  }
+
+  private async ensurePriceListVersionSeedForDb(
+    tx: Prisma.TransactionClient,
+    companyId: string,
+    priceListId: string
+  ): Promise<void> {
+    const priceList = await tx.priceList.findFirst({
+      where: { companyId, id: priceListId },
+      select: { id: true, startsAt: true, endsAt: true, activeVersionId: true }
+    });
+    if (!priceList) {
+      throw new NotFoundException('Price list not found');
+    }
+
+    const existing = await tx.priceListVersion.findMany({
+      where: { companyId, priceListId },
+      orderBy: { versionNo: 'asc' }
+    });
+
+    if (!existing.length) {
+      const baseRules = await tx.priceRule.findMany({
+        where: { companyId, priceListId },
+        select: {
+          productId: true,
+          flowMode: true,
+          unitPrice: true,
+          unitCost: true,
+          discountCapPct: true,
+          priority: true
+        }
+      });
+      const productIds = Array.from(new Set(baseRules.map((rule) => rule.productId)));
+      const products = productIds.length
+        ? await tx.product.findMany({
+            where: { companyId, id: { in: productIds } },
+            select: { id: true, standardCost: true }
+          })
+        : [];
+      const productCost = new Map(
+        products.map((product) => [product.id, product.standardCost === null ? null : Number(product.standardCost)])
+      );
+
+      const published = await tx.priceListVersion.create({
+        data: {
+          companyId,
+          priceListId,
+          versionNo: 1,
+          status: PriceListVersionStatus.PUBLISHED,
+          effectiveFrom: priceList.startsAt,
+          effectiveTo: priceList.endsAt,
+          publishedAt: priceList.startsAt
+        }
+      });
+
+      if (baseRules.length) {
+        await tx.priceListVersionRule.createMany({
+          data: baseRules.map((rule) => ({
+            companyId,
+            priceListVersionId: published.id,
+            productId: rule.productId,
+            flowMode: rule.flowMode,
+            unitPrice: rule.unitPrice,
+            unitCost:
+              rule.unitCost === null || rule.unitCost === undefined
+                ? productCost.get(rule.productId) === null || productCost.get(rule.productId) === undefined
+                  ? null
+                  : new Prisma.Decimal(productCost.get(rule.productId) as number)
+                : rule.unitCost,
+            discountCapPct: rule.discountCapPct,
+            priority: rule.priority
+          }))
+        });
+      }
+
+      await tx.priceList.update({
+        where: { id: priceListId },
+        data: { activeVersionId: published.id }
+      });
+      return;
+    }
+
+    if (!priceList.activeVersionId) {
+      const published =
+        existing.find((version) => version.status === PriceListVersionStatus.PUBLISHED) ??
+        existing[existing.length - 1];
+      await tx.priceList.update({
+        where: { id: priceListId },
+        data: { activeVersionId: published.id }
+      });
+    }
+  }
+
+  private async normalizePriceListVersionRules(
+    tx: Prisma.TransactionClient,
+    companyId: string,
+    rules: CreatePriceRuleInput[]
+  ): Promise<Array<{
+    productId: string;
+    flowMode: 'ANY' | 'REFILL_EXCHANGE' | 'NON_REFILL';
+    unitPrice: number;
+    unitCost: number | null;
+    discountCapPct: number;
+    priority: number;
+  }>> {
+    if (!rules.length) {
+      return [];
+    }
+    const productIds = Array.from(new Set(rules.map((rule) => String(rule.productId).trim()).filter(Boolean)));
+    const products = await tx.product.findMany({
+      where: { companyId, id: { in: productIds } },
+      select: { id: true, isLpg: true }
+    });
+    const productMap = new Map(products.map((product) => [product.id, product]));
+
+    return rules.map((rule, index) => {
+      const productId = String(rule.productId ?? '').trim();
+      if (!productId || !productMap.has(productId)) {
+        throw new BadRequestException(`Invalid productId at rule index ${index + 1}`);
+      }
+      const product = productMap.get(productId);
+      const flowMode =
+        rule.flowMode === 'ANY' || rule.flowMode === 'REFILL_EXCHANGE' || rule.flowMode === 'NON_REFILL'
+          ? rule.flowMode
+          : 'ANY';
+      const normalizedFlowMode = product?.isLpg ? flowMode : 'ANY';
+
+      const unitPrice = Number(rule.unitPrice ?? 0);
+      if (!Number.isFinite(unitPrice) || unitPrice < 0) {
+        throw new BadRequestException(`Invalid unitPrice for product ${productId}`);
+      }
+      const unitCostRaw =
+        rule.unitCost === undefined || rule.unitCost === null
+          ? null
+          : Number(rule.unitCost);
+      if (unitCostRaw !== null && (!Number.isFinite(unitCostRaw) || unitCostRaw < 0)) {
+        throw new BadRequestException(`Invalid unitCost for product ${productId}`);
+      }
+      const discountCapPct = Number(rule.discountCapPct ?? 0);
+      if (!Number.isFinite(discountCapPct) || discountCapPct < 0) {
+        throw new BadRequestException(`Invalid discountCapPct for product ${productId}`);
+      }
+      const priority = Number(rule.priority ?? 4);
+      if (!Number.isFinite(priority)) {
+        throw new BadRequestException(`Invalid priority for product ${productId}`);
+      }
+
+      return {
+        productId,
+        flowMode: normalizedFlowMode,
+        unitPrice: this.round(unitPrice, 2),
+        unitCost: unitCostRaw === null ? null : this.round(unitCostRaw, 4),
+        discountCapPct: this.round(discountCapPct, 2),
+        priority: Math.trunc(priority)
+      };
+    });
+  }
+
+  private computeBulkAdjustedAmount(
+    current: number | null,
+    mode: 'PERCENT' | 'FIXED',
+    value: number,
+    scale: number
+  ): number | null {
+    if (current === null || current === undefined) {
+      return null;
+    }
+    const nextRaw = mode === 'PERCENT' ? current + current * (value / 100) : current + value;
+    const bounded = Math.max(0, nextRaw);
+    return this.round(bounded, scale);
+  }
+
+  private async publishPriceListVersionForTransaction(
+    tx: Prisma.TransactionClient,
+    companyId: string,
+    priceListId: string,
+    input: PublishPriceListVersionInput
+  ): Promise<{
+    priceList: {
+      id: string;
+      code: string;
+      name: string;
+      scope: 'GLOBAL' | 'BRANCH' | 'TIER' | 'CUSTOMER_GROUP' | 'CONTRACT';
+      activeVersionId: string | null;
+      branchId: string | null;
+      customerTier: string | null;
+      customerCategoryId: string | null;
+      customerId: string | null;
+      startsAt: Date;
+      endsAt: Date | null;
+      isActive: boolean;
+      createdAt: Date;
+      updatedAt: Date;
+      rules: Array<{
+        id: string;
+        productId: string;
+        flowMode: PriceFlowMode;
+        unitPrice: Prisma.Decimal;
+        unitCost: Prisma.Decimal | null;
+        discountCapPct: Prisma.Decimal;
+        priority: number;
+      }>;
+    };
+    version: {
+      id: string;
+      companyId: string;
+      priceListId: string;
+      versionNo: number;
+      status: PriceListVersionStatus;
+      basedOnVersionId: string | null;
+      publishedFromVersionId: string | null;
+      effectiveFrom: Date;
+      effectiveTo: Date | null;
+      notes: string | null;
+      rollbackReason: string | null;
+      createdByUserId: string | null;
+      publishedByUserId: string | null;
+      createdAt: Date;
+      publishedAt: Date | null;
+      updatedAt: Date;
+      rules: Array<{
+        id: string;
+        productId: string;
+        flowMode: PriceFlowMode;
+        unitPrice: Prisma.Decimal;
+        unitCost: Prisma.Decimal | null;
+        discountCapPct: Prisma.Decimal;
+        priority: number;
+        createdAt: Date;
+        updatedAt: Date;
+      }>;
+    };
+  }> {
+    await this.ensurePriceListVersionSeedForDb(tx, companyId, priceListId);
+    const targetVersion = await tx.priceListVersion.findFirst({
+      where: {
+        companyId,
+        priceListId,
+        id: input.versionId
+      },
+      include: { rules: true }
+    });
+    if (!targetVersion) {
+      throw new NotFoundException('Price list version not found');
+    }
+    if (targetVersion.status !== PriceListVersionStatus.DRAFT) {
+      throw new BadRequestException('Only draft versions can be published');
+    }
+
+    const effectiveFrom = input.effectiveFrom ? this.toDate(input.effectiveFrom) : new Date();
+    const currentPublished = await tx.priceListVersion.findFirst({
+      where: {
+        companyId,
+        priceListId,
+        status: PriceListVersionStatus.PUBLISHED,
+        NOT: { id: targetVersion.id }
+      },
+      orderBy: { versionNo: 'desc' }
+    });
+
+    if (currentPublished) {
+      await tx.priceListVersion.update({
+        where: { id: currentPublished.id },
+        data: {
+          status: PriceListVersionStatus.SUPERSEDED,
+          effectiveTo: effectiveFrom
+        }
+      });
+    }
+
+    const published = await tx.priceListVersion.update({
+      where: { id: targetVersion.id },
+      data: {
+        status: PriceListVersionStatus.PUBLISHED,
+        effectiveFrom,
+        effectiveTo: null,
+        notes: input.notes === undefined ? targetVersion.notes : input.notes,
+        publishedAt: new Date(),
+        publishedByUserId: input.actorUserId?.trim() || null
+      },
+      include: { rules: true }
+    });
+
+    await tx.priceRule.deleteMany({ where: { companyId, priceListId } });
+    if (published.rules.length) {
+      await tx.priceRule.createMany({
+        data: published.rules.map((rule) => ({
+          companyId,
+          priceListId,
+          productId: rule.productId,
+          flowMode: rule.flowMode,
+          unitPrice: rule.unitPrice,
+          unitCost: rule.unitCost,
+          discountCapPct: rule.discountCapPct,
+          priority: rule.priority
+        }))
+      });
+    }
+
+    const priceList = await tx.priceList.update({
+      where: { id: priceListId },
+      data: { activeVersionId: published.id },
+      include: { rules: true }
+    });
+
+    return { priceList, version: published };
+  }
+
+  private createLocalPriceListVersion(
+    priceListId: string,
+    input: CreatePriceListVersionInput
+  ): PriceListVersionRecord {
+    const list = this.find(this.priceLists, priceListId, 'Price list');
+    const existing = this.priceListVersions
+      .filter((version) => version.priceListId === priceListId)
+      .sort((a, b) => b.versionNo - a.versionNo);
+
+    if (!existing.length) {
+      const seeded: PriceListVersionRecord = {
+        id: uuidv4(),
+        priceListId,
+        versionNo: 1,
+        status: 'PUBLISHED',
+        basedOnVersionId: null,
+        publishedFromVersionId: null,
+        effectiveFrom: list.startsAt,
+        effectiveTo: list.endsAt ?? null,
+        notes: null,
+        rollbackReason: null,
+        createdByUserId: null,
+        publishedByUserId: null,
+        createdAt: this.now(),
+        updatedAt: this.now(),
+        publishedAt: this.now(),
+        rules: list.rules.map((rule) => ({
+          id: uuidv4(),
+          productId: rule.productId,
+          flowMode: rule.flowMode,
+          unitPrice: rule.unitPrice,
+          unitCost: rule.unitCost ?? null,
+          discountCapPct: rule.discountCapPct,
+          priority: rule.priority,
+          createdAt: this.now(),
+          updatedAt: this.now()
+        }))
+      };
+      this.priceListVersions.push(seeded);
+      list.activeVersionId = seeded.id;
+      existing.unshift(seeded);
+    }
+
+    const baseVersionId = input.basedOnVersionId?.trim() || list.activeVersionId || existing[0]?.id || null;
+    const base = existing.find((version) => version.id === baseVersionId);
+    if (!base) {
+      throw new BadRequestException('Base version not found');
+    }
+    const nextVersionNo = (existing[0]?.versionNo ?? 0) + 1;
+    const created: PriceListVersionRecord = {
+      id: uuidv4(),
+      priceListId,
+      versionNo: nextVersionNo,
+      status: 'DRAFT',
+      basedOnVersionId: base.id,
+      publishedFromVersionId: null,
+      effectiveFrom: list.startsAt,
+      effectiveTo: list.endsAt ?? null,
+      notes: input.notes?.trim() || null,
+      rollbackReason: null,
+      createdByUserId: input.actorUserId?.trim() || null,
+      publishedByUserId: null,
+      publishedAt: null,
+      createdAt: this.now(),
+      updatedAt: this.now(),
+      rules: (base.rules ?? []).map((rule) => ({
+        ...rule,
+        id: uuidv4(),
+        createdAt: this.now(),
+        updatedAt: this.now()
+      }))
+    };
+    this.priceListVersions.push(created);
+    return created;
+  }
+
+  private listLocalPriceListVersions(
+    priceListId: string,
+    filters: PriceListVersionListFilters
+  ): PriceListVersionRecord[] {
+    const versions = this.priceListVersions
+      .filter((version) => version.priceListId === priceListId)
+      .filter((version) => (filters.status ? version.status === filters.status : true))
+      .sort((a, b) => b.versionNo - a.versionNo);
+    const limited = filters.limit && filters.limit > 0 ? versions.slice(0, filters.limit) : versions;
+    return limited.map((version) => ({ ...version, rules: undefined }));
+  }
+
+  private getLocalPriceListVersion(
+    priceListId: string,
+    versionId: string
+  ): PriceListVersionRecord {
+    const version = this.priceListVersions.find((row) => row.priceListId === priceListId && row.id === versionId);
+    if (!version) {
+      throw new NotFoundException('Price list version not found');
+    }
+    return version;
+  }
+
+  private replaceLocalPriceListVersionRules(
+    priceListId: string,
+    versionId: string,
+    rules: CreatePriceRuleInput[]
+  ): PriceListVersionRecord {
+    const version = this.getLocalPriceListVersion(priceListId, versionId);
+    if (version.status !== 'DRAFT') {
+      throw new BadRequestException('Only draft versions can be edited');
+    }
+
+    const productMap = new Map(this.products.map((product) => [product.id, product]));
+    version.rules = rules.map((rule, index) => {
+      const product = productMap.get(rule.productId);
+      if (!product) {
+        throw new BadRequestException(`Invalid productId at rule index ${index + 1}`);
+      }
+      const flowMode = product.isLpg
+        ? rule.flowMode === 'REFILL_EXCHANGE' || rule.flowMode === 'NON_REFILL' || rule.flowMode === 'ANY'
+          ? rule.flowMode
+          : 'ANY'
+        : 'ANY';
+      return {
+        id: uuidv4(),
+        productId: rule.productId,
+        flowMode,
+        unitPrice: this.round(Number(rule.unitPrice ?? 0), 2),
+        unitCost:
+          rule.unitCost === undefined || rule.unitCost === null
+            ? null
+            : this.round(Number(rule.unitCost), 4),
+        discountCapPct: this.round(Number(rule.discountCapPct ?? 0), 2),
+        priority: Math.trunc(Number(rule.priority ?? 4)),
+        createdAt: this.now(),
+        updatedAt: this.now()
+      };
+    });
+    version.updatedAt = this.now();
+    return version;
+  }
+
+  private bulkAdjustLocalPriceListVersion(
+    priceListId: string,
+    versionId: string,
+    input: BulkAdjustPriceListVersionInput
+  ): { version: PriceListVersionRecord; affectedCount: number } {
+    const version = this.getLocalPriceListVersion(priceListId, versionId);
+    if (version.status !== 'DRAFT') {
+      throw new BadRequestException('Only draft versions can be bulk-adjusted');
+    }
+    const rules = version.rules ?? [];
+    for (const rule of rules) {
+      if (input.applyTo !== 'COST_ONLY') {
+        const next = this.computeBulkAdjustedAmount(rule.unitPrice, input.mode, Number(input.value ?? 0), 2);
+        rule.unitPrice = next ?? rule.unitPrice;
+      }
+      if (input.applyTo !== 'PRICE_ONLY') {
+        const next = this.computeBulkAdjustedAmount(rule.unitCost ?? 0, input.mode, Number(input.value ?? 0), 4);
+        rule.unitCost = next;
+      }
+      rule.updatedAt = this.now();
+    }
+    version.updatedAt = this.now();
+    return { version, affectedCount: rules.length };
+  }
+
+  private publishLocalPriceListVersion(
+    priceListId: string,
+    input: PublishPriceListVersionInput
+  ): { priceList: PriceListRecord; version: PriceListVersionRecord } {
+    const list = this.find(this.priceLists, priceListId, 'Price list');
+    const version = this.getLocalPriceListVersion(priceListId, input.versionId);
+    if (version.status !== 'DRAFT') {
+      throw new BadRequestException('Only draft versions can be published');
+    }
+    const now = this.now();
+    this.priceListVersions
+      .filter((row) => row.priceListId === priceListId && row.status === 'PUBLISHED' && row.id !== version.id)
+      .forEach((row) => {
+        row.status = 'SUPERSEDED';
+        row.updatedAt = now;
+      });
+    version.status = 'PUBLISHED';
+    version.effectiveFrom = input.effectiveFrom ? this.toDate(input.effectiveFrom).toISOString() : now;
+    version.effectiveTo = null;
+    version.notes = input.notes === undefined ? version.notes : input.notes;
+    version.publishedByUserId = input.actorUserId?.trim() || null;
+    version.publishedAt = now;
+    version.updatedAt = now;
+
+    list.activeVersionId = version.id;
+    list.rules = (version.rules ?? []).map((rule) => ({
+      id: uuidv4(),
+      productId: rule.productId,
+      flowMode: rule.flowMode,
+      unitPrice: rule.unitPrice,
+      unitCost: rule.unitCost ?? null,
+      discountCapPct: rule.discountCapPct,
+      priority: rule.priority
+    }));
+    list.updatedAt = now;
+    return { priceList: list, version };
+  }
+
+  private rollbackLocalPriceList(
+    priceListId: string,
+    input: RollbackPriceListInput
+  ): { priceList: PriceListRecord; version: PriceListVersionRecord; rollbackAuditId: string } {
+    const base = this.getLocalPriceListVersion(priceListId, input.targetVersionId);
+    const draft = this.createLocalPriceListVersion(priceListId, {
+      basedOnVersionId: base.id,
+      notes: input.notes ?? base.notes ?? null,
+      actorUserId: input.actorUserId ?? null
+    });
+    draft.rollbackReason = input.reason?.trim() || null;
+    draft.publishedFromVersionId = base.id;
+    const published = this.publishLocalPriceListVersion(priceListId, {
+      versionId: draft.id,
+      effectiveFrom: input.effectiveFrom ?? null,
+      notes: input.notes ?? base.notes ?? null,
+      actorUserId: input.actorUserId ?? null
+    });
+    return {
+      ...published,
+      rollbackAuditId: `rollback-local-${Date.now()}`
+    };
+  }
+
+  private toPriceListVersionStatus(
+    value: PriceListVersionRecord['status']
+  ): PriceListVersionStatus {
+    switch (value) {
+      case 'PUBLISHED':
+        return PriceListVersionStatus.PUBLISHED;
+      case 'SUPERSEDED':
+        return PriceListVersionStatus.SUPERSEDED;
+      case 'ROLLED_BACK':
+        return PriceListVersionStatus.ROLLED_BACK;
+      case 'CANCELLED':
+        return PriceListVersionStatus.CANCELLED;
+      case 'DRAFT':
+      default:
+        return PriceListVersionStatus.DRAFT;
+    }
+  }
+
+  private toActorChannel(
+    value: RollbackPriceListInput['channel']
+  ): ActorChannel {
+    switch (value) {
+      case 'WEB':
+        return ActorChannel.WEB;
+      case 'MOBILE':
+        return ActorChannel.MOBILE;
+      case 'DESKTOP':
+        return ActorChannel.DESKTOP;
+      case 'SYNC':
+        return ActorChannel.SYNC;
+      case 'API':
+      default:
+        return ActorChannel.API;
+    }
+  }
+
   private async appendPriceListCreateAuditEntries(
     binding: TenantPrismaBinding,
     companyId: string,
@@ -5806,14 +7135,18 @@ export class MasterDataService {
       list.rules.map((rule) => {
         const product = productMap.get(rule.productId);
         const standardCost = product?.standardCost ?? null;
+        const nextCost =
+          rule.unitCost === null || rule.unitCost === undefined
+            ? standardCost
+            : Number(rule.unitCost);
         return {
           productId: rule.productId,
           skuSnapshot: product?.sku ?? rule.productId,
           nameSnapshot: product?.name ?? rule.productId,
           oldPrice: null,
           newPrice: Number(rule.unitPrice),
-          oldCost: standardCost,
-          newCost: standardCost,
+          oldCost: null,
+          newCost: nextCost,
           contextType: 'PRICE_LIST_CREATE',
           contextId: list.id,
           sourceChannel: 'api'
@@ -5831,12 +7164,14 @@ export class MasterDataService {
       flowMode: 'ANY' | 'REFILL_EXCHANGE' | 'NON_REFILL';
       priority: number;
       unitPrice: number;
+      unitCost?: number | null;
     }>,
     nextRules: Array<{
       productId: string;
       flowMode: 'ANY' | 'REFILL_EXCHANGE' | 'NON_REFILL';
       priority: number;
       unitPrice: number;
+      unitCost?: number | null;
     }>
   ): Promise<void> {
     const keyOf = (rule: { productId: string; flowMode: string; priority: number }): string =>
@@ -5867,14 +7202,22 @@ export class MasterDataService {
       const previous = previousByKey.get(key);
       const product = productMap.get(rule.productId);
       const standardCost = product?.standardCost ?? null;
+      const previousCost =
+        previous?.unitCost === null || previous?.unitCost === undefined
+          ? standardCost
+          : Number(previous.unitCost);
+      const nextCost =
+        rule.unitCost === null || rule.unitCost === undefined
+          ? standardCost
+          : Number(rule.unitCost);
       entries.push({
         productId: rule.productId,
         skuSnapshot: product?.sku ?? rule.productId,
         nameSnapshot: product?.name ?? rule.productId,
         oldPrice: previous ? Number(previous.unitPrice) : null,
         newPrice: Number(rule.unitPrice),
-        oldCost: standardCost,
-        newCost: standardCost,
+        oldCost: previous ? previousCost : null,
+        newCost: nextCost,
         contextType: 'PRICE_LIST_UPDATE',
         contextId: priceListId,
         sourceChannel: 'api'
@@ -5888,14 +7231,18 @@ export class MasterDataService {
       }
       const product = productMap.get(previous.productId);
       const standardCost = product?.standardCost ?? null;
+      const previousCost =
+        previous.unitCost === null || previous.unitCost === undefined
+          ? standardCost
+          : Number(previous.unitCost);
       entries.push({
         productId: previous.productId,
         skuSnapshot: product?.sku ?? previous.productId,
         nameSnapshot: product?.name ?? previous.productId,
         oldPrice: Number(previous.unitPrice),
         newPrice: null,
-        oldCost: standardCost,
-        newCost: standardCost,
+        oldCost: previousCost,
+        newCost: null,
         contextType: 'PRICE_LIST_UPDATE',
         contextId: priceListId,
         sourceChannel: 'api'
@@ -7460,6 +8807,7 @@ export class MasterDataService {
     code: string;
     name: string;
     scope: 'GLOBAL' | 'BRANCH' | 'TIER' | 'CUSTOMER_GROUP' | 'CONTRACT';
+    activeVersionId?: string | null;
     branchId: string | null;
     customerTier: string | null;
     customerCategoryId: string | null;
@@ -7474,6 +8822,7 @@ export class MasterDataService {
       productId: string;
       flowMode: PriceFlowMode;
       unitPrice: Prisma.Decimal;
+      unitCost?: Prisma.Decimal | null;
       discountCapPct: Prisma.Decimal;
       priority: number;
     }>;
@@ -7483,6 +8832,7 @@ export class MasterDataService {
       code: row.code,
       name: row.name,
       scope: row.scope,
+      activeVersionId: row.activeVersionId ?? null,
       branchId: row.branchId,
       customerTier: row.customerTier,
       customerCategoryId: row.customerCategoryId,
@@ -7497,9 +8847,76 @@ export class MasterDataService {
         productId: rule.productId,
         flowMode: rule.flowMode,
         unitPrice: Number(rule.unitPrice),
+        unitCost:
+          rule.unitCost === undefined || rule.unitCost === null
+            ? null
+            : Number(rule.unitCost),
         discountCapPct: Number(rule.discountCapPct),
         priority: rule.priority
       }))
+    };
+  }
+
+  private mapPriceListVersionFromPrisma(
+    row: {
+      id: string;
+      priceListId: string;
+      versionNo: number;
+      status: PriceListVersionStatus;
+      basedOnVersionId: string | null;
+      publishedFromVersionId: string | null;
+      effectiveFrom: Date;
+      effectiveTo: Date | null;
+      notes: string | null;
+      rollbackReason: string | null;
+      createdByUserId: string | null;
+      publishedByUserId: string | null;
+      createdAt: Date;
+      publishedAt: Date | null;
+      updatedAt: Date;
+      rules?: Array<{
+        id: string;
+        productId: string;
+        flowMode: PriceFlowMode;
+        unitPrice: Prisma.Decimal;
+        unitCost: Prisma.Decimal | null;
+        discountCapPct: Prisma.Decimal;
+        priority: number;
+        createdAt: Date;
+        updatedAt: Date;
+      }>;
+    },
+    includeRules: boolean
+  ): PriceListVersionRecord {
+    return {
+      id: row.id,
+      priceListId: row.priceListId,
+      versionNo: row.versionNo,
+      status: row.status,
+      basedOnVersionId: row.basedOnVersionId,
+      publishedFromVersionId: row.publishedFromVersionId,
+      effectiveFrom: row.effectiveFrom.toISOString(),
+      effectiveTo: row.effectiveTo ? row.effectiveTo.toISOString() : null,
+      notes: row.notes,
+      rollbackReason: row.rollbackReason,
+      createdByUserId: row.createdByUserId,
+      publishedByUserId: row.publishedByUserId,
+      createdAt: row.createdAt.toISOString(),
+      publishedAt: row.publishedAt ? row.publishedAt.toISOString() : null,
+      updatedAt: row.updatedAt.toISOString(),
+      rules: includeRules
+        ? (row.rules ?? []).map((rule) => ({
+            id: rule.id,
+            productId: rule.productId,
+            flowMode: rule.flowMode,
+            unitPrice: Number(rule.unitPrice),
+            unitCost: rule.unitCost === null ? null : Number(rule.unitCost),
+            discountCapPct: Number(rule.discountCapPct),
+            priority: rule.priority,
+            createdAt: rule.createdAt.toISOString(),
+            updatedAt: rule.updatedAt.toISOString()
+          }))
+        : undefined
     };
   }
 

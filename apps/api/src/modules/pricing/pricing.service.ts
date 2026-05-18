@@ -13,11 +13,12 @@ export class PricingService {
     if (!product) {
       throw new NotFoundException('Product not found');
     }
+    const defaultUnitCost = product.standardCost ?? null;
 
     const customer = await this.masterDataService.getCustomerById(input.customer_id);
     const activeLists = await this.masterDataService.getActivePriceLists(requestedAt);
 
-    const contractPrice = await this.resolveContract(input, activeLists, requestedFlow);
+    const contractPrice = await this.resolveContract(input, activeLists, requestedFlow, defaultUnitCost);
     if (contractPrice) {
       return contractPrice;
     }
@@ -26,23 +27,24 @@ export class PricingService {
       input,
       customer?.customerCategoryId ?? null,
       activeLists,
-      requestedFlow
+      requestedFlow,
+      defaultUnitCost
     );
     if (customerGroupPrice) {
       return customerGroupPrice;
     }
 
-    const tierPrice = this.resolveTier(input, customer?.tier ?? null, activeLists, requestedFlow);
+    const tierPrice = this.resolveTier(input, customer?.tier ?? null, activeLists, requestedFlow, defaultUnitCost);
     if (tierPrice) {
       return tierPrice;
     }
 
-    const branchPrice = this.resolveBranch(input, activeLists, requestedFlow);
+    const branchPrice = this.resolveBranch(input, activeLists, requestedFlow, defaultUnitCost);
     if (branchPrice) {
       return branchPrice;
     }
 
-    const globalPrice = this.resolveGlobal(input, activeLists, requestedFlow);
+    const globalPrice = this.resolveGlobal(input, activeLists, requestedFlow, defaultUnitCost);
     if (globalPrice) {
       return globalPrice;
     }
@@ -53,7 +55,8 @@ export class PricingService {
   private async resolveContract(
     input: PriceResolutionInput,
     lists: Awaited<ReturnType<MasterDataService['getActivePriceLists']>>,
-    requestedFlow: 'REFILL_EXCHANGE' | 'NON_REFILL' | null
+    requestedFlow: 'REFILL_EXCHANGE' | 'NON_REFILL' | null,
+    defaultUnitCost: number | null
   ): Promise<PriceResolutionOutput | null> {
     const contractLists = lists.filter(
       (list) => list.scope === 'CONTRACT' && input.customer_id && list.customerId === input.customer_id
@@ -63,7 +66,10 @@ export class PricingService {
       return {
         source: 'contract',
         unit_price: contractRule.unitPrice,
-        discount_cap_percent: contractRule.discountCapPct
+        discount_cap_percent: contractRule.discountCapPct,
+        resolved_unit_cost: this.resolveUnitCost(contractRule.unitCost, defaultUnitCost),
+        price_list_id: contractRule.priceListId,
+        price_rule_id: contractRule.ruleId
       };
     }
 
@@ -76,7 +82,8 @@ export class PricingService {
       return {
         source: 'contract',
         unit_price: customer.contractPrice,
-        discount_cap_percent: 0
+        discount_cap_percent: 0,
+        resolved_unit_cost: defaultUnitCost
       };
     }
 
@@ -87,7 +94,8 @@ export class PricingService {
     input: PriceResolutionInput,
     customerCategoryId: string | null,
     lists: Awaited<ReturnType<MasterDataService['getActivePriceLists']>>,
-    requestedFlow: 'REFILL_EXCHANGE' | 'NON_REFILL' | null
+    requestedFlow: 'REFILL_EXCHANGE' | 'NON_REFILL' | null,
+    defaultUnitCost: number | null
   ): PriceResolutionOutput | null {
     if (!customerCategoryId) {
       return null;
@@ -104,7 +112,10 @@ export class PricingService {
     return {
       source: 'customer_group',
       unit_price: rule.unitPrice,
-      discount_cap_percent: rule.discountCapPct
+      discount_cap_percent: rule.discountCapPct,
+      resolved_unit_cost: this.resolveUnitCost(rule.unitCost, defaultUnitCost),
+      price_list_id: rule.priceListId,
+      price_rule_id: rule.ruleId
     };
   }
 
@@ -112,7 +123,8 @@ export class PricingService {
     input: PriceResolutionInput,
     customerTier: string | null,
     lists: Awaited<ReturnType<MasterDataService['getActivePriceLists']>>,
-    requestedFlow: 'REFILL_EXCHANGE' | 'NON_REFILL' | null
+    requestedFlow: 'REFILL_EXCHANGE' | 'NON_REFILL' | null,
+    defaultUnitCost: number | null
   ): PriceResolutionOutput | null {
     if (!customerTier) {
       return null;
@@ -127,14 +139,18 @@ export class PricingService {
     return {
       source: 'tier',
       unit_price: rule.unitPrice,
-      discount_cap_percent: rule.discountCapPct
+      discount_cap_percent: rule.discountCapPct,
+      resolved_unit_cost: this.resolveUnitCost(rule.unitCost, defaultUnitCost),
+      price_list_id: rule.priceListId,
+      price_rule_id: rule.ruleId
     };
   }
 
   private resolveBranch(
     input: PriceResolutionInput,
     lists: Awaited<ReturnType<MasterDataService['getActivePriceLists']>>,
-    requestedFlow: 'REFILL_EXCHANGE' | 'NON_REFILL' | null
+    requestedFlow: 'REFILL_EXCHANGE' | 'NON_REFILL' | null,
+    defaultUnitCost: number | null
   ): PriceResolutionOutput | null {
     const branchLists = lists.filter((list) => list.scope === 'BRANCH' && list.branchId === input.branch_id);
     const rule = this.findRule(branchLists, input.product_id, requestedFlow);
@@ -145,14 +161,18 @@ export class PricingService {
     return {
       source: 'branch',
       unit_price: rule.unitPrice,
-      discount_cap_percent: rule.discountCapPct
+      discount_cap_percent: rule.discountCapPct,
+      resolved_unit_cost: this.resolveUnitCost(rule.unitCost, defaultUnitCost),
+      price_list_id: rule.priceListId,
+      price_rule_id: rule.ruleId
     };
   }
 
   private resolveGlobal(
     input: PriceResolutionInput,
     lists: Awaited<ReturnType<MasterDataService['getActivePriceLists']>>,
-    requestedFlow: 'REFILL_EXCHANGE' | 'NON_REFILL' | null
+    requestedFlow: 'REFILL_EXCHANGE' | 'NON_REFILL' | null,
+    defaultUnitCost: number | null
   ): PriceResolutionOutput | null {
     const globalLists = lists.filter((list) => list.scope === 'GLOBAL');
     const rule = this.findRule(globalLists, input.product_id, requestedFlow);
@@ -163,7 +183,10 @@ export class PricingService {
     return {
       source: 'global',
       unit_price: rule.unitPrice,
-      discount_cap_percent: rule.discountCapPct
+      discount_cap_percent: rule.discountCapPct,
+      resolved_unit_cost: this.resolveUnitCost(rule.unitCost, defaultUnitCost),
+      price_list_id: rule.priceListId,
+      price_rule_id: rule.ruleId
     };
   }
 
@@ -171,7 +194,14 @@ export class PricingService {
     lists: Awaited<ReturnType<MasterDataService['getActivePriceLists']>>,
     productId: string,
     requestedFlow: 'REFILL_EXCHANGE' | 'NON_REFILL' | null
-  ): { unitPrice: number; discountCapPct: number; priority: number } | null {
+  ): {
+    ruleId: string;
+    priceListId: string;
+    unitPrice: number;
+    unitCost?: number | null;
+    discountCapPct: number;
+    priority: number;
+  } | null {
     const rules = lists
       .flatMap((list) =>
         list.rules
@@ -183,6 +213,8 @@ export class PricingService {
           })
           .map((rule) => ({
             ...rule,
+            ruleId: rule.id,
+            priceListId: list.id,
             startsAt: list.startsAt,
             flowRank: this.flowRank(rule.flowMode, requestedFlow) ?? 99
           }))
@@ -203,6 +235,13 @@ export class PricingService {
     }
 
     return rules[0];
+  }
+
+  private resolveUnitCost(ruleUnitCost: number | null | undefined, defaultUnitCost: number | null): number | null {
+    if (ruleUnitCost === null || ruleUnitCost === undefined) {
+      return defaultUnitCost;
+    }
+    return Number(ruleUnitCost);
   }
 
   private normalizeFlowMode(value: unknown): 'REFILL_EXCHANGE' | 'NON_REFILL' | null {

@@ -10,6 +10,7 @@ import { TransfersModule } from '../transfers/transfers.module';
 import { CylindersModule } from '../cylinders/cylinders.module';
 import { PrismaModule } from '../../common/prisma.module';
 import { MasterDataModule } from '../master-data/master-data.module';
+import { PurchaseOrdersModule } from '../purchase-orders/purchase-orders.module';
 
 @Module({
   imports: [
@@ -18,6 +19,7 @@ import { MasterDataModule } from '../master-data/master-data.module';
     SalesModule,
     CustomerPaymentsModule,
     MasterDataModule,
+    PurchaseOrdersModule,
     LendingModule,
     LpgItemActionsModule,
     TransfersModule,

@@ -1,8 +1,15 @@
 import { Body, Controller, Delete, ForbiddenException, Get, Param, Post, Put, Query, UnauthorizedException } from '@nestjs/common';
 import { Req } from '@nestjs/common';
 import { Request } from 'express';
+import { resolveRequestChannel } from '../../common/request-channel';
 import { Roles } from '../auth/decorators/roles.decorator';
-import { CreateCustomerCategory, CreatePriceList, MasterDataService } from './master-data.service';
+import {
+  CreateCustomerCategory,
+  CreatePriceList,
+  MasterDataService,
+  type BulkAdjustPriceListVersionInput,
+  type PriceListVersionListFilters
+} from './master-data.service';
 import { AuditService } from '../audit/audit.service';
 
 type PrimitivePayload = Record<string, unknown>;
@@ -1569,6 +1576,145 @@ export class MasterDataController {
     return row;
   }
 
+  @Post('price-lists/:id/versions')
+  async createPriceListVersion(
+    @Req() req: RequestWithTenant,
+    @Param('id') id: string,
+    @Body() body: PrimitivePayload
+  ): Promise<ReturnType<MasterDataService['createPriceListVersion']>> {
+    const row = await this.masterDataService.createPriceListVersion(id, {
+      basedOnVersionId:
+        body.based_on_version_id === undefined && body.basedOnVersionId === undefined
+          ? null
+          : String(body.based_on_version_id ?? body.basedOnVersionId ?? '').trim() || null,
+      notes: body.notes === undefined ? null : String(body.notes),
+      actorUserId: req.user?.sub ?? null
+    });
+    await this.auditWrite(req, 'MASTER_DATA_PRICE_LIST_VERSION_CREATE', 'PriceListVersion', row.id, {
+      priceListId: id,
+      versionNo: row.versionNo
+    });
+    return row;
+  }
+
+  @Get('price-lists/:id/versions')
+  @Roles('admin', 'owner', 'platform_owner', 'supervisor', 'cashier', 'driver', 'helper')
+  listPriceListVersions(
+    @Param('id') id: string,
+    @Query('limit') limit?: string,
+    @Query('status') status?: string,
+    @Query('from') from?: string,
+    @Query('to') to?: string
+  ): ReturnType<MasterDataService['listPriceListVersions']> {
+    const filters: PriceListVersionListFilters = {};
+    if (limit?.trim()) {
+      filters.limit = Number(limit);
+    }
+    const statusValue = this.parsePriceListVersionStatus(status);
+    if (statusValue) {
+      filters.status = statusValue;
+    }
+    if (from?.trim()) filters.from = from.trim();
+    if (to?.trim()) filters.to = to.trim();
+    return this.masterDataService.listPriceListVersions(id, filters);
+  }
+
+  @Get('price-lists/:id/versions/:versionId')
+  @Roles('admin', 'owner', 'platform_owner', 'supervisor', 'cashier', 'driver', 'helper')
+  getPriceListVersion(
+    @Param('id') id: string,
+    @Param('versionId') versionId: string
+  ): ReturnType<MasterDataService['getPriceListVersion']> {
+    return this.masterDataService.getPriceListVersion(id, versionId);
+  }
+
+  @Put('price-lists/:id/versions/:versionId/rules')
+  async replacePriceListVersionRules(
+    @Req() req: RequestWithTenant,
+    @Param('id') id: string,
+    @Param('versionId') versionId: string,
+    @Body() body: PrimitivePayload
+  ): Promise<ReturnType<MasterDataService['replacePriceListVersionRules']>> {
+    const row = await this.masterDataService.replacePriceListVersionRules(id, versionId, {
+      rules: this.parseRules(body.rules),
+      actorUserId: req.user?.sub ?? null
+    });
+    await this.auditWrite(req, 'MASTER_DATA_PRICE_LIST_VERSION_RULES_REPLACE', 'PriceListVersion', row.id, {
+      priceListId: id,
+      ruleCount: row.rules?.length ?? 0
+    });
+    return row;
+  }
+
+  @Post('price-lists/:id/versions/:versionId/bulk-adjust')
+  async bulkAdjustPriceListVersion(
+    @Req() req: RequestWithTenant,
+    @Param('id') id: string,
+    @Param('versionId') versionId: string,
+    @Body() body: PrimitivePayload
+  ): Promise<ReturnType<MasterDataService['bulkAdjustPriceListVersion']>> {
+    const payload = this.parsePriceListBulkAdjust(body);
+    const result = await this.masterDataService.bulkAdjustPriceListVersion(id, versionId, {
+      ...payload,
+      actorUserId: req.user?.sub ?? null
+    });
+    await this.auditWrite(req, 'MASTER_DATA_PRICE_LIST_VERSION_BULK_ADJUST', 'PriceListVersion', versionId, {
+      priceListId: id,
+      mode: payload.mode,
+      applyTo: payload.applyTo,
+      value: payload.value,
+      affectedCount: result.affectedCount
+    });
+    return result;
+  }
+
+  @Post('price-lists/:id/publish')
+  async publishPriceListVersion(
+    @Req() req: RequestWithTenant,
+    @Param('id') id: string,
+    @Body() body: PrimitivePayload
+  ): Promise<ReturnType<MasterDataService['publishPriceListVersion']>> {
+    const result = await this.masterDataService.publishPriceListVersion(id, {
+      versionId: String(body.version_id ?? body.versionId ?? '').trim(),
+      effectiveFrom:
+        body.effective_from === undefined && body.effectiveFrom === undefined
+          ? null
+          : String(body.effective_from ?? body.effectiveFrom ?? ''),
+      notes: body.notes === undefined ? null : String(body.notes),
+      actorUserId: req.user?.sub ?? null
+    });
+    await this.auditWrite(req, 'MASTER_DATA_PRICE_LIST_VERSION_PUBLISH', 'PriceListVersion', result.version.id, {
+      priceListId: id,
+      versionNo: result.version.versionNo
+    });
+    return result;
+  }
+
+  @Post('price-lists/:id/rollback')
+  async rollbackPriceList(
+    @Req() req: RequestWithTenant,
+    @Param('id') id: string,
+    @Body() body: PrimitivePayload
+  ): Promise<ReturnType<MasterDataService['rollbackPriceList']>> {
+    const result = await this.masterDataService.rollbackPriceList(id, {
+      targetVersionId: String(body.target_version_id ?? body.targetVersionId ?? '').trim(),
+      reason: body.reason === undefined ? null : String(body.reason),
+      effectiveFrom:
+        body.effective_from === undefined && body.effectiveFrom === undefined
+          ? null
+          : String(body.effective_from ?? body.effectiveFrom ?? ''),
+      notes: body.notes === undefined ? null : String(body.notes),
+      actorUserId: req.user?.sub ?? null,
+      channel: resolveRequestChannel(req)
+    });
+    await this.auditWrite(req, 'MASTER_DATA_PRICE_LIST_VERSION_ROLLBACK', 'PriceListRollbackAudit', result.rollbackAuditId, {
+      priceListId: id,
+      toVersion: result.version.id,
+      reason: body.reason ?? null
+    });
+    return result;
+  }
+
   private async auditWrite(
     req: RequestWithTenant,
     action: string,
@@ -1664,6 +1810,56 @@ export class MasterDataController {
     return Number.isNaN(parsed) ? null : parsed;
   }
 
+  private parsePriceListVersionStatus(value: string | undefined): PriceListVersionListFilters['status'] | null {
+    const normalized = String(value ?? '').trim().toUpperCase();
+    if (
+      normalized === 'DRAFT' ||
+      normalized === 'PUBLISHED' ||
+      normalized === 'SUPERSEDED' ||
+      normalized === 'ROLLED_BACK' ||
+      normalized === 'CANCELLED'
+    ) {
+      return normalized;
+    }
+    return null;
+  }
+
+  private parsePriceListBulkAdjust(body: PrimitivePayload): Omit<BulkAdjustPriceListVersionInput, 'actorUserId'> {
+    const modeRaw = String(body.mode ?? '').trim().toUpperCase();
+    const applyToRaw = String(body.apply_to ?? body.applyTo ?? '').trim().toUpperCase();
+    const flowModeRaw = String(body.flow_mode ?? body.flowMode ?? '').trim().toUpperCase();
+    const isLpgRaw = body.is_lpg ?? body.isLpg;
+    const isLpg =
+      isLpgRaw === undefined
+        ? null
+        : isLpgRaw === true || String(isLpgRaw).trim().toLowerCase() === 'true'
+          ? true
+          : isLpgRaw === false || String(isLpgRaw).trim().toLowerCase() === 'false'
+            ? false
+            : null;
+
+    return {
+      mode: modeRaw === 'FIXED' ? 'FIXED' : 'PERCENT',
+      value: Number(body.value ?? 0),
+      applyTo:
+        applyToRaw === 'COST_ONLY' || applyToRaw === 'PRICE_AND_COST' || applyToRaw === 'PRICE_ONLY'
+          ? applyToRaw
+          : 'PRICE_ONLY',
+      productIds: this.parseStringList(body.product_ids ?? body.productIds),
+      category: body.category === undefined ? null : String(body.category),
+      brand: body.brand === undefined ? null : String(body.brand),
+      supplierId:
+        body.supplier_id === undefined && body.supplierId === undefined
+          ? null
+          : String(body.supplier_id ?? body.supplierId ?? ''),
+      isLpg,
+      flowMode:
+        flowModeRaw === 'ANY' || flowModeRaw === 'REFILL_EXCHANGE' || flowModeRaw === 'NON_REFILL'
+          ? flowModeRaw
+          : null
+    };
+  }
+
   private parseCustomerCategory(body: PrimitivePayload): CreateCustomerCategory {
     return {
       code: String(body.code ?? ''),
@@ -1744,6 +1940,7 @@ export class MasterDataController {
     productId: string;
     flowMode?: 'ANY' | 'REFILL_EXCHANGE' | 'NON_REFILL';
     unitPrice: number;
+    unitCost?: number | null;
     discountCapPct: number;
     priority: number;
   }> {
@@ -1756,6 +1953,7 @@ export class MasterDataController {
       productId: string;
       flowMode?: 'ANY' | 'REFILL_EXCHANGE' | 'NON_REFILL';
       unitPrice: number;
+      unitCost?: number | null;
       discountCapPct: number;
       priority: number;
     };
@@ -1779,6 +1977,12 @@ export class MasterDataController {
               ? flowModeValue
               : 'ANY',
           unitPrice: Number(row.unitPrice ?? 0),
+          unitCost:
+            row.unitCost === undefined && row.unit_cost === undefined
+              ? null
+              : row.unitCost === null || row.unitCost === '' || row.unit_cost === null || row.unit_cost === ''
+              ? null
+              : Number(row.unitCost ?? row.unit_cost),
           discountCapPct: Number(row.discountCapPct ?? 0),
           priority: Number(row.priority ?? 4)
         };

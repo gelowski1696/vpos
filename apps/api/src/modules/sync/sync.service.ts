@@ -16,6 +16,10 @@ import {
   type LpgItemServiceActionRecord
 } from '../lpg-item-actions/lpg-item-actions.service';
 import { TransfersService, type TransferRecord } from '../transfers/transfers.service';
+import {
+  PurchaseOrdersService,
+  type PurchaseOrderRecord
+} from '../purchase-orders/purchase-orders.service';
 import { TenantDatasourceRouterService } from '../../common/tenant-datasource-router.service';
 import { EntitlementsService } from '../entitlements/entitlements.service';
 
@@ -60,6 +64,7 @@ export class SyncService {
     @Optional() private readonly lendingService?: LendingService,
     @Optional() private readonly lpgItemActionsService?: LpgItemActionsService,
     @Optional() private readonly transfersService?: TransfersService,
+    @Optional() private readonly purchaseOrdersService?: PurchaseOrdersService,
     @Optional() private readonly tenantRouter?: TenantDatasourceRouterService,
     @Optional() private readonly entitlementsService?: EntitlementsService
   ) {}
@@ -253,6 +258,31 @@ export class SyncService {
         });
         continue;
       }
+      const purchaseOrderPosting = await this.tryPostPurchaseOrderOutbox(
+        companyId,
+        syncedItem,
+        actorUserId
+      );
+      if (!purchaseOrderPosting.ok) {
+        const reviewId = this.createReview(
+          companyId,
+          item.id,
+          item.entity,
+          purchaseOrderPosting.reason,
+          item.payload
+        );
+        rejected.push({
+          id: item.id,
+          reason: purchaseOrderPosting.reason,
+          review_id: reviewId
+        });
+        await this.persistIdempotencyDecision(companyId, item.idempotency_key, requestHash, {
+          status: 'rejected',
+          reason: purchaseOrderPosting.reason,
+          review_id: reviewId
+        });
+        continue;
+      }
       const lendingPosting = await this.tryPostLendingOutbox(companyId, syncedItem, actorUserId, customerIdMap);
       if (!lendingPosting.ok) {
         const reviewId = this.createReview(companyId, item.id, item.entity, lendingPosting.reason, item.payload);
@@ -425,6 +455,17 @@ export class SyncService {
                     source_location_id: transferPosting.transfer.source_location_id,
                     destination_location_id: transferPosting.transfer.destination_location_id,
                     posted_at: transferPosting.transfer.posted_at ?? transferPosting.transfer.updated_at
+                  }
+                }
+              : {}),
+            ...(purchaseOrderPosting.purchaseOrder
+              ? {
+                  server_purchase_order_posted: true,
+                  server_purchase_order_result: {
+                    purchase_order_id: purchaseOrderPosting.purchaseOrder.id,
+                    po_number: purchaseOrderPosting.purchaseOrder.po_number,
+                    status: purchaseOrderPosting.purchaseOrder.status,
+                    updated_at: purchaseOrderPosting.purchaseOrder.updated_at
                   }
                 }
               : {}),
@@ -651,6 +692,17 @@ export class SyncService {
     }
     if (item.entity === 'lending' && item.action === 'create') {
       return 50;
+    }
+    if (
+      item.entity === 'purchase_order' ||
+      item.entity === 'purchase_order_submit' ||
+      item.entity === 'purchase_order_receive' ||
+      item.entity === 'purchase_order_pullout' ||
+      item.entity === 'purchase_order_complete' ||
+      item.entity === 'purchase_order_cancel' ||
+      item.entity === 'purchase_order_attachment'
+    ) {
+      return 45;
     }
     return 100;
   }
@@ -1518,6 +1570,252 @@ export class SyncService {
       const message = cause instanceof Error ? cause.message : 'Transfer posting failed during sync';
       return { ok: false, reason: message };
     }
+  }
+
+  private async tryPostPurchaseOrderOutbox(
+    companyId: string,
+    item: SyncPushRequest['outbox_items'][number],
+    actorUserId?: string
+  ): Promise<{ ok: true; purchaseOrder?: PurchaseOrderRecord } | { ok: false; reason: string }> {
+    const entity = item.entity;
+    if (
+      entity !== 'purchase_order' &&
+      entity !== 'purchase_order_submit' &&
+      entity !== 'purchase_order_receive' &&
+      entity !== 'purchase_order_pullout' &&
+      entity !== 'purchase_order_complete' &&
+      entity !== 'purchase_order_cancel' &&
+      entity !== 'purchase_order_attachment'
+    ) {
+      return { ok: true };
+    }
+    if (!this.purchaseOrdersService) {
+      return { ok: true };
+    }
+
+    const payload = item.payload ?? {};
+    const payloadActorUserId =
+      this.asString(
+        payload.actor_user_id ??
+          payload.actorUserId ??
+          payload.user_id ??
+          payload.userId
+      ) ?? actorUserId ?? null;
+    const purchaseOrderId = this.asString(
+      payload.purchase_order_id ??
+        payload.purchaseOrderId ??
+        payload.po_id ??
+        payload.poId ??
+        payload.id
+    );
+
+    try {
+      if (entity === 'purchase_order') {
+        const branchId = this.asString(payload.branch_id ?? payload.branchId);
+        const locationId = this.asString(payload.location_id ?? payload.locationId);
+        const supplierId = this.asString(payload.supplier_id ?? payload.supplierId);
+        const linesRaw = Array.isArray(payload.lines) ? payload.lines : [];
+        const lines = linesRaw
+          .map((row) => {
+            const line = (row as Record<string, unknown>) ?? {};
+            const productId = this.asString(line.product_id ?? line.productId);
+            const orderedQty = this.asNumber(line.ordered_qty ?? line.orderedQty ?? line.quantity);
+            const unitCost = this.asNumber(line.unit_cost ?? line.unitCost);
+            if (!productId || orderedQty <= 0 || unitCost <= 0) {
+              return null;
+            }
+            return {
+              product_id: productId,
+              ordered_qty: orderedQty,
+              unit_cost: unitCost,
+              notes: this.asString(line.notes) ?? null
+            };
+          })
+          .filter((line): line is { product_id: string; ordered_qty: number; unit_cost: number; notes: string | null } => Boolean(line));
+
+        if (!branchId || !locationId || !supplierId || lines.length === 0) {
+          return {
+            ok: false,
+            reason:
+              'Purchase order sync payload is missing branch/location/supplier/lines'
+          };
+        }
+
+        const created = await this.purchaseOrdersService.create(companyId, payloadActorUserId, {
+          po_number: this.asString(payload.po_number ?? payload.poNumber) ?? undefined,
+          branch_id: branchId,
+          location_id: locationId,
+          supplier_id: supplierId,
+          notes: this.asString(payload.notes) ?? null,
+          lines
+        });
+        return { ok: true, purchaseOrder: created };
+      }
+
+      if (!purchaseOrderId) {
+        return {
+          ok: false,
+          reason: 'Purchase order sync payload is missing purchase_order_id'
+        };
+      }
+
+      if (entity === 'purchase_order_submit') {
+        const submitted = await this.purchaseOrdersService.submit(
+          companyId,
+          purchaseOrderId,
+          payloadActorUserId
+        );
+        return { ok: true, purchaseOrder: submitted };
+      }
+
+      if (entity === 'purchase_order_receive') {
+        const linesRaw = Array.isArray(payload.lines) ? payload.lines : [];
+        const lines: Array<{
+          purchase_order_line_id: string;
+          quantity: number;
+          unit_cost?: number;
+        }> = [];
+        for (const row of linesRaw) {
+          const line = (row as Record<string, unknown>) ?? {};
+          const poLineId = this.asString(
+            line.purchase_order_line_id ?? line.purchaseOrderLineId
+          );
+          const quantity = this.asNumber(line.quantity);
+          const unitCostRaw = line.unit_cost ?? line.unitCost;
+          const unitCost =
+            unitCostRaw === undefined || unitCostRaw === null
+              ? undefined
+              : this.asNumber(unitCostRaw);
+          if (!poLineId || quantity <= 0) {
+            continue;
+          }
+          const parsedLine: {
+            purchase_order_line_id: string;
+            quantity: number;
+            unit_cost?: number;
+          } = {
+            purchase_order_line_id: poLineId,
+            quantity
+          };
+          if (unitCost !== undefined) {
+            parsedLine.unit_cost = unitCost;
+          }
+          lines.push(parsedLine);
+        }
+        if (lines.length === 0) {
+          return { ok: false, reason: 'Purchase order receive requires at least one line' };
+        }
+        const received = await this.purchaseOrdersService.receive(
+          companyId,
+          purchaseOrderId,
+          payloadActorUserId,
+          {
+            notes: this.asString(payload.notes) ?? null,
+            lines
+          }
+        );
+        return { ok: true, purchaseOrder: received };
+      }
+
+      if (entity === 'purchase_order_pullout') {
+        const linesRaw = Array.isArray(payload.lines) ? payload.lines : [];
+        const lines: Array<{
+          purchase_order_line_id: string;
+          quantity: number;
+          unit_cost?: number;
+        }> = [];
+        for (const row of linesRaw) {
+          const line = (row as Record<string, unknown>) ?? {};
+          const poLineId = this.asString(
+            line.purchase_order_line_id ?? line.purchaseOrderLineId
+          );
+          const quantity = this.asNumber(line.quantity);
+          const unitCostRaw = line.unit_cost ?? line.unitCost;
+          const unitCost =
+            unitCostRaw === undefined || unitCostRaw === null
+              ? undefined
+              : this.asNumber(unitCostRaw);
+          if (!poLineId || quantity <= 0) {
+            continue;
+          }
+          const parsedLine: {
+            purchase_order_line_id: string;
+            quantity: number;
+            unit_cost?: number;
+          } = {
+            purchase_order_line_id: poLineId,
+            quantity
+          };
+          if (unitCost !== undefined) {
+            parsedLine.unit_cost = unitCost;
+          }
+          lines.push(parsedLine);
+        }
+        if (lines.length === 0) {
+          return { ok: false, reason: 'Purchase order pullout requires at least one line' };
+        }
+        const pullout = await this.purchaseOrdersService.pullout(
+          companyId,
+          purchaseOrderId,
+          payloadActorUserId,
+          {
+            notes: this.asString(payload.notes) ?? null,
+            lines
+          }
+        );
+        return { ok: true, purchaseOrder: pullout };
+      }
+
+      if (entity === 'purchase_order_complete') {
+        const completed = await this.purchaseOrdersService.complete(
+          companyId,
+          purchaseOrderId,
+          payloadActorUserId
+        );
+        return { ok: true, purchaseOrder: completed };
+      }
+
+      if (entity === 'purchase_order_cancel') {
+        const cancelled = await this.purchaseOrdersService.cancel(
+          companyId,
+          purchaseOrderId,
+          payloadActorUserId,
+          this.asString(payload.reason) ?? null
+        );
+        return { ok: true, purchaseOrder: cancelled };
+      }
+
+      if (entity === 'purchase_order_attachment') {
+        const fileName = this.asString(payload.file_name ?? payload.fileName);
+        const mimeType = this.asString(payload.mime_type ?? payload.mimeType);
+        const sizeBytes = Math.trunc(this.asNumber(payload.size_bytes ?? payload.sizeBytes));
+        const dataBase64 = this.asString(payload.data_base64 ?? payload.dataBase64);
+        if (!fileName || !mimeType || !sizeBytes || !dataBase64) {
+          return {
+            ok: false,
+            reason:
+              'Purchase order attachment payload is missing file_name/mime_type/size_bytes/data_base64'
+          };
+        }
+        await this.purchaseOrdersService.addAttachment(companyId, purchaseOrderId, {
+          file_name: fileName,
+          mime_type: mimeType,
+          size_bytes: sizeBytes,
+          data_base64: dataBase64,
+          source_channel: this.asString(payload.source_channel ?? payload.sourceChannel) ?? 'sync'
+        });
+        const detail = await this.purchaseOrdersService.detail(companyId, purchaseOrderId);
+        return { ok: true, purchaseOrder: detail };
+      }
+    } catch (cause) {
+      const message =
+        cause instanceof Error
+          ? cause.message
+          : 'Purchase order posting failed during sync';
+      return { ok: false, reason: message };
+    }
+
+    return { ok: true };
   }
 
   private async validateTransfer(
