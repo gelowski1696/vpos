@@ -21,6 +21,7 @@ type PriceRule = {
   productId: string;
   flowMode: FlowMode;
   unitPrice: number;
+  unitCost?: number | null;
   discountCapPct: number;
   priority: number;
 };
@@ -84,6 +85,55 @@ type TenantAddons = {
 
 type CurrentEntitlement = {
   addons?: Partial<TenantAddons>;
+};
+
+type PriceListVersionStatus = 'DRAFT' | 'PUBLISHED' | 'SUPERSEDED' | 'ROLLED_BACK' | 'CANCELLED';
+
+type PriceListVersionRule = {
+  id: string;
+  productId: string;
+  flowMode: FlowMode;
+  unitPrice: number;
+  unitCost?: number | null;
+  discountCapPct: number;
+  priority: number;
+  createdAt: string;
+  updatedAt: string;
+};
+
+type PriceListVersionRecord = {
+  id: string;
+  priceListId: string;
+  versionNo: number;
+  status: PriceListVersionStatus;
+  basedOnVersionId?: string | null;
+  publishedFromVersionId?: string | null;
+  effectiveFrom: string;
+  effectiveTo?: string | null;
+  notes?: string | null;
+  rollbackReason?: string | null;
+  createdByUserId?: string | null;
+  publishedByUserId?: string | null;
+  createdAt: string;
+  publishedAt?: string | null;
+  updatedAt: string;
+  rules?: PriceListVersionRule[];
+};
+
+type BulkAdjustResponse = {
+  version: PriceListVersionRecord;
+  affectedCount: number;
+};
+
+type PublishResponse = {
+  priceList: PriceListRecord;
+  version: PriceListVersionRecord;
+};
+
+type RollbackResponse = {
+  priceList: PriceListRecord;
+  version: PriceListVersionRecord;
+  rollbackAuditId: string;
 };
 
 const DEFAULT_TENANT_ADDONS: TenantAddons = {
@@ -182,6 +232,7 @@ function createEmptyRule(defaultProductId: string, scope: Scope): PriceRule {
     productId: defaultProductId,
     flowMode: 'ANY',
     unitPrice: 0,
+    unitCost: null,
     discountCapPct: 5,
     priority: PRIORITY_BY_SCOPE[scope]
   };
@@ -215,6 +266,22 @@ function AddonBadge(): JSX.Element {
 
 function flowLabel(flowMode: FlowMode): string {
   return FLOW_OPTIONS.find((entry) => entry.value === flowMode)?.label ?? 'Any Flow';
+}
+
+function versionStatusClasses(status: PriceListVersionStatus): string {
+  if (status === 'PUBLISHED') {
+    return 'bg-emerald-100 text-emerald-700 dark:bg-emerald-950/40 dark:text-emerald-300';
+  }
+  if (status === 'DRAFT') {
+    return 'bg-amber-100 text-amber-700 dark:bg-amber-950/40 dark:text-amber-300';
+  }
+  if (status === 'SUPERSEDED') {
+    return 'bg-slate-200 text-slate-700 dark:bg-slate-700 dark:text-slate-200';
+  }
+  if (status === 'ROLLED_BACK') {
+    return 'bg-violet-100 text-violet-700 dark:bg-violet-950/40 dark:text-violet-300';
+  }
+  return 'bg-rose-100 text-rose-700 dark:bg-rose-950/40 dark:text-rose-300';
 }
 
 function statusLabel(row: PriceListRecord): string {
@@ -282,6 +349,22 @@ export default function PriceListsPage(): JSX.Element {
   const [productPickerCategory, setProductPickerCategory] = useState('ALL');
   const [productPickerSearch, setProductPickerSearch] = useState('');
   const [productPickerSelected, setProductPickerSelected] = useState<string[]>([]);
+  const [selectedPriceListId, setSelectedPriceListId] = useState<string | null>(null);
+  const [versionRows, setVersionRows] = useState<PriceListVersionRecord[]>([]);
+  const [versionLoading, setVersionLoading] = useState(false);
+  const [versionBusy, setVersionBusy] = useState(false);
+  const [versionError, setVersionError] = useState<string | null>(null);
+  const [selectedVersionId, setSelectedVersionId] = useState<string | null>(null);
+  const [selectedVersionDetail, setSelectedVersionDetail] = useState<PriceListVersionRecord | null>(null);
+  const [draftNotes, setDraftNotes] = useState('');
+  const [bulkAdjustMode, setBulkAdjustMode] = useState<'PERCENT' | 'FIXED'>('PERCENT');
+  const [bulkAdjustValue, setBulkAdjustValue] = useState('0');
+  const [bulkAdjustApplyTo, setBulkAdjustApplyTo] = useState<'PRICE_ONLY' | 'COST_ONLY' | 'PRICE_AND_COST'>(
+    'PRICE_AND_COST'
+  );
+  const [publishEffectiveFrom, setPublishEffectiveFrom] = useState(() => toInputDateTime(new Date().toISOString()));
+  const [rollbackReason, setRollbackReason] = useState('');
+  const [rollbackEffectiveFrom, setRollbackEffectiveFrom] = useState(() => toInputDateTime(new Date().toISOString()));
 
   const productOptions = useMemo(
     () =>
@@ -393,6 +476,14 @@ export default function PriceListsPage(): JSX.Element {
     () => visiblePriceLists.filter((row) => row.id !== editingId),
     [editingId, visiblePriceLists]
   );
+  const selectedPriceList = useMemo(
+    () => (selectedPriceListId ? priceLists.find((row) => row.id === selectedPriceListId) ?? null : null),
+    [priceLists, selectedPriceListId]
+  );
+  const selectedVersionRow = useMemo(
+    () => (selectedVersionId ? versionRows.find((row) => row.id === selectedVersionId) ?? null : null),
+    [selectedVersionId, versionRows]
+  );
 
   useEffect(() => {
     (async () => {
@@ -444,6 +535,200 @@ export default function PriceListsPage(): JSX.Element {
     }));
   }, [form.scope, tenantAddons.custom_pricing]);
 
+  useEffect(() => {
+    if (selectedPriceListId && !priceLists.some((row) => row.id === selectedPriceListId)) {
+      setSelectedPriceListId(null);
+      setVersionRows([]);
+      setSelectedVersionId(null);
+      setSelectedVersionDetail(null);
+      setVersionError(null);
+    }
+  }, [priceLists, selectedPriceListId]);
+
+  async function refreshPriceLists(): Promise<PriceListRecord[]> {
+    const refreshed = await apiRequest<PriceListRecord[]>('/master-data/price-lists');
+    setPriceLists(refreshed);
+    return refreshed;
+  }
+
+  async function loadVersionDetail(priceListId: string, versionId: string): Promise<void> {
+    setVersionLoading(true);
+    setVersionError(null);
+    try {
+      const detail = await apiRequest<PriceListVersionRecord>(`/master-data/price-lists/${priceListId}/versions/${versionId}`);
+      setSelectedVersionDetail(detail);
+      setSelectedVersionId(detail.id);
+    } catch (loadError) {
+      const message = loadError instanceof Error ? loadError.message : 'Failed to load version details.';
+      setVersionError(message);
+      setSelectedVersionDetail(null);
+      toastError('Failed to load version details', { description: message });
+    } finally {
+      setVersionLoading(false);
+    }
+  }
+
+  async function loadVersions(priceListId: string, preferredVersionId?: string | null): Promise<void> {
+    setVersionLoading(true);
+    setVersionError(null);
+    try {
+      const versions = await apiRequest<PriceListVersionRecord[]>(`/master-data/price-lists/${priceListId}/versions?limit=30`);
+      setVersionRows(versions);
+      const nextVersionId =
+        preferredVersionId && versions.some((row) => row.id === preferredVersionId)
+          ? preferredVersionId
+          : versions[0]?.id || null;
+      setSelectedVersionId(nextVersionId);
+      if (nextVersionId) {
+        const detail = await apiRequest<PriceListVersionRecord>(`/master-data/price-lists/${priceListId}/versions/${nextVersionId}`);
+        setSelectedVersionDetail(detail);
+      } else {
+        setSelectedVersionDetail(null);
+      }
+    } catch (loadError) {
+      const message = loadError instanceof Error ? loadError.message : 'Failed to load versions.';
+      setVersionError(message);
+      setVersionRows([]);
+      setSelectedVersionId(null);
+      setSelectedVersionDetail(null);
+      toastError('Failed to load versions', { description: message });
+    } finally {
+      setVersionLoading(false);
+    }
+  }
+
+  async function openVersionsPanel(priceListId: string): Promise<void> {
+    setSelectedPriceListId(priceListId);
+    setDraftNotes('');
+    setRollbackReason('');
+    setPublishEffectiveFrom(toInputDateTime(new Date().toISOString()));
+    setRollbackEffectiveFrom(toInputDateTime(new Date().toISOString()));
+    await loadVersions(priceListId);
+  }
+
+  async function createDraftVersion(): Promise<void> {
+    if (!selectedPriceListId) {
+      toastInfo('Version action', { description: 'Select a price list first.' });
+      return;
+    }
+    setVersionBusy(true);
+    try {
+      const created = await apiRequest<PriceListVersionRecord>(`/master-data/price-lists/${selectedPriceListId}/versions`, {
+        method: 'POST',
+        body: {
+          based_on_version_id: selectedVersionId ?? undefined,
+          notes: draftNotes.trim() || undefined
+        }
+      });
+      setDraftNotes('');
+      await loadVersions(selectedPriceListId, created.id);
+      toastSuccess('Draft version created');
+    } catch (actionError) {
+      const message = actionError instanceof Error ? actionError.message : 'Failed to create draft version.';
+      setVersionError(message);
+      toastError('Create draft failed', { description: message });
+    } finally {
+      setVersionBusy(false);
+    }
+  }
+
+  async function applyBulkAdjust(): Promise<void> {
+    if (!selectedPriceListId || !selectedVersionId) {
+      toastInfo('Bulk adjust', { description: 'Select a draft version first.' });
+      return;
+    }
+    if (selectedVersionDetail?.status !== 'DRAFT') {
+      toastInfo('Bulk adjust', { description: 'Bulk adjust can only be applied to draft versions.' });
+      return;
+    }
+    const value = Number(bulkAdjustValue);
+    if (!Number.isFinite(value)) {
+      toastInfo('Bulk adjust', { description: 'Please provide a valid numeric value.' });
+      return;
+    }
+    setVersionBusy(true);
+    try {
+      const result = await apiRequest<BulkAdjustResponse>(
+        `/master-data/price-lists/${selectedPriceListId}/versions/${selectedVersionId}/bulk-adjust`,
+        {
+          method: 'POST',
+          body: {
+            mode: bulkAdjustMode,
+            value,
+            apply_to: bulkAdjustApplyTo
+          }
+        }
+      );
+      setSelectedVersionDetail(result.version);
+      setVersionRows((prev) => prev.map((row) => (row.id === result.version.id ? { ...row, updatedAt: result.version.updatedAt } : row)));
+      toastSuccess('Bulk adjustment applied', { description: `${result.affectedCount} row(s) updated.` });
+    } catch (actionError) {
+      const message = actionError instanceof Error ? actionError.message : 'Failed to apply bulk adjustment.';
+      setVersionError(message);
+      toastError('Bulk adjust failed', { description: message });
+    } finally {
+      setVersionBusy(false);
+    }
+  }
+
+  async function publishVersion(): Promise<void> {
+    if (!selectedPriceListId || !selectedVersionId) {
+      toastInfo('Publish', { description: 'Select a draft version first.' });
+      return;
+    }
+    if (selectedVersionDetail?.status !== 'DRAFT') {
+      toastInfo('Publish', { description: 'Only draft versions can be published.' });
+      return;
+    }
+    setVersionBusy(true);
+    try {
+      const result = await apiRequest<PublishResponse>(`/master-data/price-lists/${selectedPriceListId}/publish`, {
+        method: 'POST',
+        body: {
+          version_id: selectedVersionId,
+          effective_from: toIsoOrNull(publishEffectiveFrom) ?? new Date().toISOString()
+        }
+      });
+      await refreshPriceLists();
+      await loadVersions(selectedPriceListId, result.version.id);
+      toastSuccess('Version published');
+    } catch (actionError) {
+      const message = actionError instanceof Error ? actionError.message : 'Failed to publish version.';
+      setVersionError(message);
+      toastError('Publish failed', { description: message });
+    } finally {
+      setVersionBusy(false);
+    }
+  }
+
+  async function rollbackVersion(): Promise<void> {
+    if (!selectedPriceListId || !selectedVersionId) {
+      toastInfo('Rollback', { description: 'Select a version first.' });
+      return;
+    }
+    setVersionBusy(true);
+    try {
+      const result = await apiRequest<RollbackResponse>(`/master-data/price-lists/${selectedPriceListId}/rollback`, {
+        method: 'POST',
+        body: {
+          target_version_id: selectedVersionId,
+          reason: rollbackReason.trim() || undefined,
+          effective_from: toIsoOrNull(rollbackEffectiveFrom) ?? new Date().toISOString()
+        }
+      });
+      setRollbackReason('');
+      await refreshPriceLists();
+      await loadVersions(selectedPriceListId, result.version.id);
+      toastSuccess('Rollback published');
+    } catch (actionError) {
+      const message = actionError instanceof Error ? actionError.message : 'Failed to rollback version.';
+      setVersionError(message);
+      toastError('Rollback failed', { description: message });
+    } finally {
+      setVersionBusy(false);
+    }
+  }
+
   function setField<K extends keyof FormState>(key: K, value: FormState[K]): void {
     setForm((prev) => ({ ...prev, [key]: value }));
   }
@@ -480,6 +765,7 @@ export default function PriceListsPage(): JSX.Element {
               productId: rule.productId,
               flowMode: rule.flowMode ?? 'ANY',
               unitPrice: Number(rule.unitPrice),
+              unitCost: rule.unitCost === null || rule.unitCost === undefined ? null : Number(rule.unitCost),
               discountCapPct: Number(rule.discountCapPct),
               priority: Number(rule.priority)
             }))
@@ -646,6 +932,7 @@ export default function PriceListsPage(): JSX.Element {
         productId: rule.productId,
         flowMode: productById.get(rule.productId)?.isLpg ? rule.flowMode ?? 'REFILL_EXCHANGE' : 'ANY',
         unitPrice: Number(rule.unitPrice ?? 0),
+        unitCost: rule.unitCost === null || rule.unitCost === undefined ? null : Number(rule.unitCost),
         discountCapPct: Number(rule.discountCapPct ?? 0),
         priority: PRIORITY_BY_SCOPE[form.scope]
       }));
@@ -753,6 +1040,10 @@ export default function PriceListsPage(): JSX.Element {
           productId: rule.productId,
           flowMode: productById.get(rule.productId)?.isLpg ? rule.flowMode : 'ANY',
           unitPrice: Number(rule.unitPrice),
+          unitCost:
+            rule.unitCost === undefined || rule.unitCost === null
+              ? null
+              : Number(rule.unitCost),
           discountCapPct: Number(rule.discountCapPct),
           priority: PRIORITY_BY_SCOPE[form.scope]
         }))
@@ -773,8 +1064,7 @@ export default function PriceListsPage(): JSX.Element {
         toastSuccess('Price list created successfully.');
       }
 
-      const refreshed = await apiRequest<PriceListRecord[]>('/master-data/price-lists');
-      setPriceLists(refreshed);
+      await refreshPriceLists();
       closeDialog();
     } catch (saveError) {
       const message = saveError instanceof Error ? saveError.message : 'Failed to save price list.';
@@ -886,13 +1176,22 @@ export default function PriceListsPage(): JSX.Element {
                           <span className="rounded-full bg-slate-100 px-2 py-1 text-xs font-semibold text-slate-700 dark:bg-slate-800 dark:text-slate-200">{status}</span>
                         </td>
                         <td className="px-4 py-3 align-top">
-                          <button
-                            className="rounded-lg border border-slate-300 px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-100 dark:border-slate-600 dark:text-slate-200 dark:hover:bg-slate-800"
-                            onClick={() => openEdit(row)}
-                            type="button"
-                          >
-                            Edit
-                          </button>
+                          <div className="flex flex-wrap items-center gap-2">
+                            <button
+                              className="rounded-lg border border-slate-300 px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-100 dark:border-slate-600 dark:text-slate-200 dark:hover:bg-slate-800"
+                              onClick={() => openEdit(row)}
+                              type="button"
+                            >
+                              Edit
+                            </button>
+                            <button
+                              className="rounded-lg border border-brandPrimary px-3 py-1.5 text-xs font-semibold text-brandPrimary hover:bg-brandPrimary/10"
+                              onClick={() => void openVersionsPanel(row.id)}
+                              type="button"
+                            >
+                              Versions
+                            </button>
+                          </div>
                         </td>
                       </tr>
                     );
@@ -909,13 +1208,22 @@ export default function PriceListsPage(): JSX.Element {
                       <p className="font-semibold text-slate-900 dark:text-slate-100">{row.name}</p>
                       <p className="text-xs text-slate-500 dark:text-slate-400">{row.code}</p>
                     </div>
-                    <button
-                      className="rounded-md border border-slate-300 px-2 py-1 text-xs font-semibold text-slate-700 dark:border-slate-600 dark:text-slate-200"
-                      onClick={() => openEdit(row)}
-                      type="button"
-                    >
-                      Edit
-                    </button>
+                    <div className="flex items-center gap-2">
+                      <button
+                        className="rounded-md border border-slate-300 px-2 py-1 text-xs font-semibold text-slate-700 dark:border-slate-600 dark:text-slate-200"
+                        onClick={() => openEdit(row)}
+                        type="button"
+                      >
+                        Edit
+                      </button>
+                      <button
+                        className="rounded-md border border-brandPrimary px-2 py-1 text-xs font-semibold text-brandPrimary"
+                        onClick={() => void openVersionsPanel(row.id)}
+                        type="button"
+                      >
+                        Versions
+                      </button>
+                    </div>
                   </div>
                   <div className="space-y-1 text-xs text-slate-700 dark:text-slate-200">
                     <p>
@@ -939,6 +1247,316 @@ export default function PriceListsPage(): JSX.Element {
           </>
         )}
       </div>
+
+      {selectedPriceList ? (
+        <section className="mt-4 rounded-2xl border border-slate-200 bg-white shadow-sm dark:border-slate-800 dark:bg-slate-900">
+          <header className="flex flex-wrap items-start justify-between gap-3 border-b border-slate-200 px-4 py-3 dark:border-slate-800">
+            <div>
+              <p className="text-xs font-semibold uppercase tracking-wide text-brandPrimary">Version History</p>
+              <h2 className="text-lg font-semibold text-slate-900 dark:text-slate-100">
+                {selectedPriceList.name} <span className="text-sm font-medium text-slate-500 dark:text-slate-400">({selectedPriceList.code})</span>
+              </h2>
+              <p className="text-xs text-slate-500 dark:text-slate-400">
+                Active status: {statusLabel(selectedPriceList)} | Current version: {selectedVersionRow ? `v${selectedVersionRow.versionNo}` : '-'}
+              </p>
+            </div>
+            <div className="flex flex-wrap items-center gap-2">
+              <button
+                className="rounded-lg border border-slate-300 px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-100 dark:border-slate-600 dark:text-slate-200 dark:hover:bg-slate-800"
+                disabled={versionLoading || versionBusy}
+                onClick={() => void loadVersions(selectedPriceList.id, selectedVersionId)}
+                type="button"
+              >
+                Refresh Versions
+              </button>
+              <button
+                className="rounded-lg border border-slate-300 px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-100 dark:border-slate-600 dark:text-slate-200 dark:hover:bg-slate-800"
+                onClick={() => {
+                  setSelectedPriceListId(null);
+                  setVersionRows([]);
+                  setSelectedVersionId(null);
+                  setSelectedVersionDetail(null);
+                  setVersionError(null);
+                }}
+                type="button"
+              >
+                Close
+              </button>
+            </div>
+          </header>
+
+          <div className="grid gap-0 md:grid-cols-12">
+            <aside className="border-b border-slate-200 p-3 md:col-span-4 md:border-b-0 md:border-r dark:border-slate-800">
+              <div className="mb-2 flex items-center justify-between">
+                <h3 className="text-sm font-semibold text-slate-900 dark:text-slate-100">Versions</h3>
+                <span className="text-xs text-slate-500 dark:text-slate-400">{versionRows.length} record(s)</span>
+              </div>
+
+              {versionLoading && versionRows.length === 0 ? (
+                <p className="rounded-lg border border-slate-200 p-3 text-sm text-slate-500 dark:border-slate-700 dark:text-slate-400">
+                  Loading versions...
+                </p>
+              ) : versionRows.length === 0 ? (
+                <p className="rounded-lg border border-slate-200 p-3 text-sm text-slate-500 dark:border-slate-700 dark:text-slate-400">
+                  No versions found for this price list.
+                </p>
+              ) : (
+                <div className="max-h-[62vh] space-y-2 overflow-y-auto pr-1">
+                  {versionRows.map((version) => {
+                    const selected = version.id === selectedVersionId;
+                    return (
+                      <button
+                        className={`w-full rounded-xl border p-3 text-left ${
+                          selected
+                            ? 'border-brandPrimary bg-brandPrimary/10'
+                            : 'border-slate-200 hover:bg-slate-50 dark:border-slate-700 dark:hover:bg-slate-800/70'
+                        }`}
+                        key={version.id}
+                        onClick={() => void loadVersionDetail(selectedPriceList.id, version.id)}
+                        type="button"
+                      >
+                        <div className="flex items-center justify-between gap-2">
+                          <p className="text-sm font-semibold text-slate-900 dark:text-slate-100">Version {version.versionNo}</p>
+                          <span className={`rounded-full px-2 py-0.5 text-[11px] font-semibold ${versionStatusClasses(version.status)}`}>
+                            {version.status}
+                          </span>
+                        </div>
+                        <p className="mt-1 text-xs text-slate-600 dark:text-slate-300">
+                          Effective: {formatDateTime(version.effectiveFrom)}
+                        </p>
+                        <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">
+                          Updated: {formatDateTime(version.updatedAt)}
+                        </p>
+                      </button>
+                    );
+                  })}
+                </div>
+              )}
+            </aside>
+
+            <div className="space-y-3 p-3 md:col-span-8">
+              {versionError ? <p className="text-sm text-rose-700 dark:text-rose-400">{versionError}</p> : null}
+
+              {selectedVersionDetail ? (
+                <>
+                  <section className="rounded-xl border border-slate-200 p-3 dark:border-slate-700">
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <p className="text-base font-semibold text-slate-900 dark:text-slate-100">Version {selectedVersionDetail.versionNo}</p>
+                      <span className={`rounded-full px-2 py-0.5 text-xs font-semibold ${versionStatusClasses(selectedVersionDetail.status)}`}>
+                        {selectedVersionDetail.status}
+                      </span>
+                    </div>
+                    <div className="mt-2 grid gap-2 text-xs text-slate-700 dark:text-slate-200 md:grid-cols-2">
+                      <p><span className="font-semibold">Effective From:</span> {formatDateTime(selectedVersionDetail.effectiveFrom)}</p>
+                      <p><span className="font-semibold">Effective To:</span> {formatDateTime(selectedVersionDetail.effectiveTo)}</p>
+                      <p><span className="font-semibold">Based On:</span> {selectedVersionDetail.basedOnVersionId ?? '-'}</p>
+                      <p><span className="font-semibold">Published From:</span> {selectedVersionDetail.publishedFromVersionId ?? '-'}</p>
+                      <p><span className="font-semibold">Created:</span> {formatDateTime(selectedVersionDetail.createdAt)}</p>
+                      <p><span className="font-semibold">Published:</span> {formatDateTime(selectedVersionDetail.publishedAt)}</p>
+                    </div>
+                    {selectedVersionDetail.notes ? (
+                      <p className="mt-2 rounded-lg bg-slate-50 px-2 py-1 text-xs text-slate-700 dark:bg-slate-800/70 dark:text-slate-200">
+                        <span className="font-semibold">Notes:</span> {selectedVersionDetail.notes}
+                      </p>
+                    ) : null}
+                    {selectedVersionDetail.rollbackReason ? (
+                      <p className="mt-2 rounded-lg bg-violet-50 px-2 py-1 text-xs text-violet-700 dark:bg-violet-950/30 dark:text-violet-200">
+                        <span className="font-semibold">Rollback reason:</span> {selectedVersionDetail.rollbackReason}
+                      </p>
+                    ) : null}
+                  </section>
+
+                  <section className="rounded-xl border border-slate-200 p-3 dark:border-slate-700">
+                    <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+                      <h4 className="text-sm font-semibold text-slate-900 dark:text-slate-100">Rules Snapshot</h4>
+                      <span className="text-xs text-slate-500 dark:text-slate-400">
+                        {selectedVersionDetail.rules?.length ?? 0} row(s)
+                      </span>
+                    </div>
+                    {selectedVersionDetail.rules && selectedVersionDetail.rules.length > 0 ? (
+                      <div className="overflow-x-auto">
+                        <table className="w-full min-w-[720px] border-collapse text-xs">
+                          <thead>
+                            <tr className="border-b border-slate-200 text-left uppercase tracking-wide text-slate-500 dark:border-slate-700 dark:text-slate-400">
+                              <th className="px-2 py-2">Product</th>
+                              <th className="px-2 py-2">Flow</th>
+                              <th className="px-2 py-2">Selling Price</th>
+                              <th className="px-2 py-2">Unit Cost</th>
+                              <th className="px-2 py-2">Max Discount</th>
+                              <th className="px-2 py-2">Priority</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {selectedVersionDetail.rules.map((rule) => (
+                              <tr className="border-b border-slate-100 dark:border-slate-800" key={rule.id}>
+                                <td className="px-2 py-2 text-slate-900 dark:text-slate-100">
+                                  {productNameById.get(rule.productId) ?? rule.productId}
+                                </td>
+                                <td className="px-2 py-2 text-slate-700 dark:text-slate-200">{flowLabel(rule.flowMode)}</td>
+                                <td className="px-2 py-2 text-slate-700 dark:text-slate-200">{formatMoney(rule.unitPrice)}</td>
+                                <td className="px-2 py-2 text-slate-700 dark:text-slate-200">
+                                  {rule.unitCost === null || rule.unitCost === undefined ? '-' : formatMoney(rule.unitCost)}
+                                </td>
+                                <td className="px-2 py-2 text-slate-700 dark:text-slate-200">{rule.discountCapPct}%</td>
+                                <td className="px-2 py-2 text-slate-700 dark:text-slate-200">{rule.priority}</td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    ) : (
+                      <p className="rounded-lg border border-slate-200 p-3 text-xs text-slate-500 dark:border-slate-700 dark:text-slate-400">
+                        No rules in this version.
+                      </p>
+                    )}
+                  </section>
+                </>
+              ) : (
+                <p className="rounded-lg border border-slate-200 p-3 text-sm text-slate-500 dark:border-slate-700 dark:text-slate-400">
+                  Select a version from the left panel.
+                </p>
+              )}
+
+              <section className="rounded-xl border border-slate-200 p-3 dark:border-slate-700">
+                <h4 className="text-sm font-semibold text-slate-900 dark:text-slate-100">Create Draft</h4>
+                <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">
+                  Creates a new draft from the selected version. If none is selected, the latest published version is used.
+                </p>
+                <div className="mt-2 grid gap-2 md:grid-cols-12">
+                  <label className="text-xs md:col-span-9">
+                    <span className="mb-1 block font-medium text-slate-700 dark:text-slate-200">Draft Notes (optional)</span>
+                    <input
+                      className="w-full rounded-lg border border-slate-300 bg-white px-2 py-2 text-sm text-slate-900 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-100"
+                      onChange={(event) => setDraftNotes(event.target.value)}
+                      placeholder="Example: May price hike prep"
+                      value={draftNotes}
+                    />
+                  </label>
+                  <div className="flex items-end md:col-span-3">
+                    <button
+                      className="w-full rounded-lg bg-brandPrimary px-3 py-2 text-xs font-semibold text-white hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-60"
+                      disabled={versionBusy || versionLoading}
+                      onClick={() => void createDraftVersion()}
+                      type="button"
+                    >
+                      {versionBusy ? 'Processing...' : 'Create Draft'}
+                    </button>
+                  </div>
+                </div>
+              </section>
+
+              <section className="rounded-xl border border-slate-200 p-3 dark:border-slate-700">
+                <h4 className="text-sm font-semibold text-slate-900 dark:text-slate-100">Bulk Adjust Draft</h4>
+                <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">
+                  Apply one adjustment to all or filtered draft rows.
+                </p>
+                <div className="mt-2 grid gap-2 md:grid-cols-12">
+                  <label className="text-xs md:col-span-3">
+                    <span className="mb-1 block font-medium text-slate-700 dark:text-slate-200">Mode</span>
+                    <select
+                      className="w-full rounded-lg border border-slate-300 bg-white px-2 py-2 text-sm text-slate-900 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-100"
+                      onChange={(event) => setBulkAdjustMode(event.target.value === 'FIXED' ? 'FIXED' : 'PERCENT')}
+                      value={bulkAdjustMode}
+                    >
+                      <option value="PERCENT">Percent (%)</option>
+                      <option value="FIXED">Fixed Amount (PHP)</option>
+                    </select>
+                  </label>
+                  <label className="text-xs md:col-span-3">
+                    <span className="mb-1 block font-medium text-slate-700 dark:text-slate-200">Value</span>
+                    <input
+                      className="w-full rounded-lg border border-slate-300 bg-white px-2 py-2 text-sm text-slate-900 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-100"
+                      onChange={(event) => setBulkAdjustValue(event.target.value)}
+                      step="0.01"
+                      type="number"
+                      value={bulkAdjustValue}
+                    />
+                  </label>
+                  <label className="text-xs md:col-span-4">
+                    <span className="mb-1 block font-medium text-slate-700 dark:text-slate-200">Apply To</span>
+                    <select
+                      className="w-full rounded-lg border border-slate-300 bg-white px-2 py-2 text-sm text-slate-900 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-100"
+                      onChange={(event) =>
+                        setBulkAdjustApplyTo(
+                          event.target.value === 'PRICE_ONLY' || event.target.value === 'COST_ONLY' ? event.target.value : 'PRICE_AND_COST'
+                        )
+                      }
+                      value={bulkAdjustApplyTo}
+                    >
+                      <option value="PRICE_AND_COST">Price and Cost</option>
+                      <option value="PRICE_ONLY">Price Only</option>
+                      <option value="COST_ONLY">Cost Only</option>
+                    </select>
+                  </label>
+                  <div className="flex items-end md:col-span-2">
+                    <button
+                      className="w-full rounded-lg border border-brandPrimary px-3 py-2 text-xs font-semibold text-brandPrimary hover:bg-brandPrimary/10 disabled:cursor-not-allowed disabled:opacity-60"
+                      disabled={versionBusy || versionLoading || selectedVersionDetail?.status !== 'DRAFT'}
+                      onClick={() => void applyBulkAdjust()}
+                      type="button"
+                    >
+                      Apply
+                    </button>
+                  </div>
+                </div>
+              </section>
+
+              <section className="grid gap-3 md:grid-cols-2">
+                <div className="rounded-xl border border-slate-200 p-3 dark:border-slate-700">
+                  <h4 className="text-sm font-semibold text-slate-900 dark:text-slate-100">Publish Selected Draft</h4>
+                  <label className="mt-2 block text-xs">
+                    <span className="mb-1 block font-medium text-slate-700 dark:text-slate-200">Effective From</span>
+                    <input
+                      className="w-full rounded-lg border border-slate-300 bg-white px-2 py-2 text-sm text-slate-900 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-100"
+                      onChange={(event) => setPublishEffectiveFrom(event.target.value)}
+                      type="datetime-local"
+                      value={publishEffectiveFrom}
+                    />
+                  </label>
+                  <button
+                    className="mt-2 w-full rounded-lg bg-emerald-600 px-3 py-2 text-xs font-semibold text-white hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-60"
+                    disabled={versionBusy || versionLoading || selectedVersionDetail?.status !== 'DRAFT'}
+                    onClick={() => void publishVersion()}
+                    type="button"
+                  >
+                    Publish Version
+                  </button>
+                </div>
+
+                <div className="rounded-xl border border-slate-200 p-3 dark:border-slate-700">
+                  <h4 className="text-sm font-semibold text-slate-900 dark:text-slate-100">Rollback to Selected Version</h4>
+                  <label className="mt-2 block text-xs">
+                    <span className="mb-1 block font-medium text-slate-700 dark:text-slate-200">Effective From</span>
+                    <input
+                      className="w-full rounded-lg border border-slate-300 bg-white px-2 py-2 text-sm text-slate-900 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-100"
+                      onChange={(event) => setRollbackEffectiveFrom(event.target.value)}
+                      type="datetime-local"
+                      value={rollbackEffectiveFrom}
+                    />
+                  </label>
+                  <label className="mt-2 block text-xs">
+                    <span className="mb-1 block font-medium text-slate-700 dark:text-slate-200">Rollback Reason (optional)</span>
+                    <input
+                      className="w-full rounded-lg border border-slate-300 bg-white px-2 py-2 text-sm text-slate-900 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-100"
+                      onChange={(event) => setRollbackReason(event.target.value)}
+                      placeholder="Example: Revert to previous approved pricing"
+                      value={rollbackReason}
+                    />
+                  </label>
+                  <button
+                    className="mt-2 w-full rounded-lg border border-violet-400 px-3 py-2 text-xs font-semibold text-violet-700 hover:bg-violet-50 disabled:cursor-not-allowed disabled:opacity-60 dark:border-violet-700 dark:text-violet-300 dark:hover:bg-violet-950/30"
+                    disabled={versionBusy || versionLoading || !selectedVersionDetail}
+                    onClick={() => void rollbackVersion()}
+                    type="button"
+                  >
+                    Rollback
+                  </button>
+                </div>
+              </section>
+            </div>
+          </div>
+        </section>
+      ) : null}
 
       {dialogMode ? (
         <div className="fixed inset-0 z-40 flex items-center justify-center bg-slate-950/45 p-4">
@@ -1186,7 +1804,7 @@ export default function PriceListsPage(): JSX.Element {
                 <div className="space-y-2">
                   {form.rules.map((rule, index) => (
                     <div className="grid gap-2 rounded-lg border border-slate-200 p-2 md:grid-cols-12 dark:border-slate-700" key={`${rule.id ?? 'new'}-${index}`}>
-                      <label className="text-xs md:col-span-4">
+                      <label className="text-xs md:col-span-3">
                         <span className="mb-1 block font-medium text-slate-700 dark:text-slate-200">Product</span>
                         <select
                           className="w-full rounded-lg border border-slate-300 bg-white px-2 py-2 text-sm text-slate-900 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-100"
@@ -1240,6 +1858,18 @@ export default function PriceListsPage(): JSX.Element {
                       </label>
 
                       <label className="text-xs md:col-span-2">
+                        <span className="mb-1 block font-medium text-slate-700 dark:text-slate-200">Unit Cost (PHP)</span>
+                        <input
+                          className="w-full rounded-lg border border-slate-300 bg-white px-2 py-2 text-sm text-slate-900 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-100"
+                          min="0"
+                          onChange={(event) => updateRule(index, 'unitCost', event.target.value === '' ? null : Number(event.target.value))}
+                          step="0.0001"
+                          type="number"
+                          value={rule.unitCost ?? ''}
+                        />
+                      </label>
+
+                      <label className="text-xs md:col-span-2">
                         <span className="mb-1 block font-medium text-slate-700 dark:text-slate-200">Max Discount %</span>
                         <input
                           className="w-full rounded-lg border border-slate-300 bg-white px-2 py-2 text-sm text-slate-900 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-100"
@@ -1251,7 +1881,7 @@ export default function PriceListsPage(): JSX.Element {
                         />
                       </label>
 
-                      <div className="flex items-end md:col-span-2">
+                      <div className="flex items-end md:col-span-1">
                         <button
                           className="w-full rounded-lg border border-rose-300 px-2 py-2 text-xs font-semibold text-rose-700 hover:bg-rose-50 dark:border-rose-700 dark:text-rose-300 dark:hover:bg-rose-950/40"
                           onClick={() => removeRule(index)}
