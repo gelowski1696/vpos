@@ -606,6 +606,14 @@ export default function PriceListsPage(): JSX.Element {
     await loadVersions(priceListId);
   }
 
+  function closeVersionsPanel(): void {
+    setSelectedPriceListId(null);
+    setVersionRows([]);
+    setSelectedVersionId(null);
+    setSelectedVersionDetail(null);
+    setVersionError(null);
+  }
+
   async function createDraftVersion(): Promise<void> {
     if (!selectedPriceListId) {
       toastInfo('Version action', { description: 'Select a price list first.' });
@@ -1249,313 +1257,312 @@ export default function PriceListsPage(): JSX.Element {
       </div>
 
       {selectedPriceList ? (
-        <section className="mt-4 rounded-2xl border border-slate-200 bg-white shadow-sm dark:border-slate-800 dark:bg-slate-900">
-          <header className="flex flex-wrap items-start justify-between gap-3 border-b border-slate-200 px-4 py-3 dark:border-slate-800">
-            <div>
-              <p className="text-xs font-semibold uppercase tracking-wide text-brandPrimary">Version History</p>
-              <h2 className="text-lg font-semibold text-slate-900 dark:text-slate-100">
-                {selectedPriceList.name} <span className="text-sm font-medium text-slate-500 dark:text-slate-400">({selectedPriceList.code})</span>
-              </h2>
-              <p className="text-xs text-slate-500 dark:text-slate-400">
-                Active status: {statusLabel(selectedPriceList)} | Current version: {selectedVersionRow ? `v${selectedVersionRow.versionNo}` : '-'}
-              </p>
-            </div>
-            <div className="flex flex-wrap items-center gap-2">
-              <button
-                className="rounded-lg border border-slate-300 px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-100 dark:border-slate-600 dark:text-slate-200 dark:hover:bg-slate-800"
-                disabled={versionLoading || versionBusy}
-                onClick={() => void loadVersions(selectedPriceList.id, selectedVersionId)}
-                type="button"
-              >
-                Refresh Versions
-              </button>
-              <button
-                className="rounded-lg border border-slate-300 px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-100 dark:border-slate-600 dark:text-slate-200 dark:hover:bg-slate-800"
-                onClick={() => {
-                  setSelectedPriceListId(null);
-                  setVersionRows([]);
-                  setSelectedVersionId(null);
-                  setSelectedVersionDetail(null);
-                  setVersionError(null);
-                }}
-                type="button"
-              >
-                Close
-              </button>
-            </div>
-          </header>
-
-          <div className="grid gap-0 md:grid-cols-12">
-            <aside className="border-b border-slate-200 p-3 md:col-span-4 md:border-b-0 md:border-r dark:border-slate-800">
-              <div className="mb-2 flex items-center justify-between">
-                <h3 className="text-sm font-semibold text-slate-900 dark:text-slate-100">Versions</h3>
-                <span className="text-xs text-slate-500 dark:text-slate-400">{versionRows.length} record(s)</span>
+        <div className="fixed inset-0 z-40 flex items-center justify-center bg-slate-950/55 p-4" onClick={closeVersionsPanel}>
+          <section
+            className="max-h-[92vh] w-full max-w-7xl overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-2xl dark:border-slate-700 dark:bg-slate-900"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <header className="flex flex-wrap items-start justify-between gap-3 border-b border-slate-200 px-4 py-3 dark:border-slate-800">
+              <div>
+                <p className="text-xs font-semibold uppercase tracking-wide text-brandPrimary">Version History</p>
+                <h2 className="text-lg font-semibold text-slate-900 dark:text-slate-100">
+                  {selectedPriceList.name} <span className="text-sm font-medium text-slate-500 dark:text-slate-400">({selectedPriceList.code})</span>
+                </h2>
+                <p className="text-xs text-slate-500 dark:text-slate-400">
+                  Active status: {statusLabel(selectedPriceList)} | Current version: {selectedVersionRow ? `v${selectedVersionRow.versionNo}` : '-'}
+                </p>
               </div>
+              <div className="flex flex-wrap items-center gap-2">
+                <button
+                  className="rounded-lg border border-slate-300 px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-100 dark:border-slate-600 dark:text-slate-200 dark:hover:bg-slate-800"
+                  disabled={versionLoading || versionBusy}
+                  onClick={() => void loadVersions(selectedPriceList.id, selectedVersionId)}
+                  type="button"
+                >
+                  Refresh Versions
+                </button>
+                <button
+                  className="rounded-lg border border-slate-300 px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-100 dark:border-slate-600 dark:text-slate-200 dark:hover:bg-slate-800"
+                  onClick={closeVersionsPanel}
+                  type="button"
+                >
+                  Close
+                </button>
+              </div>
+            </header>
 
-              {versionLoading && versionRows.length === 0 ? (
-                <p className="rounded-lg border border-slate-200 p-3 text-sm text-slate-500 dark:border-slate-700 dark:text-slate-400">
-                  Loading versions...
-                </p>
-              ) : versionRows.length === 0 ? (
-                <p className="rounded-lg border border-slate-200 p-3 text-sm text-slate-500 dark:border-slate-700 dark:text-slate-400">
-                  No versions found for this price list.
-                </p>
-              ) : (
-                <div className="max-h-[62vh] space-y-2 overflow-y-auto pr-1">
-                  {versionRows.map((version) => {
-                    const selected = version.id === selectedVersionId;
-                    return (
+            <div className="grid max-h-[calc(92vh-88px)] gap-0 md:grid-cols-12">
+              <aside className="border-b border-slate-200 p-3 md:col-span-4 md:border-b-0 md:border-r dark:border-slate-800">
+                <div className="mb-2 flex items-center justify-between">
+                  <h3 className="text-sm font-semibold text-slate-900 dark:text-slate-100">Versions</h3>
+                  <span className="text-xs text-slate-500 dark:text-slate-400">{versionRows.length} record(s)</span>
+                </div>
+
+                {versionLoading && versionRows.length === 0 ? (
+                  <p className="rounded-lg border border-slate-200 p-3 text-sm text-slate-500 dark:border-slate-700 dark:text-slate-400">
+                    Loading versions...
+                  </p>
+                ) : versionRows.length === 0 ? (
+                  <p className="rounded-lg border border-slate-200 p-3 text-sm text-slate-500 dark:border-slate-700 dark:text-slate-400">
+                    No versions found for this price list.
+                  </p>
+                ) : (
+                  <div className="max-h-[30vh] space-y-2 overflow-y-auto pr-1 md:max-h-[calc(92vh-160px)]">
+                    {versionRows.map((version) => {
+                      const selected = version.id === selectedVersionId;
+                      return (
+                        <button
+                          className={`w-full rounded-xl border p-3 text-left ${
+                            selected
+                              ? 'border-brandPrimary bg-brandPrimary/10'
+                              : 'border-slate-200 hover:bg-slate-50 dark:border-slate-700 dark:hover:bg-slate-800/70'
+                          }`}
+                          key={version.id}
+                          onClick={() => void loadVersionDetail(selectedPriceList.id, version.id)}
+                          type="button"
+                        >
+                          <div className="flex items-center justify-between gap-2">
+                            <p className="text-sm font-semibold text-slate-900 dark:text-slate-100">Version {version.versionNo}</p>
+                            <span className={`rounded-full px-2 py-0.5 text-[11px] font-semibold ${versionStatusClasses(version.status)}`}>
+                              {version.status}
+                            </span>
+                          </div>
+                          <p className="mt-1 text-xs text-slate-600 dark:text-slate-300">
+                            Effective: {formatDateTime(version.effectiveFrom)}
+                          </p>
+                          <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">
+                            Updated: {formatDateTime(version.updatedAt)}
+                          </p>
+                        </button>
+                      );
+                    })}
+                  </div>
+                )}
+              </aside>
+
+              <div className="space-y-3 overflow-y-auto p-3 md:col-span-8">
+                {versionError ? <p className="text-sm text-rose-700 dark:text-rose-400">{versionError}</p> : null}
+
+                {selectedVersionDetail ? (
+                  <>
+                    <section className="rounded-xl border border-slate-200 p-3 dark:border-slate-700">
+                      <div className="flex flex-wrap items-center justify-between gap-2">
+                        <p className="text-base font-semibold text-slate-900 dark:text-slate-100">Version {selectedVersionDetail.versionNo}</p>
+                        <span className={`rounded-full px-2 py-0.5 text-xs font-semibold ${versionStatusClasses(selectedVersionDetail.status)}`}>
+                          {selectedVersionDetail.status}
+                        </span>
+                      </div>
+                      <div className="mt-2 grid gap-2 text-xs text-slate-700 dark:text-slate-200 md:grid-cols-2">
+                        <p><span className="font-semibold">Effective From:</span> {formatDateTime(selectedVersionDetail.effectiveFrom)}</p>
+                        <p><span className="font-semibold">Effective To:</span> {formatDateTime(selectedVersionDetail.effectiveTo)}</p>
+                        <p><span className="font-semibold">Based On:</span> {selectedVersionDetail.basedOnVersionId ?? '-'}</p>
+                        <p><span className="font-semibold">Published From:</span> {selectedVersionDetail.publishedFromVersionId ?? '-'}</p>
+                        <p><span className="font-semibold">Created:</span> {formatDateTime(selectedVersionDetail.createdAt)}</p>
+                        <p><span className="font-semibold">Published:</span> {formatDateTime(selectedVersionDetail.publishedAt)}</p>
+                      </div>
+                      {selectedVersionDetail.notes ? (
+                        <p className="mt-2 rounded-lg bg-slate-50 px-2 py-1 text-xs text-slate-700 dark:bg-slate-800/70 dark:text-slate-200">
+                          <span className="font-semibold">Notes:</span> {selectedVersionDetail.notes}
+                        </p>
+                      ) : null}
+                      {selectedVersionDetail.rollbackReason ? (
+                        <p className="mt-2 rounded-lg bg-violet-50 px-2 py-1 text-xs text-violet-700 dark:bg-violet-950/30 dark:text-violet-200">
+                          <span className="font-semibold">Rollback reason:</span> {selectedVersionDetail.rollbackReason}
+                        </p>
+                      ) : null}
+                    </section>
+
+                    <section className="rounded-xl border border-slate-200 p-3 dark:border-slate-700">
+                      <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+                        <h4 className="text-sm font-semibold text-slate-900 dark:text-slate-100">Rules Snapshot</h4>
+                        <span className="text-xs text-slate-500 dark:text-slate-400">
+                          {selectedVersionDetail.rules?.length ?? 0} row(s)
+                        </span>
+                      </div>
+                      {selectedVersionDetail.rules && selectedVersionDetail.rules.length > 0 ? (
+                        <div className="overflow-x-auto">
+                          <table className="w-full min-w-[720px] border-collapse text-xs">
+                            <thead>
+                              <tr className="border-b border-slate-200 text-left uppercase tracking-wide text-slate-500 dark:border-slate-700 dark:text-slate-400">
+                                <th className="px-2 py-2">Product</th>
+                                <th className="px-2 py-2">Flow</th>
+                                <th className="px-2 py-2">Selling Price</th>
+                                <th className="px-2 py-2">Unit Cost</th>
+                                <th className="px-2 py-2">Max Discount</th>
+                                <th className="px-2 py-2">Priority</th>
+                              </tr>
+                            </thead>
+                            <tbody>
+                              {selectedVersionDetail.rules.map((rule) => (
+                                <tr className="border-b border-slate-100 dark:border-slate-800" key={rule.id}>
+                                  <td className="px-2 py-2 text-slate-900 dark:text-slate-100">
+                                    {productNameById.get(rule.productId) ?? rule.productId}
+                                  </td>
+                                  <td className="px-2 py-2 text-slate-700 dark:text-slate-200">{flowLabel(rule.flowMode)}</td>
+                                  <td className="px-2 py-2 text-slate-700 dark:text-slate-200">{formatMoney(rule.unitPrice)}</td>
+                                  <td className="px-2 py-2 text-slate-700 dark:text-slate-200">
+                                    {rule.unitCost === null || rule.unitCost === undefined ? '-' : formatMoney(rule.unitCost)}
+                                  </td>
+                                  <td className="px-2 py-2 text-slate-700 dark:text-slate-200">{rule.discountCapPct}%</td>
+                                  <td className="px-2 py-2 text-slate-700 dark:text-slate-200">{rule.priority}</td>
+                                </tr>
+                              ))}
+                            </tbody>
+                          </table>
+                        </div>
+                      ) : (
+                        <p className="rounded-lg border border-slate-200 p-3 text-xs text-slate-500 dark:border-slate-700 dark:text-slate-400">
+                          No rules in this version.
+                        </p>
+                      )}
+                    </section>
+                  </>
+                ) : (
+                  <p className="rounded-lg border border-slate-200 p-3 text-sm text-slate-500 dark:border-slate-700 dark:text-slate-400">
+                    Select a version from the left panel.
+                  </p>
+                )}
+
+                <section className="rounded-xl border border-slate-200 p-3 dark:border-slate-700">
+                  <h4 className="text-sm font-semibold text-slate-900 dark:text-slate-100">Create Draft</h4>
+                  <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">
+                    Creates a new draft from the selected version. If none is selected, the latest published version is used.
+                  </p>
+                  <div className="mt-2 grid gap-2 md:grid-cols-12">
+                    <label className="text-xs md:col-span-9">
+                      <span className="mb-1 block font-medium text-slate-700 dark:text-slate-200">Draft Notes (optional)</span>
+                      <input
+                        className="w-full rounded-lg border border-slate-300 bg-white px-2 py-2 text-sm text-slate-900 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-100"
+                        onChange={(event) => setDraftNotes(event.target.value)}
+                        placeholder="Example: May price hike prep"
+                        value={draftNotes}
+                      />
+                    </label>
+                    <div className="flex items-end md:col-span-3">
                       <button
-                        className={`w-full rounded-xl border p-3 text-left ${
-                          selected
-                            ? 'border-brandPrimary bg-brandPrimary/10'
-                            : 'border-slate-200 hover:bg-slate-50 dark:border-slate-700 dark:hover:bg-slate-800/70'
-                        }`}
-                        key={version.id}
-                        onClick={() => void loadVersionDetail(selectedPriceList.id, version.id)}
+                        className="w-full rounded-lg bg-brandPrimary px-3 py-2 text-xs font-semibold text-white hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-60"
+                        disabled={versionBusy || versionLoading}
+                        onClick={() => void createDraftVersion()}
                         type="button"
                       >
-                        <div className="flex items-center justify-between gap-2">
-                          <p className="text-sm font-semibold text-slate-900 dark:text-slate-100">Version {version.versionNo}</p>
-                          <span className={`rounded-full px-2 py-0.5 text-[11px] font-semibold ${versionStatusClasses(version.status)}`}>
-                            {version.status}
-                          </span>
-                        </div>
-                        <p className="mt-1 text-xs text-slate-600 dark:text-slate-300">
-                          Effective: {formatDateTime(version.effectiveFrom)}
-                        </p>
-                        <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">
-                          Updated: {formatDateTime(version.updatedAt)}
-                        </p>
+                        {versionBusy ? 'Processing...' : 'Create Draft'}
                       </button>
-                    );
-                  })}
-                </div>
-              )}
-            </aside>
-
-            <div className="space-y-3 p-3 md:col-span-8">
-              {versionError ? <p className="text-sm text-rose-700 dark:text-rose-400">{versionError}</p> : null}
-
-              {selectedVersionDetail ? (
-                <>
-                  <section className="rounded-xl border border-slate-200 p-3 dark:border-slate-700">
-                    <div className="flex flex-wrap items-center justify-between gap-2">
-                      <p className="text-base font-semibold text-slate-900 dark:text-slate-100">Version {selectedVersionDetail.versionNo}</p>
-                      <span className={`rounded-full px-2 py-0.5 text-xs font-semibold ${versionStatusClasses(selectedVersionDetail.status)}`}>
-                        {selectedVersionDetail.status}
-                      </span>
                     </div>
-                    <div className="mt-2 grid gap-2 text-xs text-slate-700 dark:text-slate-200 md:grid-cols-2">
-                      <p><span className="font-semibold">Effective From:</span> {formatDateTime(selectedVersionDetail.effectiveFrom)}</p>
-                      <p><span className="font-semibold">Effective To:</span> {formatDateTime(selectedVersionDetail.effectiveTo)}</p>
-                      <p><span className="font-semibold">Based On:</span> {selectedVersionDetail.basedOnVersionId ?? '-'}</p>
-                      <p><span className="font-semibold">Published From:</span> {selectedVersionDetail.publishedFromVersionId ?? '-'}</p>
-                      <p><span className="font-semibold">Created:</span> {formatDateTime(selectedVersionDetail.createdAt)}</p>
-                      <p><span className="font-semibold">Published:</span> {formatDateTime(selectedVersionDetail.publishedAt)}</p>
-                    </div>
-                    {selectedVersionDetail.notes ? (
-                      <p className="mt-2 rounded-lg bg-slate-50 px-2 py-1 text-xs text-slate-700 dark:bg-slate-800/70 dark:text-slate-200">
-                        <span className="font-semibold">Notes:</span> {selectedVersionDetail.notes}
-                      </p>
-                    ) : null}
-                    {selectedVersionDetail.rollbackReason ? (
-                      <p className="mt-2 rounded-lg bg-violet-50 px-2 py-1 text-xs text-violet-700 dark:bg-violet-950/30 dark:text-violet-200">
-                        <span className="font-semibold">Rollback reason:</span> {selectedVersionDetail.rollbackReason}
-                      </p>
-                    ) : null}
-                  </section>
-
-                  <section className="rounded-xl border border-slate-200 p-3 dark:border-slate-700">
-                    <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
-                      <h4 className="text-sm font-semibold text-slate-900 dark:text-slate-100">Rules Snapshot</h4>
-                      <span className="text-xs text-slate-500 dark:text-slate-400">
-                        {selectedVersionDetail.rules?.length ?? 0} row(s)
-                      </span>
-                    </div>
-                    {selectedVersionDetail.rules && selectedVersionDetail.rules.length > 0 ? (
-                      <div className="overflow-x-auto">
-                        <table className="w-full min-w-[720px] border-collapse text-xs">
-                          <thead>
-                            <tr className="border-b border-slate-200 text-left uppercase tracking-wide text-slate-500 dark:border-slate-700 dark:text-slate-400">
-                              <th className="px-2 py-2">Product</th>
-                              <th className="px-2 py-2">Flow</th>
-                              <th className="px-2 py-2">Selling Price</th>
-                              <th className="px-2 py-2">Unit Cost</th>
-                              <th className="px-2 py-2">Max Discount</th>
-                              <th className="px-2 py-2">Priority</th>
-                            </tr>
-                          </thead>
-                          <tbody>
-                            {selectedVersionDetail.rules.map((rule) => (
-                              <tr className="border-b border-slate-100 dark:border-slate-800" key={rule.id}>
-                                <td className="px-2 py-2 text-slate-900 dark:text-slate-100">
-                                  {productNameById.get(rule.productId) ?? rule.productId}
-                                </td>
-                                <td className="px-2 py-2 text-slate-700 dark:text-slate-200">{flowLabel(rule.flowMode)}</td>
-                                <td className="px-2 py-2 text-slate-700 dark:text-slate-200">{formatMoney(rule.unitPrice)}</td>
-                                <td className="px-2 py-2 text-slate-700 dark:text-slate-200">
-                                  {rule.unitCost === null || rule.unitCost === undefined ? '-' : formatMoney(rule.unitCost)}
-                                </td>
-                                <td className="px-2 py-2 text-slate-700 dark:text-slate-200">{rule.discountCapPct}%</td>
-                                <td className="px-2 py-2 text-slate-700 dark:text-slate-200">{rule.priority}</td>
-                              </tr>
-                            ))}
-                          </tbody>
-                        </table>
-                      </div>
-                    ) : (
-                      <p className="rounded-lg border border-slate-200 p-3 text-xs text-slate-500 dark:border-slate-700 dark:text-slate-400">
-                        No rules in this version.
-                      </p>
-                    )}
-                  </section>
-                </>
-              ) : (
-                <p className="rounded-lg border border-slate-200 p-3 text-sm text-slate-500 dark:border-slate-700 dark:text-slate-400">
-                  Select a version from the left panel.
-                </p>
-              )}
-
-              <section className="rounded-xl border border-slate-200 p-3 dark:border-slate-700">
-                <h4 className="text-sm font-semibold text-slate-900 dark:text-slate-100">Create Draft</h4>
-                <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">
-                  Creates a new draft from the selected version. If none is selected, the latest published version is used.
-                </p>
-                <div className="mt-2 grid gap-2 md:grid-cols-12">
-                  <label className="text-xs md:col-span-9">
-                    <span className="mb-1 block font-medium text-slate-700 dark:text-slate-200">Draft Notes (optional)</span>
-                    <input
-                      className="w-full rounded-lg border border-slate-300 bg-white px-2 py-2 text-sm text-slate-900 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-100"
-                      onChange={(event) => setDraftNotes(event.target.value)}
-                      placeholder="Example: May price hike prep"
-                      value={draftNotes}
-                    />
-                  </label>
-                  <div className="flex items-end md:col-span-3">
-                    <button
-                      className="w-full rounded-lg bg-brandPrimary px-3 py-2 text-xs font-semibold text-white hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-60"
-                      disabled={versionBusy || versionLoading}
-                      onClick={() => void createDraftVersion()}
-                      type="button"
-                    >
-                      {versionBusy ? 'Processing...' : 'Create Draft'}
-                    </button>
                   </div>
-                </div>
-              </section>
+                </section>
 
-              <section className="rounded-xl border border-slate-200 p-3 dark:border-slate-700">
-                <h4 className="text-sm font-semibold text-slate-900 dark:text-slate-100">Bulk Adjust Draft</h4>
-                <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">
-                  Apply one adjustment to all or filtered draft rows.
-                </p>
-                <div className="mt-2 grid gap-2 md:grid-cols-12">
-                  <label className="text-xs md:col-span-3">
-                    <span className="mb-1 block font-medium text-slate-700 dark:text-slate-200">Mode</span>
-                    <select
-                      className="w-full rounded-lg border border-slate-300 bg-white px-2 py-2 text-sm text-slate-900 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-100"
-                      onChange={(event) => setBulkAdjustMode(event.target.value === 'FIXED' ? 'FIXED' : 'PERCENT')}
-                      value={bulkAdjustMode}
-                    >
-                      <option value="PERCENT">Percent (%)</option>
-                      <option value="FIXED">Fixed Amount (PHP)</option>
-                    </select>
-                  </label>
-                  <label className="text-xs md:col-span-3">
-                    <span className="mb-1 block font-medium text-slate-700 dark:text-slate-200">Value</span>
-                    <input
-                      className="w-full rounded-lg border border-slate-300 bg-white px-2 py-2 text-sm text-slate-900 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-100"
-                      onChange={(event) => setBulkAdjustValue(event.target.value)}
-                      step="0.01"
-                      type="number"
-                      value={bulkAdjustValue}
-                    />
-                  </label>
-                  <label className="text-xs md:col-span-4">
-                    <span className="mb-1 block font-medium text-slate-700 dark:text-slate-200">Apply To</span>
-                    <select
-                      className="w-full rounded-lg border border-slate-300 bg-white px-2 py-2 text-sm text-slate-900 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-100"
-                      onChange={(event) =>
-                        setBulkAdjustApplyTo(
-                          event.target.value === 'PRICE_ONLY' || event.target.value === 'COST_ONLY' ? event.target.value : 'PRICE_AND_COST'
-                        )
-                      }
-                      value={bulkAdjustApplyTo}
-                    >
-                      <option value="PRICE_AND_COST">Price and Cost</option>
-                      <option value="PRICE_ONLY">Price Only</option>
-                      <option value="COST_ONLY">Cost Only</option>
-                    </select>
-                  </label>
-                  <div className="flex items-end md:col-span-2">
+                <section className="rounded-xl border border-slate-200 p-3 dark:border-slate-700">
+                  <h4 className="text-sm font-semibold text-slate-900 dark:text-slate-100">Bulk Adjust Draft</h4>
+                  <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">
+                    Apply one adjustment to all or filtered draft rows.
+                  </p>
+                  <div className="mt-2 grid gap-2 md:grid-cols-12">
+                    <label className="text-xs md:col-span-3">
+                      <span className="mb-1 block font-medium text-slate-700 dark:text-slate-200">Mode</span>
+                      <select
+                        className="w-full rounded-lg border border-slate-300 bg-white px-2 py-2 text-sm text-slate-900 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-100"
+                        onChange={(event) => setBulkAdjustMode(event.target.value === 'FIXED' ? 'FIXED' : 'PERCENT')}
+                        value={bulkAdjustMode}
+                      >
+                        <option value="PERCENT">Percent (%)</option>
+                        <option value="FIXED">Fixed Amount (PHP)</option>
+                      </select>
+                    </label>
+                    <label className="text-xs md:col-span-3">
+                      <span className="mb-1 block font-medium text-slate-700 dark:text-slate-200">Value</span>
+                      <input
+                        className="w-full rounded-lg border border-slate-300 bg-white px-2 py-2 text-sm text-slate-900 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-100"
+                        onChange={(event) => setBulkAdjustValue(event.target.value)}
+                        step="0.01"
+                        type="number"
+                        value={bulkAdjustValue}
+                      />
+                    </label>
+                    <label className="text-xs md:col-span-4">
+                      <span className="mb-1 block font-medium text-slate-700 dark:text-slate-200">Apply To</span>
+                      <select
+                        className="w-full rounded-lg border border-slate-300 bg-white px-2 py-2 text-sm text-slate-900 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-100"
+                        onChange={(event) =>
+                          setBulkAdjustApplyTo(
+                            event.target.value === 'PRICE_ONLY' || event.target.value === 'COST_ONLY' ? event.target.value : 'PRICE_AND_COST'
+                          )
+                        }
+                        value={bulkAdjustApplyTo}
+                      >
+                        <option value="PRICE_AND_COST">Price and Cost</option>
+                        <option value="PRICE_ONLY">Price Only</option>
+                        <option value="COST_ONLY">Cost Only</option>
+                      </select>
+                    </label>
+                    <div className="flex items-end md:col-span-2">
+                      <button
+                        className="w-full rounded-lg border border-brandPrimary px-3 py-2 text-xs font-semibold text-brandPrimary hover:bg-brandPrimary/10 disabled:cursor-not-allowed disabled:opacity-60"
+                        disabled={versionBusy || versionLoading || selectedVersionDetail?.status !== 'DRAFT'}
+                        onClick={() => void applyBulkAdjust()}
+                        type="button"
+                      >
+                        Apply
+                      </button>
+                    </div>
+                  </div>
+                </section>
+
+                <section className="grid gap-3 md:grid-cols-2">
+                  <div className="rounded-xl border border-slate-200 p-3 dark:border-slate-700">
+                    <h4 className="text-sm font-semibold text-slate-900 dark:text-slate-100">Publish Selected Draft</h4>
+                    <label className="mt-2 block text-xs">
+                      <span className="mb-1 block font-medium text-slate-700 dark:text-slate-200">Effective From</span>
+                      <input
+                        className="w-full rounded-lg border border-slate-300 bg-white px-2 py-2 text-sm text-slate-900 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-100"
+                        onChange={(event) => setPublishEffectiveFrom(event.target.value)}
+                        type="datetime-local"
+                        value={publishEffectiveFrom}
+                      />
+                    </label>
                     <button
-                      className="w-full rounded-lg border border-brandPrimary px-3 py-2 text-xs font-semibold text-brandPrimary hover:bg-brandPrimary/10 disabled:cursor-not-allowed disabled:opacity-60"
+                      className="mt-2 w-full rounded-lg bg-emerald-600 px-3 py-2 text-xs font-semibold text-white hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-60"
                       disabled={versionBusy || versionLoading || selectedVersionDetail?.status !== 'DRAFT'}
-                      onClick={() => void applyBulkAdjust()}
+                      onClick={() => void publishVersion()}
                       type="button"
                     >
-                      Apply
+                      Publish Version
                     </button>
                   </div>
-                </div>
-              </section>
 
-              <section className="grid gap-3 md:grid-cols-2">
-                <div className="rounded-xl border border-slate-200 p-3 dark:border-slate-700">
-                  <h4 className="text-sm font-semibold text-slate-900 dark:text-slate-100">Publish Selected Draft</h4>
-                  <label className="mt-2 block text-xs">
-                    <span className="mb-1 block font-medium text-slate-700 dark:text-slate-200">Effective From</span>
-                    <input
-                      className="w-full rounded-lg border border-slate-300 bg-white px-2 py-2 text-sm text-slate-900 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-100"
-                      onChange={(event) => setPublishEffectiveFrom(event.target.value)}
-                      type="datetime-local"
-                      value={publishEffectiveFrom}
-                    />
-                  </label>
-                  <button
-                    className="mt-2 w-full rounded-lg bg-emerald-600 px-3 py-2 text-xs font-semibold text-white hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-60"
-                    disabled={versionBusy || versionLoading || selectedVersionDetail?.status !== 'DRAFT'}
-                    onClick={() => void publishVersion()}
-                    type="button"
-                  >
-                    Publish Version
-                  </button>
-                </div>
-
-                <div className="rounded-xl border border-slate-200 p-3 dark:border-slate-700">
-                  <h4 className="text-sm font-semibold text-slate-900 dark:text-slate-100">Rollback to Selected Version</h4>
-                  <label className="mt-2 block text-xs">
-                    <span className="mb-1 block font-medium text-slate-700 dark:text-slate-200">Effective From</span>
-                    <input
-                      className="w-full rounded-lg border border-slate-300 bg-white px-2 py-2 text-sm text-slate-900 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-100"
-                      onChange={(event) => setRollbackEffectiveFrom(event.target.value)}
-                      type="datetime-local"
-                      value={rollbackEffectiveFrom}
-                    />
-                  </label>
-                  <label className="mt-2 block text-xs">
-                    <span className="mb-1 block font-medium text-slate-700 dark:text-slate-200">Rollback Reason (optional)</span>
-                    <input
-                      className="w-full rounded-lg border border-slate-300 bg-white px-2 py-2 text-sm text-slate-900 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-100"
-                      onChange={(event) => setRollbackReason(event.target.value)}
-                      placeholder="Example: Revert to previous approved pricing"
-                      value={rollbackReason}
-                    />
-                  </label>
-                  <button
-                    className="mt-2 w-full rounded-lg border border-violet-400 px-3 py-2 text-xs font-semibold text-violet-700 hover:bg-violet-50 disabled:cursor-not-allowed disabled:opacity-60 dark:border-violet-700 dark:text-violet-300 dark:hover:bg-violet-950/30"
-                    disabled={versionBusy || versionLoading || !selectedVersionDetail}
-                    onClick={() => void rollbackVersion()}
-                    type="button"
-                  >
-                    Rollback
-                  </button>
-                </div>
-              </section>
+                  <div className="rounded-xl border border-slate-200 p-3 dark:border-slate-700">
+                    <h4 className="text-sm font-semibold text-slate-900 dark:text-slate-100">Rollback to Selected Version</h4>
+                    <label className="mt-2 block text-xs">
+                      <span className="mb-1 block font-medium text-slate-700 dark:text-slate-200">Effective From</span>
+                      <input
+                        className="w-full rounded-lg border border-slate-300 bg-white px-2 py-2 text-sm text-slate-900 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-100"
+                        onChange={(event) => setRollbackEffectiveFrom(event.target.value)}
+                        type="datetime-local"
+                        value={rollbackEffectiveFrom}
+                      />
+                    </label>
+                    <label className="mt-2 block text-xs">
+                      <span className="mb-1 block font-medium text-slate-700 dark:text-slate-200">Rollback Reason (optional)</span>
+                      <input
+                        className="w-full rounded-lg border border-slate-300 bg-white px-2 py-2 text-sm text-slate-900 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-100"
+                        onChange={(event) => setRollbackReason(event.target.value)}
+                        placeholder="Example: Revert to previous approved pricing"
+                        value={rollbackReason}
+                      />
+                    </label>
+                    <button
+                      className="mt-2 w-full rounded-lg border border-violet-400 px-3 py-2 text-xs font-semibold text-violet-700 hover:bg-violet-50 disabled:cursor-not-allowed disabled:opacity-60 dark:border-violet-700 dark:text-violet-300 dark:hover:bg-violet-950/30"
+                      disabled={versionBusy || versionLoading || !selectedVersionDetail}
+                      onClick={() => void rollbackVersion()}
+                      type="button"
+                    >
+                      Rollback
+                    </button>
+                  </div>
+                </section>
+              </div>
             </div>
-          </div>
-        </section>
+          </section>
+        </div>
       ) : null}
 
       {dialogMode ? (
