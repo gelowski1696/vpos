@@ -48,6 +48,7 @@ type ProductRecord = {
   sku: string;
   name: string;
   category?: string | null;
+  brand?: string | null;
   isLpg: boolean;
   isActive: boolean;
 };
@@ -362,6 +363,13 @@ export default function PriceListsPage(): JSX.Element {
   const [bulkAdjustApplyTo, setBulkAdjustApplyTo] = useState<'PRICE_ONLY' | 'COST_ONLY' | 'PRICE_AND_COST'>(
     'PRICE_AND_COST'
   );
+  const [bulkAdjustScopeMode, setBulkAdjustScopeMode] = useState<'ALL' | 'INCLUDE' | 'EXCLUDE'>('ALL');
+  const [bulkAdjustFilterCategory, setBulkAdjustFilterCategory] = useState('ALL');
+  const [bulkAdjustFilterBrand, setBulkAdjustFilterBrand] = useState('ALL');
+  const [bulkAdjustFilterIsLpg, setBulkAdjustFilterIsLpg] = useState<'ANY' | 'LPG' | 'NON_LPG'>('ANY');
+  const [bulkAdjustFilterFlowMode, setBulkAdjustFilterFlowMode] = useState<'ALL' | FlowMode>('ALL');
+  const [bulkAdjustItemSearch, setBulkAdjustItemSearch] = useState('');
+  const [bulkAdjustSelectedProductIds, setBulkAdjustSelectedProductIds] = useState<string[]>([]);
   const [publishEffectiveFrom, setPublishEffectiveFrom] = useState(() => toInputDateTime(new Date().toISOString()));
   const [rollbackReason, setRollbackReason] = useState('');
   const [rollbackEffectiveFrom, setRollbackEffectiveFrom] = useState(() => toInputDateTime(new Date().toISOString()));
@@ -437,6 +445,16 @@ export default function PriceListsPage(): JSX.Element {
     }
     return ['ALL', ...Array.from(categories).sort((a, b) => a.localeCompare(b))];
   }, [products]);
+  const productBrandOptions = useMemo(() => {
+    const brands = new Set<string>();
+    for (const product of products) {
+      const brand = String(product.brand ?? '').trim();
+      if (brand) {
+        brands.add(brand);
+      }
+    }
+    return ['ALL', ...Array.from(brands).sort((a, b) => a.localeCompare(b))];
+  }, [products]);
   const productPickerRows = useMemo(() => {
     const searchTerm = productPickerSearch.trim().toLowerCase();
     return products.filter((product) => {
@@ -484,6 +502,82 @@ export default function PriceListsPage(): JSX.Element {
     () => (selectedVersionId ? versionRows.find((row) => row.id === selectedVersionId) ?? null : null),
     [selectedVersionId, versionRows]
   );
+  const bulkAdjustCandidateRules = useMemo(() => {
+    const rules = selectedVersionDetail?.rules ?? [];
+    const searchTerm = bulkAdjustItemSearch.trim().toLowerCase();
+    return rules.filter((rule) => {
+      const product = productById.get(rule.productId);
+      const category = String(product?.category ?? '').trim() || 'Uncategorized';
+      const brand = String(product?.brand ?? '').trim() || 'Unbranded';
+      const isLpg = Boolean(product?.isLpg);
+      if (bulkAdjustFilterCategory !== 'ALL' && category !== bulkAdjustFilterCategory) {
+        return false;
+      }
+      if (bulkAdjustFilterBrand !== 'ALL' && brand !== bulkAdjustFilterBrand) {
+        return false;
+      }
+      if (bulkAdjustFilterIsLpg === 'LPG' && !isLpg) {
+        return false;
+      }
+      if (bulkAdjustFilterIsLpg === 'NON_LPG' && isLpg) {
+        return false;
+      }
+      if (bulkAdjustFilterFlowMode !== 'ALL' && rule.flowMode !== bulkAdjustFilterFlowMode) {
+        return false;
+      }
+      if (!searchTerm) {
+        return true;
+      }
+      const haystack = `${product?.name ?? ''} ${product?.sku ?? ''} ${category} ${brand}`.toLowerCase();
+      return haystack.includes(searchTerm);
+    });
+  }, [
+    bulkAdjustFilterBrand,
+    bulkAdjustFilterCategory,
+    bulkAdjustFilterFlowMode,
+    bulkAdjustFilterIsLpg,
+    bulkAdjustItemSearch,
+    productById,
+    selectedVersionDetail?.rules
+  ]);
+  const bulkAdjustCandidateProductIds = useMemo(
+    () => Array.from(new Set(bulkAdjustCandidateRules.map((rule) => rule.productId))),
+    [bulkAdjustCandidateRules]
+  );
+  const bulkAdjustCandidateProducts = useMemo(
+    () =>
+      bulkAdjustCandidateProductIds
+        .map((productId) => {
+          const product = productById.get(productId);
+          return {
+            id: productId,
+            name: product?.name ?? productId,
+            sku: product?.sku ?? productId,
+            category: String(product?.category ?? '').trim() || 'Uncategorized',
+            brand: String(product?.brand ?? '').trim() || 'Unbranded',
+            isLpg: Boolean(product?.isLpg)
+          };
+        })
+        .sort((a, b) => a.name.localeCompare(b.name)),
+    [bulkAdjustCandidateProductIds, productById]
+  );
+  const bulkAdjustSelectedProductIdSet = useMemo(
+    () => new Set(bulkAdjustSelectedProductIds),
+    [bulkAdjustSelectedProductIds]
+  );
+  const bulkAdjustEffectiveProductIds = useMemo(() => {
+    if (bulkAdjustScopeMode === 'ALL') {
+      return bulkAdjustCandidateProductIds;
+    }
+    if (bulkAdjustScopeMode === 'INCLUDE') {
+      return bulkAdjustCandidateProductIds.filter((productId) => bulkAdjustSelectedProductIdSet.has(productId));
+    }
+    return bulkAdjustCandidateProductIds.filter((productId) => !bulkAdjustSelectedProductIdSet.has(productId));
+  }, [bulkAdjustCandidateProductIds, bulkAdjustScopeMode, bulkAdjustSelectedProductIdSet]);
+  const bulkAdjustPreviewRuleCount = useMemo(() => {
+    const effectiveSet = new Set(bulkAdjustEffectiveProductIds);
+    return bulkAdjustCandidateRules.filter((rule) => effectiveSet.has(rule.productId)).length;
+  }, [bulkAdjustCandidateRules, bulkAdjustEffectiveProductIds]);
 
   useEffect(() => {
     (async () => {
@@ -545,6 +639,11 @@ export default function PriceListsPage(): JSX.Element {
     }
   }, [priceLists, selectedPriceListId]);
 
+  useEffect(() => {
+    const allowed = new Set(bulkAdjustCandidateProductIds);
+    setBulkAdjustSelectedProductIds((prev) => prev.filter((id) => allowed.has(id)));
+  }, [bulkAdjustCandidateProductIds]);
+
   async function refreshPriceLists(): Promise<PriceListRecord[]> {
     const refreshed = await apiRequest<PriceListRecord[]>('/master-data/price-lists');
     setPriceLists(refreshed);
@@ -601,6 +700,13 @@ export default function PriceListsPage(): JSX.Element {
     setSelectedPriceListId(priceListId);
     setDraftNotes('');
     setRollbackReason('');
+    setBulkAdjustScopeMode('ALL');
+    setBulkAdjustFilterCategory('ALL');
+    setBulkAdjustFilterBrand('ALL');
+    setBulkAdjustFilterIsLpg('ANY');
+    setBulkAdjustFilterFlowMode('ALL');
+    setBulkAdjustItemSearch('');
+    setBulkAdjustSelectedProductIds([]);
     setPublishEffectiveFrom(toInputDateTime(new Date().toISOString()));
     setRollbackEffectiveFrom(toInputDateTime(new Date().toISOString()));
     await loadVersions(priceListId);
@@ -612,6 +718,7 @@ export default function PriceListsPage(): JSX.Element {
     setSelectedVersionId(null);
     setSelectedVersionDetail(null);
     setVersionError(null);
+    setBulkAdjustSelectedProductIds([]);
   }
 
   async function createDraftVersion(): Promise<void> {
@@ -654,6 +761,27 @@ export default function PriceListsPage(): JSX.Element {
       toastInfo('Bulk adjust', { description: 'Please provide a valid numeric value.' });
       return;
     }
+    if (bulkAdjustScopeMode === 'INCLUDE' && bulkAdjustSelectedProductIds.length === 0) {
+      toastInfo('Bulk adjust', { description: 'Select at least one item to include.' });
+      return;
+    }
+    const productIdsPayload =
+      bulkAdjustScopeMode === 'ALL'
+        ? undefined
+        : Array.from(new Set(bulkAdjustEffectiveProductIds.map((id) => String(id).trim()).filter(Boolean)));
+    if (bulkAdjustScopeMode !== 'ALL' && (!productIdsPayload || productIdsPayload.length === 0)) {
+      toastInfo('Bulk adjust', { description: 'No items matched your target selection. Adjust filters and try again.' });
+      return;
+    }
+    const categoryPayload = bulkAdjustFilterCategory === 'ALL' ? undefined : bulkAdjustFilterCategory;
+    const brandPayload = bulkAdjustFilterBrand === 'ALL' ? undefined : bulkAdjustFilterBrand;
+    const isLpgPayload =
+      bulkAdjustFilterIsLpg === 'ANY'
+        ? undefined
+        : bulkAdjustFilterIsLpg === 'LPG'
+          ? true
+          : false;
+    const flowModePayload = bulkAdjustFilterFlowMode === 'ALL' ? undefined : bulkAdjustFilterFlowMode;
     setVersionBusy(true);
     try {
       const result = await apiRequest<BulkAdjustResponse>(
@@ -663,7 +791,12 @@ export default function PriceListsPage(): JSX.Element {
           body: {
             mode: bulkAdjustMode,
             value,
-            apply_to: bulkAdjustApplyTo
+            apply_to: bulkAdjustApplyTo,
+            product_ids: productIdsPayload,
+            category: categoryPayload,
+            brand: brandPayload,
+            is_lpg: isLpgPayload,
+            flow_mode: flowModePayload
           }
         }
       );
@@ -1455,10 +1588,10 @@ export default function PriceListsPage(): JSX.Element {
                 <section className="rounded-xl border border-slate-200 p-3 dark:border-slate-700">
                   <h4 className="text-sm font-semibold text-slate-900 dark:text-slate-100">Bulk Adjust Draft</h4>
                   <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">
-                    Apply one adjustment to all or filtered draft rows.
+                    Apply one adjustment only to the items you target. Other items will stay unchanged.
                   </p>
                   <div className="mt-2 grid gap-2 md:grid-cols-12">
-                    <label className="text-xs md:col-span-3">
+                    <label className="text-xs md:col-span-2">
                       <span className="mb-1 block font-medium text-slate-700 dark:text-slate-200">Mode</span>
                       <select
                         className="w-full rounded-lg border border-slate-300 bg-white px-2 py-2 text-sm text-slate-900 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-100"
@@ -1469,7 +1602,7 @@ export default function PriceListsPage(): JSX.Element {
                         <option value="FIXED">Fixed Amount (PHP)</option>
                       </select>
                     </label>
-                    <label className="text-xs md:col-span-3">
+                    <label className="text-xs md:col-span-2">
                       <span className="mb-1 block font-medium text-slate-700 dark:text-slate-200">Value</span>
                       <input
                         className="w-full rounded-lg border border-slate-300 bg-white px-2 py-2 text-sm text-slate-900 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-100"
@@ -1479,7 +1612,7 @@ export default function PriceListsPage(): JSX.Element {
                         value={bulkAdjustValue}
                       />
                     </label>
-                    <label className="text-xs md:col-span-4">
+                    <label className="text-xs md:col-span-3">
                       <span className="mb-1 block font-medium text-slate-700 dark:text-slate-200">Apply To</span>
                       <select
                         className="w-full rounded-lg border border-slate-300 bg-white px-2 py-2 text-sm text-slate-900 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-100"
@@ -1495,6 +1628,24 @@ export default function PriceListsPage(): JSX.Element {
                         <option value="COST_ONLY">Cost Only</option>
                       </select>
                     </label>
+                    <label className="text-xs md:col-span-3">
+                      <span className="mb-1 block font-medium text-slate-700 dark:text-slate-200">Target Mode</span>
+                      <select
+                        className="w-full rounded-lg border border-slate-300 bg-white px-2 py-2 text-sm text-slate-900 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-100"
+                        onChange={(event) =>
+                          setBulkAdjustScopeMode(
+                            event.target.value === 'INCLUDE' || event.target.value === 'EXCLUDE'
+                              ? event.target.value
+                              : 'ALL'
+                          )
+                        }
+                        value={bulkAdjustScopeMode}
+                      >
+                        <option value="ALL">All matched items</option>
+                        <option value="INCLUDE">Only selected items</option>
+                        <option value="EXCLUDE">All except selected items</option>
+                      </select>
+                    </label>
                     <div className="flex items-end md:col-span-2">
                       <button
                         className="w-full rounded-lg border border-brandPrimary px-3 py-2 text-xs font-semibold text-brandPrimary hover:bg-brandPrimary/10 disabled:cursor-not-allowed disabled:opacity-60"
@@ -1506,6 +1657,152 @@ export default function PriceListsPage(): JSX.Element {
                       </button>
                     </div>
                   </div>
+
+                  <div className="mt-2 grid gap-2 rounded-lg border border-slate-200 bg-slate-50 p-2 md:grid-cols-12 dark:border-slate-700 dark:bg-slate-800/60">
+                    <label className="text-xs md:col-span-3">
+                      <span className="mb-1 block font-medium text-slate-700 dark:text-slate-200">Category Filter</span>
+                      <select
+                        className="w-full rounded-lg border border-slate-300 bg-white px-2 py-2 text-sm text-slate-900 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-100"
+                        onChange={(event) => setBulkAdjustFilterCategory(event.target.value)}
+                        value={bulkAdjustFilterCategory}
+                      >
+                        {productCategoryOptions.map((category) => (
+                          <option key={category} value={category}>
+                            {category === 'ALL' ? 'All Categories' : category}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                    <label className="text-xs md:col-span-3">
+                      <span className="mb-1 block font-medium text-slate-700 dark:text-slate-200">Brand Filter</span>
+                      <select
+                        className="w-full rounded-lg border border-slate-300 bg-white px-2 py-2 text-sm text-slate-900 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-100"
+                        onChange={(event) => setBulkAdjustFilterBrand(event.target.value)}
+                        value={bulkAdjustFilterBrand}
+                      >
+                        {productBrandOptions.map((brand) => (
+                          <option key={brand} value={brand}>
+                            {brand === 'ALL' ? 'All Brands' : brand}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                    <label className="text-xs md:col-span-2">
+                      <span className="mb-1 block font-medium text-slate-700 dark:text-slate-200">LPG Filter</span>
+                      <select
+                        className="w-full rounded-lg border border-slate-300 bg-white px-2 py-2 text-sm text-slate-900 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-100"
+                        onChange={(event) =>
+                          setBulkAdjustFilterIsLpg(
+                            event.target.value === 'LPG' || event.target.value === 'NON_LPG' ? event.target.value : 'ANY'
+                          )
+                        }
+                        value={bulkAdjustFilterIsLpg}
+                      >
+                        <option value="ANY">All</option>
+                        <option value="LPG">LPG only</option>
+                        <option value="NON_LPG">Non-LPG only</option>
+                      </select>
+                    </label>
+                    <label className="text-xs md:col-span-2">
+                      <span className="mb-1 block font-medium text-slate-700 dark:text-slate-200">Flow Filter</span>
+                      <select
+                        className="w-full rounded-lg border border-slate-300 bg-white px-2 py-2 text-sm text-slate-900 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-100"
+                        onChange={(event) =>
+                          setBulkAdjustFilterFlowMode(
+                            event.target.value === 'ANY' || event.target.value === 'REFILL_EXCHANGE' || event.target.value === 'NON_REFILL'
+                              ? event.target.value
+                              : 'ALL'
+                          )
+                        }
+                        value={bulkAdjustFilterFlowMode}
+                      >
+                        <option value="ALL">All Flows</option>
+                        <option value="ANY">Any Flow</option>
+                        <option value="REFILL_EXCHANGE">Refill Exchange</option>
+                        <option value="NON_REFILL">Non-Refill</option>
+                      </select>
+                    </label>
+                    <label className="text-xs md:col-span-2">
+                      <span className="mb-1 block font-medium text-slate-700 dark:text-slate-200">Search Items</span>
+                      <input
+                        className="w-full rounded-lg border border-slate-300 bg-white px-2 py-2 text-sm text-slate-900 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-100"
+                        onChange={(event) => setBulkAdjustItemSearch(event.target.value)}
+                        placeholder="Name or code..."
+                        value={bulkAdjustItemSearch}
+                      />
+                    </label>
+                  </div>
+
+                  <p className="mt-2 text-xs text-slate-600 dark:text-slate-300">
+                    Matched by filters: <span className="font-semibold">{bulkAdjustCandidateProductIds.length}</span> item(s),{' '}
+                    <span className="font-semibold">{bulkAdjustCandidateRules.length}</span> row(s) | Target now:{' '}
+                    <span className="font-semibold">{bulkAdjustEffectiveProductIds.length}</span> item(s),{' '}
+                    <span className="font-semibold">{bulkAdjustPreviewRuleCount}</span> row(s).
+                  </p>
+
+                  {bulkAdjustScopeMode !== 'ALL' ? (
+                    <div className="mt-2 rounded-lg border border-slate-200 p-2 dark:border-slate-700">
+                      <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+                        <p className="text-xs font-semibold text-slate-700 dark:text-slate-200">
+                          {bulkAdjustScopeMode === 'INCLUDE' ? 'Selected Items to Adjust' : 'Selected Items to Skip'}
+                        </p>
+                        <div className="flex items-center gap-2">
+                          <button
+                            className="rounded-md border border-slate-300 px-2 py-1 text-[11px] font-semibold text-slate-700 hover:bg-slate-100 dark:border-slate-600 dark:text-slate-200 dark:hover:bg-slate-800"
+                            onClick={() => setBulkAdjustSelectedProductIds(bulkAdjustCandidateProductIds)}
+                            type="button"
+                          >
+                            Select All Matched
+                          </button>
+                          <button
+                            className="rounded-md border border-slate-300 px-2 py-1 text-[11px] font-semibold text-slate-700 hover:bg-slate-100 dark:border-slate-600 dark:text-slate-200 dark:hover:bg-slate-800"
+                            onClick={() => setBulkAdjustSelectedProductIds([])}
+                            type="button"
+                          >
+                            Clear
+                          </button>
+                        </div>
+                      </div>
+                      {bulkAdjustCandidateProducts.length > 0 ? (
+                        <div className="max-h-44 space-y-1 overflow-y-auto pr-1">
+                          {bulkAdjustCandidateProducts.map((product) => {
+                            const checked = bulkAdjustSelectedProductIdSet.has(product.id);
+                            return (
+                              <label
+                                className={`flex cursor-pointer items-center justify-between gap-2 rounded-md border px-2 py-1.5 ${
+                                  checked
+                                    ? 'border-brandPrimary bg-brandPrimary/10'
+                                    : 'border-slate-200 dark:border-slate-700'
+                                }`}
+                                key={product.id}
+                              >
+                                <div className="min-w-0">
+                                  <p className="truncate text-xs font-semibold text-slate-900 dark:text-slate-100">
+                                    {product.name}
+                                  </p>
+                                  <p className="truncate text-[11px] text-slate-500 dark:text-slate-400">
+                                    {product.sku} | {product.category} | {product.brand} | {product.isLpg ? 'LPG' : 'NON-LPG'}
+                                  </p>
+                                </div>
+                                <input
+                                  checked={checked}
+                                  className="h-4 w-4"
+                                  onChange={() =>
+                                    setBulkAdjustSelectedProductIds((prev) =>
+                                      prev.includes(product.id) ? prev.filter((id) => id !== product.id) : [...prev, product.id]
+                                    )
+                                  }
+                                  type="checkbox"
+                                />
+                              </label>
+                            );
+                          })}
+                        </div>
+                      ) : (
+                        <p className="text-xs text-slate-500 dark:text-slate-400">No items matched current filters.</p>
+                      )}
+                    </div>
+                  ) : null}
                 </section>
 
                 <section className="grid gap-3 md:grid-cols-2">
