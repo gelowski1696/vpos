@@ -1061,10 +1061,8 @@ export class MasterDataController {
   async getInventoryOpeningSnapshot(
     @Req() req: RequestWithTenant
   ): Promise<ReturnType<MasterDataService['getInventoryOpeningSnapshot']>> {
-    await this.masterDataService.enforceInventoryReportAccess(
-      req.user?.company_id ?? undefined,
-      req.user?.roles ?? []
-    );
+    // Keep this endpoint available for branch bootstrap/download flows (desktop/mobile cashier).
+    // Inventory report restrictions are enforced on /reports/inventory/* endpoints.
     return this.masterDataService.getInventoryOpeningSnapshot();
   }
 
