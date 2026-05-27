@@ -1,7 +1,9 @@
 'use client';
 
 import { type FormEvent, useEffect, useMemo, useState } from 'react';
+import { TablePaginationControls } from '../../../components/table-pagination-controls';
 import { apiRequest } from '../../../lib/api-client';
+import { useTablePagination } from '../../../lib/table-pagination';
 import { toastError, toastInfo, toastSuccess } from '../../../lib/web-toast';
 
 type CustomerRecord = {
@@ -100,6 +102,12 @@ export default function CustomerCategoriesPage(): JSX.Element {
       ].some((value) => value.toLowerCase().includes(term))
     );
   }, [categories, search]);
+
+  const paginatedCategories = useTablePagination(filteredCategories, {
+    initialPageSize: 25,
+    pageSizeOptions: [10, 25, 50, 100],
+    resetKey: `${search}|${filteredCategories.length}`
+  });
 
   async function load(): Promise<void> {
     setLoading(true);
@@ -341,7 +349,7 @@ export default function CustomerCategoriesPage(): JSX.Element {
                   <td className="px-4 py-8 text-center text-slate-500" colSpan={6}>No customer categories found.</td>
                 </tr>
               ) : (
-                filteredCategories.map((category) => (
+                paginatedCategories.pageRows.map((category) => (
                   <tr className="hover:bg-slate-50 dark:hover:bg-slate-800/50" key={category.id}>
                     <td className="px-4 py-3 align-top">
                       <p className="font-semibold text-slate-900 dark:text-slate-100">{category.name}</p>
@@ -391,7 +399,7 @@ export default function CustomerCategoriesPage(): JSX.Element {
           ) : filteredCategories.length === 0 ? (
             <p className="rounded-xl border border-slate-200 p-4 text-sm text-slate-500 dark:border-slate-700">No customer categories found.</p>
           ) : (
-            filteredCategories.map((category) => (
+            paginatedCategories.pageRows.map((category) => (
               <article className="rounded-xl border border-slate-200 p-3 dark:border-slate-700" key={category.id}>
                 <div className="flex items-start justify-between gap-3">
                   <div>
@@ -412,6 +420,18 @@ export default function CustomerCategoriesPage(): JSX.Element {
             ))
           )}
         </div>
+
+        <TablePaginationControls
+          endRow={paginatedCategories.endRow}
+          onPageChange={paginatedCategories.setPage}
+          onPageSizeChange={paginatedCategories.setPageSize}
+          page={paginatedCategories.page}
+          pageSize={paginatedCategories.pageSize}
+          pageSizeOptions={paginatedCategories.pageSizeOptions}
+          startRow={paginatedCategories.startRow}
+          totalItems={paginatedCategories.totalItems}
+          totalPages={paginatedCategories.totalPages}
+        />
       </section>
       ) : null}
 

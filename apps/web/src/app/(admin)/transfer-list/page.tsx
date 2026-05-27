@@ -2,7 +2,9 @@
 
 import { useEffect, useMemo, useState } from 'react';
 import { useSearchParams } from 'next/navigation';
+import { TablePaginationControls } from '../../../components/table-pagination-controls';
 import { apiRequest } from '../../../lib/api-client';
+import { useTablePagination } from '../../../lib/table-pagination';
 
 type BranchRecord = {
   id: string;
@@ -320,6 +322,12 @@ export default function TransferListPage(): JSX.Element {
     [filteredRows]
   );
 
+  const paginatedFilteredRows = useTablePagination(filteredRows, {
+    initialPageSize: 25,
+    pageSizeOptions: [10, 25, 50, 100],
+    resetKey: `${branchFilter}|${statusFilter}|${modeFilter}|${since}|${until}|${filteredRows.length}`
+  });
+
   function locationLabel(id: string, fallbackLabel?: string | null): string {
     if (fallbackLabel && fallbackLabel.trim()) {
       return fallbackLabel;
@@ -482,7 +490,7 @@ export default function TransferListPage(): JSX.Element {
                   </td>
                 </tr>
               ) : (
-                filteredRows.map((row) => {
+                paginatedFilteredRows.pageRows.map((row) => {
                   const sourceLocation = locationById.get(row.source_location_id);
                   const destinationLocation = locationById.get(row.destination_location_id);
                   const transferMode = row.transfer_mode ?? deriveModeFromLocations(sourceLocation, destinationLocation);
@@ -523,6 +531,17 @@ export default function TransferListPage(): JSX.Element {
             </tbody>
           </table>
         </div>
+        <TablePaginationControls
+          endRow={paginatedFilteredRows.endRow}
+          onPageChange={paginatedFilteredRows.setPage}
+          onPageSizeChange={paginatedFilteredRows.setPageSize}
+          page={paginatedFilteredRows.page}
+          pageSize={paginatedFilteredRows.pageSize}
+          pageSizeOptions={paginatedFilteredRows.pageSizeOptions}
+          startRow={paginatedFilteredRows.startRow}
+          totalItems={paginatedFilteredRows.totalItems}
+          totalPages={paginatedFilteredRows.totalPages}
+        />
       </div>
 
       {selectedTransfer ? (

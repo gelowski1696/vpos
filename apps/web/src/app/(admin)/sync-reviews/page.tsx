@@ -1,7 +1,9 @@
 'use client';
 
 import { useEffect, useMemo, useState } from 'react';
+import { TablePaginationControls } from '../../../components/table-pagination-controls';
 import { apiRequest } from '../../../lib/api-client';
+import { useTablePagination } from '../../../lib/table-pagination';
 import { toastError, toastInfo, toastSuccess } from '../../../lib/web-toast';
 
 type SyncReviewRow = {
@@ -177,6 +179,18 @@ export default function SyncReviewsPage(): JSX.Element {
     return [];
   }, [staleApprovedTransfers, staleCreatedTransfers, transferDrillFilter]);
 
+  const paginatedReviewRows = useTablePagination(filteredRows, {
+    initialPageSize: 25,
+    pageSizeOptions: [10, 25, 50, 100],
+    resetKey: `${statusFilter}|${quickFilter}|${filteredRows.length}`
+  });
+
+  const paginatedDrilledTransferRows = useTablePagination(drilledTransferRows, {
+    initialPageSize: 25,
+    pageSizeOptions: [10, 25, 50, 100],
+    resetKey: `${transferDrillFilter}|${drilledTransferRows.length}`
+  });
+
   const resolveReview = async (row: SyncReviewRow): Promise<void> => {
     const text = resolution.trim();
     if (!text) {
@@ -347,7 +361,7 @@ export default function SyncReviewsPage(): JSX.Element {
                 </tr>
               </thead>
               <tbody>
-                {drilledTransferRows.map((row) => (
+                {paginatedDrilledTransferRows.pageRows.map((row) => (
                   <tr className="border-t border-slate-100 dark:border-slate-700" key={row.id}>
                     <td className="py-2 pr-3 font-mono text-xs text-slate-700 dark:text-slate-200">{row.id}</td>
                     <td className="py-2 pr-3 text-slate-700 dark:text-slate-200">{row.status}</td>
@@ -382,6 +396,17 @@ export default function SyncReviewsPage(): JSX.Element {
               </tbody>
             </table>
           </div>
+          <TablePaginationControls
+            endRow={paginatedDrilledTransferRows.endRow}
+            onPageChange={paginatedDrilledTransferRows.setPage}
+            onPageSizeChange={paginatedDrilledTransferRows.setPageSize}
+            page={paginatedDrilledTransferRows.page}
+            pageSize={paginatedDrilledTransferRows.pageSize}
+            pageSizeOptions={paginatedDrilledTransferRows.pageSizeOptions}
+            startRow={paginatedDrilledTransferRows.startRow}
+            totalItems={paginatedDrilledTransferRows.totalItems}
+            totalPages={paginatedDrilledTransferRows.totalPages}
+          />
         </section>
       ) : null}
 
@@ -406,7 +431,7 @@ export default function SyncReviewsPage(): JSX.Element {
               </tr>
             </thead>
             <tbody>
-              {filteredRows.map((row) => (
+              {paginatedReviewRows.pageRows.map((row) => (
                 <tr className="border-t border-slate-100 dark:border-slate-700" key={row.id}>
                   <td className="py-2 pr-3 text-slate-700 dark:text-slate-200">{row.created_at}</td>
                   <td className="py-2 pr-3">
@@ -471,9 +496,20 @@ export default function SyncReviewsPage(): JSX.Element {
             </tbody>
           </table>
         </div>
+        <TablePaginationControls
+          endRow={paginatedReviewRows.endRow}
+          onPageChange={paginatedReviewRows.setPage}
+          onPageSizeChange={paginatedReviewRows.setPageSize}
+          page={paginatedReviewRows.page}
+          pageSize={paginatedReviewRows.pageSize}
+          pageSizeOptions={paginatedReviewRows.pageSizeOptions}
+          startRow={paginatedReviewRows.startRow}
+          totalItems={paginatedReviewRows.totalItems}
+          totalPages={paginatedReviewRows.totalPages}
+        />
 
         <div className="space-y-3 md:hidden">
-          {filteredRows.map((row) => (
+          {paginatedReviewRows.pageRows.map((row) => (
             <article className="rounded-xl border border-slate-200 bg-white p-3 dark:border-slate-700 dark:bg-slate-900/60" key={row.id}>
               <div className="flex items-center justify-between gap-2">
                 <p className="text-sm font-semibold text-slate-900 dark:text-slate-100">{row.entity}</p>

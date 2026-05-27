@@ -2,7 +2,9 @@
 
 import { type ReactNode, useEffect, useMemo, useRef, useState } from 'react';
 import { apiRequest } from '../lib/api-client';
+import { useTablePagination } from '../lib/table-pagination';
 import { toastError, toastSuccess } from '../lib/web-toast';
+import { TablePaginationControls } from './table-pagination-controls';
 
 export type FieldType = 'text' | 'number' | 'boolean' | 'textarea' | 'date' | 'select' | 'password';
 
@@ -340,6 +342,14 @@ export function EntityManager({
     return decorated.map((entry) => entry.item);
   }, [columns, items, searchTerm, sortState, sortableColumnSet, tableColumnOverrides]);
 
+  const paginatedItems = useTablePagination(filteredItems, {
+    initialPageSize: 25,
+    pageSizeOptions: [10, 25, 50, 100],
+    resetKey: `${searchTerm}|${sortState?.column ?? ''}|${sortState?.direction ?? ''}|${
+      filteredItems.length
+    }`
+  });
+
   function toggleSort(column: string): void {
     if (!sortableColumnSet.has(column)) {
       return;
@@ -643,7 +653,7 @@ export function EntityManager({
                   </tr>
                 </thead>
                 <tbody>
-                  {filteredItems.map((item, rowIndex) => (
+                  {paginatedItems.pageRows.map((item, rowIndex) => (
                     <tr
                       className={`border-b border-slate-100 text-sm text-slate-800 transition hover:bg-slate-50 dark:border-slate-800 dark:text-slate-200 dark:hover:bg-slate-800/50 ${rowIndex % 2 === 0 ? 'bg-white dark:bg-slate-900' : 'bg-slate-50/50 dark:bg-slate-900/70'}`}
                       key={String(item.id)}
@@ -706,7 +716,7 @@ export function EntityManager({
             </div>
 
             <div className="space-y-3 p-3 md:hidden">
-              {filteredItems.map((item) => (
+              {paginatedItems.pageRows.map((item) => (
                 <article className="rounded-xl border border-slate-200 bg-white p-3 shadow-sm dark:border-slate-700 dark:bg-slate-800/70" key={String(item.id)}>
                   <div className="mb-2 flex items-center justify-between">
                     <p className="text-sm font-semibold text-slate-900 dark:text-slate-100">{compactPreview(item.name ?? item.code ?? item.id)}</p>
@@ -766,6 +776,18 @@ export function EntityManager({
                 </article>
               ))}
             </div>
+
+            <TablePaginationControls
+              endRow={paginatedItems.endRow}
+              onPageChange={paginatedItems.setPage}
+              onPageSizeChange={paginatedItems.setPageSize}
+              page={paginatedItems.page}
+              pageSize={paginatedItems.pageSize}
+              pageSizeOptions={paginatedItems.pageSizeOptions}
+              startRow={paginatedItems.startRow}
+              totalItems={paginatedItems.totalItems}
+              totalPages={paginatedItems.totalPages}
+            />
           </>
         )}
       </div>

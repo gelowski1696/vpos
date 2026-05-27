@@ -386,6 +386,7 @@ model Company {
   syncReviews               SyncReview[]
   idempotencyKeys           IdempotencyKey[]
   auditLogs                 AuditLog[]
+  databaseBackups           TenantDatabaseBackup[]
   eventSales                EventSales[]
   eventStock                EventStockMovement[]
   eventDelivery             EventDeliveryPerformance[]
@@ -677,6 +678,7 @@ model User {
   actedDeliveryStatusEvents     DeliveryStatusEvent[]     @relation("DeliveryStatusEventActor")
   pettyCashEntries              PettyCashEntry[]
   auditLogs                     AuditLog[]
+  createdDatabaseBackups        TenantDatabaseBackup[]      @relation("TenantDatabaseBackupCreatedBy")
   discountOverrides             DiscountOverrideLog[]
   requestedTransfers            StockTransfer[]
   postedCustomerPayments        CustomerPayment[]
@@ -2064,6 +2066,26 @@ model AuditLog {
   user    User?   @relation(fields: [userId], references: [id], onDelete: SetNull)
 
   @@index([companyId, createdAt])
+}
+
+model TenantDatabaseBackup {
+  id              String   @id @default(uuid())
+  companyId       String
+  createdByUserId String?
+  label           String?
+  retentionMonths Int      @default(3)
+  expiresAt       DateTime
+  tableCount      Int
+  rowCount        Int
+  payload         Json
+  createdAt       DateTime @default(now())
+
+  company   Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  createdBy User?   @relation("TenantDatabaseBackupCreatedBy", fields: [createdByUserId], references: [id], onDelete: SetNull)
+
+  @@index([companyId, createdAt])
+  @@index([companyId, expiresAt])
+  @@index([companyId, createdByUserId, createdAt])
 }
 
 model ItemPriceCostAudit {

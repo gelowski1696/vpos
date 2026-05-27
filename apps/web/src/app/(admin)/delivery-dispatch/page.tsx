@@ -2,12 +2,14 @@
 
 import { useEffect, useMemo, useState } from 'react';
 import { useSearchParams } from 'next/navigation';
+import { TablePaginationControls } from '../../../components/table-pagination-controls';
 import {
   API_BASE_URL,
   apiRequest,
   getAccessToken,
   getSessionClientId
 } from '../../../lib/api-client';
+import { useTablePagination } from '../../../lib/table-pagination';
 import { toastError, toastInfo, toastSuccess } from '../../../lib/web-toast';
 
 type EntitlementResponse = {
@@ -160,6 +162,12 @@ export default function DeliveryDispatchPage(): JSX.Element {
       ),
     [users]
   );
+
+  const paginatedRows = useTablePagination(rows, {
+    initialPageSize: 25,
+    pageSizeOptions: [10, 25, 50, 100],
+    resetKey: `${statusFilter}|${branchFilter}|${riderFilter}|${saleFilter}|${rows.length}`
+  });
 
   async function loadMeta(): Promise<void> {
     setLoading(true);
@@ -479,7 +487,7 @@ export default function DeliveryDispatchPage(): JSX.Element {
               <tbody>
                 {rows.length === 0 ? (
                   <tr><td className="px-3 py-6 text-center text-slate-500" colSpan={5}>{loading ? 'Loading...' : 'No delivery orders found.'}</td></tr>
-                ) : rows.map((row) => {
+                ) : paginatedRows.pageRows.map((row) => {
                   const riderLabel = row.personnel
                     .map((entry) => userById.get(entry.user_id)?.fullName ?? entry.user_id)
                     .join(', ') || '-';
@@ -496,6 +504,17 @@ export default function DeliveryDispatchPage(): JSX.Element {
               </tbody>
             </table>
           </div>
+          <TablePaginationControls
+            endRow={paginatedRows.endRow}
+            onPageChange={paginatedRows.setPage}
+            onPageSizeChange={paginatedRows.setPageSize}
+            page={paginatedRows.page}
+            pageSize={paginatedRows.pageSize}
+            pageSizeOptions={paginatedRows.pageSizeOptions}
+            startRow={paginatedRows.startRow}
+            totalItems={paginatedRows.totalItems}
+            totalPages={paginatedRows.totalPages}
+          />
         </article>
 
         <article className="rounded-2xl border border-slate-200 bg-white p-4 dark:border-slate-700 dark:bg-slate-900">

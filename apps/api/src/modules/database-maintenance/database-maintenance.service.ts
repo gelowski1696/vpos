@@ -1,10 +1,7 @@
 import { BadRequestException, Injectable, ServiceUnavailableException } from '@nestjs/common';
-import { TenancyDatastoreMode } from '@prisma/client';
-import type { PrismaClient } from '@prisma/client';
-import {
-  TenantDatasourceRouterService,
-  type TenantPrismaBinding
-} from '../../common/tenant-datasource-router.service';
+import { TenancyDatastoreMode, type Prisma, type PrismaClient } from '@prisma/client';
+import { PrismaService } from '../../common/prisma.service';
+import { TenantDatasourceRouterService } from '../../common/tenant-datasource-router.service';
 
 type TableMetadata = {
   tableName: string;
@@ -47,6 +44,21 @@ export type TenantDatabaseBackupResult = {
   payload: TenantDatabaseBackupPayload;
 };
 
+export type TenantDatabaseBackupSummary = {
+  id: string;
+  label: string | null;
+  createdAt: string;
+  retentionMonths: 1 | 3 | 6;
+  expiresAt: string;
+  createdByUserId: string | null;
+  createdByName: string | null;
+  rowCount: number;
+  tableCount: number;
+  companyCode: string | null;
+  companyName: string | null;
+  datastoreMode: TenancyDatastoreMode;
+};
+
 export type TenantDatabaseRestoreResult = {
   restoredAt: string;
   companyId: string;
@@ -60,15 +72,27 @@ type TableRowMap = Map<string, Record<string, unknown>>;
 type RowsByTable = Map<string, TableRowMap>;
 
 const SYSTEM_TABLES = new Set(['_prisma_migrations']);
+const BACKUP_EXCLUDED_TABLES = new Set(['TenantDatabaseBackup']);
+const BACKUP_RETENTION_OPTIONS = [1, 3, 6] as const;
+const DEFAULT_BACKUP_RETENTION_MONTHS: (typeof BACKUP_RETENTION_OPTIONS)[number] = 3;
 
 @Injectable()
 export class DatabaseMaintenanceService {
-  constructor(private readonly tenantRouter: TenantDatasourceRouterService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly tenantRouter: TenantDatasourceRouterService
+  ) {}
 
   async createBackup(companyId: string): Promise<TenantDatabaseBackupResult> {
     const binding = await this.tenantRouter.forCompany(companyId);
-    const metadata = await this.loadTableMetadata(binding.client);
-    const foreignKeys = await this.loadForeignKeys(binding.client);
+    const metadata = (await this.loadTableMetadata(binding.client)).filter(
+      (table) => !BACKUP_EXCLUDED_TABLES.has(table.tableName)
+    );
+    const foreignKeys = (await this.loadForeignKeys(binding.client)).filter(
+      (fk) =>
+        !BACKUP_EXCLUDED_TABLES.has(fk.childTable) &&
+        !BACKUP_EXCLUDED_TABLES.has(fk.parentTable)
+    );
     const rowsByTable = await this.collectTenantRows(binding.client, companyId, metadata, foreignKeys);
 
     const companyRow = rowsByTable.get('Company')?.values().next().value ?? null;
@@ -113,6 +137,118 @@ export class DatabaseMaintenanceService {
     };
   }
 
+  async createOnlineBackup(
+    companyId: string,
+    userId: string | null,
+    label?: string | null,
+    retentionMonthsRaw?: number | string | null
+  ): Promise<TenantDatabaseBackupSummary> {
+    const retentionMonths = this.resolveRetentionMonths(retentionMonthsRaw);
+    const expiresAt = this.computeBackupExpiry(retentionMonths);
+    const backup = await this.createBackup(companyId);
+    const saved = await this.prisma.tenantDatabaseBackup.create({
+      data: {
+        companyId,
+        createdByUserId: userId,
+        label: this.normalizeBackupLabel(label),
+        retentionMonths,
+        expiresAt,
+        tableCount: backup.payload.summary.tableCount,
+        rowCount: backup.payload.summary.rowCount,
+        payload: this.serializeBackupPayloadForStorage(backup.payload)
+      },
+      include: {
+        createdBy: {
+          select: { fullName: true }
+        }
+      }
+    });
+
+    await this.cleanupExpiredBackups(companyId);
+    return this.mapBackupSummary(saved, backup.payload);
+  }
+
+  async listOnlineBackups(
+    companyId: string,
+    limitRaw?: number
+  ): Promise<TenantDatabaseBackupSummary[]> {
+    await this.cleanupExpiredBackups(companyId);
+    const limit = this.resolveOnlineBackupLimit(limitRaw);
+    const rows = await this.prisma.tenantDatabaseBackup.findMany({
+      where: { companyId },
+      orderBy: { createdAt: 'desc' },
+      take: limit,
+      include: {
+        createdBy: {
+          select: { fullName: true }
+        }
+      }
+    });
+
+    return rows.map((row) => {
+      const payload = this.normalizeBackupPayload(row.payload);
+      return this.mapBackupSummary(row, payload);
+    });
+  }
+
+  async restoreOnlineBackup(
+    companyId: string,
+    backupId: string
+  ): Promise<{ backup: TenantDatabaseBackupSummary; restore: TenantDatabaseRestoreResult }> {
+    await this.cleanupExpiredBackups(companyId);
+    const row = await this.prisma.tenantDatabaseBackup.findFirst({
+      where: {
+        id: backupId,
+        companyId
+      },
+      include: {
+        createdBy: {
+          select: { fullName: true }
+        }
+      }
+    });
+    if (!row) {
+      throw new BadRequestException('Selected online backup was not found for this tenant.');
+    }
+
+    const payload = this.normalizeBackupPayload(row.payload);
+    const restore = await this.restoreBackup(companyId, payload);
+    return {
+      backup: this.mapBackupSummary(row, payload),
+      restore
+    };
+  }
+
+  async deleteOnlineBackup(
+    companyId: string,
+    backupId: string
+  ): Promise<TenantDatabaseBackupSummary> {
+    await this.cleanupExpiredBackups(companyId);
+    const row = await this.prisma.tenantDatabaseBackup.findFirst({
+      where: {
+        id: backupId,
+        companyId
+      },
+      include: {
+        createdBy: {
+          select: { fullName: true }
+        }
+      }
+    });
+    if (!row) {
+      throw new BadRequestException('Selected online backup was not found for this tenant.');
+    }
+
+    const payload = this.normalizeBackupPayload(row.payload);
+    await this.prisma.tenantDatabaseBackup.deleteMany({
+      where: {
+        companyId,
+        id: backupId
+      }
+    });
+    return this.mapBackupSummary(row, payload);
+  }
+
   async restoreBackup(
     companyId: string,
     payload: unknown
@@ -131,11 +267,7 @@ export class DatabaseMaintenanceService {
     const selfForeignKeysByTable = this.buildSelfForeignKeyMap(foreignKeys);
 
     const backupRowsByTable = this.normalizeBackupTables(normalized.tables, metadataByName);
-    const backupTableNames = [...new Set(
-      normalized.tables
-        .map((table) => String(table.tableName ?? '').trim())
-        .filter((tableName) => tableName.length > 0)
-    )];
+    const backupTableNames = [...backupRowsByTable.keys()];
     if (backupTableNames.length === 0) {
       throw new BadRequestException('Backup payload has no restorable table rows.');
     }
@@ -281,6 +413,9 @@ export class DatabaseMaintenanceService {
     for (const table of tables) {
       const tableName = String(table.tableName ?? '').trim();
       if (!tableName) {
+        continue;
+      }
+      if (BACKUP_EXCLUDED_TABLES.has(tableName)) {
         continue;
       }
       const tableMeta = metadataByName.get(tableName);
@@ -735,6 +870,93 @@ export class DatabaseMaintenanceService {
         parentTable: row.parentTable,
         parentColumn: row.parentColumn
       }));
+  }
+
+  private async cleanupExpiredBackups(companyId: string): Promise<void> {
+    const now = new Date();
+    await this.prisma.tenantDatabaseBackup.deleteMany({
+      where: {
+        companyId,
+        expiresAt: { lte: now }
+      }
+    });
+  }
+
+  private resolveOnlineBackupLimit(limitRaw?: number): number {
+    const fallback = this.readEnvInt('VPOS_ONLINE_BACKUP_LIST_LIMIT', 25, 1, 100);
+    if (!Number.isFinite(Number(limitRaw))) {
+      return fallback;
+    }
+    const value = Number(limitRaw);
+    if (value <= 0) {
+      return fallback;
+    }
+    return Math.min(Math.max(Math.floor(value), 1), 100);
+  }
+
+  private readEnvInt(name: string, fallback: number, min: number, max: number): number {
+    const raw = process.env[name];
+    const parsed = Number.parseInt(String(raw ?? '').trim(), 10);
+    if (!Number.isFinite(parsed)) {
+      return fallback;
+    }
+    return Math.min(Math.max(parsed, min), max);
+  }
+
+  private normalizeBackupLabel(label?: string | null): string | null {
+    const value = String(label ?? '').trim();
+    if (!value) {
+      return null;
+    }
+    return value.slice(0, 120);
+  }
+
+  private resolveRetentionMonths(valueRaw?: number | string | null): 1 | 3 | 6 {
+    const parsed = Number.parseInt(String(valueRaw ?? '').trim(), 10);
+    if ((BACKUP_RETENTION_OPTIONS as readonly number[]).includes(parsed)) {
+      return parsed as 1 | 3 | 6;
+    }
+    return DEFAULT_BACKUP_RETENTION_MONTHS;
+  }
+
+  private computeBackupExpiry(retentionMonths: 1 | 3 | 6): Date {
+    const expiresAt = new Date();
+    expiresAt.setMonth(expiresAt.getMonth() + retentionMonths);
+    return expiresAt;
+  }
+
+  private serializeBackupPayloadForStorage(payload: TenantDatabaseBackupPayload): Prisma.InputJsonValue {
+    return JSON.parse(JSON.stringify(payload)) as Prisma.InputJsonValue;
+  }
+
+  private mapBackupSummary(
+    row: {
+      id: string;
+      label: string | null;
+      createdAt: Date;
+      retentionMonths: number;
+      expiresAt: Date;
+      createdByUserId: string | null;
+      rowCount: number;
+      tableCount: number;
+      createdBy?: { fullName: string } | null;
+    },
+    payload: TenantDatabaseBackupPayload
+  ): TenantDatabaseBackupSummary {
+    return {
+      id: row.id,
+      label: row.label,
+      createdAt: row.createdAt.toISOString(),
+      retentionMonths: this.resolveRetentionMonths(row.retentionMonths),
+      expiresAt: row.expiresAt.toISOString(),
+      createdByUserId: row.createdByUserId,
+      createdByName: row.createdBy?.fullName ?? null,
+      rowCount: row.rowCount,
+      tableCount: row.tableCount,
+      companyCode: payload.companyCode,
+      companyName: payload.companyName,
+      datastoreMode: payload.datastoreMode
+    };
   }
 
   private quoteIdentifier(value: string): string {

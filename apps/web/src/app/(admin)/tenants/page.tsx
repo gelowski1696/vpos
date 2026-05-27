@@ -1,7 +1,9 @@
 'use client';
 
 import { useEffect, useMemo, useState } from 'react';
+import { TablePaginationControls } from '../../../components/table-pagination-controls';
 import { apiRequest } from '../../../lib/api-client';
+import { useTablePagination } from '../../../lib/table-pagination';
 import { toastError, toastInfo, toastSuccess } from '../../../lib/web-toast';
 
 type EntitlementStatus = 'ACTIVE' | 'PAST_DUE' | 'SUSPENDED' | 'CANCELED';
@@ -290,6 +292,12 @@ export default function TenantsPage(): JSX.Element {
       )
     );
   }, [items, search]);
+
+  const paginatedFiltered = useTablePagination(filtered, {
+    initialPageSize: 25,
+    pageSizeOptions: [10, 25, 50, 100],
+    resetKey: `${search}|${filtered.length}`
+  });
 
   function openOverride(row: TenantSummary): void {
     setError(null);
@@ -719,7 +727,7 @@ export default function TenantsPage(): JSX.Element {
                   </tr>
                 </thead>
                 <tbody>
-                  {filtered.map((row, index) => {
+                  {paginatedFiltered.pageRows.map((row, index) => {
                     const addonSummary = summarizeTenantAddons(row.addons);
                     const addonPreview = addonSummary.enabledLabels.slice(0, 3);
                     const addonOverflow = Math.max(0, addonSummary.enabledCount - addonPreview.length);
@@ -873,7 +881,7 @@ export default function TenantsPage(): JSX.Element {
             </div>
 
             <div className="space-y-3 p-3 md:hidden">
-              {filtered.map((row) => {
+              {paginatedFiltered.pageRows.map((row) => {
                 const addonSummary = summarizeTenantAddons(row.addons);
                 const addonPreview = addonSummary.enabledLabels.slice(0, 3);
                 const addonOverflow = Math.max(0, addonSummary.enabledCount - addonPreview.length);
@@ -955,6 +963,18 @@ export default function TenantsPage(): JSX.Element {
               );
               })}
             </div>
+
+            <TablePaginationControls
+              endRow={paginatedFiltered.endRow}
+              onPageChange={paginatedFiltered.setPage}
+              onPageSizeChange={paginatedFiltered.setPageSize}
+              page={paginatedFiltered.page}
+              pageSize={paginatedFiltered.pageSize}
+              pageSizeOptions={paginatedFiltered.pageSizeOptions}
+              startRow={paginatedFiltered.startRow}
+              totalItems={paginatedFiltered.totalItems}
+              totalPages={paginatedFiltered.totalPages}
+            />
           </>
         )}
       </div>

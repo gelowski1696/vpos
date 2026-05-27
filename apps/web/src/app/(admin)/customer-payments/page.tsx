@@ -1,7 +1,9 @@
 'use client';
 
 import { useEffect, useMemo, useState } from 'react';
+import { TablePaginationControls } from '../../../components/table-pagination-controls';
 import { apiRequest } from '../../../lib/api-client';
+import { useTablePagination } from '../../../lib/table-pagination';
 
 type BranchRecord = {
   id: string;
@@ -141,6 +143,12 @@ export default function CustomerPaymentsPage(): JSX.Element {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedBranchId, selectedCustomerId, since, until]);
 
+  const paginatedRows = useTablePagination(rows, {
+    initialPageSize: 25,
+    pageSizeOptions: [10, 25, 50, 100],
+    resetKey: `${selectedBranchId}|${selectedCustomerId}|${since}|${until}|${rows.length}`
+  });
+
   return (
     <section className="space-y-4">
       <div className="rounded-2xl border border-slate-200 bg-white p-4 dark:border-slate-800 dark:bg-slate-900">
@@ -254,7 +262,7 @@ export default function CustomerPaymentsPage(): JSX.Element {
                   </td>
                 </tr>
               ) : (
-                rows.map((row) => (
+                paginatedRows.pageRows.map((row) => (
                   <tr className="border-t border-slate-100 dark:border-slate-800" key={row.payment_id}>
                     <td className="px-3 py-2 text-slate-700 dark:text-slate-200">{fmtDate(row.posted_at)}</td>
                     <td className="px-3 py-2 text-slate-700 dark:text-slate-200">
@@ -277,6 +285,17 @@ export default function CustomerPaymentsPage(): JSX.Element {
             </tbody>
           </table>
         </div>
+        <TablePaginationControls
+          endRow={paginatedRows.endRow}
+          onPageChange={paginatedRows.setPage}
+          onPageSizeChange={paginatedRows.setPageSize}
+          page={paginatedRows.page}
+          pageSize={paginatedRows.pageSize}
+          pageSizeOptions={paginatedRows.pageSizeOptions}
+          startRow={paginatedRows.startRow}
+          totalItems={paginatedRows.totalItems}
+          totalPages={paginatedRows.totalPages}
+        />
       </div>
     </section>
   );

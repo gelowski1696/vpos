@@ -518,7 +518,7 @@ const NAV_SECTIONS: Array<{ title: string; items: NavItem[] }> = [
     items: [
       { href: '/personnel-roles', label: 'Personnel Roles', icon: 'users' },
       { href: '/expenses', label: 'Expense Categories', icon: 'expense' },
-      { href: '/database-maintenance' as Route, label: 'Database Backup', icon: 'syncReview' },
+      { href: '/database-maintenance' as Route, label: 'Backup & Restore', icon: 'syncReview' },
       { href: '/sync-reviews' as Route, label: 'Sync Reviews', icon: 'syncReview' },
       { href: '/audit-logs', label: 'Audit Logs', icon: 'audit' }
     ]

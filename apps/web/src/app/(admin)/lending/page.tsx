@@ -1,7 +1,9 @@
 'use client';
 
 import { useEffect, useMemo, useState } from 'react';
+import { TablePaginationControls } from '../../../components/table-pagination-controls';
 import { apiRequest } from '../../../lib/api-client';
+import { useTablePagination } from '../../../lib/table-pagination';
 import { toastError, toastSuccess } from '../../../lib/web-toast';
 
 type BranchRecord = {
@@ -222,6 +224,12 @@ export default function LendingPage(): JSX.Element {
     };
   }, [filteredRows]);
 
+  const paginatedFilteredRows = useTablePagination(filteredRows, {
+    initialPageSize: 25,
+    pageSizeOptions: [10, 25, 50, 100],
+    resetKey: `${branchId}|${statusFilter}|${search}|${filteredRows.length}`
+  });
+
   const canReturn =
     selectedDetail &&
     selectedDetail.status !== 'CLOSED' &&
@@ -389,8 +397,9 @@ export default function LendingPage(): JSX.Element {
         ) : filteredRows.length === 0 ? (
           <div className="p-8 text-sm text-slate-500 dark:text-slate-400">No lending records matched your current filters.</div>
         ) : (
-          <div className="overflow-x-auto">
-            <table className="min-w-full divide-y divide-slate-200 text-sm dark:divide-slate-800">
+          <>
+            <div className="overflow-x-auto">
+              <table className="min-w-full divide-y divide-slate-200 text-sm dark:divide-slate-800">
               <thead className="bg-slate-50 dark:bg-slate-950/40">
                 <tr className="text-left text-xs uppercase tracking-wide text-slate-500 dark:text-slate-400">
                   <th className="px-4 py-3 font-semibold">Customer</th>
@@ -403,7 +412,7 @@ export default function LendingPage(): JSX.Element {
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
-                {filteredRows.map((row) => {
+                {paginatedFilteredRows.pageRows.map((row) => {
                   const openQty = Math.max(0, row.total_quantity_lent - row.total_quantity_returned);
                   return (
                     <tr key={row.lending_id} className="align-top">
@@ -449,8 +458,20 @@ export default function LendingPage(): JSX.Element {
                   );
                 })}
               </tbody>
-            </table>
-          </div>
+              </table>
+            </div>
+            <TablePaginationControls
+              endRow={paginatedFilteredRows.endRow}
+              onPageChange={paginatedFilteredRows.setPage}
+              onPageSizeChange={paginatedFilteredRows.setPageSize}
+              page={paginatedFilteredRows.page}
+              pageSize={paginatedFilteredRows.pageSize}
+              pageSizeOptions={paginatedFilteredRows.pageSizeOptions}
+              startRow={paginatedFilteredRows.startRow}
+              totalItems={paginatedFilteredRows.totalItems}
+              totalPages={paginatedFilteredRows.totalPages}
+            />
+          </>
         )}
       </section>
 

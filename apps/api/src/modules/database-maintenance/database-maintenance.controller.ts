@@ -2,8 +2,11 @@ import {
   BadRequestException,
   Body,
   Controller,
+  Delete,
   Get,
+  Param,
   Post,
+  Query,
   Req,
   UnauthorizedException
 } from '@nestjs/common';
@@ -25,31 +28,112 @@ export class DatabaseMaintenanceController {
     private readonly auditService: AuditService
   ) {}
 
-  @Get('backup')
-  async backup(@Req() req: AuthRequest) {
+  @Get('backups')
+  async listBackups(
+    @Req() req: AuthRequest,
+    @Query('limit') limitRaw?: string
+  ) {
     const companyId = this.requireCompanyId(req);
-    const result = await this.databaseMaintenanceService.createBackup(companyId);
+    const limit = Number.parseInt(String(limitRaw ?? '').trim(), 10);
+    return this.databaseMaintenanceService.listOnlineBackups(
+      companyId,
+      Number.isFinite(limit) ? limit : undefined
+    );
+  }
+
+  @Post('backups')
+  async createBackup(
+    @Req() req: AuthRequest,
+    @Body() body?: { label?: string; retentionMonths?: number | string }
+  ) {
+    const companyId = this.requireCompanyId(req);
+    const result = await this.databaseMaintenanceService.createOnlineBackup(
+      companyId,
+      req.user?.sub ?? null,
+      body?.label,
+      body?.retentionMonths
+    );
     await this.auditService.record({
       companyId,
       userId: req.user?.sub ?? null,
-      action: 'DATABASE_BACKUP_EXPORT',
+      action: 'DATABASE_BACKUP_ONLINE_CREATE',
       entity: 'TenantDatabaseBackup',
-      entityId: result.backupId,
+      entityId: result.id,
       metadata: {
-        file_name: result.fileName,
-        row_count: result.payload.summary.rowCount,
-        table_count: result.payload.summary.tableCount,
-        created_at: result.payload.createdAt,
-        datastore_mode: result.payload.datastoreMode
+        label: result.label ?? null,
+        retention_months: result.retentionMonths,
+        expires_at: result.expiresAt,
+        row_count: result.rowCount,
+        table_count: result.tableCount,
+        created_at: result.createdAt,
+        datastore_mode: result.datastoreMode
       }
     });
     return result;
   }
 
+  // Legacy alias kept for backward compatibility with older web builds.
+  @Get('backup')
+  async backupAlias(@Req() req: AuthRequest) {
+    return this.createBackup(req, {});
+  }
+
+  @Delete('backups/:backupId')
+  async deleteBackup(
+    @Req() req: AuthRequest,
+    @Param('backupId') backupIdRaw: string
+  ) {
+    const companyId = this.requireCompanyId(req);
+    const backupId = String(backupIdRaw ?? '').trim();
+    if (!backupId) {
+      throw new BadRequestException('Backup id is required.');
+    }
+
+    try {
+      const deleted = await this.databaseMaintenanceService.deleteOnlineBackup(companyId, backupId);
+      await this.auditService.record({
+        companyId,
+        userId: req.user?.sub ?? null,
+        action: 'DATABASE_BACKUP_ONLINE_DELETE',
+        entity: 'TenantDatabaseBackup',
+        entityId: deleted.id,
+        metadata: {
+          label: deleted.label ?? null,
+          retention_months: deleted.retentionMonths,
+          expires_at: deleted.expiresAt,
+          deleted_at: new Date().toISOString(),
+          row_count: deleted.rowCount,
+          table_count: deleted.tableCount,
+          datastore_mode: deleted.datastoreMode
+        },
+        level: AuditActionLevel.WARNING
+      });
+      return {
+        deleted: true,
+        backup: deleted
+      };
+    } catch (error) {
+      const message =
+        error instanceof Error ? error.message : 'Could not delete online backup.';
+      await this.auditService.record({
+        companyId,
+        userId: req.user?.sub ?? null,
+        action: 'DATABASE_BACKUP_ONLINE_DELETE_FAILED',
+        entity: 'TenantDatabaseBackup',
+        entityId: backupId,
+        metadata: {
+          error: message
+        },
+        level: AuditActionLevel.CRITICAL
+      });
+      throw error;
+    }
+  }
+
   @Post('restore')
   async restore(
     @Req() req: AuthRequest,
-    @Body() body: { payload?: unknown; confirmation?: string }
+    @Body() body: { backupId?: string; payload?: unknown; confirmation?: string }
   ) {
     const companyId = this.requireCompanyId(req);
     const confirmation = String(body?.confirmation ?? '').trim().toUpperCase();
@@ -57,10 +141,31 @@ export class DatabaseMaintenanceController {
       throw new BadRequestException('Confirmation value must be RESTORE.');
     }
     try {
-      const result = await this.databaseMaintenanceService.restoreBackup(
-        companyId,
-        body?.payload
-      );
+      if (body?.backupId?.trim()) {
+        const onlineRestore = await this.databaseMaintenanceService.restoreOnlineBackup(
+          companyId,
+          body.backupId.trim()
+        );
+        await this.auditService.record({
+          companyId,
+          userId: req.user?.sub ?? null,
+          action: 'DATABASE_RESTORE_ONLINE',
+          entity: 'TenantDatabaseBackup',
+          entityId: onlineRestore.backup.id,
+          metadata: {
+            label: onlineRestore.backup.label ?? null,
+            restored_at: onlineRestore.restore.restoredAt,
+            tables_restored: onlineRestore.restore.tablesRestored,
+            rows_deleted: onlineRestore.restore.rowsDeleted,
+            rows_inserted: onlineRestore.restore.rowsInserted,
+            datastore_mode: onlineRestore.restore.datastoreMode
+          },
+          level: AuditActionLevel.WARNING
+        });
+        return onlineRestore.restore;
+      }
+
+      const result = await this.databaseMaintenanceService.restoreBackup(companyId, body?.payload);
       await this.auditService.record({
         companyId,
         userId: req.user?.sub ?? null,
@@ -83,10 +188,13 @@ export class DatabaseMaintenanceController {
       await this.auditService.record({
         companyId,
         userId: req.user?.sub ?? null,
-        action: 'DATABASE_RESTORE_IMPORT_FAILED',
+        action: body?.backupId?.trim()
+          ? 'DATABASE_RESTORE_ONLINE_FAILED'
+          : 'DATABASE_RESTORE_IMPORT_FAILED',
         entity: 'TenantDatabaseRestore',
         entityId: `tenant-restore-failed-${companyId}-${Date.now()}`,
         metadata: {
+          backup_id: body?.backupId?.trim() || null,
           error: message
         },
         level: AuditActionLevel.CRITICAL

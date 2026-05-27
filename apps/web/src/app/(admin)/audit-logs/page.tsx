@@ -1,7 +1,9 @@
 'use client';
 
 import { useEffect, useState } from 'react';
+import { TablePaginationControls } from '../../../components/table-pagination-controls';
 import { apiRequest } from '../../../lib/api-client';
+import { useTablePagination } from '../../../lib/table-pagination';
 
 type AuditLogRow = {
   id: string;
@@ -82,6 +84,12 @@ export default function AuditLogsPage(): JSX.Element {
     })();
   }, [branchId]);
 
+  const paginatedRows = useTablePagination(rows, {
+    initialPageSize: 25,
+    pageSizeOptions: [10, 25, 50, 100],
+    resetKey: `${branchId}|${rows.length}`
+  });
+
   return (
     <main>
       <h1 className="text-2xl font-bold text-brandPrimary">Audit Logs</h1>
@@ -124,7 +132,7 @@ export default function AuditLogsPage(): JSX.Element {
                 </tr>
               </thead>
               <tbody>
-                {rows.map((row) => (
+                {paginatedRows.pageRows.map((row) => (
                   <tr className="border-t border-slate-100 text-slate-800 dark:border-slate-700 dark:text-slate-200" key={row.id}>
                     <td className="py-2 pr-3">{formatWhen(row.created_at)}</td>
                     <td className="py-2 pr-3">{row.level}</td>
@@ -146,6 +154,17 @@ export default function AuditLogsPage(): JSX.Element {
               </tbody>
             </table>
           </div>
+          <TablePaginationControls
+            endRow={paginatedRows.endRow}
+            onPageChange={paginatedRows.setPage}
+            onPageSizeChange={paginatedRows.setPageSize}
+            page={paginatedRows.page}
+            pageSize={paginatedRows.pageSize}
+            pageSizeOptions={paginatedRows.pageSizeOptions}
+            startRow={paginatedRows.startRow}
+            totalItems={paginatedRows.totalItems}
+            totalPages={paginatedRows.totalPages}
+          />
         </section>
       ) : null}
     </main>
