@@ -25,6 +25,7 @@ import { VcardModule } from './modules/vcard/vcard.module';
 import { LpgItemActionsModule } from './modules/lpg-item-actions/lpg-item-actions.module';
 import { ChatModule } from './modules/chat/chat.module';
 import { PurchaseOrdersModule } from './modules/purchase-orders/purchase-orders.module';
+import { DatabaseMaintenanceModule } from './modules/database-maintenance/database-maintenance.module';
 
 @Module({
   imports: [
@@ -52,7 +53,8 @@ import { PurchaseOrdersModule } from './modules/purchase-orders/purchase-orders.
     ReportsModule,
     AiExportModule,
     ChatModule,
-    PurchaseOrdersModule
+    PurchaseOrdersModule,
+    DatabaseMaintenanceModule
   ],
   providers: [TenantContextMiddleware]
 })
