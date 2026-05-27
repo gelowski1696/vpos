@@ -1027,6 +1027,29 @@ export class SalesService {
           },
           orderBy: [{ referenceId: 'asc' }]
         });
+        const inventoryLedgerIds = inventoryLedgers.map((row) => row.id);
+        const inventoryEvents =
+          inventoryLedgerIds.length > 0
+            ? await tx.eventStockMovement.findMany({
+                where: {
+                  companyId,
+                  ledgerId: { in: inventoryLedgerIds }
+                },
+                select: {
+                  ledgerId: true,
+                  payload: true,
+                  createdAt: true
+                },
+                orderBy: { createdAt: 'desc' }
+              })
+            : [];
+        const movementSplitByLedger = new Map<string, { qtyFullDelta: number; qtyEmptyDelta: number }>();
+        for (const event of inventoryEvents) {
+          if (movementSplitByLedger.has(event.ledgerId)) {
+            continue;
+          }
+          movementSplitByLedger.set(event.ledgerId, this.extractMovementSplitFromPayload(event.payload));
+        }
         const depositRows = await tx.depositLiabilityLedger.findMany({
           where: { companyId, saleId: sale.id },
           orderBy: [{ createdAt: 'asc' }]
@@ -1107,6 +1130,12 @@ export class SalesService {
 
         for (const row of inventoryLedgers) {
           const reverseQtyDelta = this.roundQty(-Number(row.qtyDelta));
+          const originalSplit = movementSplitByLedger.get(row.id) ?? {
+            qtyFullDelta: 0,
+            qtyEmptyDelta: 0
+          };
+          const reverseFullDelta = this.roundQty(-originalSplit.qtyFullDelta);
+          const reverseEmptyDelta = this.roundQty(-originalSplit.qtyEmptyDelta);
           const currentBalance = await tx.inventoryBalance.findUnique({
             where: {
               locationId_productId: {
@@ -1174,6 +1203,8 @@ export class SalesService {
                 unit_cost: Number(row.unitCost),
                 avg_cost_after: nextAvgCost,
                 qty_after: nextQty,
+                full_delta: reverseFullDelta,
+                empty_delta: reverseEmptyDelta,
                 source: 'SALE_CANCEL'
               }
             }
@@ -3329,6 +3360,38 @@ export class SalesService {
       return null;
     }
     return value as Record<string, unknown>;
+  }
+
+  private extractMovementSplitFromPayload(
+    payload: Prisma.JsonValue | null | undefined
+  ): { qtyFullDelta: number; qtyEmptyDelta: number } {
+    const row = this.asJsonObject(payload);
+    const parse = (value: unknown): number | null => {
+      if (typeof value === 'number') {
+        return Number.isFinite(value) ? value : null;
+      }
+      if (typeof value === 'string' && value.trim()) {
+        const parsed = Number(value);
+        return Number.isFinite(parsed) ? parsed : null;
+      }
+      return null;
+    };
+    const fullDelta =
+      parse(row?.full_delta) ??
+      parse(row?.qty_full_delta) ??
+      parse(row?.qtyFullDelta) ??
+      parse(row?.qty_full) ??
+      0;
+    const emptyDelta =
+      parse(row?.empty_delta) ??
+      parse(row?.qty_empty_delta) ??
+      parse(row?.qtyEmptyDelta) ??
+      parse(row?.qty_empty) ??
+      0;
+    return {
+      qtyFullDelta: this.roundQty(fullDelta),
+      qtyEmptyDelta: this.roundQty(emptyDelta)
+    };
   }
 
   private normalizePayments(payments: SalePaymentInput[] | undefined): Array<{

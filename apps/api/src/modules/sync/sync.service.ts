@@ -387,6 +387,14 @@ export class SyncService {
       await this.persistIdempotencyDecision(companyId, item.idempotency_key, requestHash, {
         status: 'accepted'
       });
+      const saleCancelInventoryChanges = saleCancelPosting.ok
+        ? saleCancelPosting.inventoryChanges ?? []
+        : [];
+      if (saleCancelInventoryChanges.length > 0) {
+        const companyChanges = this.getCompanyChanges(companyId);
+        companyChanges.push(...saleCancelInventoryChanges);
+      }
+
       if (
         syncedItem.entity !== 'sale_cancel' &&
         syncedItem.entity !== 'sale_return' &&
@@ -920,7 +928,7 @@ export class SyncService {
     companyId: string,
     item: SyncPushRequest['outbox_items'][number],
     actorUserId?: string
-  ): Promise<{ ok: true } | { ok: false; reason: string }> {
+  ): Promise<{ ok: true; inventoryChanges?: SyncPullResponse['changes'] } | { ok: false; reason: string }> {
     if (item.entity !== 'sale_cancel' || item.action !== 'create') {
       return { ok: true };
     }
@@ -943,7 +951,11 @@ export class SyncService {
         reason,
         actorUserId: this.asString(payload.user_id ?? payload.userId) ?? actorUserId ?? null
       });
-      return { ok: true };
+      const inventoryChanges = await this.collectInventoryBalanceChangesForSaleId(
+        companyId,
+        saleId
+      );
+      return { ok: true, inventoryChanges };
     } catch (cause) {
       const message = cause instanceof Error ? cause.message : 'Sale cancellation failed during sync';
       return { ok: false, reason: message };
@@ -1119,6 +1131,75 @@ export class SyncService {
           },
           updated_at: updatedAt
         };
+      });
+    } catch {
+      return [];
+    }
+  }
+
+  private async collectInventoryBalanceChangesForSaleId(
+    companyId: string,
+    saleId: string
+  ): Promise<SyncPullResponse['changes']> {
+    if (!this.tenantRouter || !saleId.trim()) {
+      return [];
+    }
+    try {
+      const binding = await this.tenantRouter.forCompany(companyId);
+      const client = binding.client as unknown as {
+        sale?: {
+          findFirst: (args: {
+            where: { companyId: string; id: string };
+            select: {
+              locationId: true;
+              lines: { select: { productId: true } };
+            };
+          }) => Promise<
+            | {
+                locationId: string;
+                lines: Array<{ productId: string }>;
+              }
+            | null
+          >;
+        };
+      };
+
+      if (!client.sale || typeof client.sale.findFirst !== 'function') {
+        return [];
+      }
+
+      const sale = await client.sale.findFirst({
+        where: {
+          companyId,
+          id: saleId
+        },
+        select: {
+          locationId: true,
+          lines: {
+            select: {
+              productId: true
+            }
+          }
+        }
+      });
+      if (!sale) {
+        return [];
+      }
+
+      const productIds = [
+        ...new Set(
+          sale.lines
+            .map((line) => this.asString(line.productId))
+            .filter((value): value is string => Boolean(value))
+        )
+      ];
+      if (productIds.length === 0) {
+        return [];
+      }
+
+      return this.collectInventoryBalanceChangesForSale(companyId, {
+        location_id: sale.locationId,
+        lines: productIds.map((productId) => ({ product_id: productId }))
       });
     } catch {
       return [];
