@@ -1003,13 +1003,9 @@ export class SalesService {
         if (sale.status !== 'ACTIVE') {
           throw new BadRequestException('Only active sales can be cancelled');
         }
-        if (
-          sale.lendingTransactions.some((row: { status: string }) =>
-            ['OPEN', 'PARTIALLY_RETURNED', 'OVERDUE'].includes(row.status)
-          )
-        ) {
+        if (sale.lendingTransactions.length > 0) {
           throw new BadRequestException(
-            'Sale cannot be cancelled while linked lending records are still open'
+            'Sale cannot be cancelled because it has linked lending records'
           );
         }
         if (sale.customerPayments.length > 0) {

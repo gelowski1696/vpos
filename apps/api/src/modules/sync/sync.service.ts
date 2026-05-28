@@ -20,6 +20,7 @@ import {
   PurchaseOrdersService,
   type PurchaseOrderRecord
 } from '../purchase-orders/purchase-orders.service';
+import { VcardService } from '../vcard/vcard.service';
 import { TenantDatasourceRouterService } from '../../common/tenant-datasource-router.service';
 import { EntitlementsService } from '../entitlements/entitlements.service';
 
@@ -65,6 +66,7 @@ export class SyncService {
     @Optional() private readonly lpgItemActionsService?: LpgItemActionsService,
     @Optional() private readonly transfersService?: TransfersService,
     @Optional() private readonly purchaseOrdersService?: PurchaseOrdersService,
+    @Optional() private readonly vcardService?: VcardService,
     @Optional() private readonly tenantRouter?: TenantDatasourceRouterService,
     @Optional() private readonly entitlementsService?: EntitlementsService
   ) {}
@@ -916,10 +918,81 @@ export class SyncService {
         },
         this.asString(payload.user_id ?? payload.userId) ?? actorUserId
       );
+      const rewardPosting = await this.tryPostSaleRewardRedemption(
+        companyId,
+        item,
+        saleId,
+        resolvedCustomerId,
+        this.asString(payload.user_id ?? payload.userId) ?? actorUserId
+      );
+      if (!rewardPosting.ok) {
+        return { ok: false, reason: rewardPosting.reason };
+      }
       const inventoryChanges = await this.collectInventoryBalanceChangesForSale(companyId, payload);
       return { ok: true, sale, inventoryChanges };
     } catch (cause) {
       const message = cause instanceof Error ? cause.message : 'Sale posting failed during sync';
+      return { ok: false, reason: message };
+    }
+  }
+
+  private async tryPostSaleRewardRedemption(
+    companyId: string,
+    item: SyncPushRequest['outbox_items'][number],
+    saleId: string,
+    resolvedCustomerId: string | null,
+    actorUserId?: string
+  ): Promise<{ ok: true } | { ok: false; reason: string }> {
+    if (!this.vcardService) {
+      return { ok: true };
+    }
+    const payload = item.payload ?? {};
+    const rewardUsed =
+      payload.reward_redemption_used === true ||
+      payload.rewardRedemptionUsed === true ||
+      this.asString(payload.reward_id ?? payload.rewardId) !== null;
+    if (!rewardUsed) {
+      return { ok: true };
+    }
+
+    const rewardId = this.asString(payload.reward_id ?? payload.rewardId);
+    if (!rewardId) {
+      return { ok: false, reason: 'Sale reward sync payload is missing reward id' };
+    }
+    if (!resolvedCustomerId) {
+      return { ok: false, reason: 'Sale reward sync payload is missing customer id' };
+    }
+
+    try {
+      await this.vcardService.redeemReward(companyId, {
+        rewardId,
+        customerId: resolvedCustomerId,
+        branchId: this.asString(payload.branch_id ?? payload.branchId),
+        locationId: this.asString(payload.location_id ?? payload.locationId),
+        saleId,
+        amount: this.asNumber(
+          payload.reward_base_amount ??
+            payload.rewardBaseAmount ??
+            payload.reward_discount_amount ??
+            payload.rewardDiscountAmount
+        ),
+        remarks: this.asString(payload.reward_remarks ?? payload.rewardRemarks) ?? `Applied from POS sync sale ${saleId}`,
+        metadata: {
+          origin: 'POS_SYNC',
+          outbox_id: item.id,
+          sale_id: saleId
+        },
+        idempotencyKey:
+          this.asString(payload.reward_idempotency_key ?? payload.rewardIdempotencyKey) ??
+          `idem-sale-reward-${saleId}-${rewardId}`,
+        actorUserId: actorUserId ?? null
+      });
+      return { ok: true };
+    } catch (cause) {
+      const message =
+        cause instanceof Error
+          ? cause.message
+          : 'Reward redemption posting failed during sale sync';
       return { ok: false, reason: message };
     }
   }

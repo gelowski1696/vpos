@@ -96,6 +96,7 @@ function statusClasses(status: DeliveryStatus): string {
 }
 
 export default function DeliveryDispatchPage(): JSX.Element {
+  const webReadOnly = true;
   const searchParams = useSearchParams();
   const saleFromQuery = searchParams.get('sale_id')?.trim() ?? '';
 
@@ -406,7 +407,7 @@ export default function DeliveryDispatchPage(): JSX.Element {
           <div>
             <h1 className="text-2xl font-bold text-slate-900 dark:text-slate-100">Delivery Dispatch</h1>
             <p className="mt-1 text-sm text-slate-600 dark:text-slate-300">
-              Assign riders, track delivery lifecycle, enforce cashier validation before COMPLETE, and export dispatch CSV.
+              Web is view-only for dispatch records. Create and update dispatch flows on Desktop or Mobile POS (offline first), then review here.
             </p>
           </div>
           <div className="flex gap-2">
@@ -518,22 +519,12 @@ export default function DeliveryDispatchPage(): JSX.Element {
         </article>
 
         <article className="rounded-2xl border border-slate-200 bg-white p-4 dark:border-slate-700 dark:bg-slate-900">
-          <h2 className="text-sm font-semibold text-slate-800 dark:text-slate-100">Actions</h2>
-
-          <div className="mt-3 rounded-xl border border-slate-200 p-3 dark:border-slate-700">
-            <p className="text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Create from Sale</p>
-            <div className="mt-2 grid gap-2">
-              <select className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-xs dark:border-slate-600 dark:bg-slate-800" value={createOrderType} onChange={(event) => setCreateOrderType(event.target.value as 'DELIVERY' | 'PICKUP')}>
-                <option value="DELIVERY">DELIVERY</option>
-                <option value="PICKUP">PICKUP</option>
-              </select>
-              <input className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-xs dark:border-slate-600 dark:bg-slate-800" placeholder="Sale ID" value={createSaleId} onChange={(event) => setCreateSaleId(event.target.value)} />
-              <input className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-xs dark:border-slate-600 dark:bg-slate-800" placeholder="Notes (optional)" value={createNotes} onChange={(event) => setCreateNotes(event.target.value)} />
-              <button className="rounded-lg bg-brandPrimary px-3 py-2 text-xs font-semibold text-white disabled:opacity-60" type="button" onClick={() => void createOrder()} disabled={busy || loading}>
-                Create Delivery Order
-              </button>
+          <h2 className="text-sm font-semibold text-slate-800 dark:text-slate-100">Dispatch Details</h2>
+          {webReadOnly ? (
+            <div className="mt-3 rounded-xl border border-slate-200 bg-slate-50 p-3 text-xs text-slate-600 dark:border-slate-700 dark:bg-slate-800/60 dark:text-slate-300">
+              This page is read-only. Dispatch creation, assignment, and status updates are handled in Desktop/Mobile POS and synced here.
             </div>
-          </div>
+          ) : null}
 
           {selectedRow ? (
             <>
@@ -543,49 +534,6 @@ export default function DeliveryDispatchPage(): JSX.Element {
                 <p className="text-xs text-slate-500 dark:text-slate-400">Sale: {selectedRow.sale_id ?? '-'}</p>
                 <p className="text-xs text-slate-500 dark:text-slate-400">Status: {selectedRow.status}</p>
                 <p className="text-xs text-slate-500 dark:text-slate-400">Cashier Validation: {selectedRow.cashier_validated_by_name ?? '-'}</p>
-              </div>
-
-              <div className="mt-3 rounded-xl border border-slate-200 p-3 dark:border-slate-700">
-                <p className="text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Assign Rider</p>
-                <div className="mt-2 grid gap-2">
-                  <select className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-xs dark:border-slate-600 dark:bg-slate-800" value={assignUserId} onChange={(event) => setAssignUserId(event.target.value)}>
-                    <option value="">Select user</option>
-                    {riders.map((row) => (
-                      <option key={row.id} value={row.id}>{row.fullName} ({row.email})</option>
-                    ))}
-                  </select>
-                  <select className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-xs dark:border-slate-600 dark:bg-slate-800" value={assignRole} onChange={(event) => setAssignRole(event.target.value as 'DRIVER' | 'HELPER' | 'PERSONNEL')}>
-                    <option value="DRIVER">DRIVER</option>
-                    <option value="HELPER">HELPER</option>
-                    <option value="PERSONNEL">PERSONNEL</option>
-                  </select>
-                  <input className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-xs dark:border-slate-600 dark:bg-slate-800" placeholder="Notes" value={statusNotes} onChange={(event) => setStatusNotes(event.target.value)} />
-                  <button className="rounded-lg border border-slate-300 px-3 py-2 text-xs font-semibold text-slate-700 dark:border-slate-600 dark:text-slate-200" type="button" onClick={() => void assignSelected()} disabled={busy}>
-                    Save Assignment
-                  </button>
-                </div>
-              </div>
-
-              <div className="mt-3 rounded-xl border border-slate-200 p-3 dark:border-slate-700">
-                <p className="text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Status Actions</p>
-                <div className="mt-2 grid grid-cols-2 gap-2">
-                  {(['OUT_FOR_DELIVERY', 'DELIVERED', 'FAILED', 'RETURNED', 'ASSIGNED'] as DeliveryStatus[]).map((status) => (
-                    <button key={status} className="rounded-lg border border-slate-300 px-3 py-2 text-xs font-semibold text-slate-700 dark:border-slate-600 dark:text-slate-200" type="button" onClick={() => void setStatus(status)} disabled={busy}>
-                      {status}
-                    </button>
-                  ))}
-                </div>
-                <div className="mt-2 grid gap-2">
-                  <select className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-xs dark:border-slate-600 dark:bg-slate-800" value={cashierValidatorUserId} onChange={(event) => setCashierValidatorUserId(event.target.value)}>
-                    <option value="">Select cashier validator for COMPLETE</option>
-                    {cashValidators.map((row) => (
-                      <option key={row.id} value={row.id}>{row.fullName} ({row.roles.join(', ')})</option>
-                    ))}
-                  </select>
-                  <button className="rounded-lg bg-emerald-600 px-3 py-2 text-xs font-semibold text-white disabled:opacity-60" type="button" onClick={() => void setStatus('COMPLETE')} disabled={busy || !cashierValidatorUserId}>
-                    Mark COMPLETE
-                  </button>
-                </div>
               </div>
 
               <div className="mt-3 rounded-xl border border-slate-200 p-3 dark:border-slate-700">
@@ -602,7 +550,7 @@ export default function DeliveryDispatchPage(): JSX.Element {
               </div>
             </>
           ) : (
-            <p className="mt-3 text-xs text-slate-500 dark:text-slate-400">Select a delivery order to manage assignments and status.</p>
+            <p className="mt-3 text-xs text-slate-500 dark:text-slate-400">Select a delivery order to view synced dispatch details.</p>
           )}
         </article>
       </div>

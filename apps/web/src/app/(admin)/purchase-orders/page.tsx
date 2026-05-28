@@ -173,6 +173,7 @@ async function fileToBase64(file: File): Promise<string> {
 }
 
 export default function PurchaseOrdersPage(): JSX.Element {
+  const webReadOnly = true;
   const [featureEnabled, setFeatureEnabled] = useState(false);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -573,7 +574,7 @@ export default function PurchaseOrdersPage(): JSX.Element {
           <p className="text-xs font-semibold uppercase tracking-[0.2em] text-brandPrimary">Add-on Workspace</p>
           <h1 className="text-2xl font-bold text-slate-900 dark:text-slate-100">Purchase Orders</h1>
           <p className="mt-1 max-w-3xl text-sm text-slate-500 dark:text-slate-400">
-            Create supplier-linked POs, receive partial quantities, post pullouts, attach delivery docs, and complete with audit-safe stock movements.
+            Web is view-only for purchase order records. Create and process PO flows on Desktop/Mobile POS (offline first), then review here.
           </p>
         </div>
         <div className="flex flex-wrap items-center gap-2">
@@ -621,155 +622,10 @@ export default function PurchaseOrdersPage(): JSX.Element {
       {featureEnabled ? (
         <>
           <section className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm dark:border-slate-700 dark:bg-slate-900">
-            <h2 className="text-base font-semibold text-slate-900 dark:text-slate-100">Create Purchase Order</h2>
-            <form className="mt-3 space-y-3" onSubmit={(event) => void createPurchaseOrder(event)}>
-              <div className="grid gap-3 md:grid-cols-5">
-                <input
-                  className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-800"
-                  onChange={(event) => setPoNumber(event.target.value)}
-                  placeholder="PO number (optional)"
-                  value={poNumber}
-                />
-                <select
-                  className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-800"
-                  onChange={(event) => setBranchId(event.target.value)}
-                  value={branchId}
-                >
-                  <option value="">Select branch</option>
-                  {activeBranches.map((branch) => (
-                    <option key={branch.id} value={branch.id}>
-                      {branch.code} - {branch.name}
-                    </option>
-                  ))}
-                </select>
-                <select
-                  className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-800"
-                  onChange={(event) => setLocationId(event.target.value)}
-                  value={locationId}
-                >
-                  <option value="">Select location</option>
-                  {availableLocations.map((location) => (
-                    <option key={location.id} value={location.id}>
-                      {location.code} - {location.name}
-                    </option>
-                  ))}
-                </select>
-                <select
-                  className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-800"
-                  onChange={(event) => setSupplierId(event.target.value)}
-                  value={supplierId}
-                >
-                  <option value="">Select supplier</option>
-                  {activeSuppliers.map((supplier) => (
-                    <option key={supplier.id} value={supplier.id}>
-                      {supplier.code} - {supplier.name}
-                    </option>
-                  ))}
-                </select>
-                <input
-                  className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-800"
-                  onChange={(event) => setPoNotes(event.target.value)}
-                  placeholder="PO notes (optional)"
-                  value={poNotes}
-                />
-              </div>
-
-              <div className="grid gap-2 rounded-xl border border-slate-200 p-3 dark:border-slate-700 md:grid-cols-[2fr_1fr_1fr_2fr_auto]">
-                <select
-                  className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-800"
-                  onChange={(event) => setLineDraft((prev) => ({ ...prev, product_id: event.target.value }))}
-                  value={lineDraft.product_id}
-                >
-                  <option value="">Product</option>
-                  {activeProducts.map((product) => (
-                    <option key={product.id} value={product.id}>
-                      {product.sku} - {product.name}
-                    </option>
-                  ))}
-                </select>
-                <input
-                  className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-800"
-                  onChange={(event) => setLineDraft((prev) => ({ ...prev, ordered_qty: event.target.value }))}
-                  placeholder="Qty"
-                  value={lineDraft.ordered_qty}
-                />
-                <input
-                  className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-800"
-                  onChange={(event) => setLineDraft((prev) => ({ ...prev, unit_cost: event.target.value }))}
-                  placeholder="Unit cost"
-                  value={lineDraft.unit_cost}
-                />
-                <input
-                  className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-800"
-                  onChange={(event) => setLineDraft((prev) => ({ ...prev, notes: event.target.value }))}
-                  placeholder="Line notes (optional)"
-                  value={lineDraft.notes}
-                />
-                <button
-                  className="rounded-lg border border-slate-300 px-3 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-100 dark:border-slate-600 dark:text-slate-100 dark:hover:bg-slate-800"
-                  onClick={addCreateLine}
-                  type="button"
-                >
-                  Add Line
-                </button>
-              </div>
-
-              <div className="overflow-x-auto rounded-xl border border-slate-200 dark:border-slate-700">
-                <table className="min-w-full text-left text-sm">
-                  <thead className="bg-slate-50 text-xs uppercase tracking-wide text-slate-500 dark:bg-slate-800/70 dark:text-slate-400">
-                    <tr>
-                      <th className="px-3 py-2">Product</th>
-                      <th className="px-3 py-2">Qty</th>
-                      <th className="px-3 py-2">Unit Cost</th>
-                      <th className="px-3 py-2">Notes</th>
-                      <th className="px-3 py-2 text-right">Action</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-slate-200 dark:divide-slate-700">
-                    {createLines.length === 0 ? (
-                      <tr>
-                        <td className="px-3 py-4 text-center text-slate-500" colSpan={5}>
-                          No line yet.
-                        </td>
-                      </tr>
-                    ) : (
-                      createLines.map((line, index) => {
-                        const product = products.find((item) => item.id === line.product_id);
-                        return (
-                          <tr key={`${line.product_id}-${index}`}>
-                            <td className="px-3 py-2">
-                              {product ? `${product.sku} - ${product.name}` : line.product_id}
-                            </td>
-                            <td className="px-3 py-2">{line.ordered_qty}</td>
-                            <td className="px-3 py-2">{line.unit_cost}</td>
-                            <td className="px-3 py-2">{line.notes || '-'}</td>
-                            <td className="px-3 py-2 text-right">
-                              <button
-                                className="rounded-lg border border-rose-300 px-2 py-1 text-xs font-semibold text-rose-700 hover:bg-rose-50 dark:border-rose-700 dark:text-rose-300 dark:hover:bg-rose-950/40"
-                                onClick={() => removeCreateLine(index)}
-                                type="button"
-                              >
-                                Remove
-                              </button>
-                            </td>
-                          </tr>
-                        );
-                      })
-                    )}
-                  </tbody>
-                </table>
-              </div>
-
-              <div className="flex justify-end">
-                <button
-                  className="rounded-lg bg-brandPrimary px-4 py-2 text-sm font-semibold text-white hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-60"
-                  disabled={saving || createLines.length === 0}
-                  type="submit"
-                >
-                  {saving ? 'Saving...' : 'Create Purchase Order'}
-                </button>
-              </div>
-            </form>
+            <h2 className="text-base font-semibold text-slate-900 dark:text-slate-100">Web Access</h2>
+            <p className="mt-2 text-sm text-slate-600 dark:text-slate-300">
+              Purchase Orders are read-only on web. Create, submit, receive, pullout, attach, complete, and cancel flows are handled in Desktop/Mobile POS and synced here.
+            </p>
           </section>
 
           <section className="grid gap-4 lg:grid-cols-[1.2fr_1fr]">
@@ -838,7 +694,7 @@ export default function PurchaseOrdersPage(): JSX.Element {
             <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm dark:border-slate-700 dark:bg-slate-900">
               <h2 className="text-base font-semibold text-slate-900 dark:text-slate-100">PO Details</h2>
               {!selectedId ? (
-                <p className="mt-3 text-sm text-slate-500 dark:text-slate-400">Select a PO row to view details and actions.</p>
+                <p className="mt-3 text-sm text-slate-500 dark:text-slate-400">Select a PO row to view synced details.</p>
               ) : detailLoading || !selectedDetail ? (
                 <p className="mt-3 text-sm text-slate-500 dark:text-slate-400">Loading details...</p>
               ) : (
@@ -895,150 +751,17 @@ export default function PurchaseOrdersPage(): JSX.Element {
                     </div>
                   </div>
 
-                  <div className="grid gap-2">
-                    <button
-                      className="rounded-lg border border-slate-300 px-3 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-100 disabled:opacity-60 dark:border-slate-600 dark:text-slate-200 dark:hover:bg-slate-800"
-                      disabled={saving || selectedDetail.status !== 'DRAFT'}
-                      onClick={() => void submitSelected()}
-                      type="button"
-                    >
-                      Submit PO
-                    </button>
-                    <button
-                      className="rounded-lg border border-emerald-400 px-3 py-2 text-xs font-semibold text-emerald-700 hover:bg-emerald-50 disabled:opacity-60 dark:border-emerald-600 dark:text-emerald-300 dark:hover:bg-emerald-900/30"
-                      disabled={saving || (selectedDetail.status !== 'SUBMITTED' && selectedDetail.status !== 'PARTIALLY_RECEIVED')}
-                      onClick={() => void completeSelected()}
-                      type="button"
-                    >
-                      Complete PO
-                    </button>
-                    <div className="flex gap-2">
-                      <input
-                        className="flex-1 rounded-lg border border-slate-300 bg-white px-3 py-2 text-xs dark:border-slate-600 dark:bg-slate-800"
-                        onChange={(event) => setCancelReason(event.target.value)}
-                        placeholder="Cancel reason"
-                        value={cancelReason}
-                      />
-                      <button
-                        className="rounded-lg border border-rose-400 px-3 py-2 text-xs font-semibold text-rose-700 hover:bg-rose-50 disabled:opacity-60 dark:border-rose-600 dark:text-rose-300 dark:hover:bg-rose-900/30"
-                        disabled={saving || selectedDetail.status === 'COMPLETED' || selectedDetail.status === 'CANCELLED'}
-                        onClick={() => void cancelSelected()}
-                        type="button"
-                      >
-                        Cancel
-                      </button>
+                  {webReadOnly ? (
+                    <div className="rounded-xl border border-slate-200 bg-slate-50 p-3 text-xs text-slate-600 dark:border-slate-700 dark:bg-slate-800/60 dark:text-slate-300">
+                      This panel is read-only on web. All PO actions are completed in Desktop/Mobile POS and reflected here after sync.
                     </div>
-                  </div>
-
-                  <div className="rounded-xl border border-slate-200 p-3 dark:border-slate-700">
-                    <p className="text-sm font-semibold text-slate-900 dark:text-slate-100">Receive Line</p>
-                    <div className="mt-2 grid gap-2 md:grid-cols-2">
-                      <select
-                        className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-xs dark:border-slate-600 dark:bg-slate-800"
-                        onChange={(event) => setReceiveLineId(event.target.value)}
-                        value={receiveLineId}
-                      >
-                        <option value="">Select line</option>
-                        {selectedDetail.lines.map((line) => (
-                          <option key={line.id} value={line.id}>
-                            {line.product_sku} | Remaining {formatQty(Math.max(0, line.ordered_qty - line.received_qty))}
-                          </option>
-                        ))}
-                      </select>
-                      <input
-                        className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-xs dark:border-slate-600 dark:bg-slate-800"
-                        onChange={(event) => setReceiveQty(event.target.value)}
-                        placeholder="Receive qty"
-                        value={receiveQty}
-                      />
-                      <input
-                        className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-xs dark:border-slate-600 dark:bg-slate-800"
-                        onChange={(event) => setReceiveUnitCost(event.target.value)}
-                        placeholder="Unit cost (optional)"
-                        value={receiveUnitCost}
-                      />
-                      <input
-                        className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-xs dark:border-slate-600 dark:bg-slate-800"
-                        onChange={(event) => setReceiveNotes(event.target.value)}
-                        placeholder="Notes (optional)"
-                        value={receiveNotes}
-                      />
-                    </div>
-                    <button
-                      className="mt-2 w-full rounded-lg border border-brandPrimary px-3 py-2 text-xs font-semibold text-brandPrimary hover:bg-brandPrimary/10 disabled:opacity-60"
-                      disabled={saving || !receiveLineId}
-                      onClick={() => void receiveSelected()}
-                      type="button"
-                    >
-                      Post Receive
-                    </button>
-                  </div>
-
-                  <div className="rounded-xl border border-slate-200 p-3 dark:border-slate-700">
-                    <p className="text-sm font-semibold text-slate-900 dark:text-slate-100">Pullout Line</p>
-                    <div className="mt-2 grid gap-2 md:grid-cols-2">
-                      <select
-                        className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-xs dark:border-slate-600 dark:bg-slate-800"
-                        onChange={(event) => setPulloutLineId(event.target.value)}
-                        value={pulloutLineId}
-                      >
-                        <option value="">Select line</option>
-                        {selectedDetail.lines.map((line) => (
-                          <option key={line.id} value={line.id}>
-                            {line.product_sku} | Available {formatQty(Math.max(0, remainingByLineId.get(line.id) ?? 0))}
-                          </option>
-                        ))}
-                      </select>
-                      <input
-                        className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-xs dark:border-slate-600 dark:bg-slate-800"
-                        onChange={(event) => setPulloutQty(event.target.value)}
-                        placeholder="Pullout qty"
-                        value={pulloutQty}
-                      />
-                      <input
-                        className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-xs dark:border-slate-600 dark:bg-slate-800"
-                        onChange={(event) => setPulloutUnitCost(event.target.value)}
-                        placeholder="Unit cost (optional)"
-                        value={pulloutUnitCost}
-                      />
-                      <input
-                        className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-xs dark:border-slate-600 dark:bg-slate-800"
-                        onChange={(event) => setPulloutNotes(event.target.value)}
-                        placeholder="Notes (optional)"
-                        value={pulloutNotes}
-                      />
-                    </div>
-                    <button
-                      className="mt-2 w-full rounded-lg border border-amber-500 px-3 py-2 text-xs font-semibold text-amber-700 hover:bg-amber-50 disabled:opacity-60 dark:border-amber-600 dark:text-amber-300 dark:hover:bg-amber-900/20"
-                      disabled={saving || !pulloutLineId}
-                      onClick={() => void pulloutSelected()}
-                      type="button"
-                    >
-                      Post Pullout
-                    </button>
-                  </div>
+                  ) : null}
 
                   <div className="rounded-xl border border-slate-200 p-3 dark:border-slate-700">
                     <p className="text-sm font-semibold text-slate-900 dark:text-slate-100">Attachments</p>
                     <p className="text-xs text-slate-500 dark:text-slate-400">
                       {selectedDetail.attachments.length}/5 uploaded. Completion requires at least one.
                     </p>
-                    <div className="mt-2 flex items-center gap-2">
-                      <input
-                        accept=".jpg,.jpeg,.png,.webp,.pdf,image/jpeg,image/png,image/webp,application/pdf"
-                        className="block w-full text-xs"
-                        onChange={(event) => setAttachmentFile(event.target.files?.[0] ?? null)}
-                        type="file"
-                      />
-                      <button
-                        className="rounded-lg border border-slate-300 px-3 py-2 text-xs font-semibold hover:bg-slate-100 disabled:opacity-60 dark:border-slate-600 dark:hover:bg-slate-800"
-                        disabled={saving || !attachmentFile}
-                        onClick={() => void uploadAttachment()}
-                        type="button"
-                      >
-                        Upload
-                      </button>
-                    </div>
                     <div className="mt-2 max-h-32 space-y-1 overflow-auto rounded-lg border border-slate-200 p-2 text-xs dark:border-slate-700">
                       {selectedDetail.attachments.length === 0 ? (
                         <p className="text-slate-500 dark:text-slate-400">No attachments yet.</p>

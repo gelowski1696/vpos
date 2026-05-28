@@ -11,6 +11,7 @@ import { CylindersModule } from '../cylinders/cylinders.module';
 import { PrismaModule } from '../../common/prisma.module';
 import { MasterDataModule } from '../master-data/master-data.module';
 import { PurchaseOrdersModule } from '../purchase-orders/purchase-orders.module';
+import { VcardModule } from '../vcard/vcard.module';
 
 @Module({
   imports: [
@@ -19,6 +20,7 @@ import { PurchaseOrdersModule } from '../purchase-orders/purchase-orders.module'
     SalesModule,
     CustomerPaymentsModule,
     MasterDataModule,
+    VcardModule,
     PurchaseOrdersModule,
     LendingModule,
     LpgItemActionsModule,
