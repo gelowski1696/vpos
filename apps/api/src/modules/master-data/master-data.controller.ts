@@ -1059,11 +1059,12 @@ export class MasterDataController {
   @Get('inventory/opening-stock')
   @Roles('admin', 'owner', 'platform_owner', 'supervisor', 'cashier', 'driver', 'helper')
   async getInventoryOpeningSnapshot(
-    @Req() req: RequestWithTenant
+    @Req() req: RequestWithTenant,
+    @Query('branch_id') branchId?: string
   ): Promise<ReturnType<MasterDataService['getInventoryOpeningSnapshot']>> {
     // Keep this endpoint available for branch bootstrap/download flows (desktop/mobile cashier).
     // Inventory report restrictions are enforced on /reports/inventory/* endpoints.
-    return this.masterDataService.getInventoryOpeningSnapshot();
+    return this.masterDataService.getInventoryOpeningSnapshot(branchId);
   }
 
   @Post('inventory/opening-stock')

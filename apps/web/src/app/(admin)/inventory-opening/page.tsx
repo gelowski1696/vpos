@@ -8,6 +8,14 @@ type LocationRecord = {
   id: string;
   code: string;
   name: string;
+  branchId?: string | null;
+  isActive: boolean;
+};
+
+type BranchRecord = {
+  id: string;
+  code: string;
+  name: string;
   isActive: boolean;
 };
 
@@ -80,9 +88,11 @@ export default function InventoryOpeningPage(): JSX.Element {
   const [saving, setSaving] = useState(false);
   const [applyModalOpen, setApplyModalOpen] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [branches, setBranches] = useState<BranchRecord[]>([]);
   const [locations, setLocations] = useState<LocationRecord[]>([]);
   const [products, setProducts] = useState<ProductRecord[]>([]);
   const [snapshot, setSnapshot] = useState<InventoryOpeningSnapshot>({ asOf: new Date(0).toISOString(), rows: [] });
+  const [branchFilter, setBranchFilter] = useState('ALL');
 
   const [locationId, setLocationId] = useState('');
   const [lines, setLines] = useState<OpeningLine[]>([]);
@@ -101,14 +111,33 @@ export default function InventoryOpeningPage(): JSX.Element {
     () => locations.find((item) => item.id === locationId) ?? null,
     [locationId, locations]
   );
+  const selectedBranch = useMemo(
+    () => branches.find((item) => item.id === branchFilter) ?? null,
+    [branchFilter, branches]
+  );
+  const branchScopeLabel = useMemo(
+    () => (branchFilter === 'ALL' ? 'All Branches' : selectedBranch ? `${selectedBranch.name} (${selectedBranch.code})` : branchFilter),
+    [branchFilter, selectedBranch]
+  );
+  const filteredLocations = useMemo(
+    () =>
+      branchFilter === 'ALL'
+        ? locations
+        : locations.filter((location) => location.branchId === branchFilter),
+    [branchFilter, locations]
+  );
   const productById = useMemo(() => new Map(products.map((item) => [item.id, item])), [products]);
   const visibleSnapshotRows = useMemo(() => {
-    const activeLocationIds = new Set(locations.map((row) => row.id));
+    const activeLocationIds = new Set(filteredLocations.map((row) => row.id));
     const activeProductIds = new Set(products.map((row) => row.id));
     return snapshot.rows.filter(
       (row) => activeLocationIds.has(row.locationId) && activeProductIds.has(row.productId)
     );
-  }, [locations, products, snapshot.rows]);
+  }, [filteredLocations, products, snapshot.rows]);
+  const activeBranches = useMemo(
+    () => branches.filter((branch) => branch.isActive).sort((a, b) => a.code.localeCompare(b.code)),
+    [branches]
+  );
   const productCategoryOptions = useMemo(() => {
     const categories = new Set<string>();
     for (const product of products) {
@@ -154,17 +183,17 @@ export default function InventoryOpeningPage(): JSX.Element {
     setLoading(true);
     setError(null);
     try {
-      const [locationRows, productRows, openingSnapshot] = await Promise.all([
+      const branchQuery = branchFilter !== 'ALL' ? `?branch_id=${encodeURIComponent(branchFilter)}` : '';
+      const [branchRows, locationRows, productRows, openingSnapshot] = await Promise.all([
+        apiRequest<BranchRecord[]>('/master-data/branches'),
         apiRequest<LocationRecord[]>('/master-data/locations'),
         apiRequest<ProductRecord[]>('/master-data/products'),
-        apiRequest<InventoryOpeningSnapshot>('/master-data/inventory/opening-stock')
+        apiRequest<InventoryOpeningSnapshot>(`/master-data/inventory/opening-stock${branchQuery}`)
       ]);
+      setBranches(branchRows.filter((row) => row.isActive).sort((a, b) => a.code.localeCompare(b.code)));
       setLocations(locationRows.filter((row) => row.isActive).sort((a, b) => a.code.localeCompare(b.code)));
       setProducts(productRows.filter((row) => row.isActive).sort((a, b) => a.sku.localeCompare(b.sku)));
       setSnapshot(openingSnapshot);
-      if (!locationId && locationRows.length > 0) {
-        setLocationId(locationRows.find((row) => row.isActive)?.id ?? '');
-      }
     } catch (cause) {
       const message = cause instanceof Error ? cause.message : 'Failed to load opening stock setup';
       setError(message);
@@ -177,7 +206,19 @@ export default function InventoryOpeningPage(): JSX.Element {
   useEffect(() => {
     setRoles(getSessionRoles());
     void load();
-  }, []);
+  }, [branchFilter]);
+
+  useEffect(() => {
+    if (loading) {
+      return;
+    }
+    setLocationId((current) => {
+      if (current && filteredLocations.some((location) => location.id === current)) {
+        return current;
+      }
+      return filteredLocations[0]?.id ?? '';
+    });
+  }, [filteredLocations, loading]);
 
   function updateLine(index: number, patch: Partial<OpeningLine>): void {
     setLines((prev) => {
@@ -402,6 +443,32 @@ export default function InventoryOpeningPage(): JSX.Element {
         </p>
       </header>
 
+      <section className="rounded-2xl border border-slate-200 bg-white p-4 dark:border-slate-700 dark:bg-slate-900">
+        <div className="flex flex-wrap items-end justify-between gap-4">
+          <div className="min-w-0">
+            <h3 className="text-sm font-semibold text-slate-900 dark:text-slate-100">Branch Scope</h3>
+            <p className="mt-1 max-w-2xl text-xs leading-5 text-slate-500 dark:text-slate-400">
+              Narrow the opening stock snapshot and the location list to one branch, or keep All Branches to review everything together.
+            </p>
+          </div>
+          <label className="grid w-full gap-1 text-sm sm:max-w-sm">
+            <span className="font-medium text-slate-700 dark:text-slate-200">Branch</span>
+            <select
+              className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-slate-900 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-100"
+              onChange={(event) => setBranchFilter(event.target.value)}
+              value={branchFilter}
+            >
+              <option value="ALL">All Branches</option>
+              {activeBranches.map((branch) => (
+                <option key={branch.id} value={branch.id}>
+                  {branch.name} ({branch.code})
+                </option>
+              ))}
+            </select>
+          </label>
+        </div>
+      </section>
+
       <section className="rounded-2xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900 dark:border-amber-700/60 dark:bg-amber-950/30 dark:text-amber-100">
         <p className="font-semibold">Safe Process</p>
         <ol className="mt-2 list-decimal space-y-1 pl-5">
@@ -476,22 +543,25 @@ export default function InventoryOpeningPage(): JSX.Element {
             </div>
 
             <div className="flex-1 space-y-4 overflow-y-auto px-4 py-4">
-              <label className="grid max-w-xl gap-1 text-sm">
-                <span className="font-medium text-slate-700 dark:text-slate-200">Location</span>
-                <select
-                  className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-950"
-                  disabled={!canEdit || saving}
-                  onChange={(event) => setLocationId(event.target.value)}
-                  value={locationId}
-                >
-                  <option value="">Select location</option>
-                  {locations.map((row) => (
-                    <option key={row.id} value={row.id}>
-                      {row.name} ({row.code})
-                    </option>
-                  ))}
-                </select>
-              </label>
+                <label className="grid max-w-xl gap-1 text-sm">
+                  <span className="font-medium text-slate-700 dark:text-slate-200">Location</span>
+                  <select
+                    className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-950"
+                    disabled={!canEdit || saving || filteredLocations.length === 0}
+                    onChange={(event) => setLocationId(event.target.value)}
+                    value={locationId}
+                  >
+                    <option value="">{filteredLocations.length > 0 ? 'Select location' : 'No locations for this branch'}</option>
+                    {filteredLocations.map((row) => (
+                      <option key={row.id} value={row.id}>
+                        {row.name} ({row.code})
+                      </option>
+                    ))}
+                  </select>
+                  <span className="text-xs text-slate-500 dark:text-slate-400">
+                    Showing {filteredLocations.length} active location{filteredLocations.length === 1 ? '' : 's'} for {branchScopeLabel}.
+                  </span>
+                </label>
 
               <div className="rounded-xl border border-slate-200 p-4 dark:border-slate-700">
                 <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
@@ -791,10 +861,11 @@ export default function InventoryOpeningPage(): JSX.Element {
 
       <section className="rounded-2xl border border-slate-200 bg-white p-4 dark:border-slate-700 dark:bg-slate-900">
         <div className="flex flex-wrap items-center justify-between gap-2">
-          <h3 className="text-sm font-semibold text-slate-900 dark:text-slate-100">Current Balance Snapshot</h3>
-          <p className="text-xs text-slate-500 dark:text-slate-400">
-            As of {new Date(snapshot.asOf).toLocaleString()}
-          </p>
+          <div>
+            <h3 className="text-sm font-semibold text-slate-900 dark:text-slate-100">Current Balance Snapshot</h3>
+            <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">Scope: {branchScopeLabel}</p>
+          </div>
+          <p className="text-xs text-slate-500 dark:text-slate-400">As of {new Date(snapshot.asOf).toLocaleString()}</p>
         </div>
         <div className="mt-3 overflow-x-auto">
           <table className="min-w-full text-sm">
@@ -813,53 +884,54 @@ export default function InventoryOpeningPage(): JSX.Element {
               </tr>
             </thead>
             <tbody>
-              {visibleSnapshotRows.map((row) => (
-                <tr className="border-b border-slate-100 dark:border-slate-800" key={`${row.locationId}-${row.productId}`}>
-                  <td className="px-2 py-2 text-slate-700 dark:text-slate-200">
-                    {row.locationName} ({row.locationCode})
-                  </td>
-                  <td className="px-2 py-2 text-slate-700 dark:text-slate-200">
-                    {row.productName} ({row.productSku})
-                  </td>
-                  <td className="px-2 py-2 text-slate-700 dark:text-slate-200">{qty(row.qtyFull)}</td>
-                  <td className="px-2 py-2 text-slate-700 dark:text-slate-200">{qty(row.qtyEmpty)}</td>
-                  <td className="px-2 py-2 text-slate-700 dark:text-slate-200">{qty(row.qtyOnHand)}</td>
-                  <td className="px-2 py-2 text-slate-700 dark:text-slate-200">{money(row.avgCost)}</td>
-                  <td className="px-2 py-2 text-slate-700 dark:text-slate-200">{money(row.inventoryValue)}</td>
-                  <td className="px-2 py-2">
-                    <span
-                      className={`rounded-full px-2 py-1 text-xs font-semibold ${
-                        row.hasOpeningEntry
-                          ? 'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-300'
-                          : 'bg-slate-100 text-slate-600 dark:bg-slate-800 dark:text-slate-300'
-                      }`}
-                    >
-                      {row.hasOpeningEntry ? 'Yes' : 'No'}
-                    </span>
-                  </td>
-                  <td className="px-2 py-2">
-                    <span
-                      className={`rounded-full px-2 py-1 text-xs font-semibold ${
-                        row.hasTransactionalMovements
-                          ? 'bg-rose-100 text-rose-700 dark:bg-rose-900/40 dark:text-rose-300'
-                          : 'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-300'
-                      }`}
-                    >
-                      {row.hasTransactionalMovements ? 'Locked' : 'Open'}
-                    </span>
-                  </td>
-                  <td className="px-2 py-2 text-slate-700 dark:text-slate-200">
-                    {row.lastMovementAt ? new Date(row.lastMovementAt).toLocaleString() : '-'}
-                  </td>
-                </tr>
-              ))}
               {visibleSnapshotRows.length === 0 ? (
                 <tr>
                   <td className="px-2 py-6 text-center text-slate-500 dark:text-slate-400" colSpan={10}>
-                    No inventory balances yet.
+                    No opening stock rows for the selected branch scope.
                   </td>
                 </tr>
-              ) : null}
+              ) : (
+                visibleSnapshotRows.map((row) => (
+                  <tr className="border-b border-slate-100 dark:border-slate-800" key={`${row.locationId}-${row.productId}`}>
+                    <td className="px-2 py-2 text-slate-700 dark:text-slate-200">
+                      {row.locationName} ({row.locationCode})
+                    </td>
+                    <td className="px-2 py-2 text-slate-700 dark:text-slate-200">
+                      {row.productName} ({row.productSku})
+                    </td>
+                    <td className="px-2 py-2 text-slate-700 dark:text-slate-200">{qty(row.qtyFull)}</td>
+                    <td className="px-2 py-2 text-slate-700 dark:text-slate-200">{qty(row.qtyEmpty)}</td>
+                    <td className="px-2 py-2 text-slate-700 dark:text-slate-200">{qty(row.qtyOnHand)}</td>
+                    <td className="px-2 py-2 text-slate-700 dark:text-slate-200">{money(row.avgCost)}</td>
+                    <td className="px-2 py-2 text-slate-700 dark:text-slate-200">{money(row.inventoryValue)}</td>
+                    <td className="px-2 py-2">
+                      <span
+                        className={`rounded-full px-2 py-1 text-xs font-semibold ${
+                          row.hasOpeningEntry
+                            ? 'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-300'
+                            : 'bg-slate-100 text-slate-600 dark:bg-slate-800 dark:text-slate-300'
+                        }`}
+                      >
+                        {row.hasOpeningEntry ? 'Yes' : 'No'}
+                      </span>
+                    </td>
+                    <td className="px-2 py-2">
+                      <span
+                        className={`rounded-full px-2 py-1 text-xs font-semibold ${
+                          row.hasTransactionalMovements
+                            ? 'bg-rose-100 text-rose-700 dark:bg-rose-900/40 dark:text-rose-300'
+                            : 'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-300'
+                        }`}
+                      >
+                        {row.hasTransactionalMovements ? 'Locked' : 'Open'}
+                      </span>
+                    </td>
+                    <td className="px-2 py-2 text-slate-700 dark:text-slate-200">
+                      {row.lastMovementAt ? new Date(row.lastMovementAt).toLocaleString() : '-'}
+                    </td>
+                  </tr>
+                ))
+              )}
             </tbody>
           </table>
         </div>

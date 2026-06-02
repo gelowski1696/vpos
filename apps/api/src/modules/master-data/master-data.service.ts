@@ -4463,7 +4463,7 @@ export class MasterDataService {
     }
   }
 
-  async getInventoryOpeningSnapshot(): Promise<InventoryOpeningSnapshotRecord> {
+  async getInventoryOpeningSnapshot(branchId?: string): Promise<InventoryOpeningSnapshotRecord> {
     const companyId = await this.getCompanyIdOrNull();
     const binding = await this.getTenantBinding(companyId);
     if (!binding || !companyId) {
@@ -4475,26 +4475,47 @@ export class MasterDataService {
 
     try {
       await this.ensurePrismaBranchLocationSeed(companyId, binding.client);
-      const [balances, ledgers] = await Promise.all([
-        binding.client.inventoryBalance.findMany({
-          where: { companyId },
-          include: {
-            location: { select: { id: true, code: true, name: true } },
-            product: { select: { id: true, sku: true, name: true, isLpg: true, cylinderTypeId: true } }
-          },
-          orderBy: [{ location: { code: 'asc' } }, { product: { sku: 'asc' } }]
-        }),
-        binding.client.inventoryLedger.findMany({
-          where: { companyId },
-          select: {
-            locationId: true,
-            productId: true,
-            referenceType: true,
-            createdAt: true
-          },
-          orderBy: { createdAt: 'desc' }
-        })
-      ]);
+      const branchFilter = branchId?.trim() || null;
+      const balances = await binding.client.inventoryBalance.findMany({
+        where: {
+          companyId,
+          ...(branchFilter
+            ? {
+                location: {
+                  is: {
+                    branchId: branchFilter
+                  }
+                }
+              }
+            : {})
+        },
+        include: {
+          location: { select: { id: true, code: true, name: true, branchId: true } },
+          product: { select: { id: true, sku: true, name: true, isLpg: true, cylinderTypeId: true } }
+        },
+        orderBy: [{ location: { code: 'asc' } }, { product: { sku: 'asc' } }]
+      });
+      if (balances.length === 0) {
+        return {
+          asOf: this.now(),
+          rows: []
+        };
+      }
+
+      const locationIds = [...new Set(balances.map((row) => row.locationId))];
+      const ledgers = await binding.client.inventoryLedger.findMany({
+        where: {
+          companyId,
+          locationId: { in: locationIds }
+        },
+        select: {
+          locationId: true,
+          productId: true,
+          referenceType: true,
+          createdAt: true
+        },
+        orderBy: { createdAt: 'desc' }
+      });
 
       const openingKeys = new Set<string>();
       const nonOpeningKeys = new Set<string>();
