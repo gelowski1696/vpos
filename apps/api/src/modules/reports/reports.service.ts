@@ -1175,7 +1175,8 @@ export class ReportsService {
         customerPayments: {
           select: {
             method: true,
-            amount: true
+            amount: true,
+            purpose: true
           }
         },
         returns: {
@@ -1195,9 +1196,12 @@ export class ReportsService {
         until: range.until?.toISOString() ?? null
       },
       rows: rows.map((row) => {
+        const settlementPayments = row.customerPayments.filter(
+          (payment) => payment.purpose !== 'LENDING_DEPOSIT'
+        );
         const paymentTotal = this.roundMoney(
           row.payments.reduce((sum, payment) => sum + this.toNumber(payment.amount), 0) +
-            row.customerPayments.reduce((sum, payment) => sum + this.toNumber(payment.amount), 0)
+            settlementPayments.reduce((sum, payment) => sum + this.toNumber(payment.amount), 0)
         );
         const totalAmount = this.roundMoney(this.toNumber(row.totalAmount));
         const cogsAmount = this.roundMoney(this.toNumber(row.cogsAmount));
@@ -1240,7 +1244,7 @@ export class ReportsService {
           payment_methods: [
             ...new Set([
               ...row.payments.map((payment) => payment.method),
-              ...row.customerPayments.map((payment) => payment.method)
+              ...settlementPayments.map((payment) => payment.method)
             ])
           ]
         };
@@ -1325,6 +1329,8 @@ export class ReportsService {
       method: PaymentMethod;
       amount: number;
       reference_no: string | null;
+      notes: string | null;
+      posted_at: string | null;
     }>;
     delivery: {
       id: string;
@@ -1474,7 +1480,8 @@ export class ReportsService {
             amount: true,
             referenceNo: true,
             notes: true,
-            postedAt: true
+            postedAt: true,
+            purpose: true
           },
           orderBy: { postedAt: 'asc' }
         },
@@ -1621,14 +1628,16 @@ export class ReportsService {
             amount: true,
             referenceNo: true,
             notes: true,
-            postedAt: true
+            postedAt: true,
+            purpose: true
           },
           orderBy: { postedAt: 'asc' },
           take: 200
         });
-        settlementPayments = fallbackRows;
+        settlementPayments = fallbackRows.filter((payment) => payment.purpose !== 'LENDING_DEPOSIT');
       }
     }
+    settlementPayments = settlementPayments.filter((payment) => payment.purpose !== 'LENDING_DEPOSIT');
     const paymentTotal = this.roundMoney(
       row.payments.reduce((sum, payment) => sum + this.toNumber(payment.amount), 0) +
         settlementPayments.reduce((sum, payment) => sum + this.toNumber(payment.amount), 0)
@@ -1728,14 +1737,18 @@ export class ReportsService {
           payment_source: 'SALE' as const,
           method: payment.method,
           amount: this.roundMoney(this.toNumber(payment.amount)),
-          reference_no: payment.referenceNo ?? null
+          reference_no: payment.referenceNo ?? null,
+          notes: null,
+          posted_at: row.createdAt ? row.createdAt.toISOString() : null
         })),
         ...settlementPayments.map((payment) => ({
           payment_id: payment.id,
           payment_source: 'SETTLEMENT' as const,
           method: payment.method,
           amount: this.roundMoney(this.toNumber(payment.amount)),
-          reference_no: payment.referenceNo ?? null
+          reference_no: payment.referenceNo ?? null,
+          notes: payment.notes ?? null,
+          posted_at: payment.postedAt ? payment.postedAt.toISOString() : null
         }))
       ],
       delivery: row.deliveryOrder

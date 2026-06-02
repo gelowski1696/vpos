@@ -152,6 +152,11 @@ enum PaymentMethod {
   E_WALLET
 }
 
+enum CustomerPaymentPurpose {
+  SALE_BALANCE
+  LENDING_DEPOSIT
+}
+
 enum DeliveryStatus {
   CREATED
   ASSIGNED
@@ -1861,6 +1866,7 @@ model CustomerPayment {
   saleId          String?
   customerId      String
   createdByUserId String?
+  purpose         CustomerPaymentPurpose @default(SALE_BALANCE)
   method          PaymentMethod
   amount          Decimal       @db.Decimal(14, 2)
   referenceNo     String?
@@ -1878,6 +1884,7 @@ model CustomerPayment {
   @@index([companyId, postedAt])
   @@index([companyId, customerId, postedAt])
   @@index([companyId, saleId, postedAt])
+  @@index([companyId, purpose, postedAt])
   @@index([branchId, postedAt])
 }
 

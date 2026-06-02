@@ -11,6 +11,11 @@ import {
   TenantDatasourceRouterService,
   type TenantPrismaBinding
 } from '../../common/tenant-datasource-router.service';
+import {
+  isBalanceAffectingCustomerPaymentPurpose,
+  normalizeCustomerPaymentPurpose,
+  type CustomerPaymentPurpose
+} from './customer-payment-purpose';
 
 type DbClient = PrismaService | PrismaClient;
 type DbTransaction = Prisma.TransactionClient;
@@ -20,6 +25,7 @@ export type CustomerPaymentPostInput = {
   sale_id?: string | null;
   customer_id: string;
   branch_id?: string | null;
+  purpose?: CustomerPaymentPurpose | string | null;
   method: 'CASH' | 'CARD' | 'E_WALLET';
   amount: number;
   reference_no?: string | null;
@@ -47,6 +53,7 @@ export type CustomerPaymentRecord = {
   customer_name: string | null;
   created_by_user_id: string | null;
   created_by_name: string | null;
+  purpose: CustomerPaymentPurpose;
   method: 'CASH' | 'CARD' | 'E_WALLET';
   amount: number;
   reference_no: string | null;
@@ -111,6 +118,7 @@ export class CustomerPaymentsService {
       customer_name: this.fallbackCustomerName(customerCode),
       created_by_user_id: actorUserId?.trim() || null,
       created_by_name: null,
+      purpose: normalizeCustomerPaymentPurpose(input.purpose),
       method: input.method,
       amount: this.roundMoney(input.amount),
       reference_no: input.reference_no?.trim() || null,
@@ -140,6 +148,7 @@ export class CustomerPaymentsService {
         saleId: string | null;
         customerId: string;
         createdByUserId: string | null;
+        purpose: CustomerPaymentPurpose;
         method: PaymentMethod;
         amount: Prisma.Decimal;
         referenceNo: string | null;
@@ -184,6 +193,7 @@ export class CustomerPaymentsService {
               saleId: sale?.id ?? null,
               customerId: customer.id,
               createdByUserId: actor?.id ?? null,
+              purpose: normalizeCustomerPaymentPurpose(input.purpose),
               method: input.method,
               amount: this.roundMoney(input.amount),
               referenceNo: input.reference_no?.trim() || null,
@@ -289,6 +299,7 @@ export class CustomerPaymentsService {
       customerId: string;
       createdByUserId: string | null;
       saleId: string | null;
+      purpose: CustomerPaymentPurpose;
       method: PaymentMethod;
       amount: Prisma.Decimal;
       referenceNo: string | null;
@@ -387,7 +398,11 @@ export class CustomerPaymentsService {
       );
     }
 
-    let credits: Array<{ customerId: string; amount: Prisma.Decimal }> = [];
+    let credits: Array<{
+      customerId: string;
+      amount: Prisma.Decimal;
+      purpose: CustomerPaymentPurpose;
+    }> = [];
     try {
       credits = await db.customerPayment.findMany({
         where: {
@@ -396,7 +411,8 @@ export class CustomerPaymentsService {
         },
         select: {
           customerId: true,
-          amount: true
+          amount: true,
+          purpose: true
         }
       });
     } catch (error) {
@@ -406,6 +422,9 @@ export class CustomerPaymentsService {
     }
     const creditMap = new Map<string, number>();
     for (const row of credits) {
+      if (!isBalanceAffectingCustomerPaymentPurpose(row.purpose)) {
+        continue;
+      }
       creditMap.set(
         row.customerId,
         this.roundMoney((creditMap.get(row.customerId) ?? 0) + Number(row.amount))
@@ -430,6 +449,7 @@ export class CustomerPaymentsService {
       saleId: string | null;
       customerId: string;
       createdByUserId: string | null;
+      purpose: CustomerPaymentPurpose;
       method: PaymentMethod;
       amount: Prisma.Decimal;
       referenceNo: string | null;
@@ -454,6 +474,7 @@ export class CustomerPaymentsService {
       customer_name: row.customer?.name ?? null,
       created_by_user_id: row.createdByUserId ?? null,
       created_by_name: row.createdByUser?.fullName ?? null,
+      purpose: row.purpose,
       method: row.method,
       amount: this.roundMoney(Number(row.amount)),
       reference_no: row.referenceNo ?? null,
@@ -583,6 +604,7 @@ export class CustomerPaymentsService {
       sale_id: input.sale_id?.trim() || null,
       customer_id: customerId,
       branch_id: input.branch_id?.trim() || null,
+      purpose: normalizeCustomerPaymentPurpose(input.purpose),
       method: input.method,
       amount,
       reference_no: input.reference_no?.trim() || null,

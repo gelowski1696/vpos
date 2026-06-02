@@ -5,6 +5,7 @@ import {
   Optional
 } from '@nestjs/common';
 import {
+  PaymentMethod,
   LendingReturnCondition,
   LendingSettlementType,
   LendingStatus,
@@ -89,6 +90,16 @@ export type LendingReturnRecord = {
   created_at: string;
 };
 
+export type LendingDepositPaymentRecord = {
+  payment_id: string;
+  method: PaymentMethod;
+  amount: number;
+  reference_no: string | null;
+  notes: string | null;
+  posted_at: string;
+  created_at: string;
+};
+
 export type LendingRecord = {
   lending_id: string;
   company_id: string;
@@ -122,6 +133,7 @@ export type LendingRecord = {
 export type LendingDetailRecord = LendingRecord & {
   lines: LendingLineRecord[];
   returns: LendingReturnRecord[];
+  deposit_payment: LendingDepositPaymentRecord | null;
 };
 
 type NormalizedCreateLendingInput = {
@@ -481,6 +493,23 @@ export class LendingService {
     if (!row) {
       throw new NotFoundException('Lending record not found');
     }
+    const depositPayment = await db.customerPayment.findFirst({
+      where: {
+        companyId,
+        saleId: row.saleId,
+        purpose: 'LENDING_DEPOSIT'
+      },
+      select: {
+        id: true,
+        method: true,
+        amount: true,
+        referenceNo: true,
+        notes: true,
+        postedAt: true,
+        createdAt: true
+      },
+      orderBy: { postedAt: 'desc' }
+    });
 
     const base = this.mapLendingRecord(row);
     return {
@@ -509,7 +538,18 @@ export class LendingService {
         received_by_name: entry.receivedBy?.fullName ?? null,
         returned_at: entry.returnedAt.toISOString(),
         created_at: entry.createdAt.toISOString()
-      }))
+      })),
+      deposit_payment: depositPayment
+        ? {
+            payment_id: depositPayment.id,
+            method: depositPayment.method,
+            amount: this.toNumber(depositPayment.amount),
+            reference_no: depositPayment.referenceNo ?? null,
+            notes: depositPayment.notes ?? null,
+            posted_at: depositPayment.postedAt.toISOString(),
+            created_at: depositPayment.createdAt.toISOString()
+          }
+        : null
     };
   }
 

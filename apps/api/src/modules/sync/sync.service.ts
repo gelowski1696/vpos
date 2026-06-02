@@ -1309,6 +1309,10 @@ export class SyncService {
         ? rawMethod
         : 'CASH';
     const amount = this.asNumber(payload.amount);
+    const purpose =
+      this.asString(payload.purpose)?.trim().toUpperCase() === 'LENDING_DEPOSIT'
+        ? 'LENDING_DEPOSIT'
+        : 'SALE_BALANCE';
 
     try {
       const payment = await this.customerPaymentsService.post(
@@ -1321,6 +1325,7 @@ export class SyncService {
               : this.asString(payload.sale_id ?? payload.saleId),
           customer_id: customerId,
           branch_id: this.asString(payload.branch_id ?? payload.branchId) ?? null,
+          purpose,
           method,
           amount,
           reference_no: this.asString(payload.reference_no ?? payload.referenceNo) ?? null,
@@ -2949,16 +2954,17 @@ export class SyncService {
     return ordered.map((row) => ({
       entity: 'customer_payment',
       action: 'create',
-      payload: {
-        id: row.payment_id,
-        payment_id: row.payment_id,
-        sale_id: row.sale_id,
-        customer_id: row.customer_id,
-        branch_id: row.branch_id,
-        method: row.method,
-        amount: row.amount,
-        reference_no: row.reference_no,
-        notes: row.notes,
+        payload: {
+          id: row.payment_id,
+          payment_id: row.payment_id,
+          sale_id: row.sale_id,
+          customer_id: row.customer_id,
+          branch_id: row.branch_id,
+          purpose: row.purpose,
+          method: row.method,
+          amount: row.amount,
+          reference_no: row.reference_no,
+          notes: row.notes,
         posted_at: row.posted_at,
         created_at: row.created_at,
         updated_at: row.updated_at

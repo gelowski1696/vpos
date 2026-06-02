@@ -122,6 +122,15 @@ type CostingPolicy = {
   roundingScale: number;
 };
 
+const OPEN_LENDING_STATUSES = new Set(['OPEN', 'PARTIALLY_RETURNED', 'OVERDUE']);
+
+export function hasOpenLinkedLendingRecord(rows: Array<{ status?: string | null }>): boolean {
+  return rows.some((row) => {
+    const status = typeof row.status === 'string' ? row.status.trim().toUpperCase() : '';
+    return OPEN_LENDING_STATUSES.has(status);
+  });
+}
+
 export type SalePostResponse = {
   sale_id: string;
   posted: boolean;
@@ -991,7 +1000,8 @@ export class SalesService {
             },
             customerPayments: {
               select: {
-                id: true
+                id: true,
+                purpose: true
               }
             }
           }
@@ -1003,12 +1013,16 @@ export class SalesService {
         if (sale.status !== 'ACTIVE') {
           throw new BadRequestException('Only active sales can be cancelled');
         }
-        if (sale.lendingTransactions.length > 0) {
+        if (hasOpenLinkedLendingRecord(sale.lendingTransactions)) {
           throw new BadRequestException(
-            'Sale cannot be cancelled because it has linked lending records'
+            'Sale cannot be cancelled while linked lending records are still open'
           );
         }
-        if (sale.customerPayments.length > 0) {
+        const settlementPayments = sale.customerPayments.filter(
+          (payment: { purpose?: string | null }) =>
+            String(payment.purpose ?? '').trim().toUpperCase() !== 'LENDING_DEPOSIT'
+        );
+        if (settlementPayments.length > 0) {
           throw new BadRequestException(
             'Sale cannot be cancelled after customer settlement payments are posted'
           );
@@ -1378,7 +1392,7 @@ export class SalesService {
               select: { id: true, status: true }
             },
             customerPayments: {
-              select: { id: true }
+              select: { id: true, purpose: true }
             }
           }
         })) as any;
@@ -1389,16 +1403,16 @@ export class SalesService {
         if (sale.status !== 'ACTIVE') {
           throw new BadRequestException('Only active sales can accept returns');
         }
-        if (
-          sale.lendingTransactions.some((row: { status: string }) =>
-            ['OPEN', 'PARTIALLY_RETURNED', 'OVERDUE'].includes(row.status)
-          )
-        ) {
+        if (hasOpenLinkedLendingRecord(sale.lendingTransactions)) {
           throw new BadRequestException(
             'Sale cannot accept item returns while linked lending records are still open'
           );
         }
-        if (sale.customerPayments.length > 0) {
+        const settlementPayments = sale.customerPayments.filter(
+          (payment: { purpose?: string | null }) =>
+            String(payment.purpose ?? '').trim().toUpperCase() !== 'LENDING_DEPOSIT'
+        );
+        if (settlementPayments.length > 0) {
           throw new BadRequestException(
             'Sale cannot accept item returns after customer settlement payments are posted'
           );
