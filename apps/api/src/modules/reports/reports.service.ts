@@ -2946,20 +2946,7 @@ export class ReportsService {
         where: { companyId, id: actorUserId },
         select: { branchId: true }
       });
-      if (!actor?.branchId) {
-        const activeBranches = await db.branch.findMany({
-          where: { companyId, isActive: true },
-          select: { id: true },
-          take: 2
-        });
-        if (activeBranches.length === 1) {
-          effectiveBranchId = activeBranches[0].id;
-        } else {
-          throw new BadRequestException(
-            'Admin account is not linked to a branch. Link branch first to view branch audit logs.'
-          );
-        }
-      } else {
+      if (actor?.branchId) {
         effectiveBranchId = actor.branchId;
       }
     }
