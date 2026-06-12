@@ -92,6 +92,15 @@ enum PurchaseOrderStatus {
   CANCELLED
 }
 
+enum PurchaseOrderPulloutReason {
+  EXPIRED
+  DAMAGED
+  WRONG_ITEM
+  OVERDELIVERY
+  EMPTIES
+  OTHER
+}
+
 enum NegativeStockPolicy {
   BLOCK_POSTING
   ALLOW_WITH_REVIEW
@@ -374,6 +383,7 @@ model Company {
   purchaseOrderPullouts     PurchaseOrderPullout[]
   purchaseOrderPulloutLines PurchaseOrderPulloutLine[]
   purchaseOrderAttachments  PurchaseOrderAttachment[]
+  purchaseOrderDeliveries   PurchaseOrderDelivery[]
   costingConfig             CostingConfig?
   vcardPointsPolicy         VcardPointsPolicy?
   cylinders                 Cylinder[]
@@ -654,6 +664,7 @@ model Location {
   purchaseOrders         PurchaseOrder[]
   purchaseOrderReceipts  PurchaseOrderReceipt[]
   purchaseOrderPullouts  PurchaseOrderPullout[]
+  purchaseOrderDeliveries PurchaseOrderDelivery[]
 
   @@unique([companyId, code])
   @@index([companyId, updatedAt])
@@ -1453,6 +1464,7 @@ model PurchaseOrder {
   lines        PurchaseOrderLine[]
   receipts     PurchaseOrderReceipt[]
   pullouts     PurchaseOrderPullout[]
+  deliveries   PurchaseOrderDelivery[]
   attachments  PurchaseOrderAttachment[]
 
   @@unique([companyId, poNumber])
@@ -1488,17 +1500,20 @@ model PurchaseOrderReceipt {
   purchaseOrderId  String
   companyId        String
   locationId       String
+  deliveryId       String?
   receivedByUserId String?
   notes            String?  @db.Text
   createdAt        DateTime @default(now())
 
-  purchaseOrder PurchaseOrder          @relation(fields: [purchaseOrderId], references: [id], onDelete: Cascade)
-  company       Company                @relation(fields: [companyId], references: [id], onDelete: Cascade)
-  location      Location               @relation(fields: [locationId], references: [id], onDelete: Restrict)
+  purchaseOrder PurchaseOrder             @relation(fields: [purchaseOrderId], references: [id], onDelete: Cascade)
+  company       Company                   @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  location      Location                  @relation(fields: [locationId], references: [id], onDelete: Restrict)
+  delivery      PurchaseOrderDelivery?    @relation(fields: [deliveryId], references: [id], onDelete: SetNull)
   lines         PurchaseOrderReceiptLine[]
 
   @@index([companyId, createdAt])
   @@index([purchaseOrderId, createdAt])
+  @@index([deliveryId])
 }
 
 model PurchaseOrderReceiptLine {
@@ -1527,29 +1542,33 @@ model PurchaseOrderPullout {
   purchaseOrderId    String
   companyId          String
   locationId         String
+  deliveryId         String?
   pulledOutByUserId  String?
   notes              String?  @db.Text
   createdAt          DateTime @default(now())
 
-  purchaseOrder PurchaseOrder          @relation(fields: [purchaseOrderId], references: [id], onDelete: Cascade)
-  company       Company                @relation(fields: [companyId], references: [id], onDelete: Cascade)
-  location      Location               @relation(fields: [locationId], references: [id], onDelete: Restrict)
+  purchaseOrder PurchaseOrder             @relation(fields: [purchaseOrderId], references: [id], onDelete: Cascade)
+  company       Company                   @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  location      Location                  @relation(fields: [locationId], references: [id], onDelete: Restrict)
+  delivery      PurchaseOrderDelivery?    @relation(fields: [deliveryId], references: [id], onDelete: SetNull)
   lines         PurchaseOrderPulloutLine[]
 
   @@index([companyId, createdAt])
   @@index([purchaseOrderId, createdAt])
+  @@index([deliveryId])
 }
 
 model PurchaseOrderPulloutLine {
-  id                  String   @id @default(uuid())
+  id                  String                       @id @default(uuid())
   pulloutId           String
   companyId           String
   purchaseOrderLineId String
   productId           String
-  quantity            Decimal  @db.Decimal(14, 4)
-  unitCost            Decimal  @db.Decimal(14, 4)
+  quantity            Decimal                      @db.Decimal(14, 4)
+  unitCost            Decimal                      @db.Decimal(14, 4)
+  pulloutReason       PurchaseOrderPulloutReason?
   ledgerReferenceId   String?
-  createdAt           DateTime @default(now())
+  createdAt           DateTime                     @default(now())
 
   pullout           PurchaseOrderPullout @relation(fields: [pulloutId], references: [id], onDelete: Cascade)
   company           Company              @relation(fields: [companyId], references: [id], onDelete: Cascade)
@@ -1579,6 +1598,26 @@ model PurchaseOrderAttachment {
 
   @@index([companyId, purchaseOrderId, createdAt])
   @@index([companyId, createdAt])
+}
+
+model PurchaseOrderDelivery {
+  id                String   @id @default(uuid())
+  purchaseOrderId   String
+  companyId         String
+  locationId        String
+  referenceNo       String?
+  notes             String?  @db.Text
+  postedByUserId    String?
+  createdAt         DateTime @default(now())
+
+  purchaseOrder PurchaseOrder          @relation(fields: [purchaseOrderId], references: [id], onDelete: Cascade)
+  company       Company                @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  location      Location               @relation(fields: [locationId], references: [id], onDelete: Restrict)
+  receipts      PurchaseOrderReceipt[]
+  pullouts      PurchaseOrderPullout[]
+
+  @@index([companyId, createdAt])
+  @@index([purchaseOrderId, createdAt])
 }
 
 model CostingConfig {

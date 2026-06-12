@@ -54,6 +54,8 @@ export type PurchaseOrderReceiptRecord = {
   lines: PurchaseOrderReceiptLineRecord[];
 };
 
+export type PurchaseOrderPulloutReason = 'EXPIRED' | 'DAMAGED' | 'WRONG_ITEM' | 'OVERDELIVERY' | 'EMPTIES' | 'OTHER';
+
 export type PurchaseOrderPulloutLineRecord = {
   id: string;
   purchase_order_line_id: string;
@@ -62,6 +64,7 @@ export type PurchaseOrderPulloutLineRecord = {
   product_name: string;
   quantity: number;
   unit_cost: number;
+  pullout_reason: PurchaseOrderPulloutReason | null;
   ledger_reference_id: string | null;
 };
 
@@ -102,10 +105,23 @@ export type PurchaseOrderSummaryRecord = {
   updated_at: string;
 };
 
+export type PurchaseOrderDeliveryRecord = {
+  id: string;
+  location_id: string;
+  location_name: string;
+  reference_no: string | null;
+  posted_by_user_id: string | null;
+  notes: string | null;
+  created_at: string;
+  receipts: PurchaseOrderReceiptRecord[];
+  pullouts: PurchaseOrderPulloutRecord[];
+};
+
 export type PurchaseOrderRecord = PurchaseOrderSummaryRecord & {
   lines: PurchaseOrderLineRecord[];
   receipts: PurchaseOrderReceiptRecord[];
   pullouts: PurchaseOrderPulloutRecord[];
+  deliveries: PurchaseOrderDeliveryRecord[];
   attachments: PurchaseOrderAttachmentRecord[];
 };
 
@@ -556,6 +572,215 @@ export class PurchaseOrdersService {
     });
   }
 
+  async receivePullout(
+    companyId: string,
+    id: string,
+    actorUserId: string | null,
+    input: {
+      reference_no?: string | null;
+      notes?: string | null;
+      receive_lines: Array<{
+        purchase_order_line_id: string;
+        quantity: number;
+        unit_cost?: number;
+      }>;
+      pullout_lines: Array<{
+        purchase_order_line_id: string;
+        quantity: number;
+        unit_cost?: number;
+        pullout_reason?: PurchaseOrderPulloutReason | null;
+      }>;
+    }
+  ): Promise<PurchaseOrderRecord> {
+    await this.enforceAddonPolicy(companyId);
+    const binding = await this.requireTenantBinding(companyId);
+    const db = binding.client as DbClient;
+    const receiveLines = this.normalizeReceiveLines(input.receive_lines);
+    const pulloutLines = this.normalizeReceiveLines(input.pullout_lines);
+
+    if (receiveLines.length === 0 && pulloutLines.length === 0) {
+      throw new BadRequestException('At least one receive or pullout line is required.');
+    }
+
+    return db.$transaction(async (tx) => {
+      const po = await tx.purchaseOrder.findFirst({
+        where: { id, companyId },
+        include: {
+          lines: {
+            include: {
+              product: { select: { id: true, isLpg: true } }
+            }
+          }
+        }
+      });
+      if (!po) {
+        throw new NotFoundException('Purchase order not found.');
+      }
+      if (po.status === 'DRAFT') {
+        throw new BadRequestException('Submit the purchase order before posting a delivery.');
+      }
+      if (po.status === 'CANCELLED') {
+        throw new BadRequestException('Cancelled purchase orders cannot receive stock.');
+      }
+
+      const poLineById = new Map(po.lines.map((line) => [line.id, line]));
+
+      const delivery = await tx.purchaseOrderDelivery.create({
+        data: {
+          purchaseOrderId: po.id,
+          companyId,
+          locationId: po.locationId,
+          referenceNo: this.asNullableText(input.reference_no),
+          notes: this.asNullableText(input.notes),
+          postedByUserId: actorUserId
+        },
+        select: { id: true }
+      });
+
+      if (receiveLines.length > 0) {
+        const receipt = await tx.purchaseOrderReceipt.create({
+          data: {
+            purchaseOrderId: po.id,
+            companyId,
+            locationId: po.locationId,
+            deliveryId: delivery.id,
+            receivedByUserId: actorUserId,
+            notes: this.asNullableText(input.notes)
+          },
+          select: { id: true }
+        });
+
+        for (const line of receiveLines) {
+          const poLine = poLineById.get(line.purchase_order_line_id);
+          if (!poLine) {
+            throw new BadRequestException(`PO line ${line.purchase_order_line_id} does not belong to this PO.`);
+          }
+
+          const alreadyReceived = Number(poLine.receivedQty);
+          const orderedQty = Number(poLine.orderedQty);
+          const remainingQty = this.roundQty(orderedQty - alreadyReceived);
+          if (line.quantity > remainingQty + 0.0001) {
+            throw new BadRequestException(
+              `Received quantity for PO line ${poLine.id} exceeds remaining quantity.`
+            );
+          }
+
+          const unitCost = line.unit_cost ?? Number(poLine.unitCost);
+          const inventoryEvent = await this.applyInventoryDelta(tx, {
+            companyId,
+            locationId: po.locationId,
+            productId: poLine.productId,
+            isLpg: poLine.product.isLpg,
+            qtyDelta: line.quantity,
+            unitCost,
+            referenceType: 'PURCHASE_ORDER_RECEIVE',
+            referenceId: `${receipt.id}:${poLine.id}`
+          });
+
+          await tx.purchaseOrderLine.update({
+            where: { id: poLine.id },
+            data: { receivedQty: this.roundQty(alreadyReceived + line.quantity) }
+          });
+
+          await tx.purchaseOrderReceiptLine.create({
+            data: {
+              receiptId: receipt.id,
+              companyId,
+              purchaseOrderLineId: poLine.id,
+              productId: poLine.productId,
+              quantity: line.quantity,
+              unitCost,
+              ledgerReferenceId: inventoryEvent.ledgerId
+            }
+          });
+
+          // refresh cached receivedQty for pullout cap check below
+          const freshLine = poLineById.get(poLine.id);
+          if (freshLine) {
+            (freshLine as { receivedQty: unknown }).receivedQty = this.roundQty(alreadyReceived + line.quantity);
+          }
+        }
+      }
+
+      if (pulloutLines.length > 0) {
+        const pullout = await tx.purchaseOrderPullout.create({
+          data: {
+            purchaseOrderId: po.id,
+            companyId,
+            locationId: po.locationId,
+            deliveryId: delivery.id,
+            pulledOutByUserId: actorUserId,
+            notes: this.asNullableText(input.notes)
+          },
+          select: { id: true }
+        });
+
+        for (const line of pulloutLines) {
+          const poLine = poLineById.get(line.purchase_order_line_id);
+          if (!poLine) {
+            throw new BadRequestException(`PO line ${line.purchase_order_line_id} does not belong to this PO.`);
+          }
+
+          const aggregate = await tx.purchaseOrderPulloutLine.aggregate({
+            where: { purchaseOrderLineId: poLine.id },
+            _sum: { quantity: true }
+          });
+          const pulledOutQty = Number(aggregate._sum.quantity ?? 0);
+          const receivedQty = Number(poLine.receivedQty);
+          const available = this.roundQty(receivedQty - pulledOutQty);
+          if (line.quantity > available + 0.0001) {
+            throw new BadRequestException(
+              `Pullout quantity for PO line ${poLine.id} exceeds available received quantity.`
+            );
+          }
+
+          const unitCost = line.unit_cost ?? Number(poLine.unitCost);
+          const pulloutReasonRaw = (input.pullout_lines.find(
+            (raw) => raw.purchase_order_line_id === line.purchase_order_line_id
+          )?.pullout_reason) ?? null;
+          const inventoryEvent = await this.applyInventoryDelta(tx, {
+            companyId,
+            locationId: po.locationId,
+            productId: poLine.productId,
+            isLpg: poLine.product.isLpg,
+            qtyDelta: -line.quantity,
+            unitCost,
+            referenceType: 'PURCHASE_ORDER_PULLOUT',
+            referenceId: `${pullout.id}:${poLine.id}`
+          });
+
+          await tx.purchaseOrderPulloutLine.create({
+            data: {
+              pulloutId: pullout.id,
+              companyId,
+              purchaseOrderLineId: poLine.id,
+              productId: poLine.productId,
+              quantity: line.quantity,
+              unitCost,
+              pulloutReason: pulloutReasonRaw ?? undefined,
+              ledgerReferenceId: inventoryEvent.ledgerId
+            }
+          });
+        }
+      }
+
+      const totalReceived = po.lines.reduce((sum, line) => sum + Number(line.receivedQty), 0);
+      const nextStatus =
+        po.status === 'COMPLETED'
+          ? 'COMPLETED'
+          : totalReceived > 0
+            ? 'PARTIALLY_RECEIVED'
+            : po.status;
+
+      await tx.purchaseOrder.update({
+        where: { id: po.id },
+        data: { status: nextStatus }
+      });
+
+      return this.getDetailWithTx(tx, companyId, po.id);
+    });
+  }
+
   async complete(companyId: string, id: string, actorUserId: string | null): Promise<PurchaseOrderRecord> {
     await this.enforceAddonPolicy(companyId);
     const binding = await this.requireTenantBinding(companyId);
@@ -801,6 +1026,36 @@ export class PurchaseOrdersService {
           },
           orderBy: { createdAt: 'asc' }
         },
+        deliveries: {
+          include: {
+            location: { select: { id: true, name: true } },
+            receipts: {
+              include: {
+                location: { select: { id: true, name: true } },
+                lines: {
+                  include: {
+                    product: { select: { id: true, sku: true, name: true } },
+                    purchaseOrderLine: { select: { id: true } }
+                  },
+                  orderBy: { createdAt: 'asc' }
+                }
+              }
+            },
+            pullouts: {
+              include: {
+                location: { select: { id: true, name: true } },
+                lines: {
+                  include: {
+                    product: { select: { id: true, sku: true, name: true } },
+                    purchaseOrderLine: { select: { id: true } }
+                  },
+                  orderBy: { createdAt: 'asc' }
+                }
+              }
+            }
+          },
+          orderBy: { createdAt: 'asc' }
+        },
         receipts: {
           include: {
             location: { select: { id: true, name: true } },
@@ -855,6 +1110,45 @@ export class PurchaseOrdersService {
       )
     );
 
+    const mapReceiptLines = (receipt: typeof row.receipts[number]): PurchaseOrderReceiptRecord => ({
+      id: receipt.id,
+      location_id: receipt.locationId,
+      location_name: receipt.location.name,
+      received_by_user_id: receipt.receivedByUserId ?? null,
+      notes: receipt.notes ?? null,
+      created_at: receipt.createdAt.toISOString(),
+      lines: receipt.lines.map((line) => ({
+        id: line.id,
+        purchase_order_line_id: line.purchaseOrderLine.id,
+        product_id: line.productId,
+        product_sku: line.product.sku,
+        product_name: line.product.name,
+        quantity: Number(line.quantity),
+        unit_cost: Number(line.unitCost),
+        ledger_reference_id: line.ledgerReferenceId ?? null
+      }))
+    });
+
+    const mapPulloutLines = (pullout: typeof row.pullouts[number]): PurchaseOrderPulloutRecord => ({
+      id: pullout.id,
+      location_id: pullout.locationId,
+      location_name: pullout.location.name,
+      pulled_out_by_user_id: pullout.pulledOutByUserId ?? null,
+      notes: pullout.notes ?? null,
+      created_at: pullout.createdAt.toISOString(),
+      lines: pullout.lines.map((line) => ({
+        id: line.id,
+        purchase_order_line_id: line.purchaseOrderLine.id,
+        product_id: line.productId,
+        product_sku: line.product.sku,
+        product_name: line.product.name,
+        quantity: Number(line.quantity),
+        unit_cost: Number(line.unitCost),
+        pullout_reason: (line.pulloutReason as PurchaseOrderPulloutReason | null) ?? null,
+        ledger_reference_id: line.ledgerReferenceId ?? null
+      }))
+    });
+
     return {
       id: row.id,
       po_number: row.poNumber,
@@ -890,42 +1184,19 @@ export class PurchaseOrdersService {
         unit_cost: Number(line.unitCost),
         notes: line.notes ?? null
       })),
-      receipts: row.receipts.map((receipt) => ({
-        id: receipt.id,
-        location_id: receipt.locationId,
-        location_name: receipt.location.name,
-        received_by_user_id: receipt.receivedByUserId ?? null,
-        notes: receipt.notes ?? null,
-        created_at: receipt.createdAt.toISOString(),
-        lines: receipt.lines.map((line) => ({
-          id: line.id,
-          purchase_order_line_id: line.purchaseOrderLine.id,
-          product_id: line.productId,
-          product_sku: line.product.sku,
-          product_name: line.product.name,
-          quantity: Number(line.quantity),
-          unit_cost: Number(line.unitCost),
-          ledger_reference_id: line.ledgerReferenceId ?? null
-        }))
+      deliveries: row.deliveries.map((delivery) => ({
+        id: delivery.id,
+        location_id: delivery.locationId,
+        location_name: delivery.location.name,
+        reference_no: delivery.referenceNo ?? null,
+        posted_by_user_id: delivery.postedByUserId ?? null,
+        notes: delivery.notes ?? null,
+        created_at: delivery.createdAt.toISOString(),
+        receipts: delivery.receipts.map(mapReceiptLines),
+        pullouts: delivery.pullouts.map(mapPulloutLines)
       })),
-      pullouts: row.pullouts.map((pullout) => ({
-        id: pullout.id,
-        location_id: pullout.locationId,
-        location_name: pullout.location.name,
-        pulled_out_by_user_id: pullout.pulledOutByUserId ?? null,
-        notes: pullout.notes ?? null,
-        created_at: pullout.createdAt.toISOString(),
-        lines: pullout.lines.map((line) => ({
-          id: line.id,
-          purchase_order_line_id: line.purchaseOrderLine.id,
-          product_id: line.productId,
-          product_sku: line.product.sku,
-          product_name: line.product.name,
-          quantity: Number(line.quantity),
-          unit_cost: Number(line.unitCost),
-          ledger_reference_id: line.ledgerReferenceId ?? null
-        }))
-      })),
+      receipts: row.receipts.map(mapReceiptLines),
+      pullouts: row.pullouts.map(mapPulloutLines),
       attachments: row.attachments.map((attachment) => ({
         id: attachment.id,
         file_name: attachment.fileName,

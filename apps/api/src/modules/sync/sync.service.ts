@@ -18,6 +18,7 @@ import {
 import { TransfersService, type TransferRecord } from '../transfers/transfers.service';
 import {
   PurchaseOrdersService,
+  type PurchaseOrderPulloutReason,
   type PurchaseOrderRecord
 } from '../purchase-orders/purchase-orders.service';
 import { VcardService } from '../vcard/vcard.service';
@@ -708,6 +709,7 @@ export class SyncService {
       item.entity === 'purchase_order_submit' ||
       item.entity === 'purchase_order_receive' ||
       item.entity === 'purchase_order_pullout' ||
+      item.entity === 'purchase_order_delivery' ||
       item.entity === 'purchase_order_complete' ||
       item.entity === 'purchase_order_cancel' ||
       item.entity === 'purchase_order_attachment'
@@ -1742,6 +1744,7 @@ export class SyncService {
       entity !== 'purchase_order_submit' &&
       entity !== 'purchase_order_receive' &&
       entity !== 'purchase_order_pullout' &&
+      entity !== 'purchase_order_delivery' &&
       entity !== 'purchase_order_complete' &&
       entity !== 'purchase_order_cancel' &&
       entity !== 'purchase_order_attachment'
@@ -1923,6 +1926,73 @@ export class SyncService {
           }
         );
         return { ok: true, purchaseOrder: pullout };
+      }
+
+      if (entity === 'purchase_order_delivery') {
+        const parseLines = (raw: unknown[]): Array<{
+          purchase_order_line_id: string;
+          quantity: number;
+          unit_cost?: number;
+        }> => {
+          const result: Array<{ purchase_order_line_id: string; quantity: number; unit_cost?: number }> = [];
+          for (const row of raw) {
+            const line = (row as Record<string, unknown>) ?? {};
+            const poLineId = this.asString(line.purchase_order_line_id ?? line.purchaseOrderLineId);
+            const quantity = this.asNumber(line.quantity);
+            const unitCostRaw = line.unit_cost ?? line.unitCost;
+            if (!poLineId || quantity <= 0) {
+              continue;
+            }
+            const parsed: { purchase_order_line_id: string; quantity: number; unit_cost?: number } = {
+              purchase_order_line_id: poLineId,
+              quantity
+            };
+            if (unitCostRaw !== undefined && unitCostRaw !== null) {
+              parsed.unit_cost = this.asNumber(unitCostRaw);
+            }
+            result.push(parsed);
+          }
+          return result;
+        };
+
+        const parsePulloutLines = (raw: unknown[]): Array<{
+          purchase_order_line_id: string;
+          quantity: number;
+          unit_cost?: number;
+          pullout_reason?: PurchaseOrderPulloutReason | null;
+        }> => {
+          return parseLines(raw).map((line, idx) => {
+            const row = (raw[idx] as Record<string, unknown>) ?? {};
+            const reasonRaw = this.asString(row.pullout_reason ?? row.pulloutReason);
+            const validReasons: PurchaseOrderPulloutReason[] = [
+              'EXPIRED', 'DAMAGED', 'WRONG_ITEM', 'OVERDELIVERY', 'EMPTIES', 'OTHER'
+            ];
+            const pulloutReason = validReasons.includes(reasonRaw as PurchaseOrderPulloutReason)
+              ? (reasonRaw as PurchaseOrderPulloutReason)
+              : null;
+            return { ...line, pullout_reason: pulloutReason };
+          });
+        };
+
+        const receiveLines = parseLines(Array.isArray(payload.receive_lines) ? payload.receive_lines : []);
+        const pulloutLines = parsePulloutLines(Array.isArray(payload.pullout_lines) ? payload.pullout_lines : []);
+
+        if (receiveLines.length === 0 && pulloutLines.length === 0) {
+          return { ok: false, reason: 'Delivery post requires at least one receive or pullout line' };
+        }
+
+        const result = await this.purchaseOrdersService.receivePullout(
+          companyId,
+          purchaseOrderId,
+          payloadActorUserId,
+          {
+            reference_no: this.asString(payload.reference_no ?? payload.referenceNo) ?? null,
+            notes: this.asString(payload.notes) ?? null,
+            receive_lines: receiveLines,
+            pullout_lines: pulloutLines
+          }
+        );
+        return { ok: true, purchaseOrder: result };
       }
 
       if (entity === 'purchase_order_complete') {

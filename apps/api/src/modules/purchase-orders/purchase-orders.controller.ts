@@ -19,6 +19,7 @@ import { EntitlementsService } from '../entitlements/entitlements.service';
 import { TenantRoutingPolicyService } from '../entitlements/tenant-routing-policy.service';
 import {
   PurchaseOrderListFilters,
+  PurchaseOrderPulloutReason,
   PurchaseOrderRecord,
   PurchaseOrderStatus,
   PurchaseOrdersService
@@ -187,6 +188,57 @@ export class PurchaseOrdersController {
       entityId: updated.id,
       metadata: {
         pulloutLines: body.lines?.length ?? 0
+      }
+    });
+    return updated;
+  }
+
+  @Post(':id/receive-pullout')
+  async receivePullout(
+    @Req() req: RequestWithUser,
+    @Param('id') id: string,
+    @Body()
+    body: {
+      reference_no?: string | null;
+      notes?: string | null;
+      receive_lines: Array<{
+        purchase_order_line_id: string;
+        quantity: number;
+        unit_cost?: number;
+      }>;
+      pullout_lines: Array<{
+        purchase_order_line_id: string;
+        quantity: number;
+        unit_cost?: number;
+        pullout_reason?: PurchaseOrderPulloutReason | null;
+      }>;
+    }
+  ): Promise<PurchaseOrderRecord> {
+    this.enforcePosWriteChannel(req);
+    const companyId = this.requireCompanyId(req);
+    await this.tenantRoutingPolicy.assertRoutable(companyId);
+    await this.entitlementsService.enforceTransactionalWrite(companyId);
+    const updated = await this.purchaseOrdersService.receivePullout(
+      companyId,
+      id,
+      req.user?.sub ?? null,
+      {
+        reference_no: body.reference_no ?? null,
+        notes: body.notes ?? null,
+        receive_lines: body.receive_lines ?? [],
+        pullout_lines: body.pullout_lines ?? []
+      }
+    );
+    await this.auditService.record({
+      companyId,
+      userId: req.user?.sub ?? null,
+      action: 'PURCHASE_ORDER_DELIVERY_POST',
+      entity: 'PurchaseOrder',
+      entityId: updated.id,
+      metadata: {
+        referenceNo: body.reference_no ?? null,
+        receiveLines: body.receive_lines?.length ?? 0,
+        pulloutLines: body.pullout_lines?.length ?? 0
       }
     });
     return updated;
