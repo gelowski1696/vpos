@@ -595,8 +595,25 @@ export class PurchaseOrdersService {
     await this.enforceAddonPolicy(companyId);
     const binding = await this.requireTenantBinding(companyId);
     const db = binding.client as DbClient;
-    const receiveLines = this.normalizeReceiveLines(input.receive_lines);
-    const pulloutLines = this.normalizeReceiveLines(input.pullout_lines);
+    const receiveLines = this.normalizeDeliveryLines(input.receive_lines ?? []);
+    const rawPulloutLines = Array.isArray(input.pullout_lines) ? input.pullout_lines : [];
+    const pulloutLines = rawPulloutLines.map((line) => {
+      const poLineId = String(line.purchase_order_line_id ?? '').trim();
+      if (!poLineId) throw new BadRequestException('purchase_order_line_id is required on pullout line.');
+      const quantity = this.asPositiveNumber(line.quantity, 'Pullout line quantity must be greater than 0.');
+      const unitCost =
+        line.unit_cost === undefined || line.unit_cost === null
+          ? undefined
+          : this.asPositiveNumber(line.unit_cost, 'Pullout line unit_cost must be greater than 0.');
+      const validReasons: PurchaseOrderPulloutReason[] = [
+        'EXPIRED', 'DAMAGED', 'WRONG_ITEM', 'OVERDELIVERY', 'EMPTIES', 'OTHER'
+      ];
+      const pulloutReason: PurchaseOrderPulloutReason | null =
+        validReasons.includes(line.pullout_reason as PurchaseOrderPulloutReason)
+          ? (line.pullout_reason as PurchaseOrderPulloutReason)
+          : null;
+      return { purchase_order_line_id: poLineId, quantity, unit_cost: unitCost, pullout_reason: pulloutReason };
+    });
 
     if (receiveLines.length === 0 && pulloutLines.length === 0) {
       throw new BadRequestException('At least one receive or pullout line is required.');
@@ -721,23 +738,26 @@ export class PurchaseOrdersService {
             throw new BadRequestException(`PO line ${line.purchase_order_line_id} does not belong to this PO.`);
           }
 
-          const aggregate = await tx.purchaseOrderPulloutLine.aggregate({
-            where: { purchaseOrderLineId: poLine.id },
-            _sum: { quantity: true }
-          });
-          const pulledOutQty = Number(aggregate._sum.quantity ?? 0);
-          const receivedQty = Number(poLine.receivedQty);
-          const available = this.roundQty(receivedQty - pulledOutQty);
-          if (line.quantity > available + 0.0001) {
+          if (!poLine.product.isLpg) {
             throw new BadRequestException(
-              `Pullout quantity for PO line ${poLine.id} exceeds available received quantity.`
+              `Pull-out is only allowed for LPG cylinder items (product ${poLine.productId}).`
+            );
+          }
+
+          const invBalance = await tx.inventoryBalance.findUnique({
+            where: { locationId_productId: { locationId: po.locationId, productId: poLine.productId } },
+            select: { qtyEmpty: true }
+          });
+          const qtyEmpty = this.roundQty(Number(invBalance?.qtyEmpty ?? 0));
+          const pulloutCap = this.roundQty(Math.min(Number(poLine.orderedQty), qtyEmpty));
+          if (line.quantity > pulloutCap + 0.0001) {
+            throw new BadRequestException(
+              `Pull-out qty ${line.quantity} for PO line ${poLine.id} exceeds cap of ${pulloutCap} (ordered: ${Number(poLine.orderedQty)}, empty on hand: ${qtyEmpty}).`
             );
           }
 
           const unitCost = line.unit_cost ?? Number(poLine.unitCost);
-          const pulloutReasonRaw = (input.pullout_lines.find(
-            (raw) => raw.purchase_order_line_id === line.purchase_order_line_id
-          )?.pullout_reason) ?? null;
+          const pulloutReasonRaw = line.pullout_reason ?? null;
           const inventoryEvent = await this.applyInventoryDelta(tx, {
             companyId,
             locationId: po.locationId,
@@ -1366,6 +1386,27 @@ export class PurchaseOrdersService {
         quantity,
         unit_cost: unitCost
       };
+    });
+  }
+
+  private normalizeDeliveryLines(
+    lines: Array<{ purchase_order_line_id: string; quantity: number; unit_cost?: number }>
+  ): Array<{ purchase_order_line_id: string; quantity: number; unit_cost?: number }> {
+    if (!Array.isArray(lines) || lines.length === 0) {
+      return [];
+    }
+    const seen = new Set<string>();
+    return lines.map((line) => {
+      const poLineId = String(line.purchase_order_line_id ?? '').trim();
+      if (!poLineId) throw new BadRequestException('purchase_order_line_id is required.');
+      if (seen.has(poLineId)) throw new BadRequestException('Duplicate purchase_order_line_id in receive lines.');
+      seen.add(poLineId);
+      const quantity = this.asPositiveNumber(line.quantity, 'Receive line quantity must be greater than 0.');
+      const unitCost =
+        line.unit_cost === undefined || line.unit_cost === null
+          ? undefined
+          : this.asPositiveNumber(line.unit_cost, 'Receive line unit_cost must be greater than 0.');
+      return { purchase_order_line_id: poLineId, quantity, unit_cost: unitCost };
     });
   }
 
