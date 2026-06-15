@@ -172,6 +172,29 @@ function yesNo(value: unknown): string {
   return 'No';
 }
 
+function formatMovementLabel(referenceType: string, movementType: string): string {
+  if (referenceType === 'PURCHASE_ORDER_RECEIVE') return 'PO Receive';
+  if (referenceType === 'PURCHASE_ORDER_PULLOUT') return 'PO Pull-out';
+  if (referenceType.startsWith('LPG_ITEM_')) return `LPG ${referenceType.replace('LPG_ITEM_', '')}`;
+  if (referenceType === 'LENDING') return 'Lending Out';
+  if (referenceType === 'LENDING_RETURN') return 'Lending Return';
+  return movementType.replace(/_/g, ' ');
+}
+
+function formatMovementReference(referenceType: string, referenceId: string): string {
+  if (referenceType === 'PURCHASE_ORDER_RECEIVE' || referenceType === 'PURCHASE_ORDER_PULLOUT') {
+    const poId = referenceId.split(':')[0] ?? referenceId;
+    return `PO ${poId.slice(-8).toUpperCase()}`;
+  }
+  if (referenceType === 'LENDING' || referenceType === 'LENDING_RETURN') {
+    return `Lending ${(referenceId.split('::')[0] ?? referenceId).slice(-8).toUpperCase()}`;
+  }
+  if (referenceType.startsWith('TRANSFER')) {
+    return `Transfer ${referenceId.slice(-8).toUpperCase()}`;
+  }
+  return `${referenceType}:${referenceId}`;
+}
+
 function formatDate(value: string | null): string {
   if (!value) {
     return 'N/A';
@@ -1297,7 +1320,7 @@ export default function ProductsPage(): JSX.Element {
                           key={row.id}
                         >
                           <td className="px-2 py-2">{formatDate(row.created_at)}</td>
-                          <td className="px-2 py-2">{row.movement_type}</td>
+                          <td className="px-2 py-2">{formatMovementLabel(row.reference_type, row.movement_type)}</td>
                           <td className="px-2 py-2">{row.location_name}</td>
                           <td className="px-2 py-2">{formatQty(row.qty_delta)}</td>
                           <td className="px-2 py-2">{formatQty(row.qty_full_delta)}</td>
@@ -1312,7 +1335,7 @@ export default function ProductsPage(): JSX.Element {
                             {row.qty_empty_after_known === false ? '-' : formatQty(row.qty_empty_after)}
                           </td>
                           <td className="px-2 py-2">
-                            {row.reference_type}:{row.reference_id}
+                            {formatMovementReference(row.reference_type, row.reference_id)}
                           </td>
                         </tr>
                       ))}

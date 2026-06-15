@@ -1322,6 +1322,29 @@ export class PurchaseOrdersService {
       select: { id: true }
     });
 
+    const fullDelta = this.roundQty(nextFull - currentFull);
+    const emptyDelta = this.roundQty(nextEmpty - currentEmpty);
+
+    await tx.eventStockMovement.create({
+      data: {
+        companyId: input.companyId,
+        locationId: input.locationId,
+        ledgerId: ledger.id,
+        happenedAt: new Date(),
+        payload: {
+          source: 'PURCHASE_ORDER',
+          product_id: input.productId,
+          qty_delta: input.qtyDelta,
+          full_delta: fullDelta,
+          empty_delta: emptyDelta,
+          movement_type: InventoryMovementType.ADJUSTMENT,
+          reference_type: input.referenceType,
+          reference_id: input.referenceId,
+          direction: input.qtyDelta >= 0 ? 'IN' : 'OUT'
+        }
+      }
+    });
+
     return { ledgerId: ledger.id };
   }
 
