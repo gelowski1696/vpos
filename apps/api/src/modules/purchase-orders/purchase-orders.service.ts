@@ -1262,9 +1262,16 @@ export class PurchaseOrdersService {
       throw new BadRequestException('Insufficient stock for purchase-order inventory movement.');
     }
 
-    const nextFull = input.isLpg ? this.roundQty(currentFull + input.qtyDelta) : currentFull;
+    const isReceive = input.qtyDelta > 0;
+    // LPG receive → add to full cylinders; LPG pullout → subtract from empty cylinders
+    const nextFull = (input.isLpg && isReceive) ? this.roundQty(currentFull + input.qtyDelta) : currentFull;
+    const nextEmpty = (input.isLpg && !isReceive) ? this.roundQty(currentEmpty + input.qtyDelta) : currentEmpty;
+
     if (nextFull < -0.0001) {
-      throw new BadRequestException('Insufficient LPG full stock for purchase-order pullout.');
+      throw new BadRequestException('Insufficient LPG full stock for purchase-order movement.');
+    }
+    if (nextEmpty < -0.0001) {
+      throw new BadRequestException('Insufficient LPG empty stock for purchase-order pullout.');
     }
 
     let nextAvg = currentAvg;
@@ -1285,7 +1292,7 @@ export class PurchaseOrdersService {
       update: {
         qtyOnHand: Math.max(0, nextQty),
         qtyFull: Math.max(0, nextFull),
-        qtyEmpty: Math.max(0, currentEmpty),
+        qtyEmpty: Math.max(0, nextEmpty),
         avgCost: Math.max(0, nextAvg)
       },
       create: {
@@ -1294,7 +1301,7 @@ export class PurchaseOrdersService {
         productId: input.productId,
         qtyOnHand: Math.max(0, nextQty),
         qtyFull: Math.max(0, nextFull),
-        qtyEmpty: Math.max(0, currentEmpty),
+        qtyEmpty: Math.max(0, nextEmpty),
         avgCost: Math.max(0, nextAvg)
       }
     });
