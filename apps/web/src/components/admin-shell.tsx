@@ -38,6 +38,7 @@ type TenantAddons = {
   receipt_amount_privacy: boolean;
   purchase_order_suite: boolean;
   delivery_dispatch_suite: boolean;
+  queue_order_filtering: boolean;
 };
 
 type CurrentEntitlement = {
@@ -58,7 +59,8 @@ const DEFAULT_TENANT_ADDONS: TenantAddons = {
   kilo_overview_chart: false,
   receipt_amount_privacy: false,
   purchase_order_suite: false,
-  delivery_dispatch_suite: false
+  delivery_dispatch_suite: false,
+  queue_order_filtering: false
 };
 
 type TenantAddonKey = keyof TenantAddons;

@@ -17,6 +17,7 @@ describe('VPOS API (integration)', () => {
     receipt_amount_privacy: boolean;
     delivery_dispatch_suite: boolean;
     purchase_order_suite: boolean;
+    queue_order_filtering?: boolean;
   };
   const dbRuntimeIt = process.env.VPOS_TEST_USE_DB === 'true' ? it : it.skip;
 
@@ -2932,6 +2933,44 @@ describe('VPOS API (integration)', () => {
       .set('Authorization', `Bearer ${login.body.access_token}`)
       .set('X-Client-Id', 'TENANT_ACME')
       .expect(200);
+  });
+
+  it('12d) rounds trip queue order filtering add-on through owner settings', async () => {
+    const actor = await loginAs('owner@vpos.local', 'Owner@123', '');
+
+    const currentEntitlement = await request(app.getHttpServer())
+      .get('/api/platform/entitlements/current')
+      .set('Authorization', `Bearer ${actor.access}`)
+      .set('X-Client-Id', actor.clientId ?? 'DEMO')
+      .expect(200);
+
+    const currentAddons = (currentEntitlement.body?.addons ?? {}) as Partial<TenantAddonFlags>;
+    const previousValue = Boolean(currentAddons.queue_order_filtering);
+
+    try {
+      const updatedAddons = await updateDemoTenantAddons(actor.access, actor.clientId ?? 'DEMO', {
+        queue_order_filtering: true
+      });
+
+      expect(updatedAddons.queue_order_filtering).toBe(true);
+
+      const refreshedEntitlement = await request(app.getHttpServer())
+        .get('/api/platform/entitlements/current')
+        .set('Authorization', `Bearer ${actor.access}`)
+        .set('X-Client-Id', actor.clientId ?? 'DEMO')
+        .expect(200);
+
+      expect(
+        Boolean(
+          (refreshedEntitlement.body?.addons as Record<string, unknown> | undefined)
+            ?.queue_order_filtering
+        )
+      ).toBe(true);
+    } finally {
+      await updateDemoTenantAddons(actor.access, actor.clientId ?? 'DEMO', {
+        queue_order_filtering: previousValue
+      });
+    }
   });
 
   it('58) auto-detects tenant on login when client id header is omitted', async () => {

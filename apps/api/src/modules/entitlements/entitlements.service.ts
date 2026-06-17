@@ -194,7 +194,8 @@ export type TenantAddonKey =
   | 'kilo_overview_chart'
   | 'receipt_amount_privacy'
   | 'purchase_order_suite'
-  | 'delivery_dispatch_suite';
+  | 'delivery_dispatch_suite'
+  | 'queue_order_filtering';
 
 const TENANT_ADDON_LABELS: Record<TenantAddonKey, string> = {
   email_features: 'Email Features',
@@ -210,7 +211,8 @@ const TENANT_ADDON_LABELS: Record<TenantAddonKey, string> = {
   kilo_overview_chart: 'Kilo Overview Chart',
   receipt_amount_privacy: 'Receipt Amount Privacy',
   purchase_order_suite: 'Purchase Order Suite',
-  delivery_dispatch_suite: 'Delivery Dispatch Suite'
+  delivery_dispatch_suite: 'Delivery Dispatch Suite',
+  queue_order_filtering: 'Queue Order Filtering'
 };
 
 type TenantAddonFlags = Record<TenantAddonKey, boolean>;
@@ -392,6 +394,7 @@ type OwnerTenantAddonsInput = {
   receipt_amount_privacy?: boolean;
   purchase_order_suite?: boolean;
   delivery_dispatch_suite?: boolean;
+  queue_order_filtering?: boolean;
   reason?: string;
   actor_id?: string | null;
 };
@@ -963,7 +966,8 @@ export class EntitlementsService {
           addonKiloOverviewChart: true,
           addonReceiptAmountPrivacy: true,
           addonPurchaseOrderSuite: true,
-          addonDeliveryDispatchSuite: true
+          addonDeliveryDispatchSuite: true,
+          addonQueueOrderFiltering: true
         }
       });
       if (!company) {
@@ -1252,7 +1256,8 @@ export class EntitlementsService {
       kilo_overview_chart: false,
       receipt_amount_privacy: false,
       purchase_order_suite: false,
-      delivery_dispatch_suite: false
+      delivery_dispatch_suite: false,
+      queue_order_filtering: false
     };
   }
 
@@ -1271,6 +1276,7 @@ export class EntitlementsService {
     addonReceiptAmountPrivacy?: boolean;
     addonPurchaseOrderSuite?: boolean;
     addonDeliveryDispatchSuite?: boolean;
+    addonQueueOrderFiltering?: boolean;
   }): TenantAddonFlags {
     return {
       email_features: Boolean(input.addonEmailFeatures),
@@ -1286,7 +1292,8 @@ export class EntitlementsService {
       kilo_overview_chart: Boolean(input.addonKiloOverviewChart),
       receipt_amount_privacy: Boolean(input.addonReceiptAmountPrivacy),
       purchase_order_suite: Boolean(input.addonPurchaseOrderSuite),
-      delivery_dispatch_suite: Boolean(input.addonDeliveryDispatchSuite)
+      delivery_dispatch_suite: Boolean(input.addonDeliveryDispatchSuite),
+      queue_order_filtering: Boolean(input.addonQueueOrderFiltering)
     };
   }
 
@@ -1308,7 +1315,8 @@ export class EntitlementsService {
       kilo_overview_chart: input.kilo_overview_chart ?? current.kilo_overview_chart,
       receipt_amount_privacy: input.receipt_amount_privacy ?? current.receipt_amount_privacy,
       purchase_order_suite: input.purchase_order_suite ?? current.purchase_order_suite,
-      delivery_dispatch_suite: input.delivery_dispatch_suite ?? current.delivery_dispatch_suite
+      delivery_dispatch_suite: input.delivery_dispatch_suite ?? current.delivery_dispatch_suite,
+      queue_order_filtering: input.queue_order_filtering ?? current.queue_order_filtering
     };
   }
 
@@ -1604,6 +1612,7 @@ export class EntitlementsService {
             addonReceiptAmountPrivacy: false,
             addonPurchaseOrderSuite: false,
             addonDeliveryDispatchSuite: false,
+            addonQueueOrderFiltering: false,
             datastoreMode,
             datastoreRef,
             datastoreMigrationState
@@ -2141,6 +2150,7 @@ export class EntitlementsService {
         addonReceiptAmountPrivacy: true,
         addonPurchaseOrderSuite: true,
         addonDeliveryDispatchSuite: true,
+        addonQueueOrderFiltering: true,
         datastoreMode: true,
         datastoreRef: true,
         datastoreMigrationState: true,
@@ -3659,7 +3669,8 @@ export class EntitlementsService {
           addonKiloOverviewChart: true,
           addonReceiptAmountPrivacy: true,
           addonPurchaseOrderSuite: true,
-          addonDeliveryDispatchSuite: true
+          addonDeliveryDispatchSuite: true,
+          addonQueueOrderFiltering: true
         }
       });
       if (!company) {
@@ -3688,7 +3699,8 @@ export class EntitlementsService {
           addonKiloOverviewChart: next.kilo_overview_chart,
           addonReceiptAmountPrivacy: next.receipt_amount_privacy,
           addonPurchaseOrderSuite: next.purchase_order_suite,
-          addonDeliveryDispatchSuite: next.delivery_dispatch_suite
+          addonDeliveryDispatchSuite: next.delivery_dispatch_suite,
+          addonQueueOrderFiltering: next.queue_order_filtering
         },
         select: {
           addonEmailFeatures: true,
@@ -3704,7 +3716,8 @@ export class EntitlementsService {
           addonKiloOverviewChart: true,
           addonReceiptAmountPrivacy: true,
           addonPurchaseOrderSuite: true,
-          addonDeliveryDispatchSuite: true
+          addonDeliveryDispatchSuite: true,
+          addonQueueOrderFiltering: true
         }
       });
 

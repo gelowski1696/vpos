@@ -370,6 +370,7 @@ export class EntitlementsController {
       receipt_amount_privacy?: boolean;
       purchase_order_suite?: boolean;
       delivery_dispatch_suite?: boolean;
+      queue_order_filtering?: boolean;
       reason?: string;
     }
   ) {

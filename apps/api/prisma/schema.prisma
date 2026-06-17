@@ -345,6 +345,7 @@ model Company {
   addonReceiptAmountPrivacy Boolean             @default(false)
   addonPurchaseOrderSuite Boolean               @default(false)
   addonDeliveryDispatchSuite Boolean            @default(false)
+  addonQueueOrderFiltering Boolean              @default(false)
   datastoreMode           TenancyDatastoreMode  @default(SHARED_DB)
   datastoreRef            String?
   datastoreMigrationState TenancyMigrationState @default(NONE)
