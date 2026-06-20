@@ -25,6 +25,7 @@ type TenantAddons = {
   purchase_order_suite: boolean;
   delivery_dispatch_suite: boolean;
   queue_order_filtering: boolean;
+  customer_pricelist_view: boolean;
 };
 
 type TenantAddonDisplay = {
@@ -45,7 +46,8 @@ const TENANT_ADDON_DISPLAY: TenantAddonDisplay[] = [
   { key: 'receipt_amount_privacy', label: 'Receipt Amount Privacy' },
   { key: 'purchase_order_suite', label: 'Purchase Order Suite' },
   { key: 'delivery_dispatch_suite', label: 'Delivery Dispatch Suite' },
-  { key: 'queue_order_filtering', label: 'Queue Order Filtering' }
+  { key: 'queue_order_filtering', label: 'Queue Order Filtering' },
+  { key: 'customer_pricelist_view', label: 'Customer Pricelist View' }
 ];
 
 type TenantSummary = {
@@ -361,6 +363,7 @@ export default function TenantsPage(): JSX.Element {
       purchase_order_suite: row.addons.purchase_order_suite,
       delivery_dispatch_suite: row.addons.delivery_dispatch_suite,
       queue_order_filtering: row.addons.queue_order_filtering,
+      customer_pricelist_view: row.addons.customer_pricelist_view,
       reason: ''
     });
   }
@@ -528,6 +531,7 @@ export default function TenantsPage(): JSX.Element {
             purchase_order_suite: addonsForm.purchase_order_suite,
             delivery_dispatch_suite: addonsForm.delivery_dispatch_suite,
             queue_order_filtering: addonsForm.queue_order_filtering,
+            customer_pricelist_view: addonsForm.customer_pricelist_view,
             reason: addonsForm.reason.trim() || undefined
           }
         }
@@ -1212,6 +1216,10 @@ export default function TenantsPage(): JSX.Element {
               <label className="flex items-center gap-2 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-sm dark:border-slate-700 dark:bg-slate-800/60 md:col-span-2">
                 <input checked={addonsForm.queue_order_filtering} onChange={(event) => setAddonsForm((prev) => prev ? { ...prev, queue_order_filtering: event.target.checked } : prev)} type="checkbox" />
                 <span>Queue Order Filtering</span>
+              </label>
+              <label className="flex items-center gap-2 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-sm dark:border-slate-700 dark:bg-slate-800/60 md:col-span-2">
+                <input checked={addonsForm.customer_pricelist_view} onChange={(event) => setAddonsForm((prev) => prev ? { ...prev, customer_pricelist_view: event.target.checked } : prev)} type="checkbox" />
+                <span>Customer Pricelist View</span>
               </label>
               <label className="text-sm md:col-span-2">
                 <span className="mb-1 block font-medium text-slate-700 dark:text-slate-200">Reason (Audit Note)</span>

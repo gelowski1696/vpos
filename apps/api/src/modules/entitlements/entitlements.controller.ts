@@ -371,6 +371,7 @@ export class EntitlementsController {
       purchase_order_suite?: boolean;
       delivery_dispatch_suite?: boolean;
       queue_order_filtering?: boolean;
+      customer_pricelist_view?: boolean;
       reason?: string;
     }
   ) {

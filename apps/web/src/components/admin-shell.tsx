@@ -39,6 +39,7 @@ type TenantAddons = {
   purchase_order_suite: boolean;
   delivery_dispatch_suite: boolean;
   queue_order_filtering: boolean;
+  customer_pricelist_view: boolean;
 };
 
 type CurrentEntitlement = {
@@ -60,7 +61,8 @@ const DEFAULT_TENANT_ADDONS: TenantAddons = {
   receipt_amount_privacy: false,
   purchase_order_suite: false,
   delivery_dispatch_suite: false,
-  queue_order_filtering: false
+  queue_order_filtering: false,
+  customer_pricelist_view: false
 };
 
 type TenantAddonKey = keyof TenantAddons;
@@ -104,6 +106,15 @@ const ADDON_SIDEBAR_SHORTCUTS: Array<{ addon: TenantAddonKey; item: NavItem }> =
       href: '/delivery-dispatch' as Route,
       label: 'Delivery Dispatch',
       icon: 'transfer',
+      badge: 'Add-on'
+    }
+  },
+  {
+    addon: 'customer_pricelist_view',
+    item: {
+      href: '/customer-viewing' as Route,
+      label: 'Customer Viewing',
+      icon: 'customer',
       badge: 'Add-on'
     }
   }
