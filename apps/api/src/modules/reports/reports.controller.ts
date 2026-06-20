@@ -232,6 +232,23 @@ export class ReportsController {
     return this.reportsService.inventoryMovements(companyId, query);
   }
 
+  @Get('inventory/daily-count')
+  async dailyInventoryCount(
+    @Req() req: Request & { user?: { company_id?: string; roles?: string[] } },
+    @Query()
+    query: {
+      since?: string;
+      until?: string;
+      branch_id?: string;
+      include_open?: string;
+    }
+  ): Promise<ReturnType<ReportsService['dailyInventoryCount']>> {
+    const companyId = this.requireCompanyId(req);
+    await this.tenantRoutingPolicy.assertRoutable(companyId);
+    await this.reportsService.enforceInventoryReportAccess(companyId, req.user?.roles ?? []);
+    return this.reportsService.dailyInventoryCount(companyId, query);
+  }
+
   @Get('inventory/full-empty')
   async fullEmptyByLocation(
     @Req() req: Request & { user?: { company_id?: string; roles?: string[] } },

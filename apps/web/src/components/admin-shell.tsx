@@ -496,6 +496,7 @@ const NAV_SECTIONS: Array<{ title: string; items: NavItem[] }> = [
       { href: '/lpg-item-actions' as Route, label: 'LPG Item Service', icon: 'cylinder' },
       { href: '/cylinder-types', label: 'Cylinder Types', icon: 'cylinder' },
       { href: '/inventory-opening' as Route, label: 'Opening Stock', icon: 'product' },
+      { href: '/inventory-daily-count' as Route, label: 'Daily Inventory Count', icon: 'audit' },
       { href: '/price-lists', label: 'Price Lists', icon: 'pricing' },
       { href: '/costing', label: 'Costing Setup', icon: 'costing' }
     ]

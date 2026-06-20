@@ -42,6 +42,11 @@ type InventoryMovementQuery = ReportRangeQuery & {
   limit?: string;
 };
 
+type DailyInventoryCountQuery = ReportRangeQuery & {
+  branch_id?: string;
+  include_open?: string;
+};
+
 type InventoryMovementSplit = {
   qty_full_delta: number;
   qty_empty_delta: number;
@@ -69,6 +74,106 @@ type InventoryMovementRowView = {
   qty_full_after_known: boolean;
   qty_empty_after: number;
   qty_empty_after_known: boolean;
+};
+
+type DailyInventorySnapshotLine = {
+  product_id: string;
+  sku: string;
+  product_name: string;
+  category: string;
+  unit: string;
+  is_lpg: boolean;
+  qty_on_hand: number;
+  qty_full: number;
+  qty_empty: number;
+};
+
+type DailyInventorySnapshotSummary = {
+  item_count: number;
+  qty_on_hand: number;
+  qty_full: number;
+  qty_empty: number;
+  captured_at: string;
+  location_id: string | null;
+  location_code: string | null;
+  location_name: string | null;
+};
+
+type DailyInventoryShiftInventoryReportRow = {
+  product_id: string;
+  sku: string;
+  product_name: string;
+  category: string;
+  unit: string;
+  is_lpg: boolean;
+  start_qty_on_hand: number;
+  end_qty_on_hand: number;
+  delta_qty_on_hand: number;
+  start_qty_full: number;
+  end_qty_full: number;
+  delta_qty_full: number;
+  start_qty_empty: number;
+  end_qty_empty: number;
+  delta_qty_empty: number;
+  changed: boolean;
+};
+
+type DailyInventoryShiftInventoryReportTotals = {
+  item_count: number;
+  changed_count: number;
+  start_qty_on_hand: number;
+  end_qty_on_hand: number;
+  delta_qty_on_hand: number;
+  start_qty_full: number;
+  end_qty_full: number;
+  delta_qty_full: number;
+  start_qty_empty: number;
+  end_qty_empty: number;
+  delta_qty_empty: number;
+};
+
+type DailyInventoryShiftInventoryReport = {
+  opening_snapshot: DailyInventorySnapshotSummary | null;
+  closing_snapshot: DailyInventorySnapshotSummary;
+  has_opening_snapshot: boolean;
+  rows: DailyInventoryShiftInventoryReportRow[];
+  totals: DailyInventoryShiftInventoryReportTotals;
+};
+
+type DailyInventoryShiftRow = {
+  id: string;
+  shift_id: string;
+  branch_id: string;
+  branch_name: string;
+  branch_code: string;
+  location_id: string | null;
+  location_name: string | null;
+  location_code: string | null;
+  cashier_name: string;
+  status: 'OPEN' | 'CLOSED';
+  opened_at: string;
+  closed_at: string | null;
+  opening_snapshot_summary: DailyInventorySnapshotSummary | null;
+  closing_snapshot_summary: DailyInventorySnapshotSummary | null;
+  inventory_report: DailyInventoryShiftInventoryReport | null;
+  snapshot_state: 'complete' | 'opening-missing' | 'closing-missing' | 'in-progress' | 'location-missing';
+  snapshot_warning: string | null;
+};
+
+type DailyInventoryReport = {
+  period: { since: string | null; until: string | null };
+  closed_shift_count: number;
+  open_shift_count: number;
+  start_snapshot_summary: DailyInventorySnapshotSummary | null;
+  end_snapshot_summary: DailyInventorySnapshotSummary | null;
+  net_change: {
+    item_count: number;
+    qty_on_hand: number;
+    qty_full: number;
+    qty_empty: number;
+  } | null;
+  closed_shifts: DailyInventoryShiftRow[];
+  open_shifts: DailyInventoryShiftRow[];
 };
 
 type AuditLogQuery = ReportRangeQuery & {
@@ -2465,6 +2570,704 @@ export class ReportsService {
         }))
         .sort((a, b) => b.count - a.count),
       rows: mergedRows
+    };
+  }
+
+  async dailyInventoryCount(companyId: string, query: DailyInventoryCountQuery): Promise<DailyInventoryReport> {
+    const range = this.parseRange(query);
+    const includeOpen = /^(1|true|yes|on)$/i.test(query.include_open?.trim() ?? '');
+    const period = {
+      since: range.since?.toISOString() ?? null,
+      until: range.until?.toISOString() ?? null
+    };
+    const emptyReport = (closedShiftCount = 0, openShiftCount = 0): DailyInventoryReport => ({
+      period,
+      closed_shift_count: closedShiftCount,
+      open_shift_count: openShiftCount,
+      start_snapshot_summary: null,
+      end_snapshot_summary: null,
+      net_change: null,
+      closed_shifts: [],
+      open_shifts: []
+    });
+
+    const binding = await this.getTenantBinding(companyId);
+    if (!binding) {
+      return emptyReport();
+    }
+
+    const db = binding.client as DbClient;
+    const branchId = query.branch_id?.trim() || null;
+    const shiftScope: Prisma.ShiftWhereInput = {
+      companyId,
+      ...(branchId ? { branchId } : {})
+    };
+
+    const [closedShifts, openShifts] = await Promise.all([
+      db.shift.findMany({
+        where: {
+          ...shiftScope,
+          status: 'CLOSED',
+          ...(range.since || range.until
+            ? {
+                closedAt: {
+                  ...(range.since ? { gte: range.since } : {}),
+                  ...(range.until ? { lte: range.until } : {})
+                }
+              }
+            : {})
+        },
+        include: {
+          branch: {
+            select: {
+              id: true,
+              code: true,
+              name: true
+            }
+          },
+          user: {
+            select: {
+              fullName: true
+            }
+          }
+        },
+        orderBy: { closedAt: 'asc' }
+      }),
+      includeOpen
+        ? db.shift.findMany({
+            where: {
+              ...shiftScope,
+              status: 'OPEN'
+            },
+            include: {
+              branch: {
+                select: {
+                  id: true,
+                  code: true,
+                  name: true
+                }
+              },
+              user: {
+                select: {
+                  fullName: true
+                }
+              }
+            },
+            orderBy: { openedAt: 'asc' }
+          })
+        : Promise.resolve([])
+    ]);
+
+    if (closedShifts.length === 0 && openShifts.length === 0) {
+      return emptyReport();
+    }
+
+    const shiftIds = [...closedShifts, ...openShifts].map((shift) => shift.id);
+    const shiftOpenAuditRows =
+      shiftIds.length > 0
+        ? await db.auditLog.findMany({
+            where: {
+              companyId,
+              action: 'SHIFT_OPEN',
+              entity: 'Shift',
+              entityId: { in: shiftIds }
+            },
+            select: {
+              entityId: true,
+              metadata: true,
+              createdAt: true
+            },
+            orderBy: { createdAt: 'desc' }
+          })
+        : [];
+    const shiftContextMap = new Map<string, { location_id: string | null }>();
+    for (const row of shiftOpenAuditRows) {
+      if (!row.entityId || shiftContextMap.has(row.entityId)) {
+        continue;
+      }
+      const metadata =
+        row.metadata && typeof row.metadata === 'object' && !Array.isArray(row.metadata)
+          ? (row.metadata as Record<string, unknown>)
+          : {};
+      shiftContextMap.set(row.entityId, {
+        location_id: this.toFiniteText(metadata.location_id) ?? this.toFiniteText(metadata.locationId)
+      });
+    }
+
+    const locationIds = [...new Set(
+      [...shiftContextMap.values()]
+        .map((context) => context.location_id)
+        .filter((value): value is string => Boolean(value))
+    )];
+    const locationRows =
+      locationIds.length > 0
+        ? await db.location.findMany({
+            where: {
+              companyId,
+              id: { in: locationIds }
+            },
+            select: {
+              id: true,
+              code: true,
+              name: true
+            }
+          })
+        : [];
+    const locationMap = new Map(locationRows.map((row) => [row.id, row]));
+
+    const products = await db.product.findMany({
+      where: {
+        companyId,
+        isActive: true
+      },
+      select: {
+        id: true,
+        sku: true,
+        name: true,
+        category: true,
+        unit: true,
+        isLpg: true
+      },
+      orderBy: [{ name: 'asc' }, { sku: 'asc' }]
+    });
+    const productMap = new Map(products.map((row) => [row.id, row]));
+    const productIds = products.map((row) => row.id);
+
+    const earliestCheckpoint = [...closedShifts, ...openShifts]
+      .flatMap((shift) => [shift.openedAt, shift.closedAt ?? null])
+      .filter((value): value is Date => Boolean(value))
+      .reduce<Date | null>((earliest, value) => {
+        if (!earliest || value < earliest) {
+          return value;
+        }
+        return earliest;
+      }, null);
+
+    const emptyBalance = {
+      qty_on_hand: 0,
+      qty_full: 0,
+      qty_empty: 0
+    };
+
+    const currentBalancesByScope = new Map<string, typeof emptyBalance>();
+    const movementsByScope = new Map<
+      string,
+      Array<{
+        createdAtMs: number;
+        movement_type: InventoryMovementType;
+        qty_delta: number;
+        qty_full_delta: number;
+        qty_empty_delta: number;
+      }>
+    >();
+
+    if (locationIds.length > 0) {
+      const balanceRows = await db.inventoryBalance.findMany({
+        where: {
+          companyId,
+          locationId: { in: locationIds },
+          product: {
+            isActive: true
+          }
+        },
+        select: {
+          locationId: true,
+          productId: true,
+          qtyOnHand: true,
+          qtyFull: true,
+          qtyEmpty: true
+        }
+      });
+      for (const row of balanceRows) {
+        currentBalancesByScope.set(`${row.locationId}::${row.productId}`, {
+          qty_on_hand: this.roundQty(this.toNumber(row.qtyOnHand)),
+          qty_full: this.roundQty(this.toNumber(row.qtyFull)),
+          qty_empty: this.roundQty(this.toNumber(row.qtyEmpty))
+        });
+      }
+
+      if (productIds.length > 0 && earliestCheckpoint) {
+        const ledgerRows = await db.inventoryLedger.findMany({
+          where: {
+            companyId,
+            locationId: { in: locationIds },
+            productId: { in: productIds },
+            createdAt: {
+              gte: earliestCheckpoint
+            }
+          },
+          include: {
+            product: {
+              select: {
+                id: true,
+                sku: true,
+                name: true,
+                category: true,
+                unit: true,
+                isLpg: true
+              }
+            }
+          },
+          orderBy: [{ createdAt: 'asc' }, { id: 'asc' }]
+        });
+
+        const ledgerIds = ledgerRows.map((row) => row.id);
+        const stockEvents =
+          ledgerIds.length > 0
+            ? await db.eventStockMovement.findMany({
+                where: {
+                  companyId,
+                  ledgerId: { in: ledgerIds }
+                },
+                select: {
+                  ledgerId: true,
+                  payload: true,
+                  happenedAt: true
+                },
+                orderBy: [{ happenedAt: 'asc' }, { createdAt: 'asc' }]
+              })
+            : [];
+        const payloadByLedger = new Map<string, Prisma.JsonValue>();
+        for (const row of stockEvents) {
+          if (!payloadByLedger.has(row.ledgerId)) {
+            payloadByLedger.set(row.ledgerId, row.payload);
+          }
+        }
+
+        const lpgActionRows = await db.eventStockMovement.findMany({
+          where: {
+            companyId,
+            locationId: { in: locationIds },
+            ledgerId: {
+              startsWith: 'lpg-item-action:'
+            },
+            happenedAt: {
+              gte: earliestCheckpoint
+            }
+          },
+          select: {
+            ledgerId: true,
+            locationId: true,
+            happenedAt: true,
+            payload: true
+          },
+          orderBy: [{ happenedAt: 'asc' }, { createdAt: 'asc' }]
+        });
+
+        const addMovement = (
+          locationId: string,
+          productId: string,
+          createdAtMs: number,
+          movement: {
+            movement_type: InventoryMovementType;
+            qty_delta: number;
+            qty_full_delta: number;
+            qty_empty_delta: number;
+          }
+        ): void => {
+          const scopeKey = `${locationId}::${productId}`;
+          const rows = movementsByScope.get(scopeKey) ?? [];
+          rows.push({ createdAtMs, ...movement });
+          movementsByScope.set(scopeKey, rows);
+        };
+
+        for (const row of ledgerRows) {
+          const product = productMap.get(row.productId);
+          if (!product) {
+            continue;
+          }
+          const rawQtyDelta = this.roundQty(this.toNumber(row.qtyDelta));
+          const payload = payloadByLedger.get(row.id);
+          const split = this.parseMovementSplit(payload, rawQtyDelta, product.isLpg);
+          const movementView = {
+            movement_type: row.movementType,
+            qty_delta: rawQtyDelta,
+            qty_full_delta: split.qty_full_delta,
+            qty_empty_delta: split.qty_empty_delta
+          };
+          const effective = this.effectiveAfterDeltas(movementView);
+          if (
+            Math.abs(effective.qty_delta) < 0.0001 &&
+            Math.abs(effective.qty_full_delta) < 0.0001 &&
+            Math.abs(effective.qty_empty_delta) < 0.0001
+          ) {
+            continue;
+          }
+          addMovement(row.locationId, row.productId, row.createdAt.getTime(), {
+            movement_type: row.movementType,
+            ...effective
+          });
+        }
+
+        for (const row of lpgActionRows) {
+          const payload =
+            row.payload && typeof row.payload === 'object' && !Array.isArray(row.payload)
+              ? (row.payload as Record<string, unknown>)
+              : null;
+          const productId = this.toFiniteText(payload?.product_id) ?? this.toFiniteText(payload?.productId);
+          if (!productId || !productMap.has(productId)) {
+            continue;
+          }
+          const qtyDelta =
+            this.toFiniteNumber(payload?.qty_delta) ??
+            this.toFiniteNumber(payload?.qtyDelta) ??
+            this.toFiniteNumber(payload?.empty_delta) ??
+            this.toFiniteNumber(payload?.qty_empty_delta) ??
+            this.toFiniteNumber(payload?.full_delta) ??
+            this.toFiniteNumber(payload?.qty_full_delta) ??
+            0;
+          const split = this.parseMovementSplit(row.payload, this.roundQty(qtyDelta), false);
+          const movementView = {
+            movement_type: InventoryMovementType.ADJUSTMENT,
+            qty_delta: this.roundQty(qtyDelta),
+            qty_full_delta: split.qty_full_delta,
+            qty_empty_delta: split.qty_empty_delta
+          };
+          const effective = this.effectiveAfterDeltas(movementView);
+          if (
+            Math.abs(effective.qty_delta) < 0.0001 &&
+            Math.abs(effective.qty_full_delta) < 0.0001 &&
+            Math.abs(effective.qty_empty_delta) < 0.0001
+          ) {
+            continue;
+          }
+          addMovement(row.locationId ?? '', productId, row.happenedAt.getTime(), {
+            movement_type: InventoryMovementType.ADJUSTMENT,
+            ...effective
+          });
+        }
+      }
+    }
+
+    type ScopeHistory = {
+      current: typeof emptyBalance;
+      timesMs: number[];
+      prefixQty: number[];
+      prefixFull: number[];
+      prefixEmpty: number[];
+    };
+
+    const upperBound = (values: number[], target: number): number => {
+      let low = 0;
+      let high = values.length;
+      while (low < high) {
+        const mid = Math.floor((low + high) / 2);
+        if (values[mid] <= target) {
+          low = mid + 1;
+        } else {
+          high = mid;
+        }
+      }
+      return low;
+    };
+
+    const historyByScope = new Map<string, ScopeHistory>();
+    for (const scopeKey of new Set([...currentBalancesByScope.keys(), ...movementsByScope.keys()])) {
+      const movements = [...(movementsByScope.get(scopeKey) ?? [])].sort(
+        (left, right) => left.createdAtMs - right.createdAtMs
+      );
+      const current = currentBalancesByScope.get(scopeKey) ?? emptyBalance;
+      const history: ScopeHistory = {
+        current,
+        timesMs: [],
+        prefixQty: [0],
+        prefixFull: [0],
+        prefixEmpty: [0]
+      };
+      for (const movement of movements) {
+        history.timesMs.push(movement.createdAtMs);
+        history.prefixQty.push(this.roundQty(history.prefixQty[history.prefixQty.length - 1] + movement.qty_delta));
+        history.prefixFull.push(
+          this.roundQty(history.prefixFull[history.prefixFull.length - 1] + movement.qty_full_delta)
+        );
+        history.prefixEmpty.push(
+          this.roundQty(history.prefixEmpty[history.prefixEmpty.length - 1] + movement.qty_empty_delta)
+        );
+      }
+      historyByScope.set(scopeKey, history);
+    }
+
+    const buildSnapshotAt = (
+      locationId: string,
+      capturedAt: Date
+    ): DailyInventorySnapshotSummary & { lines: DailyInventorySnapshotLine[] } => {
+      const location = locationMap.get(locationId) ?? null;
+      const capturedMs = capturedAt.getTime();
+      const lines = products
+        .map<DailyInventorySnapshotLine>((product) => {
+          const scopeKey = `${locationId}::${product.id}`;
+          const history = historyByScope.get(scopeKey);
+          const current = history?.current ?? emptyBalance;
+          const futureQty = history
+            ? this.roundQty(
+                history.prefixQty[history.prefixQty.length - 1] -
+                  history.prefixQty[upperBound(history.timesMs, capturedMs)]
+              )
+            : 0;
+          const futureFull = history
+            ? this.roundQty(
+                history.prefixFull[history.prefixFull.length - 1] -
+                  history.prefixFull[upperBound(history.timesMs, capturedMs)]
+              )
+            : 0;
+          const futureEmpty = history
+            ? this.roundQty(
+                history.prefixEmpty[history.prefixEmpty.length - 1] -
+                  history.prefixEmpty[upperBound(history.timesMs, capturedMs)]
+              )
+            : 0;
+          return {
+            product_id: product.id,
+            sku: product.sku,
+            product_name: product.name,
+            category: product.category?.trim() || 'Uncategorized',
+            unit: product.unit?.trim() || 'unit',
+            is_lpg: product.isLpg,
+            qty_on_hand: this.roundQty(current.qty_on_hand - futureQty),
+            qty_full: this.roundQty(current.qty_full - futureFull),
+            qty_empty: this.roundQty(current.qty_empty - futureEmpty)
+          };
+        })
+        .sort((left, right) => {
+          return left.product_name.localeCompare(right.product_name) || left.sku.localeCompare(right.sku);
+        });
+
+      return {
+        item_count: lines.length,
+        qty_on_hand: this.roundQty(lines.reduce((sum, line) => sum + line.qty_on_hand, 0)),
+        qty_full: this.roundQty(lines.reduce((sum, line) => sum + line.qty_full, 0)),
+        qty_empty: this.roundQty(lines.reduce((sum, line) => sum + line.qty_empty, 0)),
+        captured_at: capturedAt.toISOString(),
+        location_id: locationId,
+        location_code: location?.code ?? null,
+        location_name: location?.name ?? null,
+        lines
+      };
+    };
+
+    const lineChanged = (row: DailyInventoryShiftInventoryReportRow): boolean =>
+      Math.abs(row.delta_qty_on_hand) > 0.0001 ||
+      Math.abs(row.delta_qty_full) > 0.0001 ||
+      Math.abs(row.delta_qty_empty) > 0.0001;
+
+    const buildShiftInventoryReport = (
+      openingSnapshot: DailyInventorySnapshotSummary & { lines: DailyInventorySnapshotLine[] },
+      closingSnapshot: DailyInventorySnapshotSummary & { lines: DailyInventorySnapshotLine[] }
+    ): DailyInventoryShiftInventoryReport => {
+      const openingByProduct = new Map(
+        (openingSnapshot.lines ?? []).map((line) => [line.product_id, line] as const)
+      );
+      const closingByProduct = new Map(
+        (closingSnapshot.lines ?? []).map((line) => [line.product_id, line] as const)
+      );
+      const productIdsForRows = Array.from(new Set([...openingByProduct.keys(), ...closingByProduct.keys()]));
+      const rows = productIdsForRows
+        .map<DailyInventoryShiftInventoryReportRow>((productId) => {
+          const openingLine = openingByProduct.get(productId);
+          const closingLine = closingByProduct.get(productId);
+          const source = closingLine ?? openingLine;
+          const emptyLine: DailyInventorySnapshotLine = {
+            product_id: productId,
+            sku: productId,
+            product_name: productId,
+            category: 'Uncategorized',
+            unit: 'unit',
+            is_lpg: false,
+            qty_on_hand: 0,
+            qty_full: 0,
+            qty_empty: 0
+          };
+          const start = openingLine ?? emptyLine;
+          const end = closingLine ?? emptyLine;
+          const row: DailyInventoryShiftInventoryReportRow = {
+            product_id: productId,
+            sku: source?.sku ?? productId,
+            product_name: source?.product_name ?? productId,
+            category: source?.category ?? 'Uncategorized',
+            unit: source?.unit ?? 'unit',
+            is_lpg: source?.is_lpg ?? false,
+            start_qty_on_hand: this.roundQty(start.qty_on_hand),
+            end_qty_on_hand: this.roundQty(end.qty_on_hand),
+            delta_qty_on_hand: this.roundQty(end.qty_on_hand - start.qty_on_hand),
+            start_qty_full: this.roundQty(start.qty_full),
+            end_qty_full: this.roundQty(end.qty_full),
+            delta_qty_full: this.roundQty(end.qty_full - start.qty_full),
+            start_qty_empty: this.roundQty(start.qty_empty),
+            end_qty_empty: this.roundQty(end.qty_empty),
+            delta_qty_empty: this.roundQty(end.qty_empty - start.qty_empty),
+            changed: false
+          };
+          return {
+            ...row,
+            changed: lineChanged(row)
+          };
+        })
+        .sort((left, right) => {
+          if (left.changed !== right.changed) {
+            return left.changed ? -1 : 1;
+          }
+          return left.product_name.localeCompare(right.product_name) || left.sku.localeCompare(right.sku);
+        });
+
+      const sumRows = (
+        key: keyof Pick<
+          DailyInventoryShiftInventoryReportRow,
+          | 'start_qty_on_hand'
+          | 'end_qty_on_hand'
+          | 'delta_qty_on_hand'
+          | 'start_qty_full'
+          | 'end_qty_full'
+          | 'delta_qty_full'
+          | 'start_qty_empty'
+          | 'end_qty_empty'
+          | 'delta_qty_empty'
+        >
+      ): number => this.roundQty(rows.reduce((sum, row) => sum + Number(row[key]), 0));
+
+      return {
+        opening_snapshot: {
+          item_count: openingSnapshot.item_count,
+          qty_on_hand: openingSnapshot.qty_on_hand,
+          qty_full: openingSnapshot.qty_full,
+          qty_empty: openingSnapshot.qty_empty,
+          captured_at: openingSnapshot.captured_at,
+          location_id: openingSnapshot.location_id,
+          location_code: openingSnapshot.location_code,
+          location_name: openingSnapshot.location_name
+        },
+        closing_snapshot: {
+          item_count: closingSnapshot.item_count,
+          qty_on_hand: closingSnapshot.qty_on_hand,
+          qty_full: closingSnapshot.qty_full,
+          qty_empty: closingSnapshot.qty_empty,
+          captured_at: closingSnapshot.captured_at,
+          location_id: closingSnapshot.location_id,
+          location_code: closingSnapshot.location_code,
+          location_name: closingSnapshot.location_name
+        },
+        has_opening_snapshot: true,
+        rows,
+        totals: {
+          item_count: rows.length,
+          changed_count: rows.filter((row) => row.changed).length,
+          start_qty_on_hand: sumRows('start_qty_on_hand'),
+          end_qty_on_hand: sumRows('end_qty_on_hand'),
+          delta_qty_on_hand: sumRows('delta_qty_on_hand'),
+          start_qty_full: sumRows('start_qty_full'),
+          end_qty_full: sumRows('end_qty_full'),
+          delta_qty_full: sumRows('delta_qty_full'),
+          start_qty_empty: sumRows('start_qty_empty'),
+          end_qty_empty: sumRows('end_qty_empty'),
+          delta_qty_empty: sumRows('delta_qty_empty')
+        }
+      };
+    };
+
+    const buildShiftRow = (
+      shift: (typeof closedShifts)[number],
+      mode: 'closed' | 'open'
+    ): DailyInventoryShiftRow => {
+      const locationId = shiftContextMap.get(shift.id)?.location_id ?? null;
+      const location = locationId ? locationMap.get(locationId) ?? null : null;
+      const buildSnapshot = (capturedAt: Date): (DailyInventorySnapshotSummary & { lines: DailyInventorySnapshotLine[] }) | null => {
+        if (!locationId) {
+          return null;
+        }
+        return buildSnapshotAt(locationId, capturedAt);
+      };
+
+      const openingSnapshot = buildSnapshot(shift.openedAt);
+      const closingSnapshot = mode === 'closed' && shift.closedAt ? buildSnapshot(shift.closedAt) : null;
+      const inventoryReport =
+        openingSnapshot && closingSnapshot && mode === 'closed'
+          ? buildShiftInventoryReport(openingSnapshot, closingSnapshot)
+          : null;
+      const openingSummary = openingSnapshot
+        ? {
+            item_count: openingSnapshot.item_count,
+            qty_on_hand: openingSnapshot.qty_on_hand,
+            qty_full: openingSnapshot.qty_full,
+            qty_empty: openingSnapshot.qty_empty,
+            captured_at: openingSnapshot.captured_at,
+            location_id: openingSnapshot.location_id,
+            location_code: openingSnapshot.location_code,
+            location_name: openingSnapshot.location_name
+          }
+        : null;
+      const closingSummary = closingSnapshot
+        ? {
+            item_count: closingSnapshot.item_count,
+            qty_on_hand: closingSnapshot.qty_on_hand,
+            qty_full: closingSnapshot.qty_full,
+            qty_empty: closingSnapshot.qty_empty,
+            captured_at: closingSnapshot.captured_at,
+            location_id: closingSnapshot.location_id,
+            location_code: closingSnapshot.location_code,
+            location_name: closingSnapshot.location_name
+          }
+        : null;
+
+      let snapshotState: DailyInventoryShiftRow['snapshot_state'] = 'complete';
+      let snapshotWarning: string | null = null;
+      if (!locationId) {
+        snapshotState = 'location-missing';
+        snapshotWarning = 'Location was not recorded for this shift';
+      } else if (mode === 'open') {
+        snapshotState = 'in-progress';
+        snapshotWarning = 'Closing snapshot pending';
+      } else if (!openingSnapshot) {
+        snapshotState = 'opening-missing';
+        snapshotWarning = 'Start not captured';
+      } else if (!closingSnapshot) {
+        snapshotState = 'closing-missing';
+        snapshotWarning = 'End not captured';
+      }
+
+      return {
+        id: shift.id,
+        shift_id: shift.id,
+        branch_id: shift.branchId,
+        branch_name: shift.branch.name,
+        branch_code: shift.branch.code,
+        location_id: locationId,
+        location_name: location?.name ?? null,
+        location_code: location?.code ?? null,
+        cashier_name: shift.user.fullName,
+        status: shift.status,
+        opened_at: shift.openedAt.toISOString(),
+        closed_at: shift.closedAt?.toISOString() ?? null,
+        opening_snapshot_summary: openingSummary,
+        closing_snapshot_summary: closingSummary,
+        inventory_report: inventoryReport,
+        snapshot_state: snapshotState,
+        snapshot_warning: snapshotWarning
+      };
+    };
+
+    const closedShiftRows = closedShifts.map((shift) => buildShiftRow(shift, 'closed'));
+    const openShiftRows = openShifts.map((shift) => buildShiftRow(shift, 'open'));
+    const firstClosedRow = closedShiftRows[0] ?? null;
+    const lastClosedRow = closedShiftRows[closedShiftRows.length - 1] ?? null;
+    const startSnapshotSummary = firstClosedRow?.opening_snapshot_summary ?? null;
+    const endSnapshotSummary = lastClosedRow?.closing_snapshot_summary ?? null;
+
+    return {
+      period,
+      closed_shift_count: closedShiftRows.length,
+      open_shift_count: openShiftRows.length,
+      start_snapshot_summary: startSnapshotSummary,
+      end_snapshot_summary: endSnapshotSummary,
+      net_change:
+        startSnapshotSummary && endSnapshotSummary
+          ? {
+              item_count: endSnapshotSummary.item_count - startSnapshotSummary.item_count,
+              qty_on_hand: this.roundQty(endSnapshotSummary.qty_on_hand - startSnapshotSummary.qty_on_hand),
+              qty_full: this.roundQty(endSnapshotSummary.qty_full - startSnapshotSummary.qty_full),
+              qty_empty: this.roundQty(endSnapshotSummary.qty_empty - startSnapshotSummary.qty_empty)
+            }
+          : null,
+      closed_shifts: closedShiftRows,
+      open_shifts: openShiftRows
     };
   }
 
