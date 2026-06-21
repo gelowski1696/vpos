@@ -110,7 +110,8 @@ export class SyncService {
       const persistedDecision = await this.lookupPersistedIdempotencyDecision(
         companyId,
         item.idempotency_key,
-        requestHash
+        requestHash,
+        syncedItem.payload
       );
       if (persistedDecision) {
         if (persistedDecision.status === 'accepted') {
@@ -143,7 +144,7 @@ export class SyncService {
           status: 'rejected',
           reason,
           review_id: reviewId
-        });
+        }, item.payload);
         continue;
       }
 
@@ -159,7 +160,7 @@ export class SyncService {
           status: 'rejected',
           reason: customerPosting.reason,
           review_id: reviewId
-        });
+        }, item.payload);
         continue;
       }
       const localCustomerId =
@@ -181,7 +182,7 @@ export class SyncService {
           status: 'rejected',
           reason: salePosting.reason,
           review_id: reviewId
-        });
+        }, item.payload);
         continue;
       }
       const saleCancelPosting = await this.tryPostSaleCancelOutbox(companyId, item, actorUserId);
@@ -196,7 +197,7 @@ export class SyncService {
           status: 'rejected',
           reason: saleCancelPosting.reason,
           review_id: reviewId
-        });
+        }, item.payload);
         continue;
       }
       const saleReturnPosting = await this.tryPostSaleReturnOutbox(companyId, item, actorUserId);
@@ -211,7 +212,7 @@ export class SyncService {
           status: 'rejected',
           reason: saleReturnPosting.reason,
           review_id: reviewId
-        });
+        }, item.payload);
         continue;
       }
       const customerPaymentPosting = await this.tryPostCustomerPaymentOutbox(
@@ -237,7 +238,7 @@ export class SyncService {
           status: 'rejected',
           reason: customerPaymentPosting.reason,
           review_id: reviewId
-        });
+        }, item.payload);
         continue;
       }
       const transferPosting = await this.tryPostTransferOutbox(companyId, syncedItem, actorUserId);
@@ -258,7 +259,7 @@ export class SyncService {
           status: 'rejected',
           reason: transferPosting.reason,
           review_id: reviewId
-        });
+        }, item.payload);
         continue;
       }
       const purchaseOrderPosting = await this.tryPostPurchaseOrderOutbox(
@@ -283,7 +284,7 @@ export class SyncService {
           status: 'rejected',
           reason: purchaseOrderPosting.reason,
           review_id: reviewId
-        });
+        }, item.payload);
         continue;
       }
       const lendingPosting = await this.tryPostLendingOutbox(companyId, syncedItem, actorUserId, customerIdMap);
@@ -298,7 +299,7 @@ export class SyncService {
           status: 'rejected',
           reason: lendingPosting.reason,
           review_id: reviewId
-        });
+        }, item.payload);
         continue;
       }
       const localLendingId =
@@ -330,7 +331,7 @@ export class SyncService {
           status: 'rejected',
           reason: lendingReturnPosting.reason,
           review_id: reviewId
-        });
+        }, item.payload);
         continue;
       }
       const lpgItemActionPosting = await this.tryPostLpgItemActionOutbox(companyId, syncedItem, actorUserId);
@@ -351,7 +352,7 @@ export class SyncService {
           status: 'rejected',
           reason: lpgItemActionPosting.reason,
           review_id: reviewId
-        });
+        }, item.payload);
         continue;
       }
       const transferPostedServerSide =
@@ -949,15 +950,15 @@ export class SyncService {
       return { ok: true };
     }
     const payload = item.payload ?? {};
+    const rewardId = this.asString(payload.reward_id ?? payload.rewardId);
     const rewardUsed =
       payload.reward_redemption_used === true ||
       payload.rewardRedemptionUsed === true ||
-      this.asString(payload.reward_id ?? payload.rewardId) !== null;
+      rewardId !== undefined;
     if (!rewardUsed) {
       return { ok: true };
     }
 
-    const rewardId = this.asString(payload.reward_id ?? payload.rewardId);
     if (!rewardId) {
       return { ok: false, reason: 'Sale reward sync payload is missing reward id' };
     }
@@ -4010,7 +4011,8 @@ export class SyncService {
   private async lookupPersistedIdempotencyDecision(
     companyId: string,
     key: string,
-    requestHash: string
+    requestHash: string,
+    itemPayload?: Record<string, unknown>
   ): Promise<IdempotencyReplayDecision | null> {
     const row = await this.readIdempotencyRow(companyId, key);
     if (!row) {
@@ -4026,13 +4028,16 @@ export class SyncService {
     if (!row.response || typeof row.response !== 'object') {
       return { status: 'accepted' };
     }
-    const payload = row.response as Record<string, unknown>;
-    const status = String(payload.status ?? '').toLowerCase();
+    const storedResponse = row.response as Record<string, unknown>;
+    const status = String(storedResponse.status ?? '').toLowerCase();
     if (status === 'rejected') {
+      if (itemPayload && this.shouldBypassStaleSaleRewardRejection(itemPayload, row.response)) {
+        return null;
+      }
       return {
         status: 'rejected',
-        reason: String(payload.reason ?? 'Previously rejected by idempotency replay'),
-        review_id: payload.review_id ? String(payload.review_id) : undefined
+        reason: String(storedResponse.reason ?? 'Previously rejected by idempotency replay'),
+        review_id: storedResponse.review_id ? String(storedResponse.review_id) : undefined
       };
     }
     return { status: 'accepted' };
@@ -4042,28 +4047,56 @@ export class SyncService {
     companyId: string,
     key: string,
     requestHash: string,
-    decision: IdempotencyReplayDecision
+    decision: IdempotencyReplayDecision,
+    payload?: Record<string, unknown>
   ): Promise<void> {
     const client = await this.getIdempotencyClient(companyId);
     if (!client) {
       return;
     }
     try {
-      await client.idempotencyKey.upsert({
+      const existing = await client.idempotencyKey.findUnique({
         where: {
           companyId_key: {
             companyId,
             key
           }
         },
-        update: {},
-        create: {
-          companyId,
-          key,
-          requestHash,
-          response: decision
+        select: {
+          requestHash: true,
+          response: true
         }
       });
+      if (!existing) {
+        await client.idempotencyKey.create({
+          data: {
+            companyId,
+            key,
+            requestHash,
+            response: decision
+          }
+        });
+        return;
+      }
+
+      if (
+        decision.status === 'accepted' &&
+        payload &&
+        this.shouldBypassStaleSaleRewardRejection(payload, existing.response)
+      ) {
+        await client.idempotencyKey.update({
+          where: {
+            companyId_key: {
+              companyId,
+              key
+            }
+          },
+          data: {
+            requestHash,
+            response: decision
+          }
+        });
+      }
     } catch {
       // Keep sync flow resilient even if idempotency persistence is temporarily unavailable.
     }
@@ -4108,12 +4141,17 @@ export class SyncService {
         where: { companyId_key: { companyId: string; key: string } };
         select: { requestHash: true; response: true };
       }) => Promise<{ requestHash: unknown; response: unknown } | null>;
-      upsert: (args: {
-        where: { companyId_key: { companyId: string; key: string } };
-        update: Record<string, never>;
-        create: {
+      create: (args: {
+        data: {
           companyId: string;
           key: string;
+          requestHash: string;
+          response: IdempotencyReplayDecision;
+        };
+      }) => Promise<unknown>;
+      update: (args: {
+        where: { companyId_key: { companyId: string; key: string } };
+        data: {
           requestHash: string;
           response: IdempotencyReplayDecision;
         };
@@ -4131,12 +4169,17 @@ export class SyncService {
             where: { companyId_key: { companyId: string; key: string } };
             select: { requestHash: true; response: true };
           }) => Promise<{ requestHash: unknown; response: unknown } | null>;
-          upsert?: (args: {
-            where: { companyId_key: { companyId: string; key: string } };
-            update: Record<string, never>;
-            create: {
+          create?: (args: {
+            data: {
               companyId: string;
               key: string;
+              requestHash: string;
+              response: IdempotencyReplayDecision;
+            };
+          }) => Promise<unknown>;
+          update?: (args: {
+            where: { companyId_key: { companyId: string; key: string } };
+            data: {
               requestHash: string;
               response: IdempotencyReplayDecision;
             };
@@ -4146,19 +4189,47 @@ export class SyncService {
       if (
         !client.idempotencyKey ||
         typeof client.idempotencyKey.findUnique !== 'function' ||
-        typeof client.idempotencyKey.upsert !== 'function'
+        typeof client.idempotencyKey.create !== 'function' ||
+        typeof client.idempotencyKey.update !== 'function'
       ) {
         return null;
       }
       return {
         idempotencyKey: {
           findUnique: client.idempotencyKey.findUnique,
-          upsert: client.idempotencyKey.upsert
+          create: client.idempotencyKey.create,
+          update: client.idempotencyKey.update
         }
       };
     } catch {
       return null;
     }
+  }
+
+  private shouldBypassStaleSaleRewardRejection(
+    payload: Record<string, unknown>,
+    response: unknown
+  ): boolean {
+    if (this.isSaleRewardRedemptionPayload(payload)) {
+      return false;
+    }
+    if (!response || typeof response !== 'object') {
+      return false;
+    }
+    const record = response as Record<string, unknown>;
+    return (
+      String(record.status ?? '').toLowerCase() === 'rejected' &&
+      String(record.reason ?? '') === 'Sale reward sync payload is missing reward id'
+    );
+  }
+
+  private isSaleRewardRedemptionPayload(payload: Record<string, unknown>): boolean {
+    const rewardId = this.asString(payload.reward_id ?? payload.rewardId);
+    return (
+      payload.reward_redemption_used === true ||
+      payload.rewardRedemptionUsed === true ||
+      rewardId !== undefined
+    );
   }
 
   private companyScopedKey(companyId: string, value: string): string {
