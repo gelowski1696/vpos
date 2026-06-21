@@ -4,9 +4,17 @@ import type { Route } from 'next';
 import Link from 'next/link';
 import { useEffect, useMemo, useState } from 'react';
 import { apiRequest } from '../../../lib/api-client';
+import { getHiddenSystemLocationIds } from '../../../lib/reports-hidden-location';
 import { toastInfo, toastSuccess } from '../../../lib/web-toast';
 
 type BranchRecord = {
+  id: string;
+  code: string;
+  name: string;
+  isActive: boolean;
+};
+
+type LocationRecord = {
   id: string;
   code: string;
   name: string;
@@ -511,6 +519,7 @@ export default function ReportsPage(): JSX.Element {
   const [loading, setLoading] = useState(true);
   const [errors, setErrors] = useState<string[]>([]);
   const [data, setData] = useState<ReportsState>(INITIAL_STATE);
+  const [locations, setLocations] = useState<LocationRecord[]>([]);
 
   const [since, setSince] = useState(initialFilters.since);
   const [until, setUntil] = useState(initialFilters.until);
@@ -560,6 +569,7 @@ export default function ReportsPage(): JSX.Element {
 
       const requests = await Promise.all([
         safeRequest<BranchRecord[]>('/master-data/branches'),
+        safeRequest<LocationRecord[]>('/master-data/locations'),
         safeRequest<SalesSummary>(`/reports/sales/summary?${baseParams.toString()}`),
         safeRequest<{ rows: SalesBySkuRow[] }>(`/reports/sales/by-sku?${baseParams.toString()}`),
         safeRequest<{ rows: SalesByBranchRow[] }>(`/reports/sales/by-branch?${baseParams.toString()}`),
@@ -587,6 +597,7 @@ export default function ReportsPage(): JSX.Element {
 
       const [
         branchesRes,
+        locationsRes,
         salesSummaryRes,
         salesBySkuRes,
         salesByBranchRes,
@@ -616,6 +627,7 @@ export default function ReportsPage(): JSX.Element {
 
       setErrors(nextErrors);
       setBranches((branchesRes.data ?? []).filter((row) => row.isActive));
+      setLocations(locationsRes.data ?? []);
       setData({
         salesSummary: salesSummaryRes.data,
         salesBySku: salesBySkuRes.data?.rows ?? [],
@@ -678,9 +690,31 @@ export default function ReportsPage(): JSX.Element {
     [data.products]
   );
 
+  const hiddenSystemLocationIds = useMemo(() => getHiddenSystemLocationIds(locations), [locations]);
+
+  const filteredOpeningSnapshot = useMemo(
+    () => data.openingSnapshot.filter((row) => !hiddenSystemLocationIds.has(row.locationId)),
+    [data.openingSnapshot, hiddenSystemLocationIds]
+  );
+
+  const filteredInventoryMovements = useMemo(
+    () => data.inventoryMovements.filter((row) => !hiddenSystemLocationIds.has(row.location_id)),
+    [data.inventoryMovements, hiddenSystemLocationIds]
+  );
+
+  const filteredFullEmpty = useMemo(
+    () => data.fullEmpty.filter((row) => !hiddenSystemLocationIds.has(row.location_id)),
+    [data.fullEmpty, hiddenSystemLocationIds]
+  );
+
+  const filteredCylinders = useMemo(
+    () => data.cylinders.filter((row) => !hiddenSystemLocationIds.has(row.locationId)),
+    [data.cylinders, hiddenSystemLocationIds]
+  );
+
   const lowStockRows = useMemo(
     () =>
-      data.openingSnapshot
+      filteredOpeningSnapshot
         .map((row) => {
           const product = productById.get(row.productId);
           const configuredThreshold = product?.lowStockAlertQty ?? null;
@@ -696,18 +730,18 @@ export default function ReportsPage(): JSX.Element {
         })
         .filter((row) => row.lowStockCurrentQty <= row.lowStockThreshold)
         .sort((a, b) => a.lowStockCurrentQty - b.lowStockCurrentQty),
-    [data.openingSnapshot, lowStockThreshold, productById]
+    [filteredOpeningSnapshot, lowStockThreshold, productById]
   );
 
   const transferRows = useMemo(() => data.transfers.slice().sort((a, b) => b.created_at.localeCompare(a.created_at)).slice(0, 20), [data.transfers]);
 
   const cylinderStatusCounts = useMemo(() => {
     const counts = new Map<string, number>();
-    for (const row of data.cylinders) {
+    for (const row of filteredCylinders) {
       counts.set(row.status, (counts.get(row.status) ?? 0) + 1);
     }
     return [...counts.entries()].map(([status, count]) => ({ status, count })).sort((a, b) => b.count - a.count);
-  }, [data.cylinders]);
+  }, [filteredCylinders]);
 
   const cylinderAuditRows = useMemo(
     () => data.auditLogs.filter((row) => row.action.toUpperCase().startsWith('CYLINDER_')).slice(0, 40),
@@ -738,8 +772,16 @@ export default function ReportsPage(): JSX.Element {
   }, [unsettledSales]);
 
   const openingControlRows = useMemo(
-    () => data.openingSnapshot.map((row) => ({ ...row, openingControl: row.hasOpeningEntry ? (row.hasTransactionalMovements ? 'POST-OPENING MOVEMENTS DETECTED' : 'OPENING-ONLY') : 'NO OPENING ENTRY' })),
-    [data.openingSnapshot]
+    () =>
+      filteredOpeningSnapshot.map((row) => ({
+        ...row,
+        openingControl: row.hasOpeningEntry
+          ? row.hasTransactionalMovements
+            ? 'POST-OPENING MOVEMENTS DETECTED'
+            : 'OPENING-ONLY'
+          : 'NO OPENING ENTRY'
+      })),
+    [filteredOpeningSnapshot]
   );
 
   const totalTransferLines = useMemo(() => data.transfers.reduce((sum, row) => sum + row.lines.length, 0), [data.transfers]);
@@ -794,7 +836,7 @@ export default function ReportsPage(): JSX.Element {
 
   const inventoryExportRows = useMemo(
     () => [
-      ...data.openingSnapshot.map((row) => ({
+      ...filteredOpeningSnapshot.map((row) => ({
         report_type: 'INVENTORY_ON_HAND',
         location_name: row.locationName,
         item_code: row.productSku,
@@ -806,7 +848,7 @@ export default function ReportsPage(): JSX.Element {
         inventory_value: row.inventoryValue,
         status: row.hasOpeningEntry ? (row.hasTransactionalMovements ? 'POST_OPENING_MOVEMENTS_DETECTED' : 'OPENING_ONLY') : 'NO_OPENING_ENTRY'
       })),
-      ...data.inventoryMovements.map((row) => ({
+      ...filteredInventoryMovements.map((row) => ({
         report_type: 'INVENTORY_MOVEMENT',
         when: row.created_at,
         movement_type: row.movement_type,
@@ -817,12 +859,12 @@ export default function ReportsPage(): JSX.Element {
         qty_empty_delta: row.qty_empty_delta
       }))
     ],
-    [data.inventoryMovements, data.openingSnapshot]
+    [filteredInventoryMovements, filteredOpeningSnapshot]
   );
 
   const lpgExportRows = useMemo(
     () => [
-      ...data.fullEmpty.map((row) => ({
+      ...filteredFullEmpty.map((row) => ({
         report_type: 'FULL_EMPTY_BY_ITEM',
         location_name: row.location_name,
         item_code: row.item_code,
@@ -830,7 +872,7 @@ export default function ReportsPage(): JSX.Element {
         qty_full: row.qty_full,
         qty_empty: row.qty_empty
       })),
-      ...data.cylinders.map((row) => ({
+      ...filteredCylinders.map((row) => ({
         report_type: 'CYLINDER_ASSET_REGISTER',
         serial: row.serial,
         cylinder_type: row.typeCode,
@@ -847,7 +889,7 @@ export default function ReportsPage(): JSX.Element {
         net_liability: row.net_liability
       }))
     ],
-    [data.cylinders, data.depositLiability, data.fullEmpty]
+    [data.depositLiability, filteredCylinders, filteredFullEmpty]
   );
 
   const operationsExportRows = useMemo(
@@ -1237,7 +1279,7 @@ export default function ReportsPage(): JSX.Element {
               <div className="overflow-x-auto">
                 <table className="w-full min-w-[900px] text-xs">
                   <thead className="text-left text-[11px] uppercase text-slate-500"><tr><th className="pb-2 pr-2">Location</th><th className="pb-2 pr-2">Item Code</th><th className="pb-2 pr-2">Product</th><th className="pb-2 pr-2">FULL</th><th className="pb-2 pr-2">EMPTY</th><th className="pb-2 pr-2">Qty On Hand</th><th className="pb-2 pr-2">Avg Cost</th><th className="pb-2">Value</th></tr></thead>
-                  <tbody>{data.openingSnapshot.slice(0, 40).map((row) => <tr key={`${row.locationId}:${row.productId}`} className="border-t border-slate-100 dark:border-slate-700"><td className="py-1.5 pr-2">{row.locationName}</td><td className="py-1.5 pr-2">{row.productSku}</td><td className="py-1.5 pr-2">{row.productName}</td><td className="py-1.5 pr-2">{qty(row.qtyFull)}</td><td className="py-1.5 pr-2">{qty(row.qtyEmpty)}</td><td className="py-1.5 pr-2">{qty(row.qtyOnHand)}</td><td className="py-1.5 pr-2">{money(row.avgCost)}</td><td className="py-1.5">{money(row.inventoryValue)}</td></tr>)}</tbody>
+                  <tbody>{filteredOpeningSnapshot.slice(0, 40).map((row) => <tr key={`${row.locationId}:${row.productId}`} className="border-t border-slate-100 dark:border-slate-700"><td className="py-1.5 pr-2">{row.locationName}</td><td className="py-1.5 pr-2">{row.productSku}</td><td className="py-1.5 pr-2">{row.productName}</td><td className="py-1.5 pr-2">{qty(row.qtyFull)}</td><td className="py-1.5 pr-2">{qty(row.qtyEmpty)}</td><td className="py-1.5 pr-2">{qty(row.qtyOnHand)}</td><td className="py-1.5 pr-2">{money(row.avgCost)}</td><td className="py-1.5">{money(row.inventoryValue)}</td></tr>)}</tbody>
                 </table>
               </div>
             </ReportCard>
@@ -1246,14 +1288,14 @@ export default function ReportsPage(): JSX.Element {
               <div className="overflow-x-auto">
                 <table className="w-full min-w-[760px] text-xs">
                   <thead className="text-left text-[11px] uppercase text-slate-500"><tr><th className="pb-2 pr-2">When</th><th className="pb-2 pr-2">Type</th><th className="pb-2 pr-2">Location</th><th className="pb-2 pr-2">Item</th><th className="pb-2 pr-2">Qty</th><th className="pb-2 pr-2">FULL</th><th className="pb-2">EMPTY</th></tr></thead>
-                  <tbody>{data.inventoryMovements.slice(0, 50).map((row) => <tr key={row.id} className="border-t border-slate-100 dark:border-slate-700"><td className="py-1.5 pr-2">{dt(row.created_at)}</td><td className="py-1.5 pr-2">{row.movement_type}</td><td className="py-1.5 pr-2">{row.location_name}</td><td className="py-1.5 pr-2">{row.product_sku}</td><td className="py-1.5 pr-2">{qty(row.qty_delta)}</td><td className="py-1.5 pr-2">{qty(row.qty_full_delta)}</td><td className="py-1.5">{qty(row.qty_empty_delta)}</td></tr>)}</tbody>
+                  <tbody>{filteredInventoryMovements.slice(0, 50).map((row) => <tr key={row.id} className="border-t border-slate-100 dark:border-slate-700"><td className="py-1.5 pr-2">{dt(row.created_at)}</td><td className="py-1.5 pr-2">{row.movement_type}</td><td className="py-1.5 pr-2">{row.location_name}</td><td className="py-1.5 pr-2">{row.product_sku}</td><td className="py-1.5 pr-2">{qty(row.qty_delta)}</td><td className="py-1.5 pr-2">{qty(row.qty_full_delta)}</td><td className="py-1.5">{qty(row.qty_empty_delta)}</td></tr>)}</tbody>
                 </table>
               </div>
             </ReportCard>
 
             <ReportCard title="10. Stock Valuation (WAC)" subtitle="Inventory value by location and item (avg cost based)">
-              <p className="mb-2 text-xs text-slate-500">Total Inventory Value: <span className="font-semibold text-slate-700 dark:text-slate-200">{money(data.openingSnapshot.reduce((sum, row) => sum + row.inventoryValue, 0))}</span></p>
-              <div className="space-y-1 text-xs">{data.openingSnapshot.slice(0, 20).map((row) => <p key={`val-${row.locationId}-${row.productId}`}>{row.locationCode} | {row.productSku} | Qty {qty(row.qtyOnHand)} | Value {money(row.inventoryValue)}</p>)}</div>
+              <p className="mb-2 text-xs text-slate-500">Total Inventory Value: <span className="font-semibold text-slate-700 dark:text-slate-200">{money(filteredOpeningSnapshot.reduce((sum, row) => sum + row.inventoryValue, 0))}</span></p>
+              <div className="space-y-1 text-xs">{filteredOpeningSnapshot.slice(0, 20).map((row) => <p key={`val-${row.locationId}-${row.productId}`}>{row.locationCode} | {row.productSku} | Qty {qty(row.qtyOnHand)} | Value {money(row.inventoryValue)}</p>)}</div>
             </ReportCard>
 
             <ReportCard title="11. Low Stock / Reorder Alert" subtitle="Product threshold first; LPG uses FULL qty, non-LPG uses QOH." status="DERIVED">
@@ -1288,7 +1330,7 @@ export default function ReportsPage(): JSX.Element {
               <div className="overflow-x-auto">
                 <table className="w-full min-w-[680px] text-xs">
                   <thead className="text-left text-[11px] uppercase text-slate-500"><tr><th className="pb-2 pr-2">Location</th><th className="pb-2 pr-2">Item</th><th className="pb-2 pr-2">Product</th><th className="pb-2 pr-2">FULL</th><th className="pb-2">EMPTY</th></tr></thead>
-                  <tbody>{data.fullEmpty.slice(0, 50).map((row) => <tr key={`${row.location_id}:${row.product_id}`} className="border-t border-slate-100 dark:border-slate-700"><td className="py-1.5 pr-2">{row.location_name}</td><td className="py-1.5 pr-2">{row.item_code}</td><td className="py-1.5 pr-2">{row.product_name}</td><td className="py-1.5 pr-2">{qty(row.qty_full)}</td><td className="py-1.5">{qty(row.qty_empty)}</td></tr>)}</tbody>
+                  <tbody>{filteredFullEmpty.slice(0, 50).map((row) => <tr key={`${row.location_id}:${row.product_id}`} className="border-t border-slate-100 dark:border-slate-700"><td className="py-1.5 pr-2">{row.location_name}</td><td className="py-1.5 pr-2">{row.item_code}</td><td className="py-1.5 pr-2">{row.product_name}</td><td className="py-1.5 pr-2">{qty(row.qty_full)}</td><td className="py-1.5">{qty(row.qty_empty)}</td></tr>)}</tbody>
                 </table>
               </div>
             </ReportCard>
@@ -1296,7 +1338,7 @@ export default function ReportsPage(): JSX.Element {
               <div className="overflow-x-auto">
                 <table className="w-full min-w-[620px] text-xs">
                   <thead className="text-left text-[11px] uppercase text-slate-500"><tr><th className="pb-2 pr-2">Serial</th><th className="pb-2 pr-2">Type</th><th className="pb-2 pr-2">Status</th><th className="pb-2 pr-2">Location</th><th className="pb-2">Updated</th></tr></thead>
-                  <tbody>{data.cylinders.slice(0, 80).map((row) => <tr key={row.serial} className="border-t border-slate-100 dark:border-slate-700"><td className="py-1.5 pr-2">{row.serial}</td><td className="py-1.5 pr-2">{row.typeCode}</td><td className="py-1.5 pr-2">{row.status}</td><td className="py-1.5 pr-2">{row.locationId}</td><td className="py-1.5">{dt(row.updatedAt)}</td></tr>)}</tbody>
+                  <tbody>{filteredCylinders.slice(0, 80).map((row) => <tr key={row.serial} className="border-t border-slate-100 dark:border-slate-700"><td className="py-1.5 pr-2">{row.serial}</td><td className="py-1.5 pr-2">{row.typeCode}</td><td className="py-1.5 pr-2">{row.status}</td><td className="py-1.5 pr-2">{row.locationId}</td><td className="py-1.5">{dt(row.updatedAt)}</td></tr>)}</tbody>
                 </table>
               </div>
             </ReportCard>
@@ -1312,7 +1354,7 @@ export default function ReportsPage(): JSX.Element {
                 <p>Disposed actions: <span className="font-semibold">{data.lpgItemActionSummary.counts.dispose}</span></p>
                 <p>Replaced actions: <span className="font-semibold">{data.lpgItemActionSummary.counts.replace}</span></p>
                 <p>Lost: <span className="font-semibold">{cylinderStatusCounts.find((row) => row.status === 'LOST')?.count ?? 0}</span></p>
-                <p>Adjustment movements: <span className="font-semibold">{data.inventoryMovements.filter((row) => row.movement_type.toUpperCase().includes('ADJUST')).length}</span></p>
+                <p>Adjustment movements: <span className="font-semibold">{filteredInventoryMovements.filter((row) => row.movement_type.toUpperCase().includes('ADJUST')).length}</span></p>
               </div>
             </ReportCard>
 

@@ -306,6 +306,34 @@ function shiftStatusLabel(row: DailyInventoryShiftRow): string {
   }
 }
 
+type ShiftInventoryFieldProps = {
+  label: string;
+  value: string;
+  subtitle?: string;
+  valueClassName?: string;
+};
+
+function ShiftInventoryField({
+  label,
+  value,
+  subtitle,
+  valueClassName
+}: ShiftInventoryFieldProps): JSX.Element {
+  return (
+    <div className="min-w-0">
+      <div className="text-[0.64rem] font-semibold uppercase tracking-[0.08em] text-slate-500 dark:text-slate-400">
+        {label}
+      </div>
+      <div className={`mt-0.5 break-words text-[0.82rem] font-semibold ${valueClassName ?? 'text-slate-900 dark:text-slate-100'}`}>
+        {value}
+      </div>
+      {subtitle ? (
+        <div className="mt-0.5 break-words text-[0.72rem] text-slate-500 dark:text-slate-400">{subtitle}</div>
+      ) : null}
+    </div>
+  );
+}
+
 function InventoryShiftItemBreakdown({ row }: { row: DailyInventoryShiftRow }): JSX.Element {
   const inventoryReport = row.inventory_report;
   const pagination = useTablePagination(inventoryReport?.rows ?? [], {
@@ -610,136 +638,103 @@ function ShiftInventoryTable({
         </span>
       </div>
 
-      <div className="overflow-x-auto">
-        <table className="min-w-[1700px] text-left text-sm">
-          <thead className="bg-slate-50 text-xs uppercase tracking-wide text-slate-500 dark:bg-slate-800/80 dark:text-slate-400">
-            <tr>
-              <th className="px-3 py-2">Status</th>
-              <th className="px-3 py-2">Shift / Cashier</th>
-              <th className="px-3 py-2">Branch / Location</th>
-              <th className="px-3 py-2">Opened</th>
-              <th className="px-3 py-2">Closed</th>
-              <th className="px-3 py-2">Start Snapshot</th>
-              <th className="px-3 py-2">End Snapshot</th>
-              <th className="px-3 py-2">Change</th>
-              <th className="px-3 py-2">Items</th>
-              <th className="px-3 py-2 text-center">Action</th>
-            </tr>
-          </thead>
-          <tbody className="divide-y divide-slate-200 dark:divide-slate-700">
-            {pagination.pageRows.length === 0 ? (
-              <tr>
-                <td className="px-3 py-6 text-center text-slate-500 dark:text-slate-400" colSpan={10}>
-                  No shifts were recorded for the selected day.
-                </td>
-              </tr>
-            ) : (
-              pagination.pageRows.flatMap((row) => {
-                const isExpanded = expandedShiftId === row.id;
-                const changeText = row.status === 'OPEN'
-                  ? 'Awaiting close'
-                  : row.inventory_report
-                    ? `${formatSignedCount(row.inventory_report.totals.delta_qty_on_hand)} on hand`
-                    : row.snapshot_warning ?? 'Not available';
-                const changeSubTextValue = row.status === 'OPEN'
-                  ? 'End snapshot pending'
-                  : row.inventory_report
-                    ? `Full ${formatSignedCount(row.inventory_report.totals.delta_qty_full)} | Empty ${formatSignedCount(row.inventory_report.totals.delta_qty_empty)}`
-                    : row.snapshot_warning ?? 'Item-level change unavailable';
-                const itemCount = row.inventory_report?.totals.item_count ?? row.opening_snapshot_summary?.item_count ?? 0;
+      <div className="space-y-3 p-3">
+        {pagination.pageRows.length === 0 ? (
+          <div className="rounded-xl border border-slate-200 bg-slate-50 px-4 py-5 text-sm text-slate-500 dark:border-slate-700 dark:bg-slate-900/50 dark:text-slate-400">
+            No shifts were recorded for the selected day.
+          </div>
+        ) : (
+          pagination.pageRows.map((row) => {
+            const isExpanded = expandedShiftId === row.id;
+            const changeText =
+              row.status === 'OPEN'
+                ? 'Awaiting close'
+                : row.inventory_report
+                  ? `${formatSignedCount(row.inventory_report.totals.delta_qty_on_hand)} on hand`
+                  : row.snapshot_warning ?? 'Not available';
+            const changeSubTextValue =
+              row.status === 'OPEN'
+                ? 'End snapshot pending'
+                : row.inventory_report
+                  ? `Full ${formatSignedCount(row.inventory_report.totals.delta_qty_full)} | Empty ${formatSignedCount(row.inventory_report.totals.delta_qty_empty)}`
+                  : row.snapshot_warning ?? 'Item-level change unavailable';
+            const itemCount = row.inventory_report?.totals.item_count ?? row.opening_snapshot_summary?.item_count ?? 0;
 
-                return [
-                  <tr
-                    className={`align-top transition-colors ${isExpanded ? 'bg-brandPrimary/5 dark:bg-brandPrimary/10' : 'hover:bg-slate-50 dark:hover:bg-slate-800/60'}`}
-                    key={row.id}
+            return (
+              <article
+                key={row.id}
+                className={`rounded-xl border border-slate-200 bg-slate-50/80 p-3 shadow-sm transition-colors dark:border-slate-700 dark:bg-slate-900/50 ${
+                  isExpanded ? 'ring-1 ring-brandPrimary/20' : 'hover:bg-slate-50 dark:hover:bg-slate-900/70'
+                }`}
+              >
+                <div className="flex flex-wrap items-start justify-between gap-3">
+                  <div className="flex min-w-0 flex-wrap items-center gap-2">
+                    <span className={`inline-flex min-h-[28px] items-center rounded-full px-3 text-[0.74rem] font-extrabold uppercase tracking-[0.08em] ${statusTone(row.snapshot_state)}`}>
+                      {shiftStatusLabel(row)}
+                    </span>
+                    <div className="min-w-0">
+                      <strong className="block break-words text-[0.88rem] text-slate-900 dark:text-slate-100">
+                        {row.shift_id}
+                      </strong>
+                      <span className="block text-[0.76rem] text-slate-500 dark:text-slate-400">{row.cashier_name}</span>
+                    </div>
+                  </div>
+                  <button
+                    className="rounded-md border border-slate-300 px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-100 dark:border-slate-600 dark:text-slate-200 dark:hover:bg-slate-800"
+                    onClick={() => setExpandedShiftId(isExpanded ? null : row.id)}
+                    type="button"
                   >
-                    <td className="px-3 py-3">
-                      <span className={`inline-flex min-h-[28px] items-center rounded-full px-3 text-[0.74rem] font-extrabold uppercase tracking-[0.08em] ${statusTone(row.snapshot_state)}`}>
-                        {shiftStatusLabel(row)}
-                      </span>
-                    </td>
-                    <td className="px-3 py-3">
-                      <div className="grid gap-0.5">
-                        <strong className="text-[0.88rem] text-slate-900 dark:text-slate-100">{row.shift_id}</strong>
-                        <span className="text-[0.76rem] text-slate-500 dark:text-slate-400">{row.cashier_name}</span>
-                      </div>
-                    </td>
-                    <td className="px-3 py-3">
-                      <div className="grid gap-0.5">
-                        <strong className="text-[0.84rem] text-slate-900 dark:text-slate-100">
-                          {row.branch_name}
-                          {row.branch_code ? ` (${row.branch_code})` : ''}
-                        </strong>
-                        <span className="text-[0.76rem] text-slate-500 dark:text-slate-400">
-                          {row.location_name ? `${row.location_name}${row.location_code ? ` (${row.location_code})` : ''}` : 'Location not recorded'}
-                        </span>
-                      </div>
-                    </td>
-                    <td className="px-3 py-3 text-[0.82rem] text-slate-700 dark:text-slate-200">
-                      {formatDateTime(row.opened_at)}
-                    </td>
-                    <td className="px-3 py-3 text-[0.82rem] text-slate-700 dark:text-slate-200">
-                      {row.closed_at ? formatDateTime(row.closed_at) : row.status === 'OPEN' ? 'In progress' : 'Not captured'}
-                    </td>
-                    <td className="px-3 py-3">
-                      <div className="grid gap-0.5">
-                        <strong className="text-[0.84rem] text-slate-900 dark:text-slate-100">
-                          {snapshotValueText(row.opening_snapshot_summary)}
-                        </strong>
-                        <span className="text-[0.76rem] text-slate-500 dark:text-slate-400">
-                          {snapshotSubText(row.opening_snapshot_summary, 'Start not captured')}
-                        </span>
-                      </div>
-                    </td>
-                    <td className="px-3 py-3">
-                      <div className="grid gap-0.5">
-                        <strong className="text-[0.84rem] text-slate-900 dark:text-slate-100">
-                          {row.status === 'OPEN'
-                            ? 'Closing pending'
-                            : snapshotValueText(row.closing_snapshot_summary)}
-                        </strong>
-                        <span className="text-[0.76rem] text-slate-500 dark:text-slate-400">
-                          {row.status === 'OPEN'
-                            ? 'Awaiting close'
-                            : snapshotSubText(row.closing_snapshot_summary, 'End not captured')}
-                        </span>
-                      </div>
-                    </td>
-                    <td className="px-3 py-3">
-                      <div className="grid gap-0.5">
-                        <strong className="text-[0.84rem] text-slate-900 dark:text-slate-100">{changeText}</strong>
-                        <span className="text-[0.76rem] text-slate-500 dark:text-slate-400">{changeSubTextValue}</span>
-                      </div>
-                    </td>
-                    <td className="px-3 py-3 text-[0.82rem] text-slate-700 dark:text-slate-200">
-                      {row.status === 'OPEN'
-                        ? `${formatCount(itemCount)} start`
-                        : row.inventory_report
-                          ? `${row.inventory_report.totals.item_count.toLocaleString()} items`
-                          : 'Unavailable'}
-                    </td>
-                    <td className="px-3 py-3 text-center">
-                      <button
-                        className="rounded-md border border-slate-300 px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-100 dark:border-slate-600 dark:text-slate-200 dark:hover:bg-slate-800"
-                        onClick={() => setExpandedShiftId(isExpanded ? null : row.id)}
-                        type="button"
-                      >
-                        {isExpanded ? 'Hide Details' : 'View Details'}
-                      </button>
-                    </td>
-                  </tr>,
-                  isExpanded ? (
-                    <tr key={`${row.id}-details`} className="bg-slate-50 dark:bg-slate-900/50">
-                      <td className="px-0 py-0" colSpan={10}>
-                        <ShiftInventoryDetails row={row} />
-                      </td>
-                    </tr>
-                  ) : null
-                ];
-              })
-            )}
-          </tbody>
-        </table>
+                    {isExpanded ? 'Hide Details' : 'View Details'}
+                  </button>
+                </div>
+
+                <div className="mt-3 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+                  <ShiftInventoryField
+                    label="Branch / Location"
+                    value={`${row.branch_name}${row.branch_code ? ` (${row.branch_code})` : ''}`}
+                    subtitle={row.location_name ? `${row.location_name}${row.location_code ? ` (${row.location_code})` : ''}` : 'Location not recorded'}
+                  />
+                  <ShiftInventoryField
+                    label="Opened"
+                    value={formatDateTime(row.opened_at)}
+                    subtitle={row.status === 'OPEN' ? 'Open shift' : 'Closed shift'}
+                  />
+                  <ShiftInventoryField
+                    label="Closed"
+                    value={row.closed_at ? formatDateTime(row.closed_at) : row.status === 'OPEN' ? 'In progress' : 'Not captured'}
+                    subtitle={row.status === 'OPEN' ? 'Awaiting close' : 'Close timestamp'}
+                  />
+                  <ShiftInventoryField
+                    label="Start Snapshot"
+                    value={snapshotValueText(row.opening_snapshot_summary)}
+                    subtitle={snapshotSubText(row.opening_snapshot_summary, 'Start not captured')}
+                  />
+                  <ShiftInventoryField
+                    label="End Snapshot"
+                    value={row.status === 'OPEN' ? 'Closing pending' : snapshotValueText(row.closing_snapshot_summary)}
+                    subtitle={row.status === 'OPEN' ? 'Awaiting close' : snapshotSubText(row.closing_snapshot_summary, 'End not captured')}
+                  />
+                  <ShiftInventoryField
+                    label="Change"
+                    value={changeText}
+                    subtitle={changeSubTextValue}
+                  />
+                  <ShiftInventoryField
+                    label="Items"
+                    value={row.status === 'OPEN' ? `${formatCount(itemCount)} start` : row.inventory_report ? `${row.inventory_report.totals.item_count.toLocaleString()} items` : 'Unavailable'}
+                    subtitle={row.status === 'OPEN' ? 'Start snapshot items' : 'Shift item lines'}
+                  />
+                </div>
+
+                {isExpanded ? (
+                  <div className="mt-4">
+                    <ShiftInventoryDetails row={row} />
+                  </div>
+                ) : null}
+              </article>
+            );
+          })
+        )}
       </div>
 
       {pagination.totalItems > 0 ? (
