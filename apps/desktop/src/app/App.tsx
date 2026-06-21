@@ -1,9 +1,11 @@
 ﻿import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { sileo } from 'sileo';
-import { DESKTOP_ROUTES, type DesktopRouteId } from './routes';
+import { DESKTOP_ROUTES, type DesktopRoute, type DesktopRouteId } from './routes';
 import { Sidebar } from '../components/layout/Sidebar';
 import { TopBar } from '../components/layout/TopBar';
 import { BrandLogo } from '../components/layout/BrandLogo';
+import { DesktopContainer } from '../components/layout/DesktopContainer';
+import { useBreakpointUp } from '../hooks/useMediaQuery';
+import { useDesktopShortcuts } from '../hooks/useDesktopShortcuts';
 import { DashboardScreen } from '../screens/DashboardScreen';
 import { SettingsScreen } from '../screens/SettingsScreen';
 import { ModulePlaceholderScreen } from '../screens/ModulePlaceholderScreen';
@@ -18,7 +20,10 @@ import { TransferScreen } from '../screens/TransferScreen';
 import { TransferHistoryScreen } from '../screens/TransferHistoryScreen';
 import { ShiftScreen } from '../screens/ShiftScreen';
 import { ExpenseScreen } from '../screens/ExpenseScreen';
-import { DesktopUiProvider } from '../components/feedback/DesktopUiFeedback';
+import { CashierReportsScreen } from '../screens/CashierReportsScreen';
+import { PurchaseOrdersScreen } from '../screens/PurchaseOrdersScreen';
+import { DeliveryDispatchScreen } from '../screens/DeliveryDispatchScreen';
+import { DesktopUiProvider, useDesktopUi } from '../components/feedback/DesktopUiFeedback';
 import { playDesktopStartupCueOnce } from '../components/feedback/desktop-startup-cue';
 import { DEFAULT_DESKTOP_APP_STATE, type DesktopAppState, type DesktopSaleRecord } from '../db/schema';
 import { desktopDb } from '../db/sqlite';
@@ -32,7 +37,26 @@ import { DesktopTutorialProvider, useDesktopTutorialActions, useDesktopTutorialS
 import { getRouteForTutorialScreen } from '../tutorial/tutorial-routing';
 
 const PRIMARY_ROUTES: DesktopRouteId[] = ['dashboard', 'pos', 'sales', 'transfer', 'transfer-list'];
-const SIDE_MENU_ROUTES: DesktopRouteId[] = ['lending', 'lpg-service', 'expense', 'items', 'customers', 'shift', 'settings'];
+const SIDE_MENU_ROUTES: DesktopRouteId[] = ['items', 'customers', 'lending', 'lpg-service', 'expense', 'shift', 'reports', 'settings'];
+const ADDON_ROUTE_IDS = ['purchase-orders', 'delivery-dispatch'] as const;
+const WORKSPACE_ROUTES = new Set<DesktopRouteId>(['pos', 'sales', 'transfer', 'transfer-list']);
+type TenantAddonFlags = Awaited<ReturnType<typeof desktopMasterDataService.loadTenantAddons>>;
+type AddonRouteId = (typeof ADDON_ROUTE_IDS)[number];
+
+const ADDON_FLAG_BY_ROUTE: Record<AddonRouteId, keyof TenantAddonFlags> = {
+  'purchase-orders': 'purchase_order_suite',
+  'delivery-dispatch': 'delivery_dispatch_suite'
+};
+
+function resolveRoutes(routeIds: readonly DesktopRouteId[]): DesktopRoute[] {
+  return routeIds
+    .map((routeId) => DESKTOP_ROUTES.find((route) => route.id === routeId))
+    .filter((route): route is DesktopRoute => Boolean(route));
+}
+
+function isAddonRoute(route: DesktopRouteId): route is AddonRouteId {
+  return ADDON_ROUTE_IDS.includes(route as AddonRouteId);
+}
 
 function moduleConfig(route: DesktopRouteId): { title: string; description: string; bullets: string[] } {
   switch (route) {
@@ -61,8 +85,8 @@ function moduleConfig(route: DesktopRouteId): { title: string; description: stri
     case 'sales':
       return {
         title: 'Sales',
-        description: 'Sales history, item returns, and cancel-and-recreate flow.',
-        bullets: ['Sales list and detail', 'Cancel sale', 'Return item', 'Cancel and recreate sale']
+        description: 'Sales history, cancel sale, item returns, and payment follow-up.',
+        bullets: ['Sales list and detail', 'Cancel sale', 'Payment breakdown', 'Pay balance', 'Return item']
       };
     case 'transfer':
       return {
@@ -82,6 +106,17 @@ function moduleConfig(route: DesktopRouteId): { title: string; description: stri
         description: 'Petty cash and branch expense entries will live here, following the mobile menu path.',
         bullets: ['View petty cash entries', 'Create branch expense entries', 'Review expense history', 'Later: sync and approval flow']
       };
+    case 'reports':
+      return {
+        title: 'Cashier Reports',
+        description: 'Date-filtered cashier report snapshots for sales, collections, balances, and shift activity.',
+        bullets: [
+          'Sales totals and recent receipts',
+          'Customer payment totals in range',
+          'Outstanding balance snapshot',
+          'Open lending and shift read overview'
+        ]
+      };
     case 'lending':
       return {
         title: 'Lending',
@@ -93,6 +128,28 @@ function moduleConfig(route: DesktopRouteId): { title: string; description: stri
         title: 'Shift',
         description: 'Start duty, end duty, and review shift cash from the same layout used on mobile.',
         bullets: ['Open duty with opening cash', 'End duty with actual count', 'Shift cash in and out', 'Later: full shift history']
+      };
+    case 'purchase-orders':
+      return {
+        title: 'Purchase Orders',
+        description: 'Prepare supplier purchase orders, track receiving, and keep branch replenishment organized.',
+        bullets: [
+          'Create and review supplier orders',
+          'Track ordered, received, and pending quantities',
+          'Prepare receiving and reconciliation steps',
+          'Later: sync approvals and supplier follow-up'
+        ]
+      };
+    case 'delivery-dispatch':
+      return {
+        title: 'Delivery Dispatch',
+        description: 'Stage delivery dispatch work, handoff details, and route-ready order tracking for branch teams.',
+        bullets: [
+          'Create dispatch records from completed orders',
+          'Track driver, vehicle, and handoff details',
+          'Review delivery status and exceptions',
+          'Later: sync proof-of-delivery and completion updates'
+        ]
       };
     case 'lpg-service':
       return {
@@ -117,13 +174,41 @@ function moduleConfig(route: DesktopRouteId): { title: string; description: stri
   }
 }
 
+function unavailableAddonConfig(route: AddonRouteId): { title: string; description: string; bullets: string[] } {
+  switch (route) {
+    case 'purchase-orders':
+      return {
+        title: 'Purchase Orders Unavailable',
+        description: 'The Purchase Order Suite add-on is not enabled for this tenant on this desktop.',
+        bullets: [
+          'Enable Purchase Order Suite for this tenant to open the route.',
+          'Download branch data again after the add-on is turned on.',
+          'Until then, this workstation keeps the module unavailable.'
+        ]
+      };
+    case 'delivery-dispatch':
+      return {
+        title: 'Delivery Dispatch Unavailable',
+        description: 'The Delivery Dispatch Suite add-on is not enabled for this tenant on this desktop.',
+        bullets: [
+          'Enable Delivery Dispatch Suite for this tenant to open the route.',
+          'Download branch data again after the add-on is turned on.',
+          'Until then, this workstation keeps the module unavailable.'
+        ]
+      };
+  }
+}
+
 function DesktopAppShell(): JSX.Element {
+  const desktopUi = useDesktopUi();
   const tutorialActions = useDesktopTutorialActions();
   const tutorialState = useDesktopTutorialState();
   const [state, setState] = useState<DesktopAppState>(DEFAULT_DESKTOP_APP_STATE);
   const [activeRoute, setActiveRoute] = useState<DesktopRouteId>('dashboard');
   const [lastPrimaryRoute, setLastPrimaryRoute] = useState<DesktopRouteId>('dashboard');
-  const [sideMenuOpen, setSideMenuOpen] = useState(false);
+  const [drawerOpen, setDrawerOpen] = useState(false);
+  const [railCollapsed, setRailCollapsed] = useState(false);
+  const isWide = useBreakpointUp('md');
   const [booting, setBooting] = useState(true);
   const [startupStage, setStartupStage] = useState<DesktopStartupStage>('LOGIN');
   const [startupBusy, setStartupBusy] = useState(false);
@@ -136,8 +221,11 @@ function DesktopAppShell(): JSX.Element {
   const [branchDataBusy, setBranchDataBusy] = useState(false);
   const [pendingOutboxCount, setPendingOutboxCount] = useState(0);
   const [shellScrolled, setShellScrolled] = useState(false);
+  const [tenantAddonFlags, setTenantAddonFlags] = useState<TenantAddonFlags | null>(null);
   const [reopenSaleDraft, setReopenSaleDraft] = useState<{ sale: DesktopSaleRecord; mode: 'copy' | 'recreate' } | null>(null);
   const [reopenSaleNonce, setReopenSaleNonce] = useState(0);
+  const [pendingSalesDetailId, setPendingSalesDetailId] = useState<string | null>(null);
+  const [pendingSalesDetailNonce, setPendingSalesDetailNonce] = useState(0);
   const [quickAddProductId, setQuickAddProductId] = useState<string | null>(null);
   const [quickAddNonce, setQuickAddNonce] = useState(0);
   const [lpgFocusProductId, setLpgFocusProductId] = useState<string | null>(null);
@@ -151,6 +239,15 @@ function DesktopAppShell(): JSX.Element {
     }
   }, []);
 
+  const handleEscape = useCallback((): void => {
+    setDrawerOpen(false);
+  }, []);
+
+  useDesktopShortcuts({
+    onSelectRoute: handleSelectRoute,
+    onEscape: handleEscape
+  });
+
   const reloadDesktopState = async (): Promise<void> => {
     const [next, outbox] = await Promise.all([desktopSettingsService.getState(), desktopDb.listOutboxItems()]);
     setState(next);
@@ -162,6 +259,15 @@ function DesktopAppShell(): JSX.Element {
     setPendingOutboxCount(rows.filter((row) => row.status === 'pending' || row.status === 'failed').length);
   };
 
+  const reloadTenantAddonFlags = useCallback(async (): Promise<void> => {
+    try {
+      const nextFlags = await desktopMasterDataService.loadTenantAddons();
+      setTenantAddonFlags(nextFlags);
+    } catch {
+      setTenantAddonFlags(null);
+    }
+  }, []);
+
   useEffect(() => {
     void playDesktopStartupCueOnce();
   }, []);
@@ -169,12 +275,17 @@ function DesktopAppShell(): JSX.Element {
   useEffect(() => {
     let active = true;
     void (async () => {
-      const [loadedState, outbox] = await Promise.all([desktopSettingsService.getState(), desktopDb.listOutboxItems()]);
+      const [loadedState, outbox, addonFlags] = await Promise.all([
+        desktopSettingsService.getState(),
+        desktopDb.listOutboxItems(),
+        desktopMasterDataService.loadTenantAddons().catch(() => null)
+      ]);
       const boot = await desktopSessionService.bootstrap(loadedState);
       if (!active) {
         return;
       }
       setState(boot.state);
+      setTenantAddonFlags(addonFlags);
       setPendingOutboxCount(outbox.filter((row) => row.status === 'pending' || row.status === 'failed').length);
       setStartupStage(boot.stage);
       setStartupMessage(
@@ -202,6 +313,10 @@ function DesktopAppShell(): JSX.Element {
   }, []);
 
   useEffect(() => {
+    const autoTutorialsEnabled = false;
+    if (!autoTutorialsEnabled) {
+      return;
+    }
     if (booting || startupStage !== 'READY') {
       return;
     }
@@ -277,20 +392,14 @@ function DesktopAppShell(): JSX.Element {
   }, []);
 
   const selectedModule = useMemo(() => moduleConfig(activeRoute), [activeRoute]);
-  const primaryRoutes = useMemo(
-    () =>
-      PRIMARY_ROUTES.map((routeId) => DESKTOP_ROUTES.find((route) => route.id === routeId)).filter(
-        (route): route is (typeof DESKTOP_ROUTES)[number] => Boolean(route)
-      ),
-    []
+  const enabledAddonRouteIds = useMemo(
+    () => ADDON_ROUTE_IDS.filter((routeId) => tenantAddonFlags?.[ADDON_FLAG_BY_ROUTE[routeId]] === true),
+    [tenantAddonFlags]
   );
-  const sideRoutes = useMemo(
-    () =>
-      SIDE_MENU_ROUTES.map((routeId) => DESKTOP_ROUTES.find((route) => route.id === routeId)).filter(
-        (route): route is (typeof DESKTOP_ROUTES)[number] => Boolean(route)
-      ),
-    []
-  );
+  const primaryRoutes = useMemo(() => resolveRoutes(PRIMARY_ROUTES), []);
+  const sideRoutes = useMemo(() => resolveRoutes(SIDE_MENU_ROUTES), []);
+  const addonRoutes = useMemo(() => resolveRoutes(enabledAddonRouteIds), [enabledAddonRouteIds]);
+  const enabledAddonRouteSet = useMemo(() => new Set<AddonRouteId>(enabledAddonRouteIds), [enabledAddonRouteIds]);
 
   const handleRunSync = async (): Promise<void> => {
     setSyncBusy(true);
@@ -303,23 +412,49 @@ function DesktopAppShell(): JSX.Element {
       }
     }));
 
-    const result = state.setupCompleted
-      ? await desktopSyncService.runSync(
-          state,
-          state.setup.deviceId || `${state.setup.branchLabel || 'branch'}-${state.setup.locationLabel || 'location'}`
-        )
-      : await desktopSyncService.previewOffline();
+    let syncStateApplied = false;
+    try {
+      const result = state.setupCompleted
+        ? await desktopSyncService.runSync(
+            state,
+            state.setup.deviceId || `${state.setup.branchLabel || 'branch'}-${state.setup.locationLabel || 'location'}`
+          )
+        : await desktopSyncService.previewOffline();
 
-    const nextSync = {
-      lastSyncedAt: result.timestamp,
-      lastSyncStatus: result.ok ? 'success' as const : 'error' as const,
-      lastSyncMessage: result.message
-    };
-    const nextState = await desktopSettingsService.updateSyncState(nextSync);
-    setState(nextState);
-    await reloadDesktopState();
-    await refreshOutboxCount();
-    setSyncBusy(false);
+      const nextSync = {
+        lastSyncedAt: result.timestamp,
+        lastSyncStatus: result.ok ? 'success' as const : 'error' as const,
+        lastSyncMessage: result.message
+      };
+      setState((prev) => ({
+        ...prev,
+        sync: {
+          ...prev.sync,
+          ...nextSync
+        }
+      }));
+      syncStateApplied = true;
+      const nextState = await desktopSettingsService.updateSyncState(nextSync);
+      setState(nextState);
+      await reloadDesktopState();
+      await refreshOutboxCount();
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Unable to complete desktop sync.';
+      if (!syncStateApplied) {
+        setState((prev) => ({
+          ...prev,
+          sync: {
+            ...prev.sync,
+            lastSyncedAt: new Date().toISOString(),
+            lastSyncStatus: 'error',
+            lastSyncMessage: message
+          }
+        }));
+      }
+      desktopUi.showToast({ tone: 'error', message });
+    } finally {
+      setSyncBusy(false);
+    }
   };
 
   const handleRedownloadBranchData = async (): Promise<void> => {
@@ -341,6 +476,7 @@ function DesktopAppShell(): JSX.Element {
           locationLabel: state.setup.locationLabel
         },
         sync: {
+          ...result.state.sync,
           lastSyncedAt: result.syncedAt,
           lastSyncStatus: 'success',
           lastSyncMessage: `Branch data refreshed. ${result.productCount} products, ${result.customerCount} customers, ${result.lendingCount} lending records, ${result.salesCount} sales, and ${result.transferCount} transfers are cached locally.`
@@ -349,12 +485,12 @@ function DesktopAppShell(): JSX.Element {
       await desktopSettingsService.saveState(nextState);
       setState(nextState);
       await refreshOutboxCount();
-      sileo.success({
-        description: 'Branch data refreshed for this device.'
-      });
+      await reloadTenantAddonFlags();
+      desktopUi.showToast({ tone: 'success', message: 'Branch data refreshed for this device.' });
     } catch (error) {
-      sileo.error({
-        description: error instanceof Error ? error.message : 'Unable to download branch data.'
+      desktopUi.showToast({
+        tone: 'error',
+        message: error instanceof Error ? error.message : 'Unable to download branch data.'
       });
     } finally {
       setBranchDataBusy(false);
@@ -362,22 +498,20 @@ function DesktopAppShell(): JSX.Element {
   };
 
   const handleSwitchCashier = async (): Promise<void> => {
-    const nextState = await desktopSessionService.clearSession(state, { clearPin: true });
+    const nextState = await desktopSessionService.fullSignOut(state, 'switch_cashier');
     setState(nextState);
-    setSideMenuOpen(false);
+    setDrawerOpen(false);
     setActiveRoute('dashboard');
     setLastPrimaryRoute('dashboard');
     setStartupStage('LOGIN');
     setStartupError(null);
     setStartupMessage('Current cashier signed out. Next cashier can sign in on this device.');
     setStartupMessageTone('info');
-    sileo.info({
-      description: 'Current cashier signed out. Next cashier can sign in on this device.'
-    });
+    desktopUi.showToast({ tone: 'info', message: 'Current cashier signed out. Next cashier can sign in on this device.' });
   };
 
   const handleLockSession = (): void => {
-    setSideMenuOpen(false);
+    setDrawerOpen(false);
     setActiveRoute('dashboard');
     setLastPrimaryRoute('dashboard');
     setStartupError(null);
@@ -385,32 +519,26 @@ function DesktopAppShell(): JSX.Element {
       setStartupStage('UNLOCK');
       setStartupMessage('Enter the saved PIN to reopen the app.');
       setStartupMessageTone('info');
-      sileo.info({
-        description: 'Session locked. Use PIN or password to sign back in.'
-      });
+      desktopUi.showToast({ tone: 'info', message: 'Session locked. Use PIN or password to sign back in.' });
       return;
     }
     setStartupStage('LOGIN');
     setStartupMessage('Sign in with password to continue.');
     setStartupMessageTone('info');
-    sileo.info({
-      description: 'Session locked. Sign in with password to continue.'
-    });
+    desktopUi.showToast({ tone: 'info', message: 'Session locked. Sign in with password to continue.' });
   };
 
   const handleFullSignOut = async (): Promise<void> => {
-    const nextState = await desktopSessionService.clearSession(state, { clearPin: true });
+    const nextState = await desktopSessionService.fullSignOut(state, 'full_sign_out');
     setState(nextState);
-    setSideMenuOpen(false);
+    setDrawerOpen(false);
     setActiveRoute('dashboard');
     setLastPrimaryRoute('dashboard');
     setStartupStage('LOGIN');
     setStartupError(null);
     setStartupMessage('Session and PIN unlock were removed from this device.');
     setStartupMessageTone('info');
-    sileo.info({
-      description: 'Session and PIN unlock were removed from this device.'
-    });
+    desktopUi.showToast({ tone: 'info', message: 'Session and PIN unlock were removed from this device.' });
   };
 
   const handleResetLocalData = useCallback(async () => {
@@ -419,19 +547,18 @@ function DesktopAppShell(): JSX.Element {
     autoWalkthroughOpenedRef.current = false;
     setState(DEFAULT_DESKTOP_APP_STATE);
     setPendingOutboxCount(0);
-    setSideMenuOpen(false);
+    setDrawerOpen(false);
     setActiveRoute('dashboard');
     setLastPrimaryRoute('dashboard');
     setSyncBusy(false);
     setBranchDataBusy(false);
     setStartupBusy(false);
     setStartupError(null);
+    setTenantAddonFlags(null);
     setStartupStage('LOGIN');
     setStartupMessage('Local desktop data was cleared. Sign in and download branch data again.');
     setStartupMessageTone('success');
-    sileo.success({
-      description: 'Local desktop data was cleared from this device.'
-    });
+    desktopUi.showToast({ tone: 'success', message: 'Local desktop data was cleared from this device.' });
   }, [tutorialActions]);
 
   const handleStartupLogin = async (
@@ -559,6 +686,7 @@ function DesktopAppShell(): JSX.Element {
           ...setup
         },
         sync: {
+          ...result.state.sync,
           lastSyncedAt: result.syncedAt,
           lastSyncStatus: 'success',
           lastSyncMessage: `Branch data refreshed. ${result.productCount} products, ${result.customerCount} customers, ${result.lendingCount} lending records, ${result.salesCount} sales, and ${result.transferCount} transfers are cached locally.`
@@ -570,6 +698,7 @@ function DesktopAppShell(): JSX.Element {
       setStartupMessage('Setup complete. The app is ready.');
       setStartupMessageTone('info');
       await refreshOutboxCount();
+      await reloadTenantAddonFlags();
     } catch (error) {
       setStartupError(error instanceof Error ? error.message : 'Unable to download branch data.');
     } finally {
@@ -633,6 +762,7 @@ function DesktopAppShell(): JSX.Element {
           locationLabel: claimed.location_name
         },
         sync: {
+          ...result.state.sync,
           lastSyncedAt: result.syncedAt,
           lastSyncStatus: 'success',
           lastSyncMessage: `Quick setup complete. ${result.productCount} products, ${result.customerCount} customers, ${result.lendingCount} lending records, ${result.salesCount} sales, and ${result.transferCount} transfers are cached locally.`
@@ -644,6 +774,7 @@ function DesktopAppShell(): JSX.Element {
       setStartupMessage(`Quick setup complete. Signed in as ${claimed.user_full_name}.`);
       setStartupMessageTone('info');
       await refreshOutboxCount();
+      await reloadTenantAddonFlags();
     } catch (error) {
       setStartupError(error instanceof Error ? error.message : 'Desktop quick setup failed.');
     } finally {
@@ -659,6 +790,7 @@ function DesktopAppShell(): JSX.Element {
           pendingOutboxCount={pendingOutboxCount}
           onRunSync={handleRunSync}
           syncBusy={syncBusy}
+          onOpenReports={() => handleSelectRoute('reports')}
           onStartWalkthrough={handleStartWalkthrough}
         />
       );
@@ -670,6 +802,7 @@ function DesktopAppShell(): JSX.Element {
         reopenedSale={reopenSaleDraft?.sale ?? null}
         reopenedSaleMode={reopenSaleDraft?.mode ?? 'copy'}
         reopenedSaleNonce={reopenSaleNonce}
+        onConsumeReopenedSale={() => setReopenSaleDraft(null)}
         quickAddProductId={quickAddProductId}
         quickAddNonce={quickAddNonce}
         onGoToShift={() => handleSelectRoute('shift')}
@@ -677,6 +810,13 @@ function DesktopAppShell(): JSX.Element {
     );
   } else if (activeRoute === 'expense') {
     content = <ExpenseScreen appState={state} onOutboxChanged={refreshOutboxCount} />;
+  } else if (activeRoute === 'reports') {
+    content = (
+      <CashierReportsScreen
+        appState={state}
+        onStateUpdate={setState}
+      />
+    );
   } else if (activeRoute === 'items') {
     content = (
       <ItemsScreen
@@ -691,6 +831,7 @@ function DesktopAppShell(): JSX.Element {
   } else if (activeRoute === 'customers') {
     content = (
       <CustomersScreen
+        appState={state}
         onReopenSale={(sale) => {
           setReopenSaleDraft({ sale, mode: 'copy' });
           setReopenSaleNonce((value) => value + 1);
@@ -703,6 +844,9 @@ function DesktopAppShell(): JSX.Element {
       <SalesScreen
         appState={state}
         onOutboxChanged={refreshOutboxCount}
+        requestedSaleId={pendingSalesDetailId}
+        requestedSaleNonce={pendingSalesDetailNonce}
+        onConsumeRequestedSale={() => setPendingSalesDetailId(null)}
         onReopenSale={(sale, mode) => {
           setReopenSaleDraft({ sale, mode });
           setReopenSaleNonce((value) => value + 1);
@@ -741,6 +885,30 @@ function DesktopAppShell(): JSX.Element {
         onResetLocalData={handleResetLocalData}
       />
     );
+  } else if (activeRoute === 'purchase-orders') {
+    content =
+      enabledAddonRouteSet.has('purchase-orders') ? (
+        <PurchaseOrdersScreen appState={state} onOutboxChanged={refreshOutboxCount} />
+      ) : (
+        <ModulePlaceholderScreen
+          routeId={activeRoute}
+          title={unavailableAddonConfig('purchase-orders').title}
+          description={unavailableAddonConfig('purchase-orders').description}
+          bullets={unavailableAddonConfig('purchase-orders').bullets}
+        />
+      );
+  } else if (activeRoute === 'delivery-dispatch') {
+    content =
+      enabledAddonRouteSet.has('delivery-dispatch') ? (
+        <DeliveryDispatchScreen appState={state} onOutboxChanged={refreshOutboxCount} />
+      ) : (
+        <ModulePlaceholderScreen
+          routeId={activeRoute}
+          title={unavailableAddonConfig('delivery-dispatch').title}
+          description={unavailableAddonConfig('delivery-dispatch').description}
+          bullets={unavailableAddonConfig('delivery-dispatch').bullets}
+        />
+      );
   } else {
     content = (
       <ModulePlaceholderScreen
@@ -797,74 +965,90 @@ function DesktopAppShell(): JSX.Element {
     );
   }
 
+  const sidebarMode = isWide ? 'rail' : 'drawer';
+  const brandSubtitle = state.setupCompleted
+    ? `${state.setup.branchLabel} / ${state.setup.locationLabel}`
+    : 'Setup pending';
+  const containerWidth = WORKSPACE_ROUTES.has(activeRoute) ? 'wide' : 'standard';
+
   return (
-    <div className="grid min-h-screen grid-cols-1">
+    <div className="grid min-h-screen grid-cols-1 md:grid-cols-[auto_minmax(0,1fr)]">
       <Sidebar
-        routes={sideRoutes}
-        open={sideMenuOpen}
+        primaryRoutes={primaryRoutes}
+        secondaryRoutes={sideRoutes}
+        addonRoutes={addonRoutes}
         activeRoute={activeRoute}
+        mode={sidebarMode}
+        open={drawerOpen}
+        collapsed={railCollapsed}
+        onToggleCollapsed={() => setRailCollapsed((value) => !value)}
         onSelect={handleSelectRoute}
-        onClose={() => setSideMenuOpen(false)}
+        onClose={() => setDrawerOpen(false)}
         setupCompleted={state.setupCompleted}
         syncBusy={syncBusy}
+        syncNeedsAttention={state.sync.lastSyncStatus === 'error'}
         branchDataBusy={branchDataBusy}
-        onBackToMainTabs={() => {
-          handleSelectRoute(lastPrimaryRoute);
-          setSideMenuOpen(false);
-        }}
+        pendingOutboxCount={pendingOutboxCount}
+        lastSyncedAt={state.sync.lastSyncedAt}
         onSyncNow={() => {
           void handleRunSync();
         }}
         onDownloadBranchData={() => {
           void handleRedownloadBranchData();
         }}
-        onSwitchCashier={() => {
-          void handleSwitchCashier();
-        }}
-        onLockSession={handleLockSession}
-        onFullSignOut={() => {
-          void handleFullSignOut();
-        }}
+        brandSubtitle={brandSubtitle}
       />
-      <main className="flex flex-col gap-2.5 px-[18px] pb-[18px] pt-[14px]">
+      <main className="flex min-w-0 flex-col">
         <TopBar
           state={state}
           activeRoute={activeRoute}
-          onOpenMenu={() => setSideMenuOpen(true)}
+          onOpenMenu={() => setDrawerOpen(true)}
           pendingOutboxCount={pendingOutboxCount}
           syncBusy={syncBusy}
           onRunSync={() => {
             void handleRunSync();
           }}
           onOpenRoute={handleSelectRoute}
+          onSwitchCashier={() => {
+            void handleSwitchCashier();
+          }}
+          onLockSession={handleLockSession}
+          onFullSignOut={() => {
+            void handleFullSignOut();
+          }}
           compact={shellScrolled}
+          showMenuButton={!isWide}
         />
-        <div className="flex flex-col gap-[18px] scroll-pb-24 pb-[92px]">{content}</div>
-        <div className="fixed bottom-[10px] left-[18px] right-[18px] z-40 flex gap-2 overflow-x-auto rounded-[28px] border border-[var(--border-soft)] bg-[rgba(255,255,255,0.96)] p-2 shadow-[0_20px_34px_rgba(17,40,58,0.14)] backdrop-blur-[14px]">
+        <div className="flex flex-1 flex-col py-gutter-y pb-[var(--bottomdock-height)] md:pb-gutter-y">
+          <DesktopContainer width={containerWidth}>
+            <div className="desktop-shell-stack">{content}</div>
+          </DesktopContainer>
+        </div>
+        <div className="fixed bottom-[var(--bottomdock-offset)] left-gutter-x right-gutter-x z-rail flex gap-2 overflow-x-auto rounded-xl border border-border-soft bg-surface-strong p-2 shadow-strong backdrop-blur-[14px] md:hidden">
           {primaryRoutes.map((route) => (
             <button
               key={route.id}
               className={[
-                'relative grid min-h-[68px] min-w-0 flex-1 justify-items-center gap-1 rounded-[22px] bg-transparent px-3 py-3 text-center transition-all',
+                'relative grid min-h-[68px] min-w-0 flex-1 justify-items-center gap-1 rounded-lg bg-transparent px-3 py-3 text-center transition-all',
                 route.id === activeRoute
-                  ? 'translate-y-[-4px] scale-[1.01] bg-[linear-gradient(145deg,var(--accent),var(--accent-strong))] text-[#f4f8ff] shadow-[0_14px_26px_rgba(25,118,210,0.24)]'
-                  : 'text-[var(--text)] hover:bg-[rgba(229,238,246,0.88)]'
+                  ? 'translate-y-[-4px] scale-[1.01] bg-[linear-gradient(145deg,var(--accent),var(--accent-strong))] text-[#f4f8ff] shadow-strong'
+                  : 'text-text hover:bg-accent-soft'
               ].join(' ')}
               type="button"
               onClick={() => handleSelectRoute(route.id)}
             >
               <div
                 className={[
-                  'grid h-[34px] w-[34px] place-items-center rounded-[12px] text-[0.98rem] transition-all',
+                  'grid h-[34px] w-[34px] place-items-center rounded-sm text-base transition-all',
                   route.id === activeRoute
-                    ? 'bg-[rgba(255,255,255,0.2)] text-[#f4f8ff]'
-                    : 'bg-[var(--accent-soft)]'
+                    ? 'bg-white/20 text-[#f4f8ff]'
+                    : 'bg-accent-soft'
                 ].join(' ')}
               >
                 {route.icon}
               </div>
-              <span className="text-[0.96rem] font-extrabold">{route.label}</span>
-              <small className={route.id === activeRoute ? 'text-[0.74rem] leading-[1.25] text-[rgba(255,255,255,0.82)]' : 'text-[0.74rem] leading-[1.25] text-[var(--muted)]'}>
+              <span className="text-sm font-extrabold">{route.label}</span>
+              <small className={route.id === activeRoute ? 'text-xs text-white/85' : 'text-xs text-muted'}>
                 {route.hint}
               </small>
             </button>
@@ -889,4 +1073,3 @@ export function App(): JSX.Element {
     </DesktopUiProvider>
   );
 }
-
