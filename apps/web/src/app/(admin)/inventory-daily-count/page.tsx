@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useTablePagination } from '../../../lib/table-pagination';
 import { apiRequest } from '../../../lib/api-client';
+import { getInventoryBreakdownResetKey } from '../../../lib/inventory-breakdown-pagination';
 
 type BranchRecord = {
   id: string;
@@ -272,24 +273,20 @@ function shiftStatusLabel(row: DailyInventoryShiftRow): string {
 }
 
 function InventoryShiftItemBreakdown({ row }: { row: DailyInventoryShiftRow }): JSX.Element {
-  const pageSize = 6;
-  const [currentPage, setCurrentPage] = useState(1);
-
-  useEffect(() => {
-    setCurrentPage(1);
-  }, [row.id]);
-
   const inventoryReport = row.inventory_report;
-  const totalItems = inventoryReport?.rows.length ?? 0;
-  const totalPages = Math.max(1, Math.ceil(totalItems / pageSize));
-  const safePage = Math.min(currentPage, totalPages);
+  const pagination = useTablePagination(inventoryReport?.rows ?? [], {
+    initialPageSize: 6,
+    pageSizeOptions: [6],
+    resetKey: getInventoryBreakdownResetKey(row)
+  });
   const visiblePageButtons = useMemo(
-    () => buildVisiblePageButtons(safePage, totalPages),
-    [safePage, totalPages]
+    () => buildVisiblePageButtons(pagination.page, pagination.totalPages),
+    [pagination.page, pagination.totalPages]
   );
-  const pageRows = inventoryReport?.rows.slice((safePage - 1) * pageSize, safePage * pageSize) ?? [];
-  const startItem = totalItems === 0 ? 0 : (safePage - 1) * pageSize + 1;
-  const endItem = totalItems === 0 ? 0 : Math.min(safePage * pageSize, totalItems);
+  const totalItems = pagination.totalItems;
+  const pageRows = pagination.pageRows;
+  const startItem = pagination.startRow;
+  const endItem = pagination.endRow;
 
   if (!inventoryReport) {
     return (
@@ -399,8 +396,8 @@ function InventoryShiftItemBreakdown({ row }: { row: DailyInventoryShiftRow }): 
         <div className="flex items-center gap-1.5">
           <button
             className="rounded-md border border-slate-300 px-2 py-1 text-xs font-semibold text-slate-700 hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-50 dark:border-slate-600 dark:text-slate-200 dark:hover:bg-slate-800"
-            disabled={safePage === 1}
-            onClick={() => setCurrentPage(1)}
+            disabled={pagination.page === 1}
+            onClick={() => pagination.setPage(1)}
             type="button"
             aria-label="First page"
           >
@@ -411,8 +408,8 @@ function InventoryShiftItemBreakdown({ row }: { row: DailyInventoryShiftRow }): 
           </button>
           <button
             className="rounded-md border border-slate-300 px-2 py-1 text-xs font-semibold text-slate-700 hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-50 dark:border-slate-600 dark:text-slate-200 dark:hover:bg-slate-800"
-            disabled={safePage === 1}
-            onClick={() => setCurrentPage((page) => Math.max(1, page - 1))}
+            disabled={pagination.page === 1}
+            onClick={() => pagination.setPage(pagination.page - 1)}
             type="button"
             aria-label="Previous page"
           >
@@ -424,11 +421,11 @@ function InventoryShiftItemBreakdown({ row }: { row: DailyInventoryShiftRow }): 
             <button
               key={page}
               className={`rounded-md px-2.5 py-1 text-xs font-semibold ${
-                page === safePage
+                page === pagination.page
                   ? 'bg-brandPrimary text-white shadow-sm'
                   : 'border border-slate-300 text-slate-700 hover:bg-slate-100 dark:border-slate-600 dark:text-slate-200 dark:hover:bg-slate-800'
               }`}
-              onClick={() => setCurrentPage(page)}
+              onClick={() => pagination.setPage(page)}
               type="button"
             >
               {page}
@@ -436,8 +433,8 @@ function InventoryShiftItemBreakdown({ row }: { row: DailyInventoryShiftRow }): 
           ))}
           <button
             className="rounded-md border border-slate-300 px-2 py-1 text-xs font-semibold text-slate-700 hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-50 dark:border-slate-600 dark:text-slate-200 dark:hover:bg-slate-800"
-            disabled={safePage === totalPages}
-            onClick={() => setCurrentPage((page) => Math.min(totalPages, page + 1))}
+            disabled={pagination.page >= pagination.totalPages}
+            onClick={() => pagination.setPage(pagination.page + 1)}
             type="button"
             aria-label="Next page"
           >
@@ -447,8 +444,8 @@ function InventoryShiftItemBreakdown({ row }: { row: DailyInventoryShiftRow }): 
           </button>
           <button
             className="rounded-md border border-slate-300 px-2 py-1 text-xs font-semibold text-slate-700 hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-50 dark:border-slate-600 dark:text-slate-200 dark:hover:bg-slate-800"
-            disabled={safePage === totalPages}
-            onClick={() => setCurrentPage(totalPages)}
+            disabled={pagination.page >= pagination.totalPages}
+            onClick={() => pagination.setPage(pagination.totalPages)}
             type="button"
             aria-label="Last page"
           >
