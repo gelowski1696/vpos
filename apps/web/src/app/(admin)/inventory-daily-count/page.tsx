@@ -232,6 +232,40 @@ function renderSnapshotMetric(
   );
 }
 
+type InventoryBreakdownFieldProps = {
+  label: string;
+  title: string;
+  subtitle?: string;
+  titleClassName?: string;
+};
+
+function InventoryBreakdownField({
+  label,
+  title,
+  subtitle,
+  titleClassName
+}: InventoryBreakdownFieldProps): JSX.Element {
+  return (
+    <div className="min-w-0">
+      <div className="text-[0.64rem] font-semibold uppercase tracking-[0.08em] text-slate-500 xl:hidden dark:text-slate-400">
+        {label}
+      </div>
+      <div className="grid gap-0.5">
+        <strong
+          className={`break-words text-[0.82rem] font-semibold ${
+            titleClassName ?? 'text-slate-900 dark:text-slate-100'
+          }`}
+        >
+          {title}
+        </strong>
+        {subtitle ? (
+          <span className="break-words text-[0.72rem] text-slate-500 dark:text-slate-400">{subtitle}</span>
+        ) : null}
+      </div>
+    </div>
+  );
+}
+
 function statusTone(state: DailyInventoryShiftRow['snapshot_state']): string {
   switch (state) {
     case 'complete':
@@ -276,7 +310,7 @@ function InventoryShiftItemBreakdown({ row }: { row: DailyInventoryShiftRow }): 
   const inventoryReport = row.inventory_report;
   const pagination = useTablePagination(inventoryReport?.rows ?? [], {
     initialPageSize: 6,
-    pageSizeOptions: [6],
+    pageSizeOptions: [6, 12, 24, 48],
     resetKey: getInventoryBreakdownResetKey(row)
   });
   const visiblePageButtons = useMemo(
@@ -310,82 +344,75 @@ function InventoryShiftItemBreakdown({ row }: { row: DailyInventoryShiftRow }): 
         </span>
       </div>
 
-      <div className="mt-3 overflow-x-auto">
-        <table className="min-w-full border-collapse text-left text-xs">
-          <thead>
-            <tr className="border-b border-slate-200 text-[0.7rem] uppercase tracking-[0.08em] text-slate-500 dark:border-slate-700 dark:text-slate-400">
-              <th className="pb-2 pr-3 font-semibold">Item</th>
-              <th className="pb-2 pr-3 font-semibold">SKU</th>
-              <th className="pb-2 pr-3 font-semibold">Start</th>
-              <th className="pb-2 pr-3 font-semibold">End</th>
-              <th className="pb-2 pr-3 font-semibold">Delta</th>
-            </tr>
-          </thead>
-          <tbody>
-            {pageRows.length === 0 ? (
-              <tr>
-                <td className="py-4 text-slate-500 dark:text-slate-400" colSpan={5}>
-                  No item breakdown available.
-                </td>
-              </tr>
-            ) : (
-              pageRows.map((item) => (
-                <tr
-                  key={item.product_id}
-                  className={`border-b border-slate-100 align-top last:border-b-0 dark:border-slate-700/70 ${item.changed ? 'bg-blue-50/40 dark:bg-blue-950/20' : ''}`}
-                >
-                  <td className="py-3 pr-3">
-                    <div className="grid gap-0.5">
-                      <strong className="text-[0.84rem] text-slate-900 dark:text-slate-100">{item.product_name}</strong>
-                      <span className="text-[0.74rem] text-slate-500 dark:text-slate-400">{item.category}</span>
-                    </div>
-                  </td>
-                  <td className="py-3 pr-3 font-mono text-[0.76rem] text-slate-500 dark:text-slate-400">{item.sku}</td>
-                  <td className="py-3 pr-3">
-                    <div className="grid gap-0.5">
-                      <strong className="text-[0.8rem] text-slate-900 dark:text-slate-100">
-                        {item.is_lpg
-                          ? `Full ${formatCount(item.start_qty_full)} / Empty ${formatCount(item.start_qty_empty)}`
-                          : `On hand ${formatCount(item.start_qty_on_hand)}`}
-                      </strong>
-                      <span className="text-[0.72rem] text-slate-500 dark:text-slate-400">
-                        {item.is_lpg
-                          ? `Captured ${formatDateTime(row.opening_snapshot_summary?.captured_at)}`
-                          : `Start ${formatCount(item.start_qty_on_hand)}`}
-                      </span>
-                    </div>
-                  </td>
-                  <td className="py-3 pr-3">
-                    <div className="grid gap-0.5">
-                      <strong className="text-[0.8rem] text-slate-900 dark:text-slate-100">
-                        {item.is_lpg
-                          ? `Full ${formatCount(item.end_qty_full)} / Empty ${formatCount(item.end_qty_empty)}`
-                          : `On hand ${formatCount(item.end_qty_on_hand)}`}
-                      </strong>
-                      <span className="text-[0.72rem] text-slate-500 dark:text-slate-400">
-                        {item.is_lpg
-                          ? `Captured ${formatDateTime(row.closing_snapshot_summary?.captured_at)}`
-                          : `End ${formatCount(item.end_qty_on_hand)}`}
-                      </span>
-                    </div>
-                  </td>
-                  <td className="py-3 pr-3">
-                    <div className="grid gap-0.5">
-                      <strong className="text-[0.8rem] text-slate-900 dark:text-slate-100">
-                        {item.is_lpg
-                          ? `Full ${formatSignedCount(item.delta_qty_full)} / Empty ${formatSignedCount(item.delta_qty_empty)}`
-                          : `On hand ${formatSignedCount(item.delta_qty_on_hand)}`}
-                      </strong>
-                      <span className="text-[0.72rem] text-slate-500 dark:text-slate-400">
-                        {item.changed ? 'Changed' : 'Unchanged'}
-                      </span>
-                    </div>
-                  </td>
-                </tr>
-              ))
-            )}
-          </tbody>
-        </table>
+      <div className="mt-3 overflow-hidden rounded-xl border border-slate-200 bg-white/80 shadow-sm dark:border-slate-700 dark:bg-slate-900/40">
+        <div className="hidden xl:grid xl:grid-cols-[minmax(0,2.1fr)_minmax(0,0.95fr)_minmax(0,1.25fr)_minmax(0,1.25fr)_minmax(0,1.2fr)] border-b border-slate-200 px-3 py-2 text-[0.7rem] font-semibold uppercase tracking-[0.08em] text-slate-500 dark:border-slate-700 dark:text-slate-400">
+          <span>Item</span>
+          <span>SKU</span>
+          <span>Start</span>
+          <span>End</span>
+          <span>Delta</span>
+        </div>
+
+        <div className="divide-y divide-slate-100 dark:divide-slate-700/70">
+          {pageRows.length === 0 ? (
+            <div className="px-3 py-4 text-sm text-slate-500 dark:text-slate-400">
+              No item breakdown available.
+            </div>
+          ) : (
+            pageRows.map((item) => (
+              <article
+                key={item.product_id}
+                className={`grid gap-3 px-3 py-3 text-left sm:grid-cols-2 xl:grid-cols-[minmax(0,2.1fr)_minmax(0,0.95fr)_minmax(0,1.25fr)_minmax(0,1.25fr)_minmax(0,1.2fr)] xl:items-start ${item.changed ? 'bg-blue-50/40 dark:bg-blue-950/20' : ''}`}
+              >
+                <InventoryBreakdownField
+                  label="Item"
+                  title={item.product_name}
+                  subtitle={item.category}
+                />
+                <InventoryBreakdownField
+                  label="SKU"
+                  title={item.sku}
+                  titleClassName="break-all font-mono text-[0.76rem] text-slate-500 dark:text-slate-400"
+                />
+                <InventoryBreakdownField
+                  label="Start"
+                  title={
+                    item.is_lpg
+                      ? `Full ${formatCount(item.start_qty_full)} / Empty ${formatCount(item.start_qty_empty)}`
+                      : `On hand ${formatCount(item.start_qty_on_hand)}`
+                  }
+                  subtitle={
+                    item.is_lpg
+                      ? `Captured ${formatDateTime(row.opening_snapshot_summary?.captured_at)}`
+                      : `Start ${formatCount(item.start_qty_on_hand)}`
+                  }
+                />
+                <InventoryBreakdownField
+                  label="End"
+                  title={
+                    item.is_lpg
+                      ? `Full ${formatCount(item.end_qty_full)} / Empty ${formatCount(item.end_qty_empty)}`
+                      : `On hand ${formatCount(item.end_qty_on_hand)}`
+                  }
+                  subtitle={
+                    item.is_lpg
+                      ? `Captured ${formatDateTime(row.closing_snapshot_summary?.captured_at)}`
+                      : `End ${formatCount(item.end_qty_on_hand)}`
+                  }
+                />
+                <InventoryBreakdownField
+                  label="Delta"
+                  title={
+                    item.is_lpg
+                      ? `Full ${formatSignedCount(item.delta_qty_full)} / Empty ${formatSignedCount(item.delta_qty_empty)}`
+                      : `On hand ${formatSignedCount(item.delta_qty_on_hand)}`
+                  }
+                  subtitle={item.changed ? 'Changed' : 'Unchanged'}
+                />
+              </article>
+            ))
+          )}
+        </div>
       </div>
 
       <div className="mt-3 flex flex-wrap items-center justify-between gap-2 border-t border-slate-200 pt-3 text-xs dark:border-slate-700">
@@ -393,67 +420,83 @@ function InventoryShiftItemBreakdown({ row }: { row: DailyInventoryShiftRow }): 
           Showing <strong>{startItem}</strong> to <strong>{endItem}</strong> of{' '}
           <strong>{totalItems}</strong> item{totalItems === 1 ? '' : 's'}
         </div>
-        <div className="flex items-center gap-1.5">
-          <button
-            className="rounded-md border border-slate-300 px-2 py-1 text-xs font-semibold text-slate-700 hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-50 dark:border-slate-600 dark:text-slate-200 dark:hover:bg-slate-800"
-            disabled={pagination.page === 1}
-            onClick={() => pagination.setPage(1)}
-            type="button"
-            aria-label="First page"
-          >
-            <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-              <path d="M11 17l-5-5 5-5" />
-              <path d="M18 17l-5-5 5-5" />
-            </svg>
-          </button>
-          <button
-            className="rounded-md border border-slate-300 px-2 py-1 text-xs font-semibold text-slate-700 hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-50 dark:border-slate-600 dark:text-slate-200 dark:hover:bg-slate-800"
-            disabled={pagination.page === 1}
-            onClick={() => pagination.setPage(pagination.page - 1)}
-            type="button"
-            aria-label="Previous page"
-          >
-            <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-              <path d="M15 18l-6-6 6-6" />
-            </svg>
-          </button>
-          {visiblePageButtons.map((page) => (
-            <button
-              key={page}
-              className={`rounded-md px-2.5 py-1 text-xs font-semibold ${
-                page === pagination.page
-                  ? 'bg-brandPrimary text-white shadow-sm'
-                  : 'border border-slate-300 text-slate-700 hover:bg-slate-100 dark:border-slate-600 dark:text-slate-200 dark:hover:bg-slate-800'
-              }`}
-              onClick={() => pagination.setPage(page)}
-              type="button"
+        <div className="flex flex-wrap items-center justify-end gap-2">
+          <label className="flex items-center gap-2 text-slate-500 dark:text-slate-400">
+            <span>Rows per page</span>
+            <select
+              className="rounded-md border border-slate-300 bg-white px-2 py-1 text-xs text-slate-700 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-200"
+              onChange={(event) => pagination.setPageSize(Number.parseInt(event.target.value, 10))}
+              value={String(pagination.pageSize)}
             >
-              {page}
+              {pagination.pageSizeOptions.map((value) => (
+                <option key={value} value={value}>
+                  {value}
+                </option>
+              ))}
+            </select>
+          </label>
+          <div className="flex items-center gap-1.5">
+            <button
+              className="rounded-md border border-slate-300 px-2 py-1 text-xs font-semibold text-slate-700 hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-50 dark:border-slate-600 dark:text-slate-200 dark:hover:bg-slate-800"
+              disabled={pagination.page === 1}
+              onClick={() => pagination.setPage(1)}
+              type="button"
+              aria-label="First page"
+            >
+              <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                <path d="M11 17l-5-5 5-5" />
+                <path d="M18 17l-5-5 5-5" />
+              </svg>
             </button>
-          ))}
-          <button
-            className="rounded-md border border-slate-300 px-2 py-1 text-xs font-semibold text-slate-700 hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-50 dark:border-slate-600 dark:text-slate-200 dark:hover:bg-slate-800"
-            disabled={pagination.page >= pagination.totalPages}
-            onClick={() => pagination.setPage(pagination.page + 1)}
-            type="button"
-            aria-label="Next page"
-          >
-            <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-              <path d="M9 18l6-6-6-6" />
-            </svg>
-          </button>
-          <button
-            className="rounded-md border border-slate-300 px-2 py-1 text-xs font-semibold text-slate-700 hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-50 dark:border-slate-600 dark:text-slate-200 dark:hover:bg-slate-800"
-            disabled={pagination.page >= pagination.totalPages}
-            onClick={() => pagination.setPage(pagination.totalPages)}
-            type="button"
-            aria-label="Last page"
-          >
-            <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-              <path d="M13 17l5-5-5-5" />
-              <path d="M6 17l5-5-5-5" />
-            </svg>
-          </button>
+            <button
+              className="rounded-md border border-slate-300 px-2 py-1 text-xs font-semibold text-slate-700 hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-50 dark:border-slate-600 dark:text-slate-200 dark:hover:bg-slate-800"
+              disabled={pagination.page === 1}
+              onClick={() => pagination.setPage(pagination.page - 1)}
+              type="button"
+              aria-label="Previous page"
+            >
+              <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                <path d="M15 18l-6-6 6-6" />
+              </svg>
+            </button>
+            {visiblePageButtons.map((page) => (
+              <button
+                key={page}
+                className={`rounded-md px-2.5 py-1 text-xs font-semibold ${
+                  page === pagination.page
+                    ? 'bg-brandPrimary text-white shadow-sm'
+                    : 'border border-slate-300 text-slate-700 hover:bg-slate-100 dark:border-slate-600 dark:text-slate-200 dark:hover:bg-slate-800'
+                }`}
+                onClick={() => pagination.setPage(page)}
+                type="button"
+              >
+                {page}
+              </button>
+            ))}
+            <button
+              className="rounded-md border border-slate-300 px-2 py-1 text-xs font-semibold text-slate-700 hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-50 dark:border-slate-600 dark:text-slate-200 dark:hover:bg-slate-800"
+              disabled={pagination.page >= pagination.totalPages}
+              onClick={() => pagination.setPage(pagination.page + 1)}
+              type="button"
+              aria-label="Next page"
+            >
+              <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                <path d="M9 18l6-6-6-6" />
+              </svg>
+            </button>
+            <button
+              className="rounded-md border border-slate-300 px-2 py-1 text-xs font-semibold text-slate-700 hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-50 dark:border-slate-600 dark:text-slate-200 dark:hover:bg-slate-800"
+              disabled={pagination.page >= pagination.totalPages}
+              onClick={() => pagination.setPage(pagination.totalPages)}
+              type="button"
+              aria-label="Last page"
+            >
+              <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                <path d="M13 17l5-5-5-5" />
+                <path d="M6 17l5-5-5-5" />
+              </svg>
+            </button>
+          </div>
         </div>
       </div>
     </section>
