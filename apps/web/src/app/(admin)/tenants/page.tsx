@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useState } from 'react';
 import { TablePaginationControls } from '../../../components/table-pagination-controls';
+import { TenantOperationalResetDialog } from '../../../components/tenant-operational-reset-dialog';
 import { apiRequest } from '../../../lib/api-client';
 import { useTablePagination } from '../../../lib/table-pagination';
 import { toastError, toastInfo, toastSuccess } from '../../../lib/web-toast';
@@ -90,7 +91,7 @@ type OverrideFormState = {
   reason: string;
 };
 
-type DialogMode = 'bindings' | 'override' | 'addons' | 'suspend' | 'reactivate' | 'provision' | 'delete' | null;
+type DialogMode = 'bindings' | 'override' | 'addons' | 'suspend' | 'reactivate' | 'provision' | 'delete' | 'reset' | null;
 
 type ProvisionFormState = {
   client_id: string;
@@ -225,6 +226,8 @@ export default function TenantsPage(): JSX.Element {
   const [bindings, setBindings] = useState<TenantBindings | null>(null);
   const [selectedSubscriptionId, setSelectedSubscriptionId] = useState('');
   const [deleteConfirmCode, setDeleteConfirmCode] = useState('');
+  const [resetConfirmCode, setResetConfirmCode] = useState('');
+  const [resetNotes, setResetNotes] = useState('');
   const [provisionForm, setProvisionForm] = useState<ProvisionFormState>({
     client_id: '',
     company_name: '',
@@ -238,20 +241,16 @@ export default function TenantsPage(): JSX.Element {
     admin_password: ''
   });
 
-  const savingMessage =
-    dialogMode === 'provision'
-      ? 'Provisioning tenant...'
-      : dialogMode === 'override'
-        ? 'Saving tenant changes...'
-        : dialogMode === 'addons'
-          ? 'Saving add-ons...'
-        : dialogMode === 'suspend'
-          ? 'Suspending tenant...'
-        : dialogMode === 'reactivate'
-          ? 'Reactivating tenant...'
-          : dialogMode === 'delete'
-            ? 'Deleting tenant...'
-            : 'Processing request...';
+  const savingMessage = (() => {
+    if (dialogMode === 'provision') return 'Provisioning tenant...';
+    if (dialogMode === 'override') return 'Saving tenant changes...';
+    if (dialogMode === 'addons') return 'Saving add-ons...';
+    if (dialogMode === 'suspend') return 'Suspending tenant...';
+    if (dialogMode === 'reactivate') return 'Reactivating tenant...';
+    if (dialogMode === 'reset') return 'Resetting tenant data...';
+    if (dialogMode === 'delete') return 'Deleting tenant...';
+    return 'Processing request...';
+  })();
 
   async function loadTenants(): Promise<void> {
     setLoading(true);
@@ -392,6 +391,14 @@ export default function TenantsPage(): JSX.Element {
     setDeleteConfirmCode('');
   }
 
+  function openReset(row: TenantSummary): void {
+    setError(null);
+    setSelected(row);
+    setDialogMode('reset');
+    setResetConfirmCode('');
+    setResetNotes('');
+  }
+
   function closeDialog(): void {
     setDialogMode(null);
     setSelected(null);
@@ -402,6 +409,8 @@ export default function TenantsPage(): JSX.Element {
     setSuspendGraceUntil('');
     setSelectedSubscriptionId('');
     setDeleteConfirmCode('');
+    setResetConfirmCode('');
+    setResetNotes('');
     setProvisionForm({
       client_id: '',
       company_name: '',
@@ -633,6 +642,39 @@ export default function TenantsPage(): JSX.Element {
       const message = submitError instanceof Error ? submitError.message : 'Failed to delete tenant';
       setError(message);
       toastError('Failed to delete tenant', { description: message });
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function submitResetOperationalData(): Promise<void> {
+    if (!selected) {
+      return;
+    }
+    if (resetConfirmCode.trim().toUpperCase() !== selected.company_code.trim().toUpperCase()) {
+      const message = `Type "${selected.company_code}" to confirm reset.`;
+      setError(message);
+      toastInfo('Reset confirmation required', { description: message });
+      return;
+    }
+
+    setSaving(true);
+    setError(null);
+    try {
+      await apiRequest(`/platform/owner/tenants/${selected.company_id}/reset-operational-data`, {
+        method: 'POST',
+        body: {
+          confirmation: resetConfirmCode.trim(),
+          reason: resetNotes.trim() || undefined
+        }
+      });
+      toastSuccess('Tenant operational data reset', { description: selected.company_name });
+      closeDialog();
+      await loadTenants();
+    } catch (submitError) {
+      const message = submitError instanceof Error ? submitError.message : 'Failed to reset tenant operational data';
+      setError(message);
+      toastError('Failed to reset tenant operational data', { description: message });
     } finally {
       setSaving(false);
     }
@@ -873,6 +915,13 @@ export default function TenantsPage(): JSX.Element {
                             Reactivate
                           </button>
                           <button
+                            className="rounded-lg border border-rose-300 px-2.5 py-1 text-xs font-semibold text-rose-700 hover:bg-rose-50 dark:border-rose-700 dark:text-rose-300 dark:hover:bg-rose-950/40"
+                            onClick={() => openReset(row)}
+                            type="button"
+                          >
+                            Reset Data
+                          </button>
+                          <button
                             className="rounded-lg border border-rose-500 bg-rose-600 px-2.5 py-1 text-xs font-semibold text-white hover:bg-rose-500 dark:border-rose-700"
                             onClick={() => openDelete(row)}
                             type="button"
@@ -965,6 +1014,7 @@ export default function TenantsPage(): JSX.Element {
                     <button className="rounded-lg border border-indigo-300 px-2.5 py-1 text-xs font-semibold text-indigo-700 dark:border-indigo-700 dark:text-indigo-300" onClick={() => openAddons(row)} type="button">Add-ons</button>
                     <button className="rounded-lg border border-rose-300 px-2.5 py-1 text-xs font-semibold text-rose-700 dark:border-rose-700 dark:text-rose-300" onClick={() => openSuspend(row)} type="button">Suspend</button>
                     <button className="rounded-lg border border-emerald-300 px-2.5 py-1 text-xs font-semibold text-emerald-700 dark:border-emerald-700 dark:text-emerald-300" onClick={() => openReactivate(row)} type="button">Reactivate</button>
+                    <button className="rounded-lg border border-rose-300 px-2.5 py-1 text-xs font-semibold text-rose-700 dark:border-rose-700 dark:text-rose-300" onClick={() => openReset(row)} type="button">Reset Data</button>
                     <button className="rounded-lg border border-rose-500 bg-rose-600 px-2.5 py-1 text-xs font-semibold text-white dark:border-rose-700" onClick={() => openDelete(row)} type="button">Delete</button>
                   </div>
                 </article>
@@ -1450,6 +1500,22 @@ export default function TenantsPage(): JSX.Element {
             </div>
           </section>
         </div>
+      ) : null}
+
+      {dialogMode === 'reset' && selected ? (
+        <TenantOperationalResetDialog
+          companyCode={selected.company_code}
+          companyName={selected.company_name}
+          confirmationValue={resetConfirmCode}
+          error={error}
+          notesValue={resetNotes}
+          onClose={closeDialog}
+          onConfirm={() => void submitResetOperationalData()}
+          onConfirmationChange={setResetConfirmCode}
+          onNotesChange={setResetNotes}
+          open
+          saving={saving}
+        />
       ) : null}
 
       {dialogMode === 'delete' && selected ? (

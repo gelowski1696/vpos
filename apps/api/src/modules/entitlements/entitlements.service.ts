@@ -14,6 +14,7 @@ import {
   EntitlementBranchMode,
   EntitlementInventoryMode,
   EntitlementStatus,
+  CylinderStatus,
   Prisma,
   PrismaClient,
   TenancyDatastoreMode,
@@ -417,6 +418,49 @@ type OwnerDeleteTenantResult = {
   tenancy_mode: TenancyDatastoreMode;
   datastore_ref: string | null;
   dedicated_database_dropped: boolean;
+};
+
+type OwnerOperationalResetInput = {
+  confirmation?: string;
+  reason?: string;
+  actor_id?: string | null;
+  actor_company_id?: string | null;
+};
+
+type OwnerOperationalResetResult = {
+  company_id: string;
+  company_code: string;
+  company_name: string;
+  client_id: string;
+  tenancy_mode: TenancyDatastoreMode;
+  datastore_ref: string | null;
+  reset_at: string;
+  reason: string | null;
+  confirmation: string;
+  rewardRedemptions: number;
+  customerPoints: number;
+  customerPayments: number;
+  depositLedger: number;
+  lpgItemActions: number;
+  lending: number;
+  deliveryEvents: number;
+  deliveries: number;
+  inventoryLedgers: number;
+  stockEvents: number;
+  saleEvents: number;
+  userBehaviorEvents: number;
+  syncReviews: number;
+  syncCursors: number;
+  idempotencyKeys: number;
+  pettyCash: number;
+  sales: number;
+  transfers: number;
+  shifts: number;
+  cylinderEvents: number;
+  inventoryBalances: number;
+  cylinderBalances: number;
+  customerBalancesReset: number;
+  cylinderStatusesReset: number;
 };
 
 @Injectable()
@@ -3348,6 +3392,153 @@ export class EntitlementsService {
     };
   }
 
+  async ownerResetOperationalData(
+    companyId: string,
+    input: OwnerOperationalResetInput = {}
+  ): Promise<OwnerOperationalResetResult> {
+    const targetCompanyId = companyId.trim();
+    if (!targetCompanyId) {
+      throw new BadRequestException('company_id is required');
+    }
+
+    const confirmation = String(input.confirmation ?? '').trim();
+    if (!confirmation) {
+      throw new BadRequestException('confirmation is required');
+    }
+
+    if (!this.dbEnabled()) {
+      const existing = this.memoryTenantProfiles.get(targetCompanyId);
+      if (!existing) {
+        throw new NotFoundException('Tenant company not found');
+      }
+      if (input.actor_company_id && input.actor_company_id === targetCompanyId) {
+        throw new BadRequestException('You cannot reset your own tenant context');
+      }
+      if (existing.externalClientId === 'DEMO' || existing.companyCode === 'DEMO') {
+        throw new BadRequestException('DEMO tenant cannot be reset');
+      }
+      if (this.isPlatformControlCompany(existing.companyCode, existing.externalClientId)) {
+        throw new BadRequestException('Platform control company cannot be reset');
+      }
+      if (confirmation.toUpperCase() !== existing.companyCode.toUpperCase()) {
+        throw new BadRequestException(`Type "${existing.companyCode}" to confirm reset`);
+      }
+
+      const freezeMarker = await this.setTenantWriteFreeze(targetCompanyId, {
+        operation: 'RESET_OPERATIONAL_DATA',
+        reason: input.reason ?? null
+      });
+      try {
+        await this.clearTenantWriteFreeze(targetCompanyId, freezeMarker, 'reset_completed_memory');
+      } catch {
+        // Keep memory-mode reset best-effort and do not mask the reset result.
+      }
+
+      return {
+        company_id: targetCompanyId,
+        company_code: existing.companyCode,
+        company_name: existing.companyName,
+        client_id: existing.externalClientId,
+        tenancy_mode: TenancyDatastoreMode.SHARED_DB,
+        datastore_ref: null,
+        reset_at: new Date().toISOString(),
+        reason: input.reason ?? null,
+        confirmation: existing.companyCode,
+        rewardRedemptions: 0,
+        customerPoints: 0,
+        customerPayments: 0,
+        depositLedger: 0,
+        lpgItemActions: 0,
+        lending: 0,
+        deliveryEvents: 0,
+        deliveries: 0,
+        inventoryLedgers: 0,
+        stockEvents: 0,
+        saleEvents: 0,
+        userBehaviorEvents: 0,
+        syncReviews: 0,
+        syncCursors: 0,
+        idempotencyKeys: 0,
+        pettyCash: 0,
+        sales: 0,
+        transfers: 0,
+        shifts: 0,
+        cylinderEvents: 0,
+        inventoryBalances: 0,
+        cylinderBalances: 0,
+        customerBalancesReset: 0,
+        cylinderStatusesReset: 0
+      };
+    }
+
+    const company = await this.prisma!.company.findUnique({
+      where: { id: targetCompanyId },
+      select: {
+        id: true,
+        code: true,
+        name: true,
+        externalClientId: true,
+        datastoreMode: true,
+        datastoreRef: true
+      }
+    });
+    if (!company) {
+      throw new NotFoundException('Tenant company not found');
+    }
+    if (input.actor_company_id && input.actor_company_id === company.id) {
+      throw new BadRequestException('You cannot reset your own tenant context');
+    }
+    if (company.externalClientId === 'DEMO' || company.code === 'DEMO') {
+      throw new BadRequestException('DEMO tenant cannot be reset');
+    }
+    if (this.isPlatformControlCompany(company.code, company.externalClientId)) {
+      throw new BadRequestException('Platform control company cannot be reset');
+    }
+    if (confirmation.toUpperCase() !== company.code.toUpperCase()) {
+      throw new BadRequestException(`Type "${company.code}" to confirm reset`);
+    }
+
+    const freezeMarker = await this.setTenantWriteFreeze(targetCompanyId, {
+      operation: 'RESET_OPERATIONAL_DATA',
+      reason: input.reason ?? null
+    });
+
+    try {
+      const binding =
+        company.datastoreMode === TenancyDatastoreMode.DEDICATED_DB
+          ? this.tenantRouter
+            ? await this.tenantRouter.forCompany(targetCompanyId)
+            : null
+          : null;
+      if (company.datastoreMode === TenancyDatastoreMode.DEDICATED_DB && !binding) {
+        throw new ServiceUnavailableException('Tenant router is unavailable for dedicated tenant reset');
+      }
+
+      const reset = await this.resetOperationalRows(
+        (binding?.client ?? this.prisma!) as PrismaClient | PrismaService,
+        targetCompanyId
+      );
+
+      await this.clearTenantWriteFreeze(targetCompanyId, freezeMarker, 'reset_completed');
+
+      return {
+        company_id: company.id,
+        company_code: company.code,
+        company_name: company.name,
+        client_id: company.externalClientId ?? company.code,
+        tenancy_mode: company.datastoreMode,
+        datastore_ref: company.datastoreRef ?? null,
+        reset_at: new Date().toISOString(),
+        reason: input.reason ?? null,
+        confirmation: company.code,
+        ...reset
+      };
+    } catch (error) {
+      await this.clearTenantWriteFreeze(targetCompanyId, freezeMarker, 'reset_failed');
+      throw error;
+    }
+  }
+
   private async createDedicatedDryRunClient(
     companyId: string,
     datastoreRef: string | null,
@@ -3464,6 +3655,129 @@ export class EntitlementsService {
         error: this.toSafeErrorMessage(error)
       };
     }
+  }
+
+  private async resetOperationalRows(
+    client: PrismaClient | PrismaService,
+    companyId: string
+  ): Promise<{
+    rewardRedemptions: number;
+    customerPoints: number;
+    customerPayments: number;
+    depositLedger: number;
+    lpgItemActions: number;
+    lending: number;
+    deliveryEvents: number;
+    deliveries: number;
+    inventoryLedgers: number;
+    stockEvents: number;
+    saleEvents: number;
+    userBehaviorEvents: number;
+    syncReviews: number;
+    syncCursors: number;
+    idempotencyKeys: number;
+    pettyCash: number;
+    sales: number;
+    transfers: number;
+    shifts: number;
+    cylinderEvents: number;
+    inventoryBalances: number;
+    cylinderBalances: number;
+    customerBalancesReset: number;
+    cylinderStatusesReset: number;
+  }> {
+    return client.$transaction(
+      async (tx) => {
+        const result = {
+          rewardRedemptions: 0,
+          customerPoints: 0,
+          customerPayments: 0,
+          depositLedger: 0,
+          lpgItemActions: 0,
+          lending: 0,
+          deliveryEvents: 0,
+          deliveries: 0,
+          inventoryLedgers: 0,
+          stockEvents: 0,
+          saleEvents: 0,
+          userBehaviorEvents: 0,
+          syncReviews: 0,
+          syncCursors: 0,
+          idempotencyKeys: 0,
+          pettyCash: 0,
+          sales: 0,
+          transfers: 0,
+          shifts: 0,
+          cylinderEvents: 0,
+          inventoryBalances: 0,
+          cylinderBalances: 0,
+          customerBalancesReset: 0,
+          cylinderStatusesReset: 0
+        };
+
+        result.rewardRedemptions = (await tx.customerRewardRedemption.deleteMany({ where: { companyId } })).count;
+        result.customerPoints = (await tx.customerPointsLedger.deleteMany({ where: { companyId } })).count;
+        result.customerPayments = (await tx.customerPayment.deleteMany({ where: { companyId } })).count;
+        result.depositLedger = (await tx.depositLiabilityLedger.deleteMany({ where: { companyId } })).count;
+        result.lpgItemActions = (await tx.lpgItemServiceAction.deleteMany({ where: { companyId } })).count;
+        result.lending = (await tx.lendingTransaction.deleteMany({ where: { companyId } })).count;
+        result.deliveryEvents = (await tx.eventDeliveryPerformance.deleteMany({ where: { companyId } })).count;
+        result.deliveries = (await tx.deliveryOrder.deleteMany({ where: { companyId } })).count;
+        result.inventoryLedgers = (await tx.inventoryLedger.deleteMany({ where: { companyId } })).count;
+        result.stockEvents = (await tx.eventStockMovement.deleteMany({ where: { companyId } })).count;
+        result.saleEvents = (await tx.eventSales.deleteMany({ where: { companyId } })).count;
+        result.userBehaviorEvents = (await tx.eventUserBehavior.deleteMany({ where: { companyId } })).count;
+        result.syncReviews = (await tx.syncReview.deleteMany({ where: { companyId } })).count;
+        result.syncCursors = (await tx.syncCursor.deleteMany({ where: { companyId } })).count;
+        result.idempotencyKeys = (await tx.idempotencyKey.deleteMany({ where: { companyId } })).count;
+        result.pettyCash = (await tx.pettyCashEntry.deleteMany({ where: { companyId } })).count;
+        result.sales = (await tx.sale.deleteMany({ where: { companyId } })).count;
+        result.transfers = (await tx.stockTransfer.deleteMany({ where: { companyId } })).count;
+        result.shifts = (await tx.shift.deleteMany({ where: { companyId } })).count;
+        result.cylinderEvents = (await tx.cylinderEvent.deleteMany({ where: { companyId } })).count;
+
+        result.inventoryBalances = (
+          await tx.inventoryBalance.updateMany({
+            where: { companyId },
+            data: {
+              qtyOnHand: new Prisma.Decimal(0),
+              qtyFull: new Prisma.Decimal(0),
+              qtyEmpty: new Prisma.Decimal(0),
+              avgCost: new Prisma.Decimal(0)
+            }
+          })
+        ).count;
+
+        result.cylinderBalances = (
+          await tx.cylinderBalance.updateMany({
+            where: { companyId },
+            data: { qtyFull: 0, qtyEmpty: 0 }
+          })
+        ).count;
+
+        result.customerBalancesReset = (
+          await tx.customer.updateMany({
+            where: { companyId },
+            data: {
+              depositBalance: new Prisma.Decimal(0),
+              pointsBalance: 0
+            }
+          })
+        ).count;
+
+        result.cylinderStatusesReset = (
+          await tx.cylinder.updateMany({
+            where: { companyId },
+            data: { status: CylinderStatus.DISPOSED }
+          })
+        ).count;
+
+        return result;
+      },
+      {
+        isolationLevel: Prisma.TransactionIsolationLevel.Serializable
+      }
+    );
   }
 
   private async resolveDedicatedUrlForDryRun(

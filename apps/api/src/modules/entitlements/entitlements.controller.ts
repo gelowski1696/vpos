@@ -510,6 +510,56 @@ export class EntitlementsController {
   }
 
   @Roles('platform_owner')
+  @Post('owner/tenants/:companyId/reset-operational-data')
+  async resetTenantOperationalData(
+    @Req()
+    req: {
+      user?: { sub?: string; company_id?: string };
+      companyId?: string;
+    },
+    @Param('companyId') companyId: string,
+    @Body()
+    payload: {
+      confirmation?: string;
+      reason?: string;
+    }
+  ) {
+    const actorCompanyId = this.requireCompanyId(req);
+    const result = await this.entitlementsService.ownerResetOperationalData(companyId, {
+      confirmation: payload.confirmation,
+      reason: payload.reason,
+      actor_id: req.user?.sub ?? null,
+      actor_company_id: actorCompanyId
+    });
+
+    await this.auditService.record({
+      companyId: actorCompanyId,
+      userId: req.user?.sub ?? null,
+      action: 'PLATFORM_TENANT_OPERATIONS_RESET',
+      entity: 'Company',
+      entityId: result.company_id,
+      metadata: {
+        reason: payload.reason ?? null,
+        target_company_code: result.company_code,
+        target_company_name: result.company_name,
+        target_client_id: result.client_id,
+        tenancy_mode: result.tenancy_mode,
+        datastore_ref: result.datastore_ref,
+        reward_redemptions: result.rewardRedemptions,
+        customer_points: result.customerPoints,
+        customer_payments: result.customerPayments,
+        deliveries: result.deliveries,
+        sales: result.sales,
+        shifts: result.shifts,
+        inventory_balances: result.inventoryBalances,
+        cylinder_statuses_reset: result.cylinderStatusesReset
+      }
+    });
+
+    return result;
+  }
+
+  @Roles('platform_owner')
   @Delete('owner/tenants/:companyId')
   async deleteTenant(
     @Req()
