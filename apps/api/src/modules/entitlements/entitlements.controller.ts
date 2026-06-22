@@ -23,6 +23,63 @@ export class EntitlementsController {
     return this.entitlementsService.getCurrentWithAddons(this.requireCompanyId(req));
   }
 
+  @Roles('admin', 'owner', 'platform_owner', 'supervisor', 'cashier', 'driver', 'helper')
+  @Get('pos-settings/current')
+  getCurrentPosSettings(
+    @Req()
+    req: {
+      user?: { company_id?: string };
+      companyId?: string;
+    }
+  ) {
+    return this.entitlementsService.getCurrentPosSettings(this.requireCompanyId(req));
+  }
+
+  @Roles('admin', 'owner', 'platform_owner')
+  @Post('pos-settings/current')
+  async updateCurrentPosSettings(
+    @Req()
+    req: {
+      user?: { sub?: string; company_id?: string };
+      companyId?: string;
+    },
+    @Body()
+    payload: {
+      reports_enabled?: boolean;
+      inventory_reports_enabled?: boolean;
+      customers_enabled?: boolean;
+      items_enabled?: boolean;
+      transfer_enabled?: boolean;
+      lending_enabled?: boolean;
+      expense_enabled?: boolean;
+      shift_enabled?: boolean;
+      settings_enabled?: boolean;
+      purchase_orders_enabled?: boolean;
+      delivery_dispatch_enabled?: boolean;
+      reason?: string;
+    }
+  ) {
+    const companyId = this.requireCompanyId(req);
+    const posSettings = await this.entitlementsService.updateCurrentPosSettings(companyId, {
+      ...payload,
+      actor_id: req.user?.sub ?? null
+    });
+
+    await this.auditService.record({
+      companyId,
+      userId: req.user?.sub ?? null,
+      action: 'PLATFORM_POS_SETTINGS_UPDATE',
+      entity: 'CompanyPosSettings',
+      entityId: companyId,
+      metadata: {
+        reason: payload.reason ?? null,
+        pos_settings: posSettings
+      }
+    });
+
+    return { pos_settings: posSettings };
+  }
+
   @Roles('admin')
   @Post('entitlements/sync')
   async sync(
@@ -393,6 +450,50 @@ export class EntitlementsController {
     });
 
     return { addons };
+  }
+
+  @Roles('platform_owner')
+  @Post('owner/tenants/:companyId/pos-settings')
+  async updateTenantPosSettings(
+    @Req()
+    req: {
+      user?: { sub?: string };
+    },
+    @Param('companyId') companyId: string,
+    @Body()
+    payload: {
+      reports_enabled?: boolean;
+      inventory_reports_enabled?: boolean;
+      customers_enabled?: boolean;
+      items_enabled?: boolean;
+      transfer_enabled?: boolean;
+      lending_enabled?: boolean;
+      expense_enabled?: boolean;
+      shift_enabled?: boolean;
+      settings_enabled?: boolean;
+      purchase_orders_enabled?: boolean;
+      delivery_dispatch_enabled?: boolean;
+      reason?: string;
+    }
+  ) {
+    const posSettings = await this.entitlementsService.ownerUpdateTenantPosSettings(companyId, {
+      ...payload,
+      actor_id: req.user?.sub ?? null
+    });
+
+    await this.auditService.record({
+      companyId,
+      userId: req.user?.sub ?? null,
+      action: 'PLATFORM_TENANT_POS_SETTINGS_UPDATE',
+      entity: 'CompanyPosSettings',
+      entityId: companyId,
+      metadata: {
+        reason: payload.reason ?? null,
+        pos_settings: posSettings
+      }
+    });
+
+    return { pos_settings: posSettings };
   }
 
   @Roles('platform_owner')

@@ -19,6 +19,21 @@ describe('VPOS API (integration)', () => {
     purchase_order_suite: boolean;
     queue_order_filtering?: boolean;
   };
+  type TenantPosSettings = {
+    reports_enabled: boolean;
+    inventory_reports_enabled: boolean;
+    customers_enabled: boolean;
+    items_enabled: boolean;
+    transfer_enabled: boolean;
+    lending_enabled: boolean;
+    expense_enabled: boolean;
+    shift_enabled: boolean;
+    settings_enabled: boolean;
+    purchase_orders_enabled: boolean;
+    delivery_dispatch_enabled: boolean;
+    updated_at: string;
+    updated_by: string | null;
+  };
   const dbRuntimeIt = process.env.VPOS_TEST_USE_DB === 'true' ? it : it.skip;
 
   let app: INestApplication;
@@ -175,6 +190,21 @@ describe('VPOS API (integration)', () => {
       .expect(201);
 
     return response.body.addons as TenantAddonFlags;
+  }
+
+  async function updateDemoTenantPosSettings(
+    accessToken: string,
+    clientId: string,
+    patch: Partial<TenantPosSettings> & { reason?: string }
+  ): Promise<TenantPosSettings> {
+    const response = await request(app.getHttpServer())
+      .post('/api/platform/pos-settings/current')
+      .set('Authorization', `Bearer ${accessToken}`)
+      .set('X-Client-Id', clientId)
+      .send(patch)
+      .expect(201);
+
+    return response.body.pos_settings as TenantPosSettings;
   }
 
   it('1) logs in successfully', async () => {
@@ -2970,6 +3000,113 @@ describe('VPOS API (integration)', () => {
       await updateDemoTenantAddons(actor.access, actor.clientId ?? 'DEMO', {
         queue_order_filtering: previousValue
       });
+    }
+  });
+
+  it('12e) rounds trip POS settings through current tenant admin update', async () => {
+    const actor = await loginAs('owner@vpos.local', 'Owner@123', '');
+
+    const currentPosSettings = await request(app.getHttpServer())
+      .get('/api/platform/pos-settings/current')
+      .set('Authorization', `Bearer ${actor.access}`)
+      .set('X-Client-Id', actor.clientId ?? 'DEMO')
+      .expect(200);
+
+    const previous = currentPosSettings.body as TenantPosSettings;
+
+    try {
+      const updated = await updateDemoTenantPosSettings(actor.access, actor.clientId ?? 'DEMO', {
+        reports_enabled: false,
+        inventory_reports_enabled: false,
+        transfer_enabled: false,
+        reason: 'test current tenant pos settings update'
+      });
+
+      expect(updated.reports_enabled).toBe(false);
+      expect(updated.inventory_reports_enabled).toBe(false);
+      expect(updated.transfer_enabled).toBe(false);
+      expect(updated.updated_at).toBeDefined();
+
+      const refreshed = await request(app.getHttpServer())
+        .get('/api/platform/pos-settings/current')
+        .set('Authorization', `Bearer ${actor.access}`)
+        .set('X-Client-Id', actor.clientId ?? 'DEMO')
+        .expect(200);
+
+      expect((refreshed.body as TenantPosSettings).reports_enabled).toBe(false);
+      expect((refreshed.body as TenantPosSettings).inventory_reports_enabled).toBe(false);
+      expect((refreshed.body as TenantPosSettings).transfer_enabled).toBe(false);
+    } finally {
+      await updateDemoTenantPosSettings(actor.access, actor.clientId ?? 'DEMO', {
+        reports_enabled: previous.reports_enabled,
+        inventory_reports_enabled: previous.inventory_reports_enabled,
+        customers_enabled: previous.customers_enabled,
+        items_enabled: previous.items_enabled,
+        transfer_enabled: previous.transfer_enabled,
+        lending_enabled: previous.lending_enabled,
+        expense_enabled: previous.expense_enabled,
+        shift_enabled: previous.shift_enabled,
+        settings_enabled: previous.settings_enabled,
+        purchase_orders_enabled: previous.purchase_orders_enabled,
+        delivery_dispatch_enabled: previous.delivery_dispatch_enabled,
+        reason: 'restore test pos settings state'
+      });
+    }
+  });
+
+  it('12f) allows platform owner to update POS settings through the owner tenant endpoint', async () => {
+    const platformOwner = await loginAs('owner@vpos.local', 'Owner@123', '');
+
+    const tenantList = await request(app.getHttpServer())
+      .get('/api/platform/owner/tenants')
+      .set('Authorization', `Bearer ${platformOwner.access}`)
+      .expect(200);
+
+    const demoTenant = (tenantList.body as Array<{ company_id: string; client_id: string }>).find(
+      (row) => row.client_id === 'DEMO'
+    );
+    expect(demoTenant).toBeDefined();
+
+    const current = await request(app.getHttpServer())
+      .get('/api/platform/pos-settings/current')
+      .set('Authorization', `Bearer ${platformOwner.access}`)
+      .set('X-Client-Id', platformOwner.clientId ?? 'DEMO')
+      .expect(200);
+
+    const previous = current.body as TenantPosSettings;
+
+    try {
+      const response = await request(app.getHttpServer())
+        .post(`/api/platform/owner/tenants/${demoTenant!.company_id}/pos-settings`)
+        .set('Authorization', `Bearer ${platformOwner.access}`)
+        .send({
+          customers_enabled: false,
+          purchase_orders_enabled: false,
+          reason: 'test owner tenant pos settings update'
+        })
+        .expect(201);
+
+      expect((response.body.pos_settings as TenantPosSettings).customers_enabled).toBe(false);
+      expect((response.body.pos_settings as TenantPosSettings).purchase_orders_enabled).toBe(false);
+    } finally {
+      await request(app.getHttpServer())
+        .post(`/api/platform/owner/tenants/${demoTenant!.company_id}/pos-settings`)
+        .set('Authorization', `Bearer ${platformOwner.access}`)
+        .send({
+          reports_enabled: previous.reports_enabled,
+          inventory_reports_enabled: previous.inventory_reports_enabled,
+          customers_enabled: previous.customers_enabled,
+          items_enabled: previous.items_enabled,
+          transfer_enabled: previous.transfer_enabled,
+          lending_enabled: previous.lending_enabled,
+          expense_enabled: previous.expense_enabled,
+          shift_enabled: previous.shift_enabled,
+          settings_enabled: previous.settings_enabled,
+          purchase_orders_enabled: previous.purchase_orders_enabled,
+          delivery_dispatch_enabled: previous.delivery_dispatch_enabled,
+          reason: 'restore owner-updated pos settings state'
+        })
+        .expect(201);
     }
   });
 

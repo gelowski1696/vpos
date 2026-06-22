@@ -356,6 +356,7 @@ model Company {
   branding                  BrandingConfig?
   entitlement               CompanyEntitlement?
   entitlementEvents         CompanyEntitlementEvent[]
+  posSettings               CompanyPosSettings?
   branches                  Branch[]
   locations                 Location[]
   users                     User[]
@@ -478,6 +479,29 @@ model CompanyEntitlementEvent {
   entitlement CompanyEntitlement? @relation(fields: [entitlementId], references: [id], onDelete: SetNull)
 
   @@index([companyId, createdAt])
+}
+
+model CompanyPosSettings {
+  id                      String   @id @default(uuid())
+  companyId               String   @unique
+  reportsEnabled          Boolean  @default(true)
+  inventoryReportsEnabled Boolean  @default(true)
+  customersEnabled        Boolean  @default(true)
+  itemsEnabled            Boolean  @default(true)
+  transferEnabled         Boolean  @default(true)
+  lendingEnabled          Boolean  @default(true)
+  expenseEnabled          Boolean  @default(true)
+  shiftEnabled            Boolean  @default(true)
+  settingsEnabled         Boolean  @default(true)
+  purchaseOrdersEnabled   Boolean  @default(true)
+  deliveryDispatchEnabled Boolean  @default(true)
+  updatedBy               String?
+  createdAt               DateTime @default(now())
+  updatedAt               DateTime @updatedAt
+
+  company Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
+
+  @@index([companyId, updatedAt])
 }
 
 model BrandingConfig {

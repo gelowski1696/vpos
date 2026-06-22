@@ -532,6 +532,7 @@ const NAV_SECTIONS: Array<{ title: string; items: NavItem[] }> = [
     items: [
       { href: '/personnel-roles', label: 'Personnel Roles', icon: 'users' },
       { href: '/expenses', label: 'Expense Categories', icon: 'expense' },
+      { href: '/pos-settings' as Route, label: 'POS Settings', icon: 'audit' },
       { href: '/database-maintenance' as Route, label: 'Backup & Restore', icon: 'syncReview' },
       { href: '/sync-reviews' as Route, label: 'Sync Reviews', icon: 'syncReview' },
       { href: '/audit-logs', label: 'Audit Logs', icon: 'audit' }
@@ -548,6 +549,7 @@ const NAV_SECTIONS: Array<{ title: string; items: NavItem[] }> = [
 const PLATFORM_OWNER_ALLOWED_ROUTES: Route[] = [
   '/tenants',
   '/audit-logs',
+  '/pos-settings' as Route,
   '/database-maintenance' as Route,
   '/sync-reviews' as Route,
   '/branches',
@@ -823,6 +825,10 @@ export function AdminShell({ children }: { children: React.ReactNode }): JSX.Ele
             }
 
             if (item.href === '/tenants') {
+              return false;
+            }
+
+            if (String(item.href) === '/pos-settings' && !canAccessWebAdmin) {
               return false;
             }
 

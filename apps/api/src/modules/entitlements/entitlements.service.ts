@@ -51,6 +51,25 @@ type CurrentEntitlementSnapshot = EntitlementSnapshot & {
   addons: TenantAddonFlags;
 };
 
+type PosSettingsFlags = {
+  reports_enabled: boolean;
+  inventory_reports_enabled: boolean;
+  customers_enabled: boolean;
+  items_enabled: boolean;
+  transfer_enabled: boolean;
+  lending_enabled: boolean;
+  expense_enabled: boolean;
+  shift_enabled: boolean;
+  settings_enabled: boolean;
+  purchase_orders_enabled: boolean;
+  delivery_dispatch_enabled: boolean;
+};
+
+type CurrentPosSettingsSnapshot = PosSettingsFlags & {
+  updated_at: string;
+  updated_by: string | null;
+};
+
 type NormalizedEntitlementPayload = {
   externalClientId: string;
   status: EntitlementStatus;
@@ -403,6 +422,16 @@ type OwnerTenantAddonsInput = {
   actor_id?: string | null;
 };
 
+type CurrentTenantPosSettingsInput = Partial<PosSettingsFlags> & {
+  reason?: string;
+  actor_id?: string | null;
+};
+
+type OwnerTenantPosSettingsInput = Partial<PosSettingsFlags> & {
+  reason?: string;
+  actor_id?: string | null;
+};
+
 type OwnerDeleteTenantInput = {
   reason?: string;
   actor_id?: string | null;
@@ -467,6 +496,7 @@ type OwnerOperationalResetResult = {
 export class EntitlementsService {
   private readonly memoryEntitlements = new Map<string, EntitlementSnapshot>();
   private readonly memoryTenantAddons = new Map<string, TenantAddonFlags>();
+  private readonly memoryPosSettings = new Map<string, CurrentPosSettingsSnapshot>();
   private readonly processedEventIds = new Set<string>();
   private readonly memoryTenantProvision = new Map<string, ProvisionTenantResult>();
   private readonly memoryTenantProfiles = new Map<string, MemoryTenantProfile>();
@@ -508,7 +538,8 @@ export class EntitlementsService {
     { name: 'EventDeliveryPerformance', filter: 'COMPANY_ID' },
     { name: 'EventUserBehavior', filter: 'COMPANY_ID' },
     { name: 'CompanyEntitlement', filter: 'COMPANY_ID' },
-    { name: 'CompanyEntitlementEvent', filter: 'COMPANY_ID' }
+    { name: 'CompanyEntitlementEvent', filter: 'COMPANY_ID' },
+    { name: 'CompanyPosSettings', filter: 'COMPANY_ID' }
   ];
 
   constructor(
@@ -1056,6 +1087,116 @@ export class EntitlementsService {
     };
   }
 
+  async getCurrentPosSettings(companyId?: string): Promise<CurrentPosSettingsSnapshot> {
+    const resolvedCompanyId = await this.resolveCompanyId(companyId);
+    if (!this.dbEnabled()) {
+      const current = this.memoryPosSettings.get(resolvedCompanyId);
+      if (current) {
+        return current;
+      }
+      const seeded = {
+        ...this.defaultPosSettingsFlags(),
+        updated_at: new Date(0).toISOString(),
+        updated_by: null
+      };
+      this.memoryPosSettings.set(resolvedCompanyId, seeded);
+      return seeded;
+    }
+
+    try {
+      const company = await this.prisma!.company.findUnique({
+        where: { id: resolvedCompanyId },
+        select: { updatedAt: true }
+      });
+      if (!company) {
+        throw new NotFoundException('Company not found');
+      }
+      const row = await this.prisma!.companyPosSettings.findUnique({
+        where: { companyId: resolvedCompanyId }
+      });
+      return this.mapPosSettingsRow(row, company.updatedAt);
+    } catch (error) {
+      if (error instanceof NotFoundException) {
+        throw error;
+      }
+      throw new InternalServerErrorException('Unable to resolve POS settings');
+    }
+  }
+
+  async updateCurrentPosSettings(
+    companyId: string | undefined,
+    input: CurrentTenantPosSettingsInput
+  ): Promise<CurrentPosSettingsSnapshot> {
+    const resolvedCompanyId = await this.resolveCompanyId(companyId);
+    if (!this.dbEnabled()) {
+      const current =
+        this.memoryPosSettings.get(resolvedCompanyId) ??
+        ({
+          ...this.defaultPosSettingsFlags(),
+          updated_at: new Date(0).toISOString(),
+          updated_by: null
+        } satisfies CurrentPosSettingsSnapshot);
+      const next = this.resolvePosSettingsInput(current, input);
+      const updated = {
+        ...next,
+        updated_at: new Date().toISOString(),
+        updated_by: input.actor_id ?? null
+      };
+      this.memoryPosSettings.set(resolvedCompanyId, updated);
+      return updated;
+    }
+
+    try {
+      const current = await this.getCurrentPosSettings(resolvedCompanyId);
+      const next = this.resolvePosSettingsInput(current, input);
+      const row = await this.prisma!.companyPosSettings.upsert({
+        where: { companyId: resolvedCompanyId },
+        update: {
+          reportsEnabled: next.reports_enabled,
+          inventoryReportsEnabled: next.inventory_reports_enabled,
+          customersEnabled: next.customers_enabled,
+          itemsEnabled: next.items_enabled,
+          transferEnabled: next.transfer_enabled,
+          lendingEnabled: next.lending_enabled,
+          expenseEnabled: next.expense_enabled,
+          shiftEnabled: next.shift_enabled,
+          settingsEnabled: next.settings_enabled,
+          purchaseOrdersEnabled: next.purchase_orders_enabled,
+          deliveryDispatchEnabled: next.delivery_dispatch_enabled,
+          updatedBy: input.actor_id ?? null
+        },
+        create: {
+          companyId: resolvedCompanyId,
+          reportsEnabled: next.reports_enabled,
+          inventoryReportsEnabled: next.inventory_reports_enabled,
+          customersEnabled: next.customers_enabled,
+          itemsEnabled: next.items_enabled,
+          transferEnabled: next.transfer_enabled,
+          lendingEnabled: next.lending_enabled,
+          expenseEnabled: next.expense_enabled,
+          shiftEnabled: next.shift_enabled,
+          settingsEnabled: next.settings_enabled,
+          purchaseOrdersEnabled: next.purchase_orders_enabled,
+          deliveryDispatchEnabled: next.delivery_dispatch_enabled,
+          updatedBy: input.actor_id ?? null
+        }
+      });
+      return this.mapPosSettingsRow(row);
+    } catch (error) {
+      if (error instanceof NotFoundException) {
+        throw error;
+      }
+      throw new InternalServerErrorException('Unable to update POS settings');
+    }
+  }
+
+  async ownerUpdateTenantPosSettings(
+    companyId: string,
+    input: OwnerTenantPosSettingsInput
+  ): Promise<CurrentPosSettingsSnapshot> {
+    return this.updateCurrentPosSettings(companyId, input);
+  }
+
   async enforceBranchCreation(companyId?: string, currentCount?: number): Promise<void> {
     const entitlement = await this.getCurrent(companyId);
     const branchCount =
@@ -1310,6 +1451,61 @@ export class EntitlementsService {
     };
   }
 
+  private defaultPosSettingsFlags(): PosSettingsFlags {
+    return {
+      reports_enabled: true,
+      inventory_reports_enabled: true,
+      customers_enabled: true,
+      items_enabled: true,
+      transfer_enabled: true,
+      lending_enabled: true,
+      expense_enabled: true,
+      shift_enabled: true,
+      settings_enabled: true,
+      purchase_orders_enabled: true,
+      delivery_dispatch_enabled: true
+    };
+  }
+
+  private mapPosSettingsRow(
+    row: {
+      reportsEnabled: boolean;
+      inventoryReportsEnabled: boolean;
+      customersEnabled: boolean;
+      itemsEnabled: boolean;
+      transferEnabled: boolean;
+      lendingEnabled: boolean;
+      expenseEnabled: boolean;
+      shiftEnabled: boolean;
+      settingsEnabled: boolean;
+      purchaseOrdersEnabled: boolean;
+      deliveryDispatchEnabled: boolean;
+      updatedAt: Date;
+      updatedBy: string | null;
+    } | null,
+    fallbackUpdatedAt?: Date | null
+  ): CurrentPosSettingsSnapshot {
+    const defaults = this.defaultPosSettingsFlags();
+    return {
+      reports_enabled: row?.reportsEnabled ?? defaults.reports_enabled,
+      inventory_reports_enabled:
+        row?.inventoryReportsEnabled ?? defaults.inventory_reports_enabled,
+      customers_enabled: row?.customersEnabled ?? defaults.customers_enabled,
+      items_enabled: row?.itemsEnabled ?? defaults.items_enabled,
+      transfer_enabled: row?.transferEnabled ?? defaults.transfer_enabled,
+      lending_enabled: row?.lendingEnabled ?? defaults.lending_enabled,
+      expense_enabled: row?.expenseEnabled ?? defaults.expense_enabled,
+      shift_enabled: row?.shiftEnabled ?? defaults.shift_enabled,
+      settings_enabled: row?.settingsEnabled ?? defaults.settings_enabled,
+      purchase_orders_enabled:
+        row?.purchaseOrdersEnabled ?? defaults.purchase_orders_enabled,
+      delivery_dispatch_enabled:
+        row?.deliveryDispatchEnabled ?? defaults.delivery_dispatch_enabled,
+      updated_at: (row?.updatedAt ?? fallbackUpdatedAt ?? new Date(0)).toISOString(),
+      updated_by: row?.updatedBy ?? null
+    };
+  }
+
   private mapTenantAddons(input: {
     addonEmailFeatures?: boolean;
     addonEmailReport?: boolean;
@@ -1369,6 +1565,58 @@ export class EntitlementsService {
       delivery_dispatch_suite: input.delivery_dispatch_suite ?? current.delivery_dispatch_suite,
       queue_order_filtering: input.queue_order_filtering ?? current.queue_order_filtering,
       customer_pricelist_view: input.customer_pricelist_view ?? current.customer_pricelist_view
+    };
+  }
+
+  private resolvePosSettingsInput(
+    current: PosSettingsFlags,
+    input: CurrentTenantPosSettingsInput | OwnerTenantPosSettingsInput
+  ): PosSettingsFlags {
+    return {
+      reports_enabled:
+        input.reports_enabled !== undefined
+          ? this.readBoolean(input.reports_enabled)
+          : current.reports_enabled,
+      inventory_reports_enabled:
+        input.inventory_reports_enabled !== undefined
+          ? this.readBoolean(input.inventory_reports_enabled)
+          : current.inventory_reports_enabled,
+      customers_enabled:
+        input.customers_enabled !== undefined
+          ? this.readBoolean(input.customers_enabled)
+          : current.customers_enabled,
+      items_enabled:
+        input.items_enabled !== undefined
+          ? this.readBoolean(input.items_enabled)
+          : current.items_enabled,
+      transfer_enabled:
+        input.transfer_enabled !== undefined
+          ? this.readBoolean(input.transfer_enabled)
+          : current.transfer_enabled,
+      lending_enabled:
+        input.lending_enabled !== undefined
+          ? this.readBoolean(input.lending_enabled)
+          : current.lending_enabled,
+      expense_enabled:
+        input.expense_enabled !== undefined
+          ? this.readBoolean(input.expense_enabled)
+          : current.expense_enabled,
+      shift_enabled:
+        input.shift_enabled !== undefined
+          ? this.readBoolean(input.shift_enabled)
+          : current.shift_enabled,
+      settings_enabled:
+        input.settings_enabled !== undefined
+          ? this.readBoolean(input.settings_enabled)
+          : current.settings_enabled,
+      purchase_orders_enabled:
+        input.purchase_orders_enabled !== undefined
+          ? this.readBoolean(input.purchase_orders_enabled)
+          : current.purchase_orders_enabled,
+      delivery_dispatch_enabled:
+        input.delivery_dispatch_enabled !== undefined
+          ? this.readBoolean(input.delivery_dispatch_enabled)
+          : current.delivery_dispatch_enabled
     };
   }
 
