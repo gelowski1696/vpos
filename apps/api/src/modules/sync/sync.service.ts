@@ -3203,6 +3203,8 @@ export class SyncService {
               userId: string;
               openedAt: Date;
               openingCash: number;
+              openingInventorySnapshot: unknown | null;
+              closingInventorySnapshot: unknown | null;
               status: 'OPEN';
             };
             update: {
@@ -3210,6 +3212,8 @@ export class SyncService {
               userId: string;
               openedAt: Date;
               openingCash: number;
+              openingInventorySnapshot: unknown | null;
+              closingInventorySnapshot: unknown | null;
               status: 'OPEN';
               closedAt: null;
               closingCash: null;
@@ -3236,6 +3240,8 @@ export class SyncService {
 
       const openedAtRaw = this.asString(payload.opened_at ?? payload.openedAt);
       const openedAt = openedAtRaw ? new Date(openedAtRaw) : new Date();
+      const openingInventorySnapshot =
+        (payload.opening_inventory_snapshot ?? payload.openingInventorySnapshot ?? null) as unknown;
       await client.shift.upsert({
         where: { id: shiftId },
         create: {
@@ -3245,6 +3251,8 @@ export class SyncService {
           userId,
           openedAt: Number.isNaN(openedAt.getTime()) ? new Date() : openedAt,
           openingCash: Number(openingCash.toFixed(2)),
+          openingInventorySnapshot,
+          closingInventorySnapshot: null,
           status: 'OPEN'
         },
         update: {
@@ -3252,6 +3260,8 @@ export class SyncService {
           userId,
           openedAt: Number.isNaN(openedAt.getTime()) ? new Date() : openedAt,
           openingCash: Number(openingCash.toFixed(2)),
+          openingInventorySnapshot,
+          closingInventorySnapshot: null,
           status: 'OPEN',
           closedAt: null,
           closingCash: null
@@ -3299,7 +3309,12 @@ export class SyncService {
         shift?: {
           updateMany: (args: {
             where: { id: string; companyId: string };
-            data: { status: 'CLOSED'; closingCash: number; closedAt: Date };
+            data: {
+              status: 'CLOSED';
+              closingCash: number;
+              closedAt: Date;
+              closingInventorySnapshot: unknown | null;
+            };
           }) => Promise<unknown>;
         };
         auditLog?: {
@@ -3321,12 +3336,15 @@ export class SyncService {
       }
       const closedAtRaw = this.asString(payload.closed_at ?? payload.closedAt);
       const closedAt = closedAtRaw ? new Date(closedAtRaw) : new Date();
+      const closingInventorySnapshot =
+        (payload.closing_inventory_snapshot ?? payload.closingInventorySnapshot ?? null) as unknown;
       await client.shift.updateMany({
         where: { id: shiftId, companyId },
         data: {
           status: 'CLOSED',
           closingCash: Number(closingCash.toFixed(2)),
-          closedAt: Number.isNaN(closedAt.getTime()) ? new Date() : closedAt
+          closedAt: Number.isNaN(closedAt.getTime()) ? new Date() : closedAt,
+          closingInventorySnapshot
         }
       });
       if (client.auditLog && typeof client.auditLog.create === 'function') {

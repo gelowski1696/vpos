@@ -216,6 +216,7 @@ export type TenantAddonKey =
   | 'purchase_order_suite'
   | 'delivery_dispatch_suite'
   | 'queue_order_filtering'
+  | 'cashier_end_of_day_inventory_count'
   | 'customer_pricelist_view';
 
 const TENANT_ADDON_LABELS: Record<TenantAddonKey, string> = {
@@ -234,6 +235,7 @@ const TENANT_ADDON_LABELS: Record<TenantAddonKey, string> = {
   purchase_order_suite: 'Purchase Order Suite',
   delivery_dispatch_suite: 'Delivery Dispatch Suite',
   queue_order_filtering: 'Queue Order Filtering',
+  cashier_end_of_day_inventory_count: 'Cashier End of Day Inventory Count',
   customer_pricelist_view: 'Customer Pricelist View'
 };
 
@@ -417,6 +419,7 @@ type OwnerTenantAddonsInput = {
   purchase_order_suite?: boolean;
   delivery_dispatch_suite?: boolean;
   queue_order_filtering?: boolean;
+  cashier_end_of_day_inventory_count?: boolean;
   customer_pricelist_view?: boolean;
   reason?: string;
   actor_id?: string | null;
@@ -1046,6 +1049,7 @@ export class EntitlementsService {
           addonPurchaseOrderSuite: true,
           addonDeliveryDispatchSuite: true,
           addonQueueOrderFiltering: true,
+          addonCashierEndOfDayInventoryCount: true,
           addonCustomerPricelistView: true
         }
       });
@@ -1447,6 +1451,7 @@ export class EntitlementsService {
       purchase_order_suite: false,
       delivery_dispatch_suite: false,
       queue_order_filtering: false,
+      cashier_end_of_day_inventory_count: false,
       customer_pricelist_view: false
     };
   }
@@ -1522,6 +1527,7 @@ export class EntitlementsService {
     addonPurchaseOrderSuite?: boolean;
     addonDeliveryDispatchSuite?: boolean;
     addonQueueOrderFiltering?: boolean;
+    addonCashierEndOfDayInventoryCount?: boolean;
     addonCustomerPricelistView?: boolean;
   }): TenantAddonFlags {
     return {
@@ -1540,6 +1546,7 @@ export class EntitlementsService {
       purchase_order_suite: Boolean(input.addonPurchaseOrderSuite),
       delivery_dispatch_suite: Boolean(input.addonDeliveryDispatchSuite),
       queue_order_filtering: Boolean(input.addonQueueOrderFiltering),
+      cashier_end_of_day_inventory_count: Boolean(input.addonCashierEndOfDayInventoryCount),
       customer_pricelist_view: Boolean(input.addonCustomerPricelistView)
     };
   }
@@ -1564,6 +1571,8 @@ export class EntitlementsService {
       purchase_order_suite: input.purchase_order_suite ?? current.purchase_order_suite,
       delivery_dispatch_suite: input.delivery_dispatch_suite ?? current.delivery_dispatch_suite,
       queue_order_filtering: input.queue_order_filtering ?? current.queue_order_filtering,
+      cashier_end_of_day_inventory_count:
+        input.cashier_end_of_day_inventory_count ?? current.cashier_end_of_day_inventory_count,
       customer_pricelist_view: input.customer_pricelist_view ?? current.customer_pricelist_view
     };
   }
@@ -1909,10 +1918,11 @@ export class EntitlementsService {
             addonPettyCashAttachments: false,
             addonShiftSecurityControls: false,
             addonKiloOverviewChart: false,
-          addonReceiptAmountPrivacy: false,
+            addonReceiptAmountPrivacy: false,
           addonPurchaseOrderSuite: false,
           addonDeliveryDispatchSuite: false,
           addonQueueOrderFiltering: false,
+          addonCashierEndOfDayInventoryCount: false,
           addonCustomerPricelistView: false,
           datastoreMode,
           datastoreRef,
@@ -2452,6 +2462,7 @@ export class EntitlementsService {
         addonPurchaseOrderSuite: true,
         addonDeliveryDispatchSuite: true,
         addonQueueOrderFiltering: true,
+        addonCashierEndOfDayInventoryCount: true,
         addonCustomerPricelistView: true,
         datastoreMode: true,
         datastoreRef: true,
@@ -4243,6 +4254,7 @@ export class EntitlementsService {
           addonPurchaseOrderSuite: true,
           addonDeliveryDispatchSuite: true,
           addonQueueOrderFiltering: true,
+          addonCashierEndOfDayInventoryCount: true,
           addonCustomerPricelistView: true
         }
       });
@@ -4274,6 +4286,7 @@ export class EntitlementsService {
           addonPurchaseOrderSuite: next.purchase_order_suite,
           addonDeliveryDispatchSuite: next.delivery_dispatch_suite,
           addonQueueOrderFiltering: next.queue_order_filtering,
+          addonCashierEndOfDayInventoryCount: next.cashier_end_of_day_inventory_count,
           addonCustomerPricelistView: next.customer_pricelist_view
         },
         select: {
@@ -4292,6 +4305,7 @@ export class EntitlementsService {
           addonPurchaseOrderSuite: true,
           addonDeliveryDispatchSuite: true,
           addonQueueOrderFiltering: true,
+          addonCashierEndOfDayInventoryCount: true,
           addonCustomerPricelistView: true
         }
       });

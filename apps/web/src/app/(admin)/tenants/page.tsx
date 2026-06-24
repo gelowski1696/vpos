@@ -26,6 +26,7 @@ type TenantAddons = {
   purchase_order_suite: boolean;
   delivery_dispatch_suite: boolean;
   queue_order_filtering: boolean;
+  cashier_end_of_day_inventory_count: boolean;
   customer_pricelist_view: boolean;
 };
 
@@ -48,6 +49,7 @@ const TENANT_ADDON_DISPLAY: TenantAddonDisplay[] = [
   { key: 'purchase_order_suite', label: 'Purchase Order Suite' },
   { key: 'delivery_dispatch_suite', label: 'Delivery Dispatch Suite' },
   { key: 'queue_order_filtering', label: 'Queue Order Filtering' },
+  { key: 'cashier_end_of_day_inventory_count', label: 'Cashier End of Day Inventory Count' },
   { key: 'customer_pricelist_view', label: 'Customer Pricelist View' }
 ];
 
@@ -362,6 +364,7 @@ export default function TenantsPage(): JSX.Element {
       purchase_order_suite: row.addons.purchase_order_suite,
       delivery_dispatch_suite: row.addons.delivery_dispatch_suite,
       queue_order_filtering: row.addons.queue_order_filtering,
+      cashier_end_of_day_inventory_count: row.addons.cashier_end_of_day_inventory_count,
       customer_pricelist_view: row.addons.customer_pricelist_view,
       reason: ''
     });
@@ -540,6 +543,7 @@ export default function TenantsPage(): JSX.Element {
             purchase_order_suite: addonsForm.purchase_order_suite,
             delivery_dispatch_suite: addonsForm.delivery_dispatch_suite,
             queue_order_filtering: addonsForm.queue_order_filtering,
+            cashier_end_of_day_inventory_count: addonsForm.cashier_end_of_day_inventory_count,
             customer_pricelist_view: addonsForm.customer_pricelist_view,
             reason: addonsForm.reason.trim() || undefined
           }
@@ -1266,6 +1270,10 @@ export default function TenantsPage(): JSX.Element {
               <label className="flex items-center gap-2 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-sm dark:border-slate-700 dark:bg-slate-800/60 md:col-span-2">
                 <input checked={addonsForm.queue_order_filtering} onChange={(event) => setAddonsForm((prev) => prev ? { ...prev, queue_order_filtering: event.target.checked } : prev)} type="checkbox" />
                 <span>Queue Order Filtering</span>
+              </label>
+              <label className="flex items-center gap-2 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-sm dark:border-slate-700 dark:bg-slate-800/60 md:col-span-2">
+                <input checked={addonsForm.cashier_end_of_day_inventory_count} onChange={(event) => setAddonsForm((prev) => prev ? { ...prev, cashier_end_of_day_inventory_count: event.target.checked } : prev)} type="checkbox" />
+                <span>Cashier End of Day Inventory Count</span>
               </label>
               <label className="flex items-center gap-2 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-sm dark:border-slate-700 dark:bg-slate-800/60 md:col-span-2">
                 <input checked={addonsForm.customer_pricelist_view} onChange={(event) => setAddonsForm((prev) => prev ? { ...prev, customer_pricelist_view: event.target.checked } : prev)} type="checkbox" />

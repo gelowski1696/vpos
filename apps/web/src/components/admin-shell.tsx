@@ -39,6 +39,7 @@ type TenantAddons = {
   purchase_order_suite: boolean;
   delivery_dispatch_suite: boolean;
   queue_order_filtering: boolean;
+  cashier_end_of_day_inventory_count: boolean;
   customer_pricelist_view: boolean;
 };
 
@@ -62,6 +63,7 @@ const DEFAULT_TENANT_ADDONS: TenantAddons = {
   purchase_order_suite: false,
   delivery_dispatch_suite: false,
   queue_order_filtering: false,
+  cashier_end_of_day_inventory_count: false,
   customer_pricelist_view: false
 };
 

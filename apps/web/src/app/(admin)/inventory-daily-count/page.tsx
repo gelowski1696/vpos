@@ -30,12 +30,18 @@ type DailyInventoryShiftInventoryReportRow = {
   category: string;
   unit: string;
   is_lpg: boolean;
+  system_qty_on_hand: number;
+  cashier_qty_on_hand: number;
   start_qty_on_hand: number;
   end_qty_on_hand: number;
   delta_qty_on_hand: number;
+  system_qty_full: number;
+  cashier_qty_full: number;
   start_qty_full: number;
   end_qty_full: number;
   delta_qty_full: number;
+  system_qty_empty: number;
+  cashier_qty_empty: number;
   start_qty_empty: number;
   end_qty_empty: number;
   delta_qty_empty: number;
@@ -334,7 +340,7 @@ function ShiftInventoryField({
   );
 }
 
-function InventoryShiftItemBreakdown({ row }: { row: DailyInventoryShiftRow }): JSX.Element {
+export function InventoryShiftItemBreakdown({ row }: { row: DailyInventoryShiftRow }): JSX.Element {
   const inventoryReport = row.inventory_report;
   const pagination = useTablePagination(inventoryReport?.rows ?? [], {
     initialPageSize: 6,
@@ -366,6 +372,9 @@ function InventoryShiftItemBreakdown({ row }: { row: DailyInventoryShiftRow }): 
           <h4 className="text-sm font-semibold text-slate-900 dark:text-slate-100">
             {totalItems.toLocaleString()} item lines
           </h4>
+          <p className="mt-1 text-[0.76rem] text-slate-500 dark:text-slate-400">
+            System Count uses the opening snapshot. Cashier Input uses the closing snapshot captured after close shift.
+          </p>
         </div>
         <span className="rounded-full bg-slate-100 px-2 py-1 text-[11px] font-semibold text-slate-600 dark:bg-slate-800 dark:text-slate-300">
           {row.status === 'OPEN' ? 'Pending close' : 'Closed shift'}
@@ -376,8 +385,8 @@ function InventoryShiftItemBreakdown({ row }: { row: DailyInventoryShiftRow }): 
         <div className="hidden xl:grid xl:grid-cols-[minmax(0,2.1fr)_minmax(0,0.95fr)_minmax(0,1.25fr)_minmax(0,1.25fr)_minmax(0,1.2fr)] border-b border-slate-200 px-3 py-2 text-[0.7rem] font-semibold uppercase tracking-[0.08em] text-slate-500 dark:border-slate-700 dark:text-slate-400">
           <span>Item</span>
           <span>SKU</span>
-          <span>Start</span>
-          <span>End</span>
+          <span>System Count</span>
+          <span>Cashier Input</span>
           <span>Delta</span>
         </div>
 
@@ -403,29 +412,29 @@ function InventoryShiftItemBreakdown({ row }: { row: DailyInventoryShiftRow }): 
                   titleClassName="break-all font-mono text-[0.76rem] text-slate-500 dark:text-slate-400"
                 />
                 <InventoryBreakdownField
-                  label="Start"
+                  label="System Count"
                   title={
                     item.is_lpg
-                      ? `Full ${formatCount(item.start_qty_full)} / Empty ${formatCount(item.start_qty_empty)}`
-                      : `On hand ${formatCount(item.start_qty_on_hand)}`
+                      ? `Full ${formatCount(item.system_qty_full)} / Empty ${formatCount(item.system_qty_empty)}`
+                      : `On hand ${formatCount(item.system_qty_on_hand)}`
                   }
                   subtitle={
                     item.is_lpg
                       ? `Captured ${formatDateTime(row.opening_snapshot_summary?.captured_at)}`
-                      : `Start ${formatCount(item.start_qty_on_hand)}`
+                      : `System ${formatCount(item.system_qty_on_hand)}`
                   }
                 />
                 <InventoryBreakdownField
-                  label="End"
+                  label="Cashier Input"
                   title={
                     item.is_lpg
-                      ? `Full ${formatCount(item.end_qty_full)} / Empty ${formatCount(item.end_qty_empty)}`
-                      : `On hand ${formatCount(item.end_qty_on_hand)}`
+                      ? `Full ${formatCount(item.cashier_qty_full)} / Empty ${formatCount(item.cashier_qty_empty)}`
+                      : `On hand ${formatCount(item.cashier_qty_on_hand)}`
                   }
                   subtitle={
                     item.is_lpg
                       ? `Captured ${formatDateTime(row.closing_snapshot_summary?.captured_at)}`
-                      : `End ${formatCount(item.end_qty_on_hand)}`
+                      : `Cashier ${formatCount(item.cashier_qty_on_hand)}`
                   }
                 />
                 <InventoryBreakdownField
@@ -549,11 +558,11 @@ function ShiftInventoryDetails({ row }: { row: DailyInventoryShiftRow }): JSX.El
   return (
     <div className="space-y-3 border-t border-slate-200 bg-slate-50 px-4 py-4 dark:border-slate-700 dark:bg-slate-900/40">
       <div className="grid gap-3 lg:grid-cols-2 xl:grid-cols-4">
-        {renderSnapshotMetric('Start Snapshot', row.opening_snapshot_summary, 'Start not captured')}
+        {renderSnapshotMetric('System Snapshot', row.opening_snapshot_summary, 'System snapshot not captured')}
         {renderSnapshotMetric(
-          'End Snapshot',
+          'Cashier Snapshot',
           row.closing_snapshot_summary,
-          isOpen ? 'Closing snapshot pending' : 'End not captured'
+          isOpen ? 'Closing snapshot pending' : 'Cashier snapshot not captured'
         )}
         <div className="rounded-[16px] border border-blue-200 bg-blue-50 p-3 dark:border-blue-900/50 dark:bg-blue-950/30">
           <div className="text-[0.74rem] font-semibold uppercase tracking-[0.08em] text-blue-700 dark:text-blue-300">

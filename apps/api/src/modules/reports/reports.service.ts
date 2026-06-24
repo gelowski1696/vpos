@@ -106,12 +106,18 @@ type DailyInventoryShiftInventoryReportRow = {
   category: string;
   unit: string;
   is_lpg: boolean;
+  system_qty_on_hand: number;
+  cashier_qty_on_hand: number;
   start_qty_on_hand: number;
   end_qty_on_hand: number;
   delta_qty_on_hand: number;
+  system_qty_full: number;
+  cashier_qty_full: number;
   start_qty_full: number;
   end_qty_full: number;
   delta_qty_full: number;
+  system_qty_empty: number;
+  cashier_qty_empty: number;
   start_qty_empty: number;
   end_qty_empty: number;
   delta_qty_empty: number;
@@ -2694,11 +2700,28 @@ export class ReportsService {
       });
     }
 
-    const locationIds = [...new Set(
-      [...shiftContextMap.values()]
-        .map((context) => context.location_id)
-        .filter((value): value is string => Boolean(value))
-    )];
+    const extractSnapshotLocationId = (snapshotValue: unknown): string | null => {
+      if (!snapshotValue || typeof snapshotValue !== 'object' || Array.isArray(snapshotValue)) {
+        return null;
+      }
+      const payload = snapshotValue as Record<string, unknown>;
+      return this.toFiniteText(payload.locationId) ?? this.toFiniteText(payload.location_id);
+    };
+
+    const snapshotLocationIds = [
+      ...closedShifts.flatMap((shift) => [
+        extractSnapshotLocationId(shift.openingInventorySnapshot),
+        extractSnapshotLocationId(shift.closingInventorySnapshot)
+      ]),
+      ...openShifts.flatMap((shift) => [
+        extractSnapshotLocationId(shift.openingInventorySnapshot),
+        extractSnapshotLocationId(shift.closingInventorySnapshot)
+      ])
+    ].filter((value): value is string => Boolean(value));
+    const shiftContextLocationIds = [...shiftContextMap.values()]
+      .map((context) => context.location_id)
+      .filter((value): value is string => Boolean(value));
+    const locationIds = [...new Set([...shiftContextLocationIds, ...snapshotLocationIds])];
     const locationRows =
       locationIds.length > 0
         ? await db.location.findMany({
@@ -3045,6 +3068,100 @@ export class ReportsService {
       };
     };
 
+    const normalizeStoredSnapshot = (
+      snapshotValue: Prisma.JsonValue | null | undefined,
+      fallbackLocationId: string | null
+    ): (DailyInventorySnapshotSummary & { lines: DailyInventorySnapshotLine[] }) | null => {
+      if (!snapshotValue || typeof snapshotValue !== 'object' || Array.isArray(snapshotValue)) {
+        return null;
+      }
+      const payload = snapshotValue as Record<string, unknown>;
+      const capturedAt =
+        this.toFiniteText(payload.capturedAt) ?? this.toFiniteText(payload.captured_at);
+      if (!capturedAt) {
+        return null;
+      }
+      const locationId =
+        this.toFiniteText(payload.locationId) ??
+        this.toFiniteText(payload.location_id) ??
+        fallbackLocationId;
+      const location = locationId ? locationMap.get(locationId) ?? null : null;
+      const locationCode =
+        this.toFiniteText(payload.locationCode) ??
+        this.toFiniteText(payload.location_code) ??
+        location?.code ??
+        null;
+      const locationName =
+        this.toFiniteText(payload.locationName) ??
+        this.toFiniteText(payload.location_name) ??
+        location?.name ??
+        null;
+      const rawLines = Array.isArray(payload.lines) ? payload.lines : [];
+      const lines = rawLines
+        .map<DailyInventorySnapshotLine | null>((entry) => {
+          if (!entry || typeof entry !== 'object' || Array.isArray(entry)) {
+            return null;
+          }
+          const row = entry as Record<string, unknown>;
+          const productId =
+            this.toFiniteText(row.product_id) ??
+            this.toFiniteText(row.productId) ??
+            this.toFiniteText(row.sku) ??
+            this.toFiniteText(row.product_name) ??
+            this.toFiniteText(row.productName) ??
+            null;
+          if (!productId) {
+            return null;
+          }
+          const sku = this.toFiniteText(row.sku) ?? productId;
+          const productName =
+            this.toFiniteText(row.product_name) ??
+            this.toFiniteText(row.productName) ??
+            sku;
+          return {
+            product_id: productId,
+            sku,
+            product_name: productName,
+            category: this.toFiniteText(row.category) ?? 'Uncategorized',
+            unit: this.toFiniteText(row.unit) ?? 'unit',
+            is_lpg: Boolean(row.is_lpg ?? row.isLpg),
+            qty_on_hand: this.roundQty(
+              this.toFiniteNumber(row.qty_on_hand) ??
+                this.toFiniteNumber(row.qtyOnHand) ??
+                0
+            ),
+            qty_full: this.roundQty(
+              this.toFiniteNumber(row.qty_full) ??
+                this.toFiniteNumber(row.qtyFull) ??
+                0
+            ),
+            qty_empty: this.roundQty(
+              this.toFiniteNumber(row.qty_empty) ??
+                this.toFiniteNumber(row.qtyEmpty) ??
+                0
+            )
+          };
+        })
+        .filter((line): line is DailyInventorySnapshotLine => Boolean(line))
+        .sort((left, right) => left.product_name.localeCompare(right.product_name) || left.sku.localeCompare(right.sku));
+
+      if (lines.length === 0) {
+        return null;
+      }
+
+      return {
+        item_count: lines.length,
+        qty_on_hand: this.roundQty(lines.reduce((sum, line) => sum + line.qty_on_hand, 0)),
+        qty_full: this.roundQty(lines.reduce((sum, line) => sum + line.qty_full, 0)),
+        qty_empty: this.roundQty(lines.reduce((sum, line) => sum + line.qty_empty, 0)),
+        captured_at: capturedAt,
+        location_id: locationId,
+        location_code: locationCode,
+        location_name: locationName,
+        lines
+      };
+    };
+
     const lineChanged = (row: DailyInventoryShiftInventoryReportRow): boolean =>
       Math.abs(row.delta_qty_on_hand) > 0.0001 ||
       Math.abs(row.delta_qty_full) > 0.0001 ||
@@ -3086,12 +3203,18 @@ export class ReportsService {
             category: source?.category ?? 'Uncategorized',
             unit: source?.unit ?? 'unit',
             is_lpg: source?.is_lpg ?? false,
+            system_qty_on_hand: this.roundQty(start.qty_on_hand),
+            cashier_qty_on_hand: this.roundQty(end.qty_on_hand),
             start_qty_on_hand: this.roundQty(start.qty_on_hand),
             end_qty_on_hand: this.roundQty(end.qty_on_hand),
             delta_qty_on_hand: this.roundQty(end.qty_on_hand - start.qty_on_hand),
+            system_qty_full: this.roundQty(start.qty_full),
+            cashier_qty_full: this.roundQty(end.qty_full),
             start_qty_full: this.roundQty(start.qty_full),
             end_qty_full: this.roundQty(end.qty_full),
             delta_qty_full: this.roundQty(end.qty_full - start.qty_full),
+            system_qty_empty: this.roundQty(start.qty_empty),
+            cashier_qty_empty: this.roundQty(end.qty_empty),
             start_qty_empty: this.roundQty(start.qty_empty),
             end_qty_empty: this.roundQty(end.qty_empty),
             delta_qty_empty: this.roundQty(end.qty_empty - start.qty_empty),
@@ -3167,17 +3290,26 @@ export class ReportsService {
       shift: (typeof closedShifts)[number],
       mode: 'closed' | 'open'
     ): DailyInventoryShiftRow => {
-      const locationId = shiftContextMap.get(shift.id)?.location_id ?? null;
+      const contextLocationId = shiftContextMap.get(shift.id)?.location_id ?? null;
+      const storedOpeningSnapshot = normalizeStoredSnapshot(
+        shift.openingInventorySnapshot as Prisma.JsonValue | null | undefined,
+        contextLocationId
+      );
+      const storedClosingSnapshot = normalizeStoredSnapshot(
+        shift.closingInventorySnapshot as Prisma.JsonValue | null | undefined,
+        contextLocationId
+      );
+      const locationId =
+        storedOpeningSnapshot?.location_id ??
+        storedClosingSnapshot?.location_id ??
+        contextLocationId;
       const location = locationId ? locationMap.get(locationId) ?? null : null;
-      const buildSnapshot = (capturedAt: Date): (DailyInventorySnapshotSummary & { lines: DailyInventorySnapshotLine[] }) | null => {
-        if (!locationId) {
-          return null;
-        }
-        return buildSnapshotAt(locationId, capturedAt);
-      };
-
-      const openingSnapshot = buildSnapshot(shift.openedAt);
-      const closingSnapshot = mode === 'closed' && shift.closedAt ? buildSnapshot(shift.closedAt) : null;
+      const openingSnapshot =
+        storedOpeningSnapshot ?? (locationId ? buildSnapshotAt(locationId, shift.openedAt) : null);
+      const closingSnapshot =
+        mode === 'closed'
+          ? storedClosingSnapshot ?? (locationId && shift.closedAt ? buildSnapshotAt(locationId, shift.closedAt) : null)
+          : null;
       const inventoryReport =
         openingSnapshot && closingSnapshot && mode === 'closed'
           ? buildShiftInventoryReport(openingSnapshot, closingSnapshot)
@@ -3215,10 +3347,10 @@ export class ReportsService {
       } else if (mode === 'open') {
         snapshotState = 'in-progress';
         snapshotWarning = 'Closing snapshot pending';
-      } else if (!openingSnapshot) {
+      } else if (!shift.openingInventorySnapshot) {
         snapshotState = 'opening-missing';
         snapshotWarning = 'Start not captured';
-      } else if (!closingSnapshot) {
+      } else if (!shift.closingInventorySnapshot) {
         snapshotState = 'closing-missing';
         snapshotWarning = 'End not captured';
       }
@@ -3230,8 +3362,8 @@ export class ReportsService {
         branch_name: shift.branch.name,
         branch_code: shift.branch.code,
         location_id: locationId,
-        location_name: location?.name ?? null,
-        location_code: location?.code ?? null,
+        location_name: location?.name ?? openingSummary?.location_name ?? closingSummary?.location_name ?? null,
+        location_code: location?.code ?? openingSummary?.location_code ?? closingSummary?.location_code ?? null,
         cashier_name: shift.user.fullName,
         status: shift.status,
         opened_at: shift.openedAt.toISOString(),
