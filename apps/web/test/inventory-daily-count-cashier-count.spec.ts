@@ -1,14 +1,13 @@
 import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
-import * as inventoryDailyCountPage from '../src/app/(admin)/inventory-daily-count/page';
+import { InventoryShiftItemBreakdown } from '../src/app/(admin)/inventory-daily-count/inventory-shift-item-breakdown';
 
 describe('inventory daily count cashier comparison', () => {
   it('renders the item breakdown with system and cashier count labels', () => {
-    const Breakdown = (inventoryDailyCountPage as any).InventoryShiftItemBreakdown;
-    expect(Breakdown).toBeDefined();
+    expect(InventoryShiftItemBreakdown).toBeDefined();
 
     const markup = renderToStaticMarkup(
-      createElement(Breakdown, {
+      createElement(InventoryShiftItemBreakdown, {
         row: {
           id: 'shift-1',
           shift_id: 'shift-1',
