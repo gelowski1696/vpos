@@ -1,3 +1,5 @@
+import fs from 'fs';
+import path from 'path';
 import { TENANT_ADDON_DISPLAY, TENANT_ADDON_GROUPS } from '../src/app/(admin)/tenants/tenant-addons';
 
 describe('tenant add-ons modal grouping', () => {
@@ -13,5 +15,18 @@ describe('tenant add-ons modal grouping', () => {
     );
     expect(inventoryAddon).toBeDefined();
     expect(inventoryAddon?.description).toContain('close shift');
+  });
+
+  it('uses the compact add-ons modal shell instead of the grouped redesign', () => {
+    const pageSource = fs.readFileSync(
+      path.join(process.cwd(), 'src/app/(admin)/tenants/page.tsx'),
+      'utf8'
+    );
+    const addonsModalBlock = pageSource.match(/\{dialogMode === 'addons'[\s\S]*?\n\s*\) : null\}/)?.[0];
+
+    expect(addonsModalBlock).toBeDefined();
+    expect(addonsModalBlock).toContain('max-w-2xl');
+    expect(addonsModalBlock).not.toContain('max-w-5xl');
+    expect(addonsModalBlock).not.toContain('TENANT_ADDON_GROUPS.map');
   });
 });

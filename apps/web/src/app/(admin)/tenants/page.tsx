@@ -6,11 +6,7 @@ import { TenantOperationalResetDialog } from '../../../components/tenant-operati
 import { apiRequest } from '../../../lib/api-client';
 import { useTablePagination } from '../../../lib/table-pagination';
 import { toastError, toastInfo, toastSuccess } from '../../../lib/web-toast';
-import {
-  TENANT_ADDON_DISPLAY,
-  TENANT_ADDON_GROUPS,
-  type TenantAddonDisplay
-} from './tenant-addons';
+import { TENANT_ADDON_DISPLAY } from './tenant-addons';
 
 type EntitlementStatus = 'ACTIVE' | 'PAST_DUE' | 'SUSPENDED' | 'CANCELED';
 type BranchMode = 'SINGLE' | 'MULTI';
@@ -34,12 +30,6 @@ type TenantAddons = {
   cashier_end_of_day_inventory_count: boolean;
   customer_pricelist_view: boolean;
 };
-
-type TenantAddonKey = TenantAddonDisplay['key'];
-
-const TENANT_ADDON_DISPLAY_BY_KEY = Object.fromEntries(
-  TENANT_ADDON_DISPLAY.map((entry) => [entry.key, entry])
-) as Record<TenantAddonKey, TenantAddonDisplay>;
 
 type TenantSummary = {
   company_id: string;
@@ -1200,125 +1190,68 @@ export default function TenantsPage(): JSX.Element {
       ) : null}
 
       {dialogMode === 'addons' && selected && addonsForm ? (
-        <div className="fixed inset-0 z-40 overflow-y-auto bg-slate-950/45 p-3 sm:p-4">
-          <div className="flex min-h-full items-start justify-center sm:items-center">
-            <section className="flex w-full max-w-5xl max-h-[calc(100vh-1.5rem)] flex-col overflow-hidden rounded-3xl border border-slate-200 bg-white shadow-2xl dark:border-slate-700 dark:bg-slate-900">
-              <header className="flex items-start justify-between gap-4 border-b border-slate-200 px-4 py-4 sm:px-5 dark:border-slate-700">
-                <div className="space-y-1">
-                  <p className="text-xs font-semibold uppercase tracking-[0.24em] text-brandPrimary/80 dark:text-brandSecondary/80">
-                    Owner Tenant Console
-                  </p>
-                  <h2 className="text-lg font-semibold text-slate-900 dark:text-slate-100 sm:text-xl">
-                    Tenant Add-ons: {selected.company_name}
-                  </h2>
-                  <p className="max-w-3xl text-sm text-slate-500 dark:text-slate-400">
-                    Enable tenant modules and desktop workflows. The cashier inventory add-on unlocks the
-                    post-close inventory capture flow on desktop.
-                  </p>
-                </div>
-                <button
-                  className="shrink-0 rounded-full border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-600 shadow-sm transition hover:bg-slate-100 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-300 dark:hover:bg-slate-700"
-                  onClick={closeDialog}
-                  type="button"
+        <div className="fixed inset-0 z-40 flex items-center justify-center bg-slate-950/45 p-4">
+          <section className="w-full max-w-2xl rounded-2xl border border-slate-200 bg-white shadow-xl dark:border-slate-700 dark:bg-slate-900">
+            <header className="flex items-center justify-between border-b border-slate-200 px-4 py-3 dark:border-slate-700">
+              <h2 className="text-lg font-semibold text-slate-900 dark:text-slate-100">
+                Tenant Add-ons: {selected.company_name}
+              </h2>
+              <button
+                className="rounded-md border border-slate-300 px-2 py-1 text-xs text-slate-600 dark:border-slate-600 dark:text-slate-300"
+                onClick={closeDialog}
+                type="button"
+              >
+                Close
+              </button>
+            </header>
+
+            <div className="grid max-h-[calc(100vh-10rem)] gap-3 overflow-y-auto p-4 md:grid-cols-2">
+              {TENANT_ADDON_DISPLAY.map((item) => (
+                <label
+                  className="flex items-center gap-2 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-sm dark:border-slate-700 dark:bg-slate-800/60"
+                  key={item.key}
                 >
-                  Close
-                </button>
-              </header>
+                  <input
+                    checked={addonsForm[item.key]}
+                    className="h-4 w-4 rounded border-slate-300 text-brandPrimary focus:ring-brandPrimary"
+                    onChange={(event) =>
+                      setAddonsForm((prev) => (prev ? { ...prev, [item.key]: event.target.checked } : prev))
+                    }
+                    type="checkbox"
+                  />
+                  <span className="min-w-0 leading-5 text-slate-700 dark:text-slate-200">{item.label}</span>
+                </label>
+              ))}
 
-              <div className="min-h-0 flex-1 overflow-y-auto px-4 py-4 sm:px-5">
-                <div className="mb-4 rounded-2xl border border-blue-200 bg-blue-50/80 px-4 py-3 dark:border-blue-900/50 dark:bg-blue-950/20">
-                  <p className="text-sm font-semibold text-blue-900 dark:text-blue-100">
-                    Cashier End of Day Inventory Count
-                  </p>
-                  <p className="mt-1 text-sm leading-6 text-blue-800 dark:text-blue-200">
-                    When enabled, the desktop close-shift flow opens an inventory snapshot screen so cashiers
-                    can enter per-item counts before the shift is finalized.
-                  </p>
-                </div>
-
-                <div className="grid gap-4 lg:grid-cols-2">
-                  {TENANT_ADDON_GROUPS.map((group) => (
-                    <section
-                      className="rounded-2xl border border-slate-200 bg-slate-50/70 p-4 shadow-sm dark:border-slate-700 dark:bg-slate-800/60"
-                      key={group.title}
-                    >
-                      <div className="space-y-1">
-                        <h3 className="text-base font-semibold text-slate-900 dark:text-slate-100">{group.title}</h3>
-                        <p className="text-sm text-slate-500 dark:text-slate-400">{group.description}</p>
-                      </div>
-
-                      <div className="mt-3 grid gap-3 sm:grid-cols-2">
-                        {group.items.map((itemKey) => {
-                          const item = TENANT_ADDON_DISPLAY_BY_KEY[itemKey];
-                          const isHighlighted = itemKey === 'cashier_end_of_day_inventory_count';
-                          return (
-                            <label
-                              className={`flex items-start justify-between gap-3 rounded-2xl border px-3 py-3 text-sm transition ${
-                                isHighlighted
-                                  ? 'border-blue-200 bg-blue-50/80 shadow-sm dark:border-blue-900/40 dark:bg-blue-950/20'
-                                  : 'border-slate-200 bg-white dark:border-slate-700 dark:bg-slate-900/70'
-                              }`}
-                              key={itemKey}
-                            >
-                              <div className="min-w-0">
-                                <div className="flex flex-wrap items-center gap-2">
-                                  <span className="font-semibold text-slate-900 dark:text-slate-100">{item.label}</span>
-                                  {isHighlighted ? (
-                                    <span className="rounded-full border border-blue-300 bg-white px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-blue-700 dark:border-blue-700 dark:bg-blue-900/40 dark:text-blue-300">
-                                      Shift flow
-                                    </span>
-                                  ) : null}
-                                </div>
-                                <p className="mt-1 text-xs leading-5 text-slate-500 dark:text-slate-400">
-                                  {item.description}
-                                </p>
-                              </div>
-                              <input
-                                checked={addonsForm[itemKey]}
-                                className="mt-0.5 h-5 w-5 rounded border-slate-300 text-brandPrimary focus:ring-brandPrimary"
-                                onChange={(event) =>
-                                  setAddonsForm((prev) => (prev ? { ...prev, [itemKey]: event.target.checked } : prev))
-                                }
-                                type="checkbox"
-                              />
-                            </label>
-                          );
-                        })}
-                      </div>
-                    </section>
-                  ))}
-                </div>
-
-                <label className="mt-4 block text-sm">
+              <label className="text-sm md:col-span-2">
                   <span className="mb-1 block font-medium text-slate-700 dark:text-slate-200">Reason (Audit Note)</span>
                   <textarea
-                    className="min-h-24 w-full rounded-2xl border border-slate-300 bg-white px-3 py-3 text-slate-900 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-100"
+                    className="min-h-20 w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-slate-900 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-100"
                     onChange={(event) => setAddonsForm((prev) => (prev ? { ...prev, reason: event.target.value } : prev))}
                     placeholder="Optional add-on update note..."
                     value={addonsForm.reason}
                   />
                 </label>
-              </div>
+            </div>
 
-              <footer className="flex items-center justify-end gap-2 border-t border-slate-200 bg-white px-4 py-3 dark:border-slate-700 dark:bg-slate-900">
-                <button
-                  className="rounded-lg border border-slate-300 px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-100 dark:border-slate-600 dark:text-slate-200 dark:hover:bg-slate-800"
-                  onClick={closeDialog}
-                  type="button"
-                >
-                  Cancel
-                </button>
-                <button
-                  className="rounded-lg bg-brandPrimary px-4 py-2 text-sm font-semibold text-white hover:brightness-110"
-                  disabled={saving}
-                  onClick={() => void submitAddons()}
-                  type="button"
-                >
-                  {saving ? 'Saving...' : 'Save Add-ons'}
-                </button>
-              </footer>
-            </section>
-          </div>
+            <footer className="flex items-center justify-end gap-2 border-t border-slate-200 px-4 py-3 dark:border-slate-700">
+              <button
+                className="rounded-lg border border-slate-300 px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-100 dark:border-slate-600 dark:text-slate-200 dark:hover:bg-slate-800"
+                onClick={closeDialog}
+                type="button"
+              >
+                Cancel
+              </button>
+              <button
+                className="rounded-lg bg-brandPrimary px-4 py-2 text-sm font-semibold text-white hover:brightness-110"
+                disabled={saving}
+                onClick={() => void submitAddons()}
+                type="button"
+              >
+                {saving ? 'Saving...' : 'Save Add-ons'}
+              </button>
+            </footer>
+          </section>
         </div>
       ) : null}
 
