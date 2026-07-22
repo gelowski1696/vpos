@@ -4,7 +4,7 @@ import { useMemo } from 'react';
 import { useTablePagination } from '../../../lib/table-pagination';
 import { getInventoryBreakdownResetKey } from '../../../lib/inventory-breakdown-pagination';
 
-type DailyInventorySnapshotSummary = {
+export type DailyInventorySnapshotSummary = {
   item_count: number;
   qty_on_hand: number;
   qty_full: number;
@@ -15,7 +15,7 @@ type DailyInventorySnapshotSummary = {
   location_name: string | null;
 };
 
-type DailyInventoryShiftInventoryReportRow = {
+export type DailyInventoryShiftInventoryReportRow = {
   product_id: string;
   sku: string;
   product_name: string;
@@ -40,7 +40,7 @@ type DailyInventoryShiftInventoryReportRow = {
   changed: boolean;
 };
 
-type DailyInventoryShiftInventoryReport = {
+export type DailyInventoryShiftInventoryReport = {
   opening_snapshot: DailyInventorySnapshotSummary | null;
   closing_snapshot: DailyInventorySnapshotSummary;
   has_opening_snapshot: boolean;
@@ -60,7 +60,7 @@ type DailyInventoryShiftInventoryReport = {
   };
 };
 
-type DailyInventoryShiftRow = {
+export type DailyInventoryShiftRow = {
   id: string;
   shift_id: string;
   branch_id: string;

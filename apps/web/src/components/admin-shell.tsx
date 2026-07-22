@@ -8,6 +8,10 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { AdminWalkthrough, type AdminTourStep } from './admin-walkthrough';
 import { ChatWidget } from './chat/ChatWidget';
 import {
+  InventoryShiftItemBreakdown,
+  type DailyInventoryShiftRow
+} from '../app/(admin)/inventory-daily-count/inventory-shift-item-breakdown';
+import {
   apiRequest,
   clearAuthSession,
   getAccessToken,
@@ -170,6 +174,11 @@ type GlobalProductSearchRow = {
   isActive: boolean;
 };
 
+type InventoryNotificationDailyReport = {
+  closed_shifts: DailyInventoryShiftRow[];
+  open_shifts: DailyInventoryShiftRow[];
+};
+
 type SearchResultGroup = 'Pages' | 'Sales' | 'Customers' | 'Products';
 
 type SearchResultItem = {
@@ -206,6 +215,8 @@ type NavIconName =
 
 const THEME_STORAGE_KEY = 'vpos_admin_theme';
 const SIDEBAR_STORAGE_KEY = 'vpos_admin_sidebar_collapsed';
+const INVENTORY_SYNC_NOTIFICATION_READ_STORAGE_KEY = 'vpos_admin_inventory_sync_notification_read_ids';
+const MAX_INVENTORY_SYNC_NOTIFICATION_READ_IDS = 60;
 const ADMIN_WALKTHROUGH_DONE_KEY = 'vpos_web_admin_walkthrough_v1_done';
 const ADMIN_ROUTE_WALKTHROUGH_DONE_PREFIX = 'vpos_web_admin_walkthrough_route_';
 
@@ -277,6 +288,34 @@ function routeWalkthroughDoneKey(route: string): string {
   return `${ADMIN_ROUTE_WALKTHROUGH_DONE_PREFIX}${routeToTourToken(route)}`;
 }
 
+function readInventoryNotificationReadIds(): string[] {
+  if (typeof window === 'undefined') {
+    return [];
+  }
+  try {
+    const raw = window.localStorage.getItem(INVENTORY_SYNC_NOTIFICATION_READ_STORAGE_KEY);
+    const parsed = raw ? JSON.parse(raw) : [];
+    if (!Array.isArray(parsed)) {
+      return [];
+    }
+    return parsed
+      .filter((value): value is string => typeof value === 'string' && value.trim().length > 0)
+      .slice(-MAX_INVENTORY_SYNC_NOTIFICATION_READ_IDS);
+  } catch {
+    return [];
+  }
+}
+
+function persistInventoryNotificationReadIds(ids: string[]): void {
+  if (typeof window === 'undefined') {
+    return;
+  }
+  const compactIds = Array.from(new Set(ids.filter((value) => value.trim().length > 0))).slice(
+    -MAX_INVENTORY_SYNC_NOTIFICATION_READ_IDS
+  );
+  window.localStorage.setItem(INVENTORY_SYNC_NOTIFICATION_READ_STORAGE_KEY, JSON.stringify(compactIds));
+}
+
 function formatInventoryNotificationTime(value: string): string {
   const parsed = new Date(value);
   if (Number.isNaN(parsed.getTime())) {
@@ -288,6 +327,38 @@ function formatInventoryNotificationTime(value: string): string {
     hour: 'numeric',
     minute: '2-digit'
   });
+}
+
+function formatInventoryCount(value: number): string {
+  const rounded = Math.round(value * 100) / 100;
+  if (Number.isInteger(rounded)) {
+    return rounded.toLocaleString();
+  }
+  return rounded.toLocaleString(undefined, {
+    minimumFractionDigits: 0,
+    maximumFractionDigits: 2
+  });
+}
+
+function formatInventorySignedCount(value: number): string {
+  if (value === 0) {
+    return '0';
+  }
+  return `${value > 0 ? '+' : '-'}${formatInventoryCount(Math.abs(value))}`;
+}
+
+function formatInventorySnapshotCount(summary: DailyInventoryShiftRow['opening_snapshot_summary']): string {
+  if (!summary) {
+    return 'Not captured';
+  }
+  return `${formatInventoryCount(summary.qty_on_hand)} on hand`;
+}
+
+function buildInventoryDailyReportPath(reportDate: string): string {
+  const since = new Date(`${reportDate}T00:00:00`).toISOString();
+  const until = new Date(`${reportDate}T23:59:59.999`).toISOString();
+  const params = new URLSearchParams({ since, until });
+  return `/reports/inventory/daily-count?${params.toString()}`;
 }
 
 function buildEntityRouteSteps(route: string, slug: string, label: string): AdminTourStep[] {
@@ -761,6 +832,11 @@ export function AdminShell({ children }: { children: React.ReactNode }): JSX.Ele
   const [globalSearchLoadedAt, setGlobalSearchLoadedAt] = useState(0);
   const [inventorySyncNotification, setInventorySyncNotification] =
     useState<AfterShiftInventorySyncNotification | null>(null);
+  const [inventoryNotificationReadIds, setInventoryNotificationReadIds] = useState<string[]>([]);
+  const [inventoryNotificationModalOpen, setInventoryNotificationModalOpen] = useState(false);
+  const [inventoryReportShift, setInventoryReportShift] = useState<DailyInventoryShiftRow | null>(null);
+  const [inventoryReportLoading, setInventoryReportLoading] = useState(false);
+  const [inventoryReportError, setInventoryReportError] = useState<string | null>(null);
   const searchContainerRef = useRef<HTMLDivElement | null>(null);
   const searchInputRef = useRef<HTMLInputElement | null>(null);
 
@@ -771,6 +847,7 @@ export function AdminShell({ children }: { children: React.ReactNode }): JSX.Ele
 
     const storedSidebar = window.localStorage.getItem(SIDEBAR_STORAGE_KEY);
     setSidebarCollapsed(storedSidebar === '1');
+    setInventoryNotificationReadIds(readInventoryNotificationReadIds());
 
     setHasToken(Boolean(getAccessToken()));
     setRequiresPasswordChange(getSessionRequiresPasswordChange());
@@ -839,6 +916,7 @@ export function AdminShell({ children }: { children: React.ReactNode }): JSX.Ele
   useEffect(() => {
     if (!ready || !hasToken || !canViewAuditLogs) {
       setInventorySyncNotification(null);
+      setInventoryNotificationModalOpen(false);
       return;
     }
 
@@ -876,6 +954,84 @@ export function AdminShell({ children }: { children: React.ReactNode }): JSX.Ele
       window.clearInterval(intervalId);
     };
   }, [canViewAuditLogs, hasToken, ready]);
+
+  const inventoryNotificationRead = useMemo(
+    () => Boolean(inventorySyncNotification && inventoryNotificationReadIds.includes(inventorySyncNotification.id)),
+    [inventoryNotificationReadIds, inventorySyncNotification]
+  );
+  const inventoryNotificationUnread = Boolean(inventorySyncNotification && !inventoryNotificationRead);
+
+  useEffect(() => {
+    if (!inventoryNotificationModalOpen) {
+      return;
+    }
+    const notification = inventorySyncNotification;
+    if (!notification) {
+      setInventoryReportShift(null);
+      setInventoryReportLoading(false);
+      setInventoryReportError(null);
+      return;
+    }
+    const reportDate = notification.reportDate;
+    const shiftId = notification.shiftId;
+
+    let cancelled = false;
+    async function loadInventoryReport(): Promise<void> {
+      setInventoryReportLoading(true);
+      setInventoryReportError(null);
+      setInventoryReportShift(null);
+      try {
+        const payload = await apiRequest<InventoryNotificationDailyReport>(
+          buildInventoryDailyReportPath(reportDate)
+        );
+        if (cancelled) {
+          return;
+        }
+        const rows = [...(payload.closed_shifts ?? []), ...(payload.open_shifts ?? [])];
+        const shiftRow =
+          rows.find((row) => row.shift_id === shiftId || row.id === shiftId) ??
+          null;
+        if (!shiftRow) {
+          setInventoryReportError('Inventory report is synced but the matching shift row was not found yet.');
+        }
+        setInventoryReportShift(shiftRow);
+      } catch (cause) {
+        if (!cancelled) {
+          const message = cause instanceof Error ? cause.message : 'Unable to load inventory count report.';
+          setInventoryReportError(message);
+        }
+      } finally {
+        if (!cancelled) {
+          setInventoryReportLoading(false);
+        }
+      }
+    }
+
+    void loadInventoryReport();
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    inventoryNotificationModalOpen,
+    inventorySyncNotification?.id,
+    inventorySyncNotification?.reportDate,
+    inventorySyncNotification?.shiftId
+  ]);
+
+  useEffect(() => {
+    if (!inventoryNotificationModalOpen) {
+      return;
+    }
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        setInventoryNotificationModalOpen(false);
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => {
+      window.removeEventListener('keydown', handleKeyDown);
+    };
+  }, [inventoryNotificationModalOpen]);
 
   const visibleNavSections = useMemo(
     () => {
@@ -1314,6 +1470,33 @@ export function AdminShell({ children }: { children: React.ReactNode }): JSX.Ele
     setWalkthroughOpen(true);
   }
 
+  function openInventoryNotificationModal(): void {
+    setSearchOpen(false);
+    setInventoryNotificationModalOpen(true);
+  }
+
+  function closeInventoryNotificationModal(): void {
+    setInventoryNotificationModalOpen(false);
+  }
+
+  function setInventoryNotificationReadState(read: boolean): void {
+    if (!inventorySyncNotification) {
+      return;
+    }
+    const notificationId = inventorySyncNotification.id;
+    setInventoryNotificationReadIds((current) => {
+      const next = new Set(current);
+      if (read) {
+        next.add(notificationId);
+      } else {
+        next.delete(notificationId);
+      }
+      const nextIds = Array.from(next).slice(-MAX_INVENTORY_SYNC_NOTIFICATION_READ_IDS);
+      persistInventoryNotificationReadIds(nextIds);
+      return nextIds;
+    });
+  }
+
   function switchTheme(nextTheme: ThemeMode): void {
     setTheme(nextTheme);
     document.documentElement.classList.toggle('dark', nextTheme === 'dark');
@@ -1601,6 +1784,36 @@ export function AdminShell({ children }: { children: React.ReactNode }): JSX.Ele
 
             <div className="flex items-center gap-2">
               <button
+                aria-label={
+                  inventoryNotificationUnread
+                    ? 'Open unread after-shift inventory notification'
+                    : 'Open after-shift inventory notifications'
+                }
+                className={`relative rounded-lg border p-2 transition ${
+                  inventoryNotificationUnread
+                    ? 'border-emerald-300 bg-emerald-50 text-emerald-700 hover:bg-emerald-100 dark:border-emerald-700 dark:bg-emerald-950/40 dark:text-emerald-300 dark:hover:bg-emerald-950/70'
+                    : 'border-slate-300/70 text-slate-700 hover:bg-slate-200/70 dark:border-slate-700 dark:text-slate-200 dark:hover:bg-slate-800/70'
+                }`}
+                onClick={openInventoryNotificationModal}
+                title="After-shift inventory notifications"
+                type="button"
+              >
+                <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" aria-hidden="true">
+                  <path
+                    d="M15 17H9m9-3.5V10a6 6 0 0 0-12 0v3.5L4.5 16h15L18 13.5ZM10 19a2 2 0 0 0 4 0"
+                    stroke="currentColor"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    strokeWidth="2"
+                  />
+                </svg>
+                {inventoryNotificationUnread ? (
+                  <span className="absolute -right-1 -top-1 flex h-4 min-w-4 items-center justify-center rounded-full bg-rose-600 px-1 text-[10px] font-extrabold leading-none text-white ring-2 ring-white dark:ring-slate-950">
+                    1
+                  </span>
+                ) : null}
+              </button>
+              <button
                 data-tour="theme-toggle"
                 aria-label={theme === 'light' ? 'Switch to dark mode' : 'Switch to light mode'}
                 className="rounded-lg border border-slate-300/70 p-2 text-slate-700 transition hover:bg-slate-200/70 dark:border-slate-700 dark:text-slate-200 dark:hover:bg-slate-800/70"
@@ -1679,34 +1892,6 @@ export function AdminShell({ children }: { children: React.ReactNode }): JSX.Ele
         </header>
 
         <main className="px-4 py-4 md:px-6 md:py-5">
-          {inventorySyncNotification ? (
-            <section className="mb-3 rounded-2xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-emerald-950 shadow-sm dark:border-emerald-900/60 dark:bg-emerald-950/30 dark:text-emerald-100">
-              <div className="flex flex-wrap items-center justify-between gap-3">
-                <div className="min-w-0">
-                  <p className="text-[0.72rem] font-extrabold uppercase tracking-[0.16em] text-emerald-700 dark:text-emerald-300">
-                    After-shift sync committed
-                  </p>
-                  <p className="mt-1 text-sm font-semibold">
-                    Shift {inventorySyncNotification.shiftId} inventory count is synced and ready for review.
-                  </p>
-                  <p className="mt-0.5 text-xs text-emerald-700 dark:text-emerald-300">
-                    {inventorySyncNotification.lineCount !== null
-                      ? `${inventorySyncNotification.lineCount.toLocaleString()} item line${inventorySyncNotification.lineCount === 1 ? '' : 's'} committed`
-                      : 'Inventory count committed'}
-                    {' | '}
-                    Closed {formatInventoryNotificationTime(inventorySyncNotification.closedAt)}
-                    {inventorySyncNotification.cashierName ? ` | ${inventorySyncNotification.cashierName}` : ''}
-                  </p>
-                </div>
-                <Link
-                  className="rounded-lg bg-emerald-700 px-3 py-2 text-xs font-extrabold uppercase tracking-[0.08em] text-white shadow-sm transition hover:bg-emerald-800 dark:bg-emerald-300 dark:text-emerald-950 dark:hover:bg-emerald-200"
-                  href={inventorySyncNotification.href as Route}
-                >
-                  View Inventory Report
-                </Link>
-              </div>
-            </section>
-          ) : null}
           <section data-tour="workspace" className="rounded-2xl border border-slate-200/70 bg-white/80 p-4 shadow-sm dark:border-slate-800 dark:bg-slate-900/55 md:p-6">
             {platformOwnerRouteBlocked ? (
               <div className="rounded-2xl border border-slate-300/70 bg-slate-100 p-5 text-slate-700 dark:border-slate-700 dark:bg-slate-800/80 dark:text-slate-200">
@@ -1729,6 +1914,180 @@ export function AdminShell({ children }: { children: React.ReactNode }): JSX.Ele
           </section>
         </main>
       </div>
+      {inventoryNotificationModalOpen ? (
+        <div
+          className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-slate-950/55 p-3 py-6 md:items-center"
+          onMouseDown={(event) => {
+            if (event.target === event.currentTarget) {
+              closeInventoryNotificationModal();
+            }
+          }}
+          role="presentation"
+        >
+          <section
+            aria-labelledby="inventory-sync-notification-title"
+            aria-modal="true"
+            className="flex max-h-[calc(100vh-2rem)] w-full max-w-6xl flex-col overflow-hidden rounded-2xl border border-slate-200 bg-white text-slate-900 shadow-2xl dark:border-slate-700 dark:bg-slate-950 dark:text-slate-100"
+            role="dialog"
+          >
+            <header className="flex flex-wrap items-start justify-between gap-3 border-b border-slate-200 px-4 py-3 dark:border-slate-800 md:px-5">
+              <div className="min-w-0">
+                <p className="text-[0.72rem] font-extrabold uppercase tracking-[0.16em] text-brandPrimary">
+                  Notifications
+                </p>
+                <h2 id="inventory-sync-notification-title" className="mt-0.5 text-base font-semibold md:text-lg">
+                  After-shift inventory count report
+                </h2>
+                <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">
+                  Review the committed system count against the cashier input count.
+                </p>
+              </div>
+              <button
+                aria-label="Close notification report"
+                className="rounded-lg border border-slate-300/70 p-2 text-slate-700 transition hover:bg-slate-100 dark:border-slate-700 dark:text-slate-200 dark:hover:bg-slate-800"
+                onClick={closeInventoryNotificationModal}
+                type="button"
+              >
+                <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" aria-hidden="true">
+                  <path d="M6 6l12 12M18 6 6 18" stroke="currentColor" strokeLinecap="round" strokeWidth="2" />
+                </svg>
+              </button>
+            </header>
+
+            {!inventorySyncNotification ? (
+              <div className="p-5 text-sm text-slate-500 dark:text-slate-400">
+                No committed after-shift inventory sync notification is available yet.
+              </div>
+            ) : (
+              <>
+                <div className="border-b border-slate-200 px-4 py-3 dark:border-slate-800 md:px-5">
+                  <div className="flex flex-wrap items-center justify-between gap-3">
+                    <div className="min-w-0">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <span
+                          className={`rounded-full px-2 py-1 text-[11px] font-extrabold uppercase tracking-[0.08em] ${
+                            inventoryNotificationRead
+                              ? 'bg-slate-100 text-slate-600 dark:bg-slate-800 dark:text-slate-300'
+                              : 'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-300'
+                          }`}
+                        >
+                          {inventoryNotificationRead ? 'Read' : 'Unread'}
+                        </span>
+                        <span className="rounded-full bg-slate-100 px-2 py-1 text-[11px] font-semibold text-slate-600 dark:bg-slate-800 dark:text-slate-300">
+                          Shift {inventorySyncNotification.shiftId}
+                        </span>
+                      </div>
+                      <p className="mt-2 text-sm font-semibold text-slate-900 dark:text-slate-100">
+                        After-shift sync committed
+                      </p>
+                      <p className="mt-0.5 text-xs text-slate-500 dark:text-slate-400">
+                        {inventorySyncNotification.lineCount !== null
+                          ? `${inventorySyncNotification.lineCount.toLocaleString()} item line${inventorySyncNotification.lineCount === 1 ? '' : 's'} committed`
+                          : 'Inventory count committed'}
+                        {' | '}
+                        Closed {formatInventoryNotificationTime(inventorySyncNotification.closedAt)}
+                        {inventorySyncNotification.cashierName ? ` | ${inventorySyncNotification.cashierName}` : ''}
+                      </p>
+                    </div>
+                    <div className="flex flex-wrap items-center gap-2">
+                      <button
+                        className="rounded-lg border border-slate-300/70 px-3 py-2 text-xs font-semibold text-slate-700 transition hover:bg-slate-100 dark:border-slate-700 dark:text-slate-200 dark:hover:bg-slate-800"
+                        onClick={() => setInventoryNotificationReadState(!inventoryNotificationRead)}
+                        type="button"
+                      >
+                        {inventoryNotificationRead ? 'Mark Unread' : 'Mark Read'}
+                      </button>
+                      <Link
+                        className="rounded-lg bg-slate-900 px-3 py-2 text-xs font-semibold text-white transition hover:bg-slate-700 dark:bg-slate-100 dark:text-slate-900 dark:hover:bg-slate-200"
+                        href={inventorySyncNotification.href as Route}
+                        onClick={closeInventoryNotificationModal}
+                      >
+                        Open Full Report
+                      </Link>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="overflow-y-auto px-4 py-4 md:px-5">
+                  {inventoryReportLoading ? (
+                    <div className="grid gap-3">
+                      <div className="min-h-[76px] animate-pulse rounded-xl border border-slate-200 bg-slate-50 dark:border-slate-800 dark:bg-slate-900" />
+                      <div className="min-h-[240px] animate-pulse rounded-xl border border-slate-200 bg-slate-50 dark:border-slate-800 dark:bg-slate-900" />
+                    </div>
+                  ) : null}
+
+                  {inventoryReportError ? (
+                    <div className="rounded-xl border border-rose-200 bg-rose-50 px-3 py-2 text-sm text-rose-700 dark:border-rose-900/60 dark:bg-rose-950/30 dark:text-rose-300">
+                      {inventoryReportError}
+                    </div>
+                  ) : null}
+
+                  {!inventoryReportLoading && !inventoryReportError && inventoryReportShift ? (
+                    <div className="space-y-3">
+                      <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-4">
+                        <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-3 dark:border-slate-800 dark:bg-slate-900/60">
+                          <p className="text-[0.68rem] font-semibold uppercase tracking-[0.12em] text-slate-500 dark:text-slate-400">
+                            System Count
+                          </p>
+                          <p className="mt-1 text-sm font-extrabold text-slate-900 dark:text-slate-100">
+                            {formatInventorySnapshotCount(inventoryReportShift.opening_snapshot_summary)}
+                          </p>
+                          <p className="mt-0.5 text-xs text-slate-500 dark:text-slate-400">
+                            Opening snapshot
+                          </p>
+                        </div>
+                        <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-3 dark:border-slate-800 dark:bg-slate-900/60">
+                          <p className="text-[0.68rem] font-semibold uppercase tracking-[0.12em] text-slate-500 dark:text-slate-400">
+                            User Input Count
+                          </p>
+                          <p className="mt-1 text-sm font-extrabold text-slate-900 dark:text-slate-100">
+                            {formatInventorySnapshotCount(inventoryReportShift.closing_snapshot_summary)}
+                          </p>
+                          <p className="mt-0.5 text-xs text-slate-500 dark:text-slate-400">
+                            Cashier close input
+                          </p>
+                        </div>
+                        <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-3 dark:border-slate-800 dark:bg-slate-900/60">
+                          <p className="text-[0.68rem] font-semibold uppercase tracking-[0.12em] text-slate-500 dark:text-slate-400">
+                            Delta
+                          </p>
+                          <p className="mt-1 text-sm font-extrabold text-slate-900 dark:text-slate-100">
+                            {inventoryReportShift.inventory_report
+                              ? `${formatInventorySignedCount(inventoryReportShift.inventory_report.totals.delta_qty_on_hand)} on hand`
+                              : 'Unavailable'}
+                          </p>
+                          <p className="mt-0.5 text-xs text-slate-500 dark:text-slate-400">
+                            System vs input
+                          </p>
+                        </div>
+                        <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-3 dark:border-slate-800 dark:bg-slate-900/60">
+                          <p className="text-[0.68rem] font-semibold uppercase tracking-[0.12em] text-slate-500 dark:text-slate-400">
+                            Location
+                          </p>
+                          <p className="mt-1 break-words text-sm font-extrabold text-slate-900 dark:text-slate-100">
+                            {inventoryReportShift.location_name ?? 'Location not recorded'}
+                          </p>
+                          <p className="mt-0.5 text-xs text-slate-500 dark:text-slate-400">
+                            {inventoryReportShift.branch_name}
+                          </p>
+                        </div>
+                      </div>
+
+                      <InventoryShiftItemBreakdown row={inventoryReportShift} />
+                    </div>
+                  ) : null}
+
+                  {!inventoryReportLoading && !inventoryReportError && !inventoryReportShift ? (
+                    <div className="rounded-xl border border-dashed border-slate-300 px-4 py-5 text-sm text-slate-500 dark:border-slate-700 dark:text-slate-400">
+                      The inventory count report will appear here once the synced shift row is available.
+                    </div>
+                  ) : null}
+                </div>
+              </>
+            )}
+          </section>
+        </div>
+      ) : null}
       {!isPlatformOwner ? (
         <AdminWalkthrough
           onClose={() => {

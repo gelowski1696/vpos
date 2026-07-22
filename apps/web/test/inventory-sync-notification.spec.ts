@@ -22,6 +22,7 @@ describe('after-shift inventory sync notification', () => {
       expect.objectContaining({
         id: 'audit-1',
         shiftId: 'shift-1',
+        reportDate: '2026-06-23',
         href: '/inventory-daily-count?date=2026-06-23&shift_id=shift-1',
         cashierName: 'Cashier One',
         lineCount: 7,

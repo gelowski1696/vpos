@@ -11,6 +11,7 @@ export type InventorySyncAuditRow = {
 export type AfterShiftInventorySyncNotification = {
   id: string;
   shiftId: string;
+  reportDate: string;
   href: string;
   createdAt: string;
   closedAt: string;
@@ -70,6 +71,7 @@ export function buildAfterShiftInventorySyncNotification(
   return {
     id: row.id,
     shiftId,
+    reportDate,
     href,
     createdAt: row.created_at,
     closedAt,
