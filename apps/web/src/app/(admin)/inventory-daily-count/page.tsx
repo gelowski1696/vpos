@@ -1,6 +1,7 @@
 'use client';
 
-import { useEffect, useMemo, useState } from 'react';
+import { Suspense, useEffect, useMemo, useState } from 'react';
+import { useSearchParams } from 'next/navigation';
 import { useTablePagination } from '../../../lib/table-pagination';
 import { apiRequest } from '../../../lib/api-client';
 import { InventoryShiftItemBreakdown } from './inventory-shift-item-breakdown';
@@ -119,6 +120,19 @@ function shiftDateOnly(dateOnly: string, offset: number): string {
   const parsed = new Date(`${dateOnly}T00:00:00`);
   parsed.setDate(parsed.getDate() + offset);
   return toDateOnly(parsed);
+}
+
+function readInitialReportTarget(
+  today: string,
+  params: { get(name: string): string | null }
+): { date: string; shiftId: string | null } {
+  const date = params.get('date');
+  const shiftId = params.get('shift_id')?.trim() || null;
+  const reportDate = date && isDateOnly(date) ? date.trim() : today;
+  return {
+    date: reportDate,
+    shiftId
+  };
 }
 
 function formatDateTime(value: string | null | undefined): string {
@@ -376,11 +390,13 @@ function ShiftInventoryDetails({ row }: { row: DailyInventoryShiftRow }): JSX.El
 function ShiftInventoryTable({
   rows,
   selectedDate,
-  branchFilter
+  branchFilter,
+  targetShiftId
 }: {
   rows: DailyInventoryShiftRow[];
   selectedDate: string;
   branchFilter: string;
+  targetShiftId: string | null;
 }): JSX.Element {
   const [expandedShiftId, setExpandedShiftId] = useState<string | null>(null);
   const pagination = useTablePagination(rows, {
@@ -390,8 +406,26 @@ function ShiftInventoryTable({
   });
 
   useEffect(() => {
+    if (targetShiftId && rows.some((row) => row.shift_id === targetShiftId || row.id === targetShiftId)) {
+      setExpandedShiftId(targetShiftId);
+      return;
+    }
     setExpandedShiftId(null);
-  }, [selectedDate, branchFilter]);
+  }, [branchFilter, rows, selectedDate, targetShiftId]);
+
+  useEffect(() => {
+    if (!targetShiftId) {
+      return;
+    }
+    const targetIndex = rows.findIndex((row) => row.shift_id === targetShiftId || row.id === targetShiftId);
+    if (targetIndex < 0) {
+      return;
+    }
+    const targetPage = Math.floor(targetIndex / pagination.pageSize) + 1;
+    if (targetPage !== pagination.page) {
+      pagination.setPage(targetPage);
+    }
+  }, [pagination.page, pagination.pageSize, rows, targetShiftId]);
 
   const visiblePageButtons = useMemo(
     () => buildVisiblePageButtons(pagination.page, pagination.totalPages),
@@ -420,7 +454,8 @@ function ShiftInventoryTable({
           </div>
         ) : (
           pagination.pageRows.map((row) => {
-            const isExpanded = expandedShiftId === row.id;
+            const isTargetShift = targetShiftId === row.shift_id || targetShiftId === row.id;
+            const isExpanded = expandedShiftId === row.id || expandedShiftId === row.shift_id;
             const changeText =
               row.status === 'OPEN'
                 ? 'Awaiting close'
@@ -439,7 +474,11 @@ function ShiftInventoryTable({
               <article
                 key={row.id}
                 className={`rounded-xl border border-slate-200 bg-slate-50/80 p-3 shadow-sm transition-colors dark:border-slate-700 dark:bg-slate-900/50 ${
-                  isExpanded ? 'ring-1 ring-brandPrimary/20' : 'hover:bg-slate-50 dark:hover:bg-slate-900/70'
+                  isTargetShift
+                    ? 'ring-2 ring-emerald-300 dark:ring-emerald-700'
+                    : isExpanded
+                      ? 'ring-1 ring-brandPrimary/20'
+                      : 'hover:bg-slate-50 dark:hover:bg-slate-900/70'
                 }`}
               >
                 <div className="flex flex-wrap items-start justify-between gap-3">
@@ -447,6 +486,11 @@ function ShiftInventoryTable({
                     <span className={`inline-flex min-h-[28px] items-center rounded-full px-3 text-[0.74rem] font-extrabold uppercase tracking-[0.08em] ${statusTone(row.snapshot_state)}`}>
                       {shiftStatusLabel(row)}
                     </span>
+                    {isTargetShift ? (
+                      <span className="inline-flex min-h-[28px] items-center rounded-full bg-emerald-100 px-3 text-[0.7rem] font-extrabold uppercase tracking-[0.08em] text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-300">
+                        Synced Count
+                      </span>
+                    ) : null}
                     <div className="min-w-0">
                       <strong className="block break-words text-[0.88rem] text-slate-900 dark:text-slate-100">
                         {row.shift_id}
@@ -607,9 +651,12 @@ function ShiftInventoryTable({
   );
 }
 
-export default function DailyInventoryCountPage(): JSX.Element {
+function DailyInventoryCountPageContent(): JSX.Element {
   const today = useMemo(() => toDateOnly(new Date()), []);
+  const searchParams = useSearchParams();
+  const reportTargetSearch = searchParams.toString();
   const [selectedDate, setSelectedDate] = useState(today);
+  const [targetShiftId, setTargetShiftId] = useState<string | null>(null);
   const [branchFilter, setBranchFilter] = useState('ALL');
   const [branches, setBranches] = useState<BranchRecord[]>([]);
   const [loading, setLoading] = useState(true);
@@ -635,6 +682,17 @@ export default function DailyInventoryCountPage(): JSX.Element {
     [branchFilter, selectedBranch]
   );
   const isToday = selectedDate === today;
+
+  useEffect(() => {
+    const target = readInitialReportTarget(today, new URLSearchParams(reportTargetSearch));
+    setSelectedDate(target.date);
+    setTargetShiftId(target.shiftId);
+  }, [reportTargetSearch, today]);
+
+  function selectReportDate(nextDate: string): void {
+    setSelectedDate(nextDate);
+    setTargetShiftId(null);
+  }
 
   useEffect(() => {
     let cancelled = false;
@@ -736,7 +794,7 @@ export default function DailyInventoryCountPage(): JSX.Element {
               className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-normal text-slate-900 outline-none transition focus:border-brandPrimary dark:border-slate-600 dark:bg-slate-800 dark:text-slate-100"
               onChange={(event) => {
                 if (isDateOnly(event.target.value)) {
-                  setSelectedDate(event.target.value);
+                  selectReportDate(event.target.value);
                 }
               }}
               value={selectedDate}
@@ -747,7 +805,10 @@ export default function DailyInventoryCountPage(): JSX.Element {
             Branch
             <select
               className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-normal text-slate-900 outline-none transition focus:border-brandPrimary dark:border-slate-600 dark:bg-slate-800 dark:text-slate-100"
-              onChange={(event) => setBranchFilter(event.target.value)}
+              onChange={(event) => {
+                setBranchFilter(event.target.value);
+                setTargetShiftId(null);
+              }}
               value={branchFilter}
             >
               <option value="ALL">All Branches</option>
@@ -760,7 +821,7 @@ export default function DailyInventoryCountPage(): JSX.Element {
           </label>
           <button
             className="rounded-lg border border-slate-300 px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-100 dark:border-slate-600 dark:text-slate-200 dark:hover:bg-slate-800"
-            onClick={() => setSelectedDate(shiftDateOnly(selectedDate, -1))}
+            onClick={() => selectReportDate(shiftDateOnly(selectedDate, -1))}
             type="button"
           >
             Previous Day
@@ -771,14 +832,14 @@ export default function DailyInventoryCountPage(): JSX.Element {
                 ? 'bg-brandPrimary text-white shadow-sm'
                 : 'border border-brandPrimary text-brandPrimary hover:bg-brandPrimary/10 dark:border-brandPrimary dark:text-brandPrimary'
             }`}
-            onClick={() => setSelectedDate(today)}
+            onClick={() => selectReportDate(today)}
             type="button"
           >
             Today
           </button>
           <button
             className="rounded-lg border border-slate-300 px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-100 dark:border-slate-600 dark:text-slate-200 dark:hover:bg-slate-800"
-            onClick={() => setSelectedDate(shiftDateOnly(selectedDate, 1))}
+            onClick={() => selectReportDate(shiftDateOnly(selectedDate, 1))}
             type="button"
           >
             Next Day
@@ -844,9 +905,28 @@ export default function DailyInventoryCountPage(): JSX.Element {
             <p className="text-xs font-medium text-slate-500 dark:text-slate-400">Refreshing report...</p>
           ) : null}
 
-          <ShiftInventoryTable branchFilter={branchFilter} rows={shiftRows} selectedDate={selectedDate} />
+          <ShiftInventoryTable
+            branchFilter={branchFilter}
+            rows={shiftRows}
+            selectedDate={selectedDate}
+            targetShiftId={targetShiftId}
+          />
         </>
       ) : null}
     </main>
+  );
+}
+
+export default function DailyInventoryCountPage(): JSX.Element {
+  return (
+    <Suspense
+      fallback={
+        <main className="space-y-4" data-tour="inventory-daily-count-root">
+          <div className="min-h-[220px] animate-pulse rounded-2xl border border-slate-200 bg-white p-4 shadow-sm dark:border-slate-700 dark:bg-slate-900" />
+        </main>
+      }
+    >
+      <DailyInventoryCountPageContent />
+    </Suspense>
   );
 }

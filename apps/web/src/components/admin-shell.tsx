@@ -14,6 +14,11 @@ import {
   getSessionRequiresPasswordChange,
   getSessionRoles
 } from '../lib/api-client';
+import {
+  buildAfterShiftInventorySyncNotification,
+  type AfterShiftInventorySyncNotification,
+  type InventorySyncAuditRow
+} from '../lib/inventory-sync-notification';
 
 type ThemeMode = 'light' | 'dark';
 
@@ -270,6 +275,19 @@ function routeToTourToken(href: string): string {
 
 function routeWalkthroughDoneKey(route: string): string {
   return `${ADMIN_ROUTE_WALKTHROUGH_DONE_PREFIX}${routeToTourToken(route)}`;
+}
+
+function formatInventoryNotificationTime(value: string): string {
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) {
+    return value;
+  }
+  return parsed.toLocaleString(undefined, {
+    month: 'short',
+    day: '2-digit',
+    hour: 'numeric',
+    minute: '2-digit'
+  });
 }
 
 function buildEntityRouteSteps(route: string, slug: string, label: string): AdminTourStep[] {
@@ -741,6 +759,8 @@ export function AdminShell({ children }: { children: React.ReactNode }): JSX.Ele
   const [globalCustomerRows, setGlobalCustomerRows] = useState<GlobalCustomerSearchRow[]>([]);
   const [globalProductRows, setGlobalProductRows] = useState<GlobalProductSearchRow[]>([]);
   const [globalSearchLoadedAt, setGlobalSearchLoadedAt] = useState(0);
+  const [inventorySyncNotification, setInventorySyncNotification] =
+    useState<AfterShiftInventorySyncNotification | null>(null);
   const searchContainerRef = useRef<HTMLDivElement | null>(null);
   const searchInputRef = useRef<HTMLInputElement | null>(null);
 
@@ -815,6 +835,47 @@ export function AdminShell({ children }: { children: React.ReactNode }): JSX.Ele
     () => roles.includes('admin') || roles.includes('owner') || roles.includes('platform_owner'),
     [roles]
   );
+
+  useEffect(() => {
+    if (!ready || !hasToken || !canViewAuditLogs) {
+      setInventorySyncNotification(null);
+      return;
+    }
+
+    let active = true;
+    const loadInventorySyncNotification = async (): Promise<void> => {
+      try {
+        const query = new URLSearchParams({
+          action: 'SHIFT_CLOSE',
+          entity: 'Shift',
+          limit: '12'
+        });
+        const payload = await apiRequest<{ rows: InventorySyncAuditRow[] }>(`/reports/audit-logs?${query.toString()}`);
+        if (!active) {
+          return;
+        }
+        const notification =
+          (payload.rows ?? [])
+            .map((row) => buildAfterShiftInventorySyncNotification(row))
+            .find((row): row is AfterShiftInventorySyncNotification => Boolean(row)) ?? null;
+        setInventorySyncNotification(notification);
+      } catch {
+        if (active) {
+          setInventorySyncNotification(null);
+        }
+      }
+    };
+
+    void loadInventorySyncNotification();
+    const intervalId = window.setInterval(() => {
+      void loadInventorySyncNotification();
+    }, 30_000);
+
+    return () => {
+      active = false;
+      window.clearInterval(intervalId);
+    };
+  }, [canViewAuditLogs, hasToken, ready]);
 
   const visibleNavSections = useMemo(
     () => {
@@ -1618,6 +1679,34 @@ export function AdminShell({ children }: { children: React.ReactNode }): JSX.Ele
         </header>
 
         <main className="px-4 py-4 md:px-6 md:py-5">
+          {inventorySyncNotification ? (
+            <section className="mb-3 rounded-2xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-emerald-950 shadow-sm dark:border-emerald-900/60 dark:bg-emerald-950/30 dark:text-emerald-100">
+              <div className="flex flex-wrap items-center justify-between gap-3">
+                <div className="min-w-0">
+                  <p className="text-[0.72rem] font-extrabold uppercase tracking-[0.16em] text-emerald-700 dark:text-emerald-300">
+                    After-shift sync committed
+                  </p>
+                  <p className="mt-1 text-sm font-semibold">
+                    Shift {inventorySyncNotification.shiftId} inventory count is synced and ready for review.
+                  </p>
+                  <p className="mt-0.5 text-xs text-emerald-700 dark:text-emerald-300">
+                    {inventorySyncNotification.lineCount !== null
+                      ? `${inventorySyncNotification.lineCount.toLocaleString()} item line${inventorySyncNotification.lineCount === 1 ? '' : 's'} committed`
+                      : 'Inventory count committed'}
+                    {' | '}
+                    Closed {formatInventoryNotificationTime(inventorySyncNotification.closedAt)}
+                    {inventorySyncNotification.cashierName ? ` | ${inventorySyncNotification.cashierName}` : ''}
+                  </p>
+                </div>
+                <Link
+                  className="rounded-lg bg-emerald-700 px-3 py-2 text-xs font-extrabold uppercase tracking-[0.08em] text-white shadow-sm transition hover:bg-emerald-800 dark:bg-emerald-300 dark:text-emerald-950 dark:hover:bg-emerald-200"
+                  href={inventorySyncNotification.href as Route}
+                >
+                  View Inventory Report
+                </Link>
+              </div>
+            </section>
+          ) : null}
           <section data-tour="workspace" className="rounded-2xl border border-slate-200/70 bg-white/80 p-4 shadow-sm dark:border-slate-800 dark:bg-slate-900/55 md:p-6">
             {platformOwnerRouteBlocked ? (
               <div className="rounded-2xl border border-slate-300/70 bg-slate-100 p-5 text-slate-700 dark:border-slate-700 dark:bg-slate-800/80 dark:text-slate-200">

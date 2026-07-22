@@ -3338,21 +3338,29 @@ export class SyncService {
       const closedAt = closedAtRaw ? new Date(closedAtRaw) : new Date();
       const closingInventorySnapshot =
         (payload.closing_inventory_snapshot ?? payload.closingInventorySnapshot ?? null) as unknown;
+      const closingInventorySummary = this.summarizeShiftInventorySnapshot(closingInventorySnapshot);
+      const resolvedClosedAt = Number.isNaN(closedAt.getTime()) ? new Date() : closedAt;
       await client.shift.updateMany({
         where: { id: shiftId, companyId },
         data: {
           status: 'CLOSED',
           closingCash: Number(closingCash.toFixed(2)),
-          closedAt: Number.isNaN(closedAt.getTime()) ? new Date() : closedAt,
+          closedAt: resolvedClosedAt,
           closingInventorySnapshot
         }
       });
       if (client.auditLog && typeof client.auditLog.create === 'function') {
         const closeMetadata: Record<string, unknown> = {
           closing_cash: Number(closingCash.toFixed(2)),
-          closed_at: Number.isNaN(closedAt.getTime()) ? new Date().toISOString() : closedAt.toISOString(),
+          closed_at: resolvedClosedAt.toISOString(),
           device_id: context?.deviceId?.trim() || null,
-          source: 'sync_push'
+          source: 'sync_push',
+          inventory_count_committed: closingInventorySummary.lineCount > 0,
+          inventory_count_line_count: closingInventorySummary.lineCount,
+          inventory_count_location_id: closingInventorySummary.locationId,
+          inventory_count_captured_at: closingInventorySummary.capturedAt,
+          inventory_report_date: resolvedClosedAt.toISOString().slice(0, 10),
+          inventory_report_path: `/inventory-daily-count?date=${resolvedClosedAt.toISOString().slice(0, 10)}&shift_id=${encodeURIComponent(shiftId)}`
         };
         if (shiftSecurity) {
           closeMetadata.cash_variance = shiftSecurity.cash_variance;
@@ -3708,6 +3716,23 @@ export class SyncService {
       source_channel: attachment.source_channel ?? null,
       created_at: attachment.created_at
     }));
+  }
+
+  private summarizeShiftInventorySnapshot(snapshot: unknown): {
+    lineCount: number;
+    locationId: string | null;
+    capturedAt: string | null;
+  } {
+    if (!snapshot || typeof snapshot !== 'object' || Array.isArray(snapshot)) {
+      return { lineCount: 0, locationId: null, capturedAt: null };
+    }
+    const payload = snapshot as Record<string, unknown>;
+    const lines = Array.isArray(payload.lines) ? payload.lines : [];
+    return {
+      lineCount: lines.length,
+      locationId: this.asString(payload.locationId ?? payload.location_id) ?? null,
+      capturedAt: this.asString(payload.capturedAt ?? payload.captured_at) ?? null
+    };
   }
 
   private async materializePettyCashAttachmentFile(
