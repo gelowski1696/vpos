@@ -20,7 +20,9 @@ import {
 } from '../lib/api-client';
 import {
   buildAfterShiftInventorySyncNotification,
+  resolveInventoryCountDiscrepancyStatus,
   type AfterShiftInventorySyncNotification,
+  type InventoryCountDiscrepancyStatus,
   type InventorySyncAuditRow
 } from '../lib/inventory-sync-notification';
 
@@ -352,6 +354,46 @@ function formatInventorySnapshotCount(summary: DailyInventoryShiftRow['opening_s
     return 'Not captured';
   }
   return `${formatInventoryCount(summary.qty_on_hand)} on hand`;
+}
+
+function inventoryCountDiscrepancyLabel(status: InventoryCountDiscrepancyStatus): string {
+  if (status === 'mismatch') {
+    return 'Discrepancy';
+  }
+  if (status === 'match') {
+    return 'No discrepancy';
+  }
+  return 'Checking count';
+}
+
+function inventoryCountDiscrepancyPillClass(status: InventoryCountDiscrepancyStatus): string {
+  if (status === 'mismatch') {
+    return 'border-rose-200 bg-rose-50 text-rose-700 dark:border-rose-900/60 dark:bg-rose-950/35 dark:text-rose-300';
+  }
+  if (status === 'match') {
+    return 'border-emerald-200 bg-emerald-50 text-emerald-700 dark:border-emerald-900/60 dark:bg-emerald-950/35 dark:text-emerald-300';
+  }
+  return 'border-slate-200 bg-slate-100 text-slate-600 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-300';
+}
+
+function inventoryCountDiscrepancyCardClass(status: InventoryCountDiscrepancyStatus): string {
+  if (status === 'mismatch') {
+    return 'border-rose-200 bg-rose-50 dark:border-rose-900/60 dark:bg-rose-950/30';
+  }
+  if (status === 'match') {
+    return 'border-emerald-200 bg-emerald-50 dark:border-emerald-900/60 dark:bg-emerald-950/30';
+  }
+  return 'border-slate-200 bg-slate-50 dark:border-slate-800 dark:bg-slate-900/60';
+}
+
+function inventoryCountDiscrepancyTextClass(status: InventoryCountDiscrepancyStatus): string {
+  if (status === 'mismatch') {
+    return 'text-rose-700 dark:text-rose-300';
+  }
+  if (status === 'match') {
+    return 'text-emerald-700 dark:text-emerald-300';
+  }
+  return 'text-slate-900 dark:text-slate-100';
 }
 
 function buildInventoryDailyReportPath(reportDate: string): string {
@@ -831,6 +873,7 @@ export function AdminShell({ children }: { children: React.ReactNode }): JSX.Ele
   const [globalProductRows, setGlobalProductRows] = useState<GlobalProductSearchRow[]>([]);
   const [globalSearchLoadedAt, setGlobalSearchLoadedAt] = useState(0);
   const [inventorySyncNotifications, setInventorySyncNotifications] = useState<AfterShiftInventorySyncNotification[]>([]);
+  const [inventoryNotificationDiscrepancyById, setInventoryNotificationDiscrepancyById] = useState<Record<string, InventoryCountDiscrepancyStatus>>({});
   const [selectedInventorySyncNotificationId, setSelectedInventorySyncNotificationId] = useState<string | null>(null);
   const [inventoryNotificationReadIds, setInventoryNotificationReadIds] = useState<string[]>([]);
   const [inventoryNotificationDropdownOpen, setInventoryNotificationDropdownOpen] = useState(false);
@@ -918,6 +961,7 @@ export function AdminShell({ children }: { children: React.ReactNode }): JSX.Ele
   useEffect(() => {
     if (!ready || !hasToken || !canViewAuditLogs) {
       setInventorySyncNotifications([]);
+      setInventoryNotificationDiscrepancyById({});
       setSelectedInventorySyncNotificationId(null);
       setInventoryNotificationDropdownOpen(false);
       setInventoryNotificationModalOpen(false);
@@ -947,6 +991,7 @@ export function AdminShell({ children }: { children: React.ReactNode }): JSX.Ele
       } catch {
         if (active) {
           setInventorySyncNotifications([]);
+          setInventoryNotificationDiscrepancyById({});
           setSelectedInventorySyncNotificationId(null);
         }
       }
@@ -962,6 +1007,64 @@ export function AdminShell({ children }: { children: React.ReactNode }): JSX.Ele
       window.clearInterval(intervalId);
     };
   }, [canViewAuditLogs, hasToken, ready]);
+
+  useEffect(() => {
+    if (!ready || !hasToken || !canViewAuditLogs) {
+      return;
+    }
+    if (inventorySyncNotifications.length === 0) {
+      setInventoryNotificationDiscrepancyById({});
+      return;
+    }
+
+    let cancelled = false;
+    async function loadInventoryNotificationDiscrepancyStatuses(): Promise<void> {
+      const notificationsByDate = new Map<string, AfterShiftInventorySyncNotification[]>();
+      inventorySyncNotifications.forEach((notification) => {
+        const rows = notificationsByDate.get(notification.reportDate) ?? [];
+        rows.push(notification);
+        notificationsByDate.set(notification.reportDate, rows);
+      });
+
+      const nextStatuses: Record<string, InventoryCountDiscrepancyStatus> = {};
+      await Promise.all(
+        Array.from(notificationsByDate.entries()).map(async ([reportDate, notifications]) => {
+          try {
+            const payload = await apiRequest<InventoryNotificationDailyReport>(
+              buildInventoryDailyReportPath(reportDate)
+            );
+            const reportRows = [...(payload.closed_shifts ?? []), ...(payload.open_shifts ?? [])];
+            notifications.forEach((notification) => {
+              const shiftRow =
+                reportRows.find((row) => row.shift_id === notification.shiftId || row.id === notification.shiftId) ??
+                null;
+              nextStatuses[notification.id] = resolveInventoryCountDiscrepancyStatus(shiftRow);
+            });
+          } catch {
+            notifications.forEach((notification) => {
+              nextStatuses[notification.id] = 'unknown';
+            });
+          }
+        })
+      );
+
+      if (cancelled) {
+        return;
+      }
+      setInventoryNotificationDiscrepancyById(() => {
+        const next: Record<string, InventoryCountDiscrepancyStatus> = {};
+        inventorySyncNotifications.forEach((notification) => {
+          next[notification.id] = nextStatuses[notification.id] ?? 'unknown';
+        });
+        return next;
+      });
+    }
+
+    void loadInventoryNotificationDiscrepancyStatuses();
+    return () => {
+      cancelled = true;
+    };
+  }, [canViewAuditLogs, hasToken, inventorySyncNotifications, ready]);
 
   const inventorySyncNotification = useMemo(
     () =>
@@ -980,6 +1083,16 @@ export function AdminShell({ children }: { children: React.ReactNode }): JSX.Ele
     [inventoryNotificationReadIds, inventorySyncNotifications]
   );
   const inventoryNotificationUnread = inventoryNotificationUnreadCount > 0;
+  const inventoryNotificationModalDiscrepancyStatus = useMemo<InventoryCountDiscrepancyStatus>(() => {
+    const reportStatus = resolveInventoryCountDiscrepancyStatus(inventoryReportShift);
+    if (reportStatus !== 'unknown') {
+      return reportStatus;
+    }
+    if (!inventorySyncNotification) {
+      return 'unknown';
+    }
+    return inventoryNotificationDiscrepancyById[inventorySyncNotification.id] ?? 'unknown';
+  }, [inventoryNotificationDiscrepancyById, inventoryReportShift, inventorySyncNotification]);
 
   useEffect(() => {
     if (!inventoryNotificationModalOpen) {
@@ -994,6 +1107,7 @@ export function AdminShell({ children }: { children: React.ReactNode }): JSX.Ele
     }
     const reportDate = notification.reportDate;
     const shiftId = notification.shiftId;
+    const notificationId = notification.id;
 
     let cancelled = false;
     async function loadInventoryReport(): Promise<void> {
@@ -1015,6 +1129,12 @@ export function AdminShell({ children }: { children: React.ReactNode }): JSX.Ele
           setInventoryReportError('Inventory report is synced but the matching shift row was not found yet.');
         }
         setInventoryReportShift(shiftRow);
+        if (shiftRow) {
+          setInventoryNotificationDiscrepancyById((current) => ({
+            ...current,
+            [notificationId]: resolveInventoryCountDiscrepancyStatus(shiftRow)
+          }));
+        }
       } catch (cause) {
         if (!cancelled) {
           const message = cause instanceof Error ? cause.message : 'Unable to load inventory count report.';
@@ -1874,6 +1994,7 @@ export function AdminShell({ children }: { children: React.ReactNode }): JSX.Ele
                       ) : (
                         inventorySyncNotifications.map((notification) => {
                           const isRead = inventoryNotificationReadIds.includes(notification.id);
+                          const discrepancyStatus = inventoryNotificationDiscrepancyById[notification.id] ?? 'unknown';
                           return (
                             <button
                               className={`flex w-full items-start gap-3 px-4 py-3 text-left transition ${
@@ -1913,6 +2034,11 @@ export function AdminShell({ children }: { children: React.ReactNode }): JSX.Ele
                                 </span>
                                 <span className="mt-0.5 block text-xs text-slate-600 dark:text-slate-300">
                                   Shift {notification.shiftId} inventory count is ready.
+                                </span>
+                                <span
+                                  className={`mt-2 inline-flex rounded-full border px-2 py-0.5 text-[10px] font-extrabold uppercase tracking-[0.08em] ${inventoryCountDiscrepancyPillClass(discrepancyStatus)}`}
+                                >
+                                  {inventoryCountDiscrepancyLabel(discrepancyStatus)}
                                 </span>
                                 <span className="mt-1 block text-[11px] text-slate-500 dark:text-slate-400">
                                   {notification.lineCount !== null
@@ -2093,6 +2219,11 @@ export function AdminShell({ children }: { children: React.ReactNode }): JSX.Ele
                         <span className="rounded-full bg-slate-100 px-2 py-1 text-[11px] font-semibold text-slate-600 dark:bg-slate-800 dark:text-slate-300">
                           Shift {inventorySyncNotification.shiftId}
                         </span>
+                        <span
+                          className={`rounded-full border px-2 py-1 text-[11px] font-extrabold uppercase tracking-[0.08em] ${inventoryCountDiscrepancyPillClass(inventoryNotificationModalDiscrepancyStatus)}`}
+                        >
+                          {inventoryCountDiscrepancyLabel(inventoryNotificationModalDiscrepancyStatus)}
+                        </span>
                       </div>
                       <p className="mt-2 text-sm font-semibold text-slate-900 dark:text-slate-100">
                         After-shift sync committed
@@ -2141,7 +2272,7 @@ export function AdminShell({ children }: { children: React.ReactNode }): JSX.Ele
 
                   {!inventoryReportLoading && !inventoryReportError && inventoryReportShift ? (
                     <div className="space-y-3">
-                      <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-4">
+                      <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-5">
                         <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-3 dark:border-slate-800 dark:bg-slate-900/60">
                           <p className="text-[0.68rem] font-semibold uppercase tracking-[0.12em] text-slate-500 dark:text-slate-400">
                             System Count
@@ -2162,6 +2293,17 @@ export function AdminShell({ children }: { children: React.ReactNode }): JSX.Ele
                           </p>
                           <p className="mt-0.5 text-xs text-slate-500 dark:text-slate-400">
                             Cashier close input
+                          </p>
+                        </div>
+                        <div className={`rounded-xl border px-3 py-3 ${inventoryCountDiscrepancyCardClass(inventoryNotificationModalDiscrepancyStatus)}`}>
+                          <p className="text-[0.68rem] font-semibold uppercase tracking-[0.12em] text-slate-500 dark:text-slate-400">
+                            Discrepancy
+                          </p>
+                          <p className={`mt-1 text-sm font-extrabold ${inventoryCountDiscrepancyTextClass(inventoryNotificationModalDiscrepancyStatus)}`}>
+                            {inventoryCountDiscrepancyLabel(inventoryNotificationModalDiscrepancyStatus)}
+                          </p>
+                          <p className="mt-0.5 text-xs text-slate-500 dark:text-slate-400">
+                            System count vs user input
                           </p>
                         </div>
                         <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-3 dark:border-slate-800 dark:bg-slate-900/60">

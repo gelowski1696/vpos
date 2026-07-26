@@ -1,4 +1,7 @@
-import { buildAfterShiftInventorySyncNotification } from '../src/lib/inventory-sync-notification';
+import {
+  buildAfterShiftInventorySyncNotification,
+  resolveInventoryCountDiscrepancyStatus
+} from '../src/lib/inventory-sync-notification';
 
 describe('after-shift inventory sync notification', () => {
   it('builds a direct inventory report link for committed shift count syncs', () => {
@@ -42,5 +45,62 @@ describe('after-shift inventory sync notification', () => {
         metadata: {}
       })
     ).toBeNull();
+  });
+
+  it('marks inventory count notifications as mismatched when system and user input counts differ', () => {
+    expect(
+      resolveInventoryCountDiscrepancyStatus({
+        inventory_report: {
+          rows: [
+            {
+              is_lpg: false,
+              system_qty_on_hand: 10,
+              cashier_qty_on_hand: 7
+            }
+          ]
+        }
+      })
+    ).toBe('mismatch');
+  });
+
+  it('marks inventory count notifications as matched when system and user input counts are equal', () => {
+    expect(
+      resolveInventoryCountDiscrepancyStatus({
+        inventory_report: {
+          rows: [
+            {
+              is_lpg: false,
+              system_qty_on_hand: 10,
+              cashier_qty_on_hand: 10
+            },
+            {
+              is_lpg: true,
+              system_qty_full: 4,
+              cashier_qty_full: 4,
+              system_qty_empty: 2,
+              cashier_qty_empty: 2
+            }
+          ]
+        }
+      })
+    ).toBe('match');
+  });
+
+  it('detects LPG full or empty count discrepancies', () => {
+    expect(
+      resolveInventoryCountDiscrepancyStatus({
+        inventory_report: {
+          rows: [
+            {
+              is_lpg: true,
+              system_qty_full: 4,
+              cashier_qty_full: 4,
+              system_qty_empty: 2,
+              cashier_qty_empty: 1
+            }
+          ]
+        }
+      })
+    ).toBe('mismatch');
   });
 });
