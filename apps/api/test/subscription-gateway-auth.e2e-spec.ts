@@ -65,4 +65,36 @@ describe('SubscriptionGatewayService auth retry', () => {
     expect(tokenService.getBearerToken).toHaveBeenNthCalledWith(1, false);
     expect(tokenService.getBearerToken).toHaveBeenNthCalledWith(2, true);
   });
+
+  it('uses Subsman next billing date as entitlement grace until', async () => {
+    const tokenService = {
+      isEnabled: jest.fn().mockReturnValue(false),
+      getBearerToken: jest.fn()
+    } as unknown as SubmanTokenService;
+
+    const fetchMock = jest.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      text: async () =>
+        JSON.stringify({
+          data: [
+            {
+              id: 'TENANT_BILLING_DATE',
+              status: 'ACTIVE',
+              plan: {
+                name: 'Pro Warehouse'
+              },
+              endDate: '2026-12-31T00:00:00.000Z',
+              nextBillingDate: '2026-02-01T00:00:00.000Z'
+            }
+          ]
+        })
+    });
+    global.fetch = fetchMock as unknown as typeof fetch;
+
+    const service = new SubscriptionGatewayService(tokenService);
+    const result = await service.fetchCurrentEntitlement('TENANT_BILLING_DATE');
+
+    expect(result.payload.grace_until).toBe('2026-02-01T00:00:00.000Z');
+  });
 });

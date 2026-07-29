@@ -169,6 +169,7 @@ export class EntitlementsController {
       status?: 'ACTIVE' | 'PAST_DUE' | 'SUSPENDED' | 'CANCELED';
       features?: Record<string, unknown>;
       grace_until?: string | null;
+      next_billing_date?: string | null;
       admin_email?: string;
       admin_password?: string;
     }
@@ -380,6 +381,7 @@ export class EntitlementsController {
       tenancy_mode?: 'SHARED_DB' | 'DEDICATED_DB';
       datastore_ref?: string;
       subman_api_key?: string;
+      next_billing_date?: string | null;
       admin_email?: string;
       admin_password?: string;
     }

@@ -2617,6 +2617,7 @@ describe('VPOS API (integration)', () => {
           client_id: 'TENANT_REMOTE_1',
           status: 'ACTIVE',
           plan_code: 'PRO_SINGLE_WAREHOUSE',
+          nextBillingDate: '2026-02-01T00:00:00.000Z',
           features: {
             max_branches: 1,
             branch_mode: 'SINGLE',
@@ -2672,6 +2673,7 @@ describe('VPOS API (integration)', () => {
       expect(provision.body.datastore_ref).toBe('tenant-remote-1-db');
       expect(provision.body.datastore_migration_state).toBe('PENDING');
       expect(provision.body.entitlement.inventoryMode).toBe('STORE_WAREHOUSE');
+      expect(provision.body.entitlement.graceUntil).toBe('2026-02-01T00:00:00.000Z');
       expect(provision.body.subscription_source.entitlement).toBe('network');
       expect(provision.body.subscription_source.profile).toBe('network');
 

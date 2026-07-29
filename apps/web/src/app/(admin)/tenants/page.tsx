@@ -680,6 +680,7 @@ export default function TenantsPage(): JSX.Element {
               ? provisionForm.datastore_ref.trim() || undefined
               : undefined,
           subman_api_key: provisionForm.subman_api_key.trim() || undefined,
+          next_billing_date: selectedSubscription?.next_billing_date ?? undefined,
           bootstrap_defaults: false,
           admin_email: provisionForm.admin_email.trim() || undefined,
           admin_password: provisionForm.admin_password || undefined

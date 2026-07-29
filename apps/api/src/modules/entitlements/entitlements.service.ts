@@ -125,6 +125,7 @@ type ProvisionTenantInput = {
   status?: EntitlementStatus;
   features?: Record<string, unknown>;
   grace_until?: string | null;
+  next_billing_date?: string | null;
   admin_email?: string;
   admin_password?: string;
 };
@@ -156,6 +157,7 @@ type ProvisionFromSubscriptionInput = {
   tenancy_mode?: TenancyDatastoreMode | 'SHARED_DB' | 'DEDICATED_DB';
   datastore_ref?: string;
   subman_api_key?: string;
+  next_billing_date?: string | null;
   admin_email?: string;
   admin_password?: string;
 };
@@ -1268,7 +1270,15 @@ export class EntitlementsService {
         ? EntitlementInventoryMode.STORE_WAREHOUSE
         : EntitlementInventoryMode.STORE_ONLY;
 
-    const graceValue = payload.grace_until ?? featureBag.grace_until;
+    const graceValue =
+      payload.grace_until ??
+      payload.graceUntil ??
+      featureBag.grace_until ??
+      featureBag.graceUntil ??
+      payload.next_billing_date ??
+      payload.nextBillingDate ??
+      featureBag.next_billing_date ??
+      featureBag.nextBillingDate;
     const graceDate =
       typeof graceValue === 'string' && graceValue.trim()
         ? new Date(graceValue)
@@ -2296,6 +2306,12 @@ export class EntitlementsService {
       client_id: clientId
     });
     const template = this.resolveProvisionTemplateInput(input.template, inferredTemplate);
+    const nextBillingDate =
+      input.next_billing_date ??
+      this.readFirstString(entitlementGateway.payload, ['next_billing_date', 'nextBillingDate']) ??
+      null;
+    const graceUntil =
+      this.readFirstString(entitlementGateway.payload, ['grace_until', 'graceUntil']) ?? nextBillingDate;
 
     const result = await this.provisionTenant({
       client_id: clientId,
@@ -2312,7 +2328,8 @@ export class EntitlementsService {
         entitlementGateway.payload.features && typeof entitlementGateway.payload.features === 'object'
           ? (entitlementGateway.payload.features as Record<string, unknown>)
           : {},
-      grace_until: this.readFirstString(entitlementGateway.payload, ['grace_until', 'graceUntil']) ?? null,
+      grace_until: graceUntil,
+      next_billing_date: nextBillingDate,
       admin_email: adminEmail ?? undefined,
       admin_password: adminPassword
     });

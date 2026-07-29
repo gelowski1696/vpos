@@ -445,8 +445,8 @@ export class SubscriptionGatewayService {
       plan_id: this.toStringOrNull(row.planId) ?? this.toStringOrNull(plan.id),
       plan_name: this.toStringOrNull(plan.name),
       start_date: this.toStringOrNull(row.startDate),
-      end_date: this.toStringOrNull(row.endDate),
-      next_billing_date: this.toStringOrNull(row.nextBillingDate),
+      end_date: this.toStringOrNull(row.endDate) ?? this.toStringOrNull(row.end_date),
+      next_billing_date: this.toStringOrNull(row.nextBillingDate) ?? this.toStringOrNull(row.next_billing_date),
       client_id_hint: this.toClientIdHint(row)
     };
   }
@@ -519,11 +519,15 @@ export class SubscriptionGatewayService {
       status: this.statusFromLegacy(chosen.status),
       plan_code: planCode,
       grace_until:
-        typeof chosen.endDate === 'string'
-          ? chosen.endDate
-          : typeof chosen.nextBillingDate === 'string'
-            ? chosen.nextBillingDate
-            : null
+        typeof chosen.nextBillingDate === 'string'
+          ? chosen.nextBillingDate
+          : typeof chosen.next_billing_date === 'string'
+            ? chosen.next_billing_date
+            : typeof chosen.endDate === 'string'
+              ? chosen.endDate
+              : typeof chosen.end_date === 'string'
+                ? chosen.end_date
+                : null
     };
   }
 
