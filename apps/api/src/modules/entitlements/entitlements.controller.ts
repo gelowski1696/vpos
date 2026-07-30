@@ -195,8 +195,11 @@ export class EntitlementsController {
 
   @Roles('platform_owner')
   @Get('owner/tenants')
-  listTenants() {
-    return this.entitlementsService.listTenantsForOwner();
+  listTenants(@Query('sync') syncRaw?: string) {
+    const syncFromControlPlane = ['1', 'true', 'yes', 'subman', 'gateway'].includes(
+      String(syncRaw ?? '').trim().toLowerCase()
+    );
+    return this.entitlementsService.listTenantsForOwner({ syncFromControlPlane });
   }
 
   @Roles('platform_owner')

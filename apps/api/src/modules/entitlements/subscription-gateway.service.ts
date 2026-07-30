@@ -42,6 +42,7 @@ type FetchOptions = {
   allowStaleOnFailure?: boolean;
   apiKeyOverride?: string;
   bearerTokenOverride?: string;
+  forceRefresh?: boolean;
 };
 
 type CacheEntry = {
@@ -604,12 +605,14 @@ export class SubscriptionGatewayService {
 
   async fetchCurrentEntitlement(clientId: string, options: FetchOptions = {}): Promise<SubscriptionGatewayResult> {
     const now = Date.now();
-    const freshCache = this.getFreshCache(clientId, now);
-    if (freshCache) {
-      return this.toResult(freshCache, 'cache', false);
+    if (!options.forceRefresh) {
+      const freshCache = this.getFreshCache(clientId, now);
+      if (freshCache) {
+        return this.toResult(freshCache, 'cache', false);
+      }
     }
 
-    if (this.isCircuitOpen(now)) {
+    if (this.isCircuitOpen(now) && !options.forceRefresh) {
       const staleCache = this.getStaleCache(clientId, now);
       if (options.allowStaleOnFailure && staleCache) {
         return this.toResult(staleCache, 'cache', true);

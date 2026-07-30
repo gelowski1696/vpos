@@ -2489,6 +2489,67 @@ describe('VPOS API (integration)', () => {
     expect(response.body.some((row: { client_id?: string }) => row.client_id === 'TENANT_ACME')).toBe(true);
   });
 
+  it('45b) refreshes owner tenant summaries from SubMan before returning rows', async () => {
+    const owner = await loginAsPlatformOwner();
+    const expiredAt = '2026-07-01T00:00:00.000Z';
+    const gatewaySpy = jest
+      .spyOn(subscriptionGateway, 'fetchCurrentEntitlement')
+      .mockImplementation(async (clientId: string) => ({
+        payload: {
+          client_id: clientId,
+          status: clientId === 'DEMO' ? 'EXPIRED' : 'ACTIVE',
+          plan_code: clientId === 'DEMO' ? 'PRO_SINGLE_WAREHOUSE' : 'PRO_MULTI',
+          grace_until: clientId === 'DEMO' ? expiredAt : null
+        },
+        meta: {
+          source: 'network',
+          stale: false,
+          fetchedAt: new Date().toISOString(),
+          failureCount: 0,
+          circuitOpenUntil: null
+        }
+      }));
+
+    try {
+      const response = await request(app.getHttpServer())
+        .get('/api/platform/owner/tenants?sync=subman')
+        .set('Authorization', `Bearer ${owner.access}`)
+        .expect(200);
+
+      const demo = (response.body as Array<{
+        client_id: string;
+        subscription_status: string;
+        entitlement: { status: string; graceUntil: string | null };
+      }>).find((row) => row.client_id === 'DEMO');
+
+      expect(demo).toBeDefined();
+      expect(demo!.subscription_status).toBe('PAST_DUE');
+      expect(demo!.entitlement.status).toBe('PAST_DUE');
+      expect(demo!.entitlement.graceUntil).toBe(expiredAt);
+      expect(gatewaySpy).toHaveBeenCalledWith(
+        'DEMO',
+        expect.objectContaining({
+          allowStaleOnFailure: false,
+          forceRefresh: true
+        })
+      );
+    } finally {
+      gatewaySpy.mockRestore();
+      await request(app.getHttpServer())
+        .post('/api/platform/webhooks/subscription')
+        .set('X-Client-Id', 'DEMO')
+        .send({
+          event_id: `evt-owner-sync-restore-${Date.now()}`,
+          event_type: 'subscription.updated',
+          occurred_at: new Date().toISOString(),
+          client_id: 'DEMO',
+          status: 'ACTIVE',
+          plan_code: 'PRO_MULTI'
+        })
+        .expect(201);
+    }
+  });
+
   it('46) denies non-owner role from owner tenant console endpoints', async () => {
     const admin = await loginAs('admin@vpos.local', 'Admin@123');
 

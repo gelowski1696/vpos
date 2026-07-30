@@ -108,6 +108,10 @@ type SyncResult = ApplyResult & {
   };
 };
 
+type ControlPlaneSyncOptions = {
+  forceRefresh?: boolean;
+};
+
 type EntitlementWriteScope = 'TRANSACTIONAL' | 'MASTER_DATA';
 type ProvisionTemplate = 'SINGLE_STORE' | 'STORE_WAREHOUSE' | 'MULTI_BRANCH_STARTER';
 type ProvisionTemplateInput = ProvisionTemplate | 'MULTI_STORE';
@@ -259,6 +263,16 @@ type OwnerTenantSummary = {
   addons: TenantAddonFlags;
   entitlement: EntitlementSnapshot;
   updated_at: string;
+};
+
+type OwnerTenantListOptions = {
+  syncFromControlPlane?: boolean;
+};
+
+type OwnerTenantSyncTarget = {
+  companyId: string;
+  clientId: string;
+  companyCode: string | null;
 };
 
 type OwnerTenantDatastoreHealth = {
@@ -874,6 +888,40 @@ export class EntitlementsService {
       externalClientId: normalized || companyId,
       tenantEmail: null
     };
+  }
+
+  private normalizeLookupValue(value: unknown): string {
+    return String(value ?? '').trim().toLowerCase();
+  }
+
+  private async resolveMemoryCompanyIdForEntitlement(externalClientId: string): Promise<string> {
+    const needle = this.normalizeLookupValue(externalClientId);
+    if (needle) {
+      for (const profile of this.memoryTenantProfiles.values()) {
+        if (
+          this.normalizeLookupValue(profile.externalClientId) === needle ||
+          this.normalizeLookupValue(profile.companyCode) === needle
+        ) {
+          return profile.companyId;
+        }
+      }
+
+      for (const entitlement of this.memoryEntitlements.values()) {
+        if (this.normalizeLookupValue(entitlement.externalClientId) === needle) {
+          return entitlement.companyId;
+        }
+      }
+    }
+
+    if (this.companyContext) {
+      try {
+        return await this.companyContext.getCompanyId();
+      } catch {
+        // Fall through to deterministic test fallback.
+      }
+    }
+
+    return this.fallbackCompanyId(externalClientId || 'DEMO');
   }
 
   private isGraceActive(entitlement: EntitlementSnapshot): boolean {
@@ -2550,7 +2598,11 @@ export class EntitlementsService {
     }
   }
 
-  async listTenantsForOwner(): Promise<OwnerTenantSummary[]> {
+  async listTenantsForOwner(options: OwnerTenantListOptions = {}): Promise<OwnerTenantSummary[]> {
+    if (options.syncFromControlPlane) {
+      await this.syncOwnerTenantEntitlementsFromControlPlane();
+    }
+
     if (!this.dbEnabled()) {
       await this.getCurrent('comp-demo');
       const provisionByCompanyId = new Map(
@@ -2671,6 +2723,69 @@ export class EntitlementsService {
           updated_at: row.updatedAt.toISOString()
         };
       });
+  }
+
+  private async ownerTenantSyncTargets(): Promise<OwnerTenantSyncTarget[]> {
+    if (!this.dbEnabled()) {
+      await this.getCurrent('comp-demo');
+      return [...this.memoryEntitlements.values()]
+        .map((entitlement) => {
+          const profile =
+            this.memoryTenantProfiles.get(entitlement.companyId) ??
+            this.defaultMemoryTenantProfile(entitlement.companyId);
+          return {
+            companyId: entitlement.companyId,
+            clientId: entitlement.externalClientId,
+            companyCode: profile.companyCode
+          };
+        })
+        .filter((target) => !this.isPlatformControlCompany(target.companyCode, target.clientId));
+    }
+
+    const rows = await this.prisma!.company.findMany({
+      select: {
+        id: true,
+        code: true,
+        externalClientId: true
+      }
+    });
+
+    return rows
+      .filter((row) => !this.isPlatformControlCompany(row.code, row.externalClientId))
+      .map((row) => ({
+        companyId: row.id,
+        clientId: row.externalClientId ?? row.code,
+        companyCode: row.code
+      }))
+      .filter((target) => target.clientId.trim().length > 0);
+  }
+
+  private async syncOwnerTenantEntitlementsFromControlPlane(): Promise<void> {
+    const targets = await this.ownerTenantSyncTargets();
+    const concurrencyRaw = Number(process.env.SUBMAN_OWNER_SYNC_CONCURRENCY ?? 4);
+    const concurrency = Math.max(
+      1,
+      Math.min(8, Number.isFinite(concurrencyRaw) ? Math.floor(concurrencyRaw) : 4)
+    );
+    let cursor = 0;
+
+    const worker = async (): Promise<void> => {
+      while (cursor < targets.length) {
+        const target = targets[cursor];
+        cursor += 1;
+        if (!target) {
+          continue;
+        }
+
+        await this.syncFromControlPlane(target.clientId, target.companyId, {
+          forceRefresh: true
+        });
+      }
+    };
+
+    await Promise.all(
+      Array.from({ length: Math.min(concurrency, targets.length) }, () => worker())
+    );
   }
 
   async listTenantDatastoreHealth(strict = false): Promise<OwnerTenantDatastoreHealthResult> {
@@ -4685,10 +4800,15 @@ export class EntitlementsService {
     }
   }
 
-  async syncFromControlPlane(clientId: string, companyId?: string): Promise<SyncResult> {
+  async syncFromControlPlane(
+    clientId: string,
+    companyId?: string,
+    options: ControlPlaneSyncOptions = {}
+  ): Promise<SyncResult> {
     try {
       const gatewayResult = await this.gateway.fetchCurrentEntitlement(clientId, {
-        allowStaleOnFailure: true
+        allowStaleOnFailure: !options.forceRefresh,
+        forceRefresh: options.forceRefresh
       });
       const normalized = this.normalizePayload({
         client_id: clientId,
@@ -4741,7 +4861,7 @@ export class EntitlementsService {
     rawPayload: Record<string, unknown>
   ): Promise<ApplyResult> {
     if (!this.dbEnabled()) {
-      const companyId = this.companyContext ? await this.companyContext.getCompanyId() : 'comp-demo';
+      const companyId = await this.resolveMemoryCompanyIdForEntitlement(normalized.externalClientId);
       if (eventId && this.processedEventIds.has(eventId)) {
         return {
           updated: false,
