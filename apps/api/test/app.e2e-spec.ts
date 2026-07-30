@@ -2435,6 +2435,47 @@ describe('VPOS API (integration)', () => {
     expect(freshnessLagMs).toBeLessThan(30_000);
   });
 
+  it('44b) maps wrapped SubMan expired webhook payload to past due with updated grace', async () => {
+    const expiredAt = new Date(Date.now() - 60_000).toISOString();
+
+    try {
+      const webhook = await request(app.getHttpServer())
+        .post('/api/platform/webhooks/subscription')
+        .set('X-Client-Id', 'DEMO')
+        .send({
+          event: 'subscription.expired',
+          clientId: 'DEMO',
+          timestamp: new Date().toISOString(),
+          data: {
+            id: 'DEMO',
+            clientId: 'DEMO',
+            status: 'EXPIRED',
+            endDate: expiredAt,
+            plan: {
+              name: 'Pro Multi'
+            }
+          }
+        })
+        .expect(201);
+
+      expect(webhook.body.entitlement.status).toBe('PAST_DUE');
+      expect(webhook.body.entitlement.graceUntil).toBe(expiredAt);
+    } finally {
+      await request(app.getHttpServer())
+        .post('/api/platform/webhooks/subscription')
+        .set('X-Client-Id', 'DEMO')
+        .send({
+          event_id: `evt-expired-restore-${Date.now()}`,
+          event_type: 'subscription.updated',
+          occurred_at: new Date().toISOString(),
+          client_id: 'DEMO',
+          status: 'ACTIVE',
+          plan_code: 'PRO_MULTI'
+        })
+        .expect(201);
+    }
+  });
+
   it('45) allows platform owner to list tenant health summaries', async () => {
     const owner = await loginAs('owner@vpos.local', 'Owner@123');
 

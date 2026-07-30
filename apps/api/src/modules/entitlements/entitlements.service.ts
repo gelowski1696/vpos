@@ -1234,14 +1234,42 @@ export class EntitlementsService {
   }
 
   private readEnumStatus(value: unknown): EntitlementStatus {
-    if (value === EntitlementStatus.PAST_DUE) return EntitlementStatus.PAST_DUE;
-    if (value === EntitlementStatus.SUSPENDED) return EntitlementStatus.SUSPENDED;
-    if (value === EntitlementStatus.CANCELED) return EntitlementStatus.CANCELED;
+    const normalized = String(value ?? '')
+      .trim()
+      .toUpperCase()
+      .replace(/[\s-]+/g, '_');
+    if (
+      normalized === EntitlementStatus.PAST_DUE ||
+      normalized === 'PASTDUE' ||
+      normalized === 'OVERDUE' ||
+      normalized === 'UNPAID' ||
+      normalized === 'PAYMENT_FAILED' ||
+      normalized === 'EXPIRED'
+    ) {
+      return EntitlementStatus.PAST_DUE;
+    }
+    if (normalized === EntitlementStatus.SUSPENDED || normalized === 'PAUSED') {
+      return EntitlementStatus.SUSPENDED;
+    }
+    if (
+      normalized === EntitlementStatus.CANCELED ||
+      normalized === 'CANCELLED' ||
+      normalized === 'ENDED' ||
+      normalized === 'TERMINATED'
+    ) {
+      return EntitlementStatus.CANCELED;
+    }
     return EntitlementStatus.ACTIVE;
   }
 
   private normalizePayload(payload: Record<string, unknown>): NormalizedEntitlementPayload {
-    const clientId = String(payload.client_id ?? payload.external_client_id ?? '').trim();
+    const clientId = String(
+      payload.client_id ??
+        payload.clientId ??
+        payload.external_client_id ??
+        payload.externalClientId ??
+        ''
+    ).trim();
     if (!clientId) {
       throw new BadRequestException('Missing client_id in entitlement payload');
     }
@@ -1250,20 +1278,33 @@ export class EntitlementsService {
       payload.features && typeof payload.features === 'object'
         ? (payload.features as Record<string, unknown>)
         : {};
-    const defaults = this.defaultsFromPlanCode(payload.plan_code);
+    const defaults = this.defaultsFromPlanCode(payload.plan_code ?? payload.planCode);
 
-    const maxBranchesRaw = featureBag.max_branches ?? payload.max_branches ?? defaults.maxBranches ?? 1;
+    const maxBranchesRaw =
+      featureBag.max_branches ??
+      featureBag.maxBranches ??
+      payload.max_branches ??
+      payload.maxBranches ??
+      defaults.maxBranches ??
+      1;
     const maxBranches = Number(maxBranchesRaw);
     const safeMaxBranches = Number.isFinite(maxBranches) && maxBranches > 0 ? Math.floor(maxBranches) : 1;
 
-    const branchModeRaw = String(featureBag.branch_mode ?? payload.branch_mode ?? defaults.branchMode ?? '');
+    const branchModeRaw = String(
+      featureBag.branch_mode ?? featureBag.branchMode ?? payload.branch_mode ?? payload.branchMode ?? defaults.branchMode ?? ''
+    );
     const branchMode =
       branchModeRaw === EntitlementBranchMode.MULTI || safeMaxBranches > 1
         ? EntitlementBranchMode.MULTI
         : EntitlementBranchMode.SINGLE;
 
     const inventoryModeRaw = String(
-      featureBag.inventory_mode ?? payload.inventory_mode ?? defaults.inventoryMode ?? ''
+      featureBag.inventory_mode ??
+        featureBag.inventoryMode ??
+        payload.inventory_mode ??
+        payload.inventoryMode ??
+        defaults.inventoryMode ??
+        ''
     );
     const inventoryMode =
       inventoryModeRaw === EntitlementInventoryMode.STORE_WAREHOUSE
@@ -1278,7 +1319,19 @@ export class EntitlementsService {
       payload.next_billing_date ??
       payload.nextBillingDate ??
       featureBag.next_billing_date ??
-      featureBag.nextBillingDate;
+      featureBag.nextBillingDate ??
+      payload.current_period_end ??
+      payload.currentPeriodEnd ??
+      featureBag.current_period_end ??
+      featureBag.currentPeriodEnd ??
+      payload.end_date ??
+      payload.endDate ??
+      featureBag.end_date ??
+      featureBag.endDate ??
+      payload.expires_at ??
+      payload.expiresAt ??
+      featureBag.expires_at ??
+      featureBag.expiresAt;
     const graceDate =
       typeof graceValue === 'string' && graceValue.trim()
         ? new Date(graceValue)
@@ -1291,13 +1344,28 @@ export class EntitlementsService {
       branchMode,
       inventoryMode,
       allowDelivery: this.readBoolean(
-        featureBag.allow_delivery ?? payload.allow_delivery ?? defaults.allowDelivery ?? false
+        featureBag.allow_delivery ??
+          featureBag.allowDelivery ??
+          payload.allow_delivery ??
+          payload.allowDelivery ??
+          defaults.allowDelivery ??
+          false
       ),
       allowTransfers: this.readBoolean(
-        featureBag.allow_transfers ?? payload.allow_transfers ?? defaults.allowTransfers ?? false
+        featureBag.allow_transfers ??
+          featureBag.allowTransfers ??
+          payload.allow_transfers ??
+          payload.allowTransfers ??
+          defaults.allowTransfers ??
+          false
       ),
       allowMobile: this.readBoolean(
-        featureBag.allow_mobile ?? payload.allow_mobile ?? defaults.allowMobile ?? true
+        featureBag.allow_mobile ??
+          featureBag.allowMobile ??
+          payload.allow_mobile ??
+          payload.allowMobile ??
+          defaults.allowMobile ??
+          true
       ),
       graceUntil: graceDate && !Number.isNaN(graceDate.getTime()) ? graceDate : null
     };
@@ -1714,7 +1782,7 @@ export class EntitlementsService {
       return;
     }
 
-    const occurredAtRaw = payload.occurred_at;
+    const occurredAtRaw = payload.occurred_at ?? payload.occurredAt ?? payload.timestamp;
     if (typeof occurredAtRaw !== 'string' || !occurredAtRaw.trim()) {
       throw new UnauthorizedException('Missing occurred_at for replay protection');
     }
@@ -1762,15 +1830,82 @@ export class EntitlementsService {
     throw new UnauthorizedException('Invalid webhook signature');
   }
 
+  private normalizeWebhookPayload(payload: Record<string, unknown>): Record<string, unknown> {
+    const data =
+      payload.data && typeof payload.data === 'object' && !Array.isArray(payload.data)
+        ? (payload.data as Record<string, unknown>)
+        : {};
+    const normalized: Record<string, unknown> = {
+      ...data,
+      ...payload
+    };
+    delete normalized.data;
+
+    normalized.client_id =
+      payload.client_id ??
+      payload.clientId ??
+      data.client_id ??
+      data.clientId ??
+      normalized.client_id;
+    normalized.event_type =
+      payload.event_type ??
+      payload.eventType ??
+      payload.event ??
+      normalized.event_type ??
+      'subscription.updated';
+    normalized.occurred_at =
+      payload.occurred_at ??
+      payload.occurredAt ??
+      payload.timestamp ??
+      data.occurred_at ??
+      data.occurredAt ??
+      data.updatedAt ??
+      data.updated_at ??
+      normalized.occurred_at;
+
+    return normalized;
+  }
+
+  private resolveWebhookEventId(
+    payload: Record<string, unknown>,
+    normalized: Record<string, unknown>
+  ): string | undefined {
+    const explicit = String(
+      payload.event_id ??
+        payload.eventId ??
+        payload.delivery_id ??
+        payload.deliveryId ??
+        ''
+    ).trim();
+    if (explicit) {
+      return explicit;
+    }
+
+    const seed = [
+      normalized.event_type,
+      normalized.client_id,
+      normalized.id ?? normalized.subscription_id ?? normalized.subscriptionId,
+      normalized.status,
+      normalized.occurred_at,
+      normalized.updatedAt ?? normalized.updated_at
+    ]
+      .map((value) => String(value ?? '').trim())
+      .filter(Boolean)
+      .join('|');
+
+    return seed ? `subman-${createHash('sha1').update(seed).digest('hex')}` : undefined;
+  }
+
   async applyWebhook(payload: Record<string, unknown>, signature?: string): Promise<ApplyResult> {
     this.verifyWebhookSignature(payload, signature);
-    this.validateWebhookReplayWindow(payload);
-    const normalized = this.normalizePayload(payload);
-    const eventId = String(payload.event_id ?? '').trim() || undefined;
+    const webhookPayload = this.normalizeWebhookPayload(payload);
+    this.validateWebhookReplayWindow(webhookPayload);
+    const normalized = this.normalizePayload(webhookPayload);
+    const eventId = this.resolveWebhookEventId(payload, normalized);
     if (!eventId) {
       throw new BadRequestException('Missing event_id in entitlement payload');
     }
-    return this.applyNormalizedEntitlement(normalized, eventId, 'WEBHOOK', payload);
+    return this.applyNormalizedEntitlement(normalized, eventId, 'WEBHOOK', webhookPayload);
   }
 
   async provisionTenant(input: ProvisionTenantInput): Promise<ProvisionTenantResult> {

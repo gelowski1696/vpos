@@ -682,7 +682,6 @@ const NAV_SECTIONS: Array<{ title: string; items: NavItem[] }> = [
 const PLATFORM_OWNER_ALLOWED_ROUTES: Route[] = [
   '/tenants',
   '/audit-logs',
-  '/pos-settings' as Route,
   '/database-maintenance' as Route,
   '/sync-reviews' as Route,
   '/branches',
@@ -1187,7 +1186,7 @@ export function AdminShell({ children }: { children: React.ReactNode }): JSX.Ele
               return false;
             }
 
-            if (String(item.href) === '/pos-settings' && !canAccessWebAdmin) {
+            if (String(item.href) === '/pos-settings') {
               return false;
             }
 

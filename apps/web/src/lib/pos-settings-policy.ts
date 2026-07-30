@@ -145,6 +145,6 @@ export function toPosSettingsDraft(policy: TenantPosSettings): TenantPosSettings
   return draft;
 }
 
-export function canManagePosSettings(roles: string[]): boolean {
-  return roles.some((role) => ['admin', 'owner', 'platform_owner'].includes(role.trim().toLowerCase()));
+export function canManagePosSettings(_roles: string[]): boolean {
+  return false;
 }

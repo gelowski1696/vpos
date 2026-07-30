@@ -97,4 +97,54 @@ describe('SubscriptionGatewayService auth retry', () => {
 
     expect(result.payload.grace_until).toBe('2026-02-01T00:00:00.000Z');
   });
+
+  it('falls back beyond active-only lookup and maps expired subscriptions as past due', async () => {
+    const tokenService = {
+      isEnabled: jest.fn().mockReturnValue(false),
+      getBearerToken: jest.fn()
+    } as unknown as SubmanTokenService;
+
+    const fetchMock = jest
+      .fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        text: async () =>
+          JSON.stringify({
+            data: [
+              {
+                id: 'OTHER_TENANT',
+                status: 'ACTIVE',
+                nextBillingDate: '2026-08-01T00:00:00.000Z'
+              }
+            ]
+          })
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        text: async () =>
+          JSON.stringify({
+            data: [
+              {
+                id: 'TENANT_EXPIRED',
+                status: 'EXPIRED',
+                endDate: '2026-07-01T00:00:00.000Z',
+                plan: {
+                  name: 'Pro Warehouse'
+                }
+              }
+            ]
+          })
+      });
+    global.fetch = fetchMock as unknown as typeof fetch;
+
+    const service = new SubscriptionGatewayService(tokenService);
+    const result = await service.fetchCurrentEntitlement('TENANT_EXPIRED');
+
+    expect(result.payload.status).toBe('PAST_DUE');
+    expect(result.payload.grace_until).toBe('2026-07-01T00:00:00.000Z');
+    expect(result.payload.plan_code).toBe('PRO_SINGLE_WAREHOUSE');
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
 });

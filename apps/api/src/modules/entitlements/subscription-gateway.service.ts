@@ -391,12 +391,22 @@ export class SubscriptionGatewayService {
       return exactMatch;
     }
 
-    return this.pickLegacySubscription(rows);
+    return undefined;
   }
 
   private toStringOrNull(value: unknown): string | null {
     const normalized = String(value ?? '').trim();
     return normalized ? normalized : null;
+  }
+
+  private firstString(...values: unknown[]): string | null {
+    for (const value of values) {
+      const normalized = this.toStringOrNull(value);
+      if (normalized) {
+        return normalized;
+      }
+    }
+    return null;
   }
 
   private toClientIdHint(row: Record<string, unknown>): string {
@@ -459,10 +469,13 @@ export class SubscriptionGatewayService {
   }
 
   private statusFromLegacy(value: unknown): 'ACTIVE' | 'PAST_DUE' | 'SUSPENDED' | 'CANCELED' {
-    const status = String(value ?? '').toUpperCase();
+    const status = String(value ?? '')
+      .trim()
+      .toUpperCase()
+      .replace(/[\s-]+/g, '_');
     if (status === 'ACTIVE' || status === 'TRIALING') return 'ACTIVE';
     if (status === 'PAUSED') return 'SUSPENDED';
-    if (status === 'CANCELED') return 'CANCELED';
+    if (status === 'CANCELED' || status === 'CANCELLED') return 'CANCELED';
     return 'PAST_DUE';
   }
 
@@ -518,16 +531,16 @@ export class SubscriptionGatewayService {
       client_id: clientId,
       status: this.statusFromLegacy(chosen.status),
       plan_code: planCode,
-      grace_until:
-        typeof chosen.nextBillingDate === 'string'
-          ? chosen.nextBillingDate
-          : typeof chosen.next_billing_date === 'string'
-            ? chosen.next_billing_date
-            : typeof chosen.endDate === 'string'
-              ? chosen.endDate
-              : typeof chosen.end_date === 'string'
-                ? chosen.end_date
-                : null
+      grace_until: this.firstString(
+        chosen.nextBillingDate,
+        chosen.next_billing_date,
+        chosen.currentPeriodEnd,
+        chosen.current_period_end,
+        chosen.endDate,
+        chosen.end_date,
+        chosen.expiresAt,
+        chosen.expires_at
+      )
     };
   }
 
@@ -609,7 +622,9 @@ export class SubscriptionGatewayService {
       process.env.SUBMAN_ENTITLEMENT_PATH?.trim() ||
       '/v1/subscriptions?status=ACTIVE&limit=20&sortBy=updatedAt&sortOrder=desc';
     const fallbackLegacyPath = '/v1/subscriptions?status=ACTIVE&limit=20&sortBy=updatedAt&sortOrder=desc';
-    const paths = primaryPath === fallbackLegacyPath ? [primaryPath] : [primaryPath, fallbackLegacyPath];
+    const fallbackAllStatusesPath = '/v1/subscriptions?limit=20&sortBy=updatedAt&sortOrder=desc';
+    const fallbackExpiredPath = '/v1/subscriptions?status=EXPIRED&limit=20&sortBy=updatedAt&sortOrder=desc';
+    const paths = [...new Set([primaryPath, fallbackLegacyPath, fallbackAllStatusesPath, fallbackExpiredPath])];
     const timeoutMs = Number(process.env.SUBMAN_TIMEOUT_MS ?? 8000);
     try {
       let normalizedPayload: Record<string, unknown> | null = null;

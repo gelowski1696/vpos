@@ -125,9 +125,9 @@ export default function PosSettingsPage(): JSX.Element {
     return (
       <main className="space-y-4">
         <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm dark:border-slate-800 dark:bg-slate-900">
-          <h1 className="text-xl font-semibold text-slate-900 dark:text-slate-100">POS Settings</h1>
+          <h1 className="text-xl font-semibold text-slate-900 dark:text-slate-100">Unavailable</h1>
           <p className="mt-2 text-sm text-slate-500 dark:text-slate-400">
-            Only admin, owner, and platform owner accounts can manage tenant POS settings.
+            This page is not available for this web-admin session.
           </p>
         </section>
       </main>
