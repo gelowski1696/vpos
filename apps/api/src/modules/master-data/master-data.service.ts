@@ -8,6 +8,7 @@ import {
   InventoryMovementType,
   LocationType,
   NegativeStockPolicy,
+  PersonnelSalaryType,
   PriceFlowMode,
   PriceListVersionStatus,
   PriceScope,
@@ -72,6 +73,9 @@ export type PersonnelRecord = Timestamped & {
   roleName?: string | null;
   phone?: string | null;
   email?: string | null;
+  salaryType: 'MONTHLY' | 'DAILY' | 'HOURLY' | 'PER_TRANSACTION';
+  salaryRate: number;
+  commissionEligible: boolean;
   isActive: boolean;
 };
 
@@ -123,6 +127,8 @@ export type ProductRecord = Timestamped & {
   cylinderTypeId?: string | null;
   standardCost?: number | null;
   lowStockAlertQty?: number | null;
+  pickupCommissionRate: number;
+  deliveryCommissionRate: number;
   isActive: boolean;
 };
 
@@ -290,7 +296,7 @@ export type CreateUser = Pick<UserRecord, 'email' | 'fullName' | 'roles'> &
 export type CreatePersonnelRole = Pick<PersonnelRoleRecord, 'code' | 'name'> &
   Partial<Pick<PersonnelRoleRecord, 'isActive'>>;
 export type CreatePersonnel = Pick<PersonnelRecord, 'code' | 'fullName' | 'branchId' | 'roleId'> &
-  Partial<Pick<PersonnelRecord, 'phone' | 'email' | 'isActive'>>;
+  Partial<Pick<PersonnelRecord, 'phone' | 'email' | 'salaryType' | 'salaryRate' | 'commissionEligible' | 'isActive'>>;
 export type CreateCustomer = Pick<CustomerRecord, 'code' | 'name' | 'type'> &
   Partial<
     Pick<
@@ -303,7 +309,7 @@ export type CreateCustomerCategory = Pick<CustomerCategoryRecord, 'code' | 'name
 export type CreateCylinderType = Pick<CylinderTypeRecord, 'code' | 'name' | 'sizeKg' | 'depositAmount'> &
   Partial<Pick<CylinderTypeRecord, 'isActive'>>;
 export type CreateProduct = Pick<ProductRecord, 'sku' | 'name' | 'unit'> &
-  Partial<Pick<ProductRecord, 'category' | 'brand' | 'isLpg' | 'cylinderTypeId' | 'standardCost' | 'lowStockAlertQty' | 'isActive'>>;
+  Partial<Pick<ProductRecord, 'category' | 'brand' | 'isLpg' | 'cylinderTypeId' | 'standardCost' | 'lowStockAlertQty' | 'pickupCommissionRate' | 'deliveryCommissionRate' | 'isActive'>>;
 export type CreateExpenseCategory = Pick<ExpenseCategoryRecord, 'code' | 'name'> & Partial<Pick<ExpenseCategoryRecord, 'isActive'>>;
 export type CreateProductCategory = Pick<ProductCategoryRecord, 'code' | 'name'> & Partial<Pick<ProductCategoryRecord, 'isActive'>>;
 export type CreateProductBrand = Pick<ProductBrandRecord, 'code' | 'name'> & Partial<Pick<ProductBrandRecord, 'isActive'>>;
@@ -1658,6 +1664,12 @@ export class MasterDataService {
     const companyId = targetCompanyId ?? (await this.getCompanyIdOrNull());
     await this.enforceMasterDataWritePolicy(companyId ?? undefined);
     const binding = await this.getTenantBinding(companyId);
+    const salaryType = this.normalizePersonnelSalaryType(input.salaryType);
+    const salaryRate =
+      input.salaryRate === undefined || input.salaryRate === null
+        ? 0
+        : this.normalizeMoneyRate(input.salaryRate, 'Salary rate');
+    const commissionEligible = input.commissionEligible === undefined ? true : Boolean(input.commissionEligible);
     const code = await this.resolveCodeForCreate(
       input.code,
       'Personnel',
@@ -1683,6 +1695,9 @@ export class MasterDataService {
         roleName: role.name,
         phone: input.phone?.trim() || null,
         email: input.email?.trim() || null,
+        salaryType,
+        salaryRate,
+        commissionEligible,
         isActive: input.isActive ?? true,
         ...this.stamp()
       };
@@ -1717,6 +1732,9 @@ export class MasterDataService {
           personnelRoleId: role.id,
           phone: input.phone?.trim() || null,
           email: input.email?.trim() || null,
+          salaryType,
+          salaryRate,
+          commissionEligible,
           isActive: input.isActive ?? true
         },
         include: {
@@ -1745,6 +1763,9 @@ export class MasterDataService {
         roleName: roleMemory.name,
         phone: input.phone?.trim() || null,
         email: input.email?.trim() || null,
+        salaryType,
+        salaryRate,
+        commissionEligible,
         isActive: input.isActive ?? true,
         ...this.stamp()
       };
@@ -1763,6 +1784,14 @@ export class MasterDataService {
     const binding = await this.getTenantBinding(companyId);
     if (!binding || !companyId) {
       const row = this.find(this.personnels, id, 'Personnel');
+      const nextSalaryType =
+        input.salaryType === undefined ? undefined : this.normalizePersonnelSalaryType(input.salaryType);
+      const nextSalaryRate =
+        input.salaryRate === undefined
+          ? undefined
+          : input.salaryRate === null
+            ? 0
+            : this.normalizeMoneyRate(input.salaryRate, 'Salary rate');
       const nextCode = await this.resolveCodeForUpdate(
         input.code,
         row.code,
@@ -1793,6 +1822,10 @@ export class MasterDataService {
           branchId: input.branchId === undefined ? undefined : input.branchId,
           phone: input.phone === undefined ? undefined : input.phone?.trim() || null,
           email: input.email === undefined ? undefined : input.email?.trim() || null,
+          salaryType: nextSalaryType,
+          salaryRate: nextSalaryRate,
+          commissionEligible:
+            input.commissionEligible === undefined ? undefined : Boolean(input.commissionEligible),
           isActive: input.isActive
         })
       );
@@ -1848,6 +1881,14 @@ export class MasterDataService {
       }
       roleId = role.id;
     }
+    const nextSalaryType =
+      input.salaryType === undefined ? undefined : this.normalizePersonnelSalaryType(input.salaryType);
+    const nextSalaryRate =
+      input.salaryRate === undefined
+        ? undefined
+        : input.salaryRate === null
+          ? 0
+          : this.normalizeMoneyRate(input.salaryRate, 'Salary rate');
 
     const row = await binding.client.personnel.update({
       where: { id },
@@ -1858,6 +1899,10 @@ export class MasterDataService {
         personnelRoleId: roleId,
         phone: input.phone === undefined ? undefined : input.phone?.trim() || null,
         email: input.email === undefined ? undefined : input.email?.trim() || null,
+        salaryType: nextSalaryType,
+        salaryRate: nextSalaryRate,
+        commissionEligible:
+          input.commissionEligible === undefined ? undefined : Boolean(input.commissionEligible),
         isActive: input.isActive
       },
       include: {
@@ -1970,6 +2015,12 @@ export class MasterDataService {
       );
       const phone = this.toImportNullableString(row.phone);
       const email = this.toImportNullableString(row.email);
+      const salaryType = this.normalizePersonnelSalaryType(row.salaryType ?? row.salary_type);
+      const salaryRate = this.toImportNullableNumber(row.salaryRate ?? row.salary_rate) ?? 0;
+      const commissionEligible = this.toImportBoolean(
+        row.commissionEligible ?? row.commission_eligible,
+        true
+      );
       const isActive = this.toImportBoolean(row.isActive ?? row.is_active, true);
 
       const branchId = branchInput
@@ -2008,6 +2059,9 @@ export class MasterDataService {
       if (email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
         messages.push(`Email "${email}" is invalid.`);
       }
+      if (salaryRate < 0) {
+        messages.push('Salary rate cannot be negative.');
+      }
       if (code && seenCodes.has(code)) {
         messages.push('Duplicate code inside import file.');
       } else if (code) {
@@ -2027,6 +2081,9 @@ export class MasterDataService {
               roleId,
               phone,
               email,
+              salaryType,
+              salaryRate,
+              commissionEligible,
               isActive
             };
 
@@ -2090,6 +2147,9 @@ export class MasterDataService {
               roleId: String(row.normalized.roleId ?? ''),
               phone: row.normalized.phone ? String(row.normalized.phone) : null,
               email: row.normalized.email ? String(row.normalized.email) : null,
+              salaryType: row.normalized.salaryType as PersonnelRecord['salaryType'],
+              salaryRate: Number(row.normalized.salaryRate ?? 0),
+              commissionEligible: Boolean(row.normalized.commissionEligible),
               isActive: Boolean(row.normalized.isActive)
             },
             targetCompanyId
@@ -2104,6 +2164,9 @@ export class MasterDataService {
               roleId: String(row.normalized.roleId ?? ''),
               phone: row.normalized.phone ? String(row.normalized.phone) : null,
               email: row.normalized.email ? String(row.normalized.email) : null,
+              salaryType: row.normalized.salaryType as PersonnelRecord['salaryType'],
+              salaryRate: Number(row.normalized.salaryRate ?? 0),
+              commissionEligible: Boolean(row.normalized.commissionEligible),
               isActive: Boolean(row.normalized.isActive)
             },
             targetCompanyId
@@ -3693,6 +3756,14 @@ export class MasterDataService {
       input.lowStockAlertQty === undefined || input.lowStockAlertQty === null
         ? null
         : this.normalizeLowStockAlertQty(input.lowStockAlertQty);
+    const normalizedPickupCommissionRate =
+      input.pickupCommissionRate === undefined || input.pickupCommissionRate === null
+        ? 0
+        : this.normalizeMoneyRate(input.pickupCommissionRate, 'Pickup commission rate');
+    const normalizedDeliveryCommissionRate =
+      input.deliveryCommissionRate === undefined || input.deliveryCommissionRate === null
+        ? 0
+        : this.normalizeMoneyRate(input.deliveryCommissionRate, 'Delivery commission rate');
     if (isLpg) {
       if (!normalizedCylinderTypeId?.trim()) {
         throw new BadRequestException('Cylinder type is required for LPG products');
@@ -3721,6 +3792,8 @@ export class MasterDataService {
         cylinderTypeId: normalizedCylinderTypeId,
         standardCost: normalizedStandardCost,
         lowStockAlertQty: normalizedLowStockAlertQty,
+        pickupCommissionRate: normalizedPickupCommissionRate,
+        deliveryCommissionRate: normalizedDeliveryCommissionRate,
         isActive: input.isActive ?? true
       };
       this.products.push(row);
@@ -3754,6 +3827,8 @@ export class MasterDataService {
             normalizedLowStockAlertQty === undefined || normalizedLowStockAlertQty === null
               ? normalizedLowStockAlertQty
               : new Prisma.Decimal(normalizedLowStockAlertQty),
+          pickupCommissionRate: new Prisma.Decimal(normalizedPickupCommissionRate),
+          deliveryCommissionRate: new Prisma.Decimal(normalizedDeliveryCommissionRate),
           isActive: input.isActive ?? true
         }
       });
@@ -3802,6 +3877,8 @@ export class MasterDataService {
         cylinderTypeId: normalizedCylinderTypeId,
         standardCost: normalizedStandardCost,
         lowStockAlertQty: normalizedLowStockAlertQty,
+        pickupCommissionRate: normalizedPickupCommissionRate,
+        deliveryCommissionRate: normalizedDeliveryCommissionRate,
         isActive: input.isActive ?? true
       };
       this.products.push(row);
@@ -3847,6 +3924,18 @@ export class MasterDataService {
           : input.lowStockAlertQty === null
             ? null
             : this.normalizeLowStockAlertQty(input.lowStockAlertQty);
+      const nextPickupCommissionRate =
+        input.pickupCommissionRate === undefined
+          ? row.pickupCommissionRate ?? 0
+          : input.pickupCommissionRate === null
+            ? 0
+            : this.normalizeMoneyRate(input.pickupCommissionRate, 'Pickup commission rate');
+      const nextDeliveryCommissionRate =
+        input.deliveryCommissionRate === undefined
+          ? row.deliveryCommissionRate ?? 0
+          : input.deliveryCommissionRate === null
+            ? 0
+            : this.normalizeMoneyRate(input.deliveryCommissionRate, 'Delivery commission rate');
       if (nextIsLpg && !nextCylinderTypeId) {
         throw new BadRequestException('Cylinder type is required for LPG products');
       }
@@ -3866,7 +3955,9 @@ export class MasterDataService {
           isLpg: nextIsLpg,
           cylinderTypeId: nextCylinderTypeId,
           standardCost: nextStandardCost,
-          lowStockAlertQty: nextLowStockAlertQty
+          lowStockAlertQty: nextLowStockAlertQty,
+          pickupCommissionRate: nextPickupCommissionRate,
+          deliveryCommissionRate: nextDeliveryCommissionRate
         })
       );
       row.updatedAt = this.now();
@@ -3919,6 +4010,18 @@ export class MasterDataService {
           : input.lowStockAlertQty === null
             ? null
             : this.normalizeLowStockAlertQty(input.lowStockAlertQty);
+      const nextPickupCommissionRate =
+        input.pickupCommissionRate === undefined
+          ? Number(existing.pickupCommissionRate ?? 0)
+          : input.pickupCommissionRate === null
+            ? 0
+            : this.normalizeMoneyRate(input.pickupCommissionRate, 'Pickup commission rate');
+      const nextDeliveryCommissionRate =
+        input.deliveryCommissionRate === undefined
+          ? Number(existing.deliveryCommissionRate ?? 0)
+          : input.deliveryCommissionRate === null
+            ? 0
+            : this.normalizeMoneyRate(input.deliveryCommissionRate, 'Delivery commission rate');
       if (nextIsLpg && !nextCylinderTypeId) {
         throw new BadRequestException('Cylinder type is required for LPG products');
       }
@@ -3953,6 +4056,8 @@ export class MasterDataService {
             nextLowStockAlertQty === undefined || nextLowStockAlertQty === null
               ? nextLowStockAlertQty
               : new Prisma.Decimal(nextLowStockAlertQty),
+          pickupCommissionRate: new Prisma.Decimal(nextPickupCommissionRate),
+          deliveryCommissionRate: new Prisma.Decimal(nextDeliveryCommissionRate),
           isActive: input.isActive
         }
       });
@@ -4017,6 +4122,18 @@ export class MasterDataService {
           : input.lowStockAlertQty === null
             ? null
             : this.normalizeLowStockAlertQty(input.lowStockAlertQty);
+      const nextPickupCommissionRate =
+        input.pickupCommissionRate === undefined
+          ? row.pickupCommissionRate ?? 0
+          : input.pickupCommissionRate === null
+            ? 0
+            : this.normalizeMoneyRate(input.pickupCommissionRate, 'Pickup commission rate');
+      const nextDeliveryCommissionRate =
+        input.deliveryCommissionRate === undefined
+          ? row.deliveryCommissionRate ?? 0
+          : input.deliveryCommissionRate === null
+            ? 0
+            : this.normalizeMoneyRate(input.deliveryCommissionRate, 'Delivery commission rate');
       if (nextIsLpg && !nextCylinderTypeId) {
         throw new BadRequestException('Cylinder type is required for LPG products');
       }
@@ -4035,7 +4152,9 @@ export class MasterDataService {
           isLpg: nextIsLpg,
           cylinderTypeId: nextCylinderTypeId,
           standardCost: nextStandardCost,
-          lowStockAlertQty: nextLowStockAlertQty
+          lowStockAlertQty: nextLowStockAlertQty,
+          pickupCommissionRate: nextPickupCommissionRate,
+          deliveryCommissionRate: nextDeliveryCommissionRate
         })
       );
       row.updatedAt = this.now();
@@ -4139,6 +4258,20 @@ export class MasterDataService {
       const lowStockAlertQty = this.toImportNullableNumber(
         row.lowStockAlertQty ?? row.low_stock_alert_qty
       );
+      const pickupCommissionRate =
+        this.toImportNullableNumber(
+          row.pickupCommissionRate ??
+            row.pickup_commission_rate ??
+            row.pickupCommission ??
+            row.pickup_commission
+        ) ?? 0;
+      const deliveryCommissionRate =
+        this.toImportNullableNumber(
+          row.deliveryCommissionRate ??
+            row.delivery_commission_rate ??
+            row.deliveryCommission ??
+            row.delivery_commission
+        ) ?? 0;
       const isActive = this.toImportBoolean(row.isActive ?? row.is_active, true);
 
       if (!sku) {
@@ -4152,6 +4285,12 @@ export class MasterDataService {
       }
       if (lowStockAlertQty !== null && lowStockAlertQty < 0) {
         messages.push('Low-stock alert qty cannot be negative.');
+      }
+      if (pickupCommissionRate < 0) {
+        messages.push('Pickup commission rate cannot be negative.');
+      }
+      if (deliveryCommissionRate < 0) {
+        messages.push('Delivery commission rate cannot be negative.');
       }
       const category = this.resolveImportMasterDataName(
         categoryRaw,
@@ -4192,6 +4331,8 @@ export class MasterDataService {
               cylinderTypeId: isLpg ? cylinderTypeKey : null,
               standardCost,
               lowStockAlertQty,
+              pickupCommissionRate,
+              deliveryCommissionRate,
               isActive
             };
       resultRows.push({
@@ -4254,6 +4395,8 @@ export class MasterDataService {
               row.normalized.lowStockAlertQty === null
                 ? null
                 : Number(row.normalized.lowStockAlertQty),
+            pickupCommissionRate: Number(row.normalized.pickupCommissionRate ?? 0),
+            deliveryCommissionRate: Number(row.normalized.deliveryCommissionRate ?? 0),
             isActive: Boolean(row.normalized.isActive)
           });
           updated += 1;
@@ -4272,6 +4415,8 @@ export class MasterDataService {
               row.normalized.lowStockAlertQty === null
                 ? null
                 : Number(row.normalized.lowStockAlertQty),
+            pickupCommissionRate: Number(row.normalized.pickupCommissionRate ?? 0),
+            deliveryCommissionRate: Number(row.normalized.deliveryCommissionRate ?? 0),
             isActive: Boolean(row.normalized.isActive)
           });
           created += 1;
@@ -8309,6 +8454,9 @@ export class MasterDataService {
     personnelRoleId: string;
     phone: string | null;
     email: string | null;
+    salaryType: PersonnelSalaryType;
+    salaryRate: Prisma.Decimal;
+    commissionEligible: boolean;
     isActive: boolean;
     createdAt: Date;
     updatedAt: Date;
@@ -8328,6 +8476,9 @@ export class MasterDataService {
       roleName: row.role?.name ?? null,
       phone: row.phone ?? null,
       email: row.email ?? null,
+      salaryType: row.salaryType,
+      salaryRate: Number(row.salaryRate),
+      commissionEligible: row.commissionEligible,
       isActive: row.isActive,
       createdAt: row.createdAt.toISOString(),
       updatedAt: row.updatedAt.toISOString()
@@ -8575,6 +8726,8 @@ export class MasterDataService {
     cylinderTypeId: string | null;
     standardCost: Prisma.Decimal | null;
     lowStockAlertQty: Prisma.Decimal | null;
+    pickupCommissionRate: Prisma.Decimal;
+    deliveryCommissionRate: Prisma.Decimal;
     isActive: boolean;
     createdAt: Date;
     updatedAt: Date;
@@ -8590,6 +8743,8 @@ export class MasterDataService {
       cylinderTypeId: row.cylinderTypeId,
       standardCost: row.standardCost ? Number(row.standardCost) : null,
       lowStockAlertQty: row.lowStockAlertQty ? Number(row.lowStockAlertQty) : null,
+      pickupCommissionRate: Number(row.pickupCommissionRate ?? 0),
+      deliveryCommissionRate: Number(row.deliveryCommissionRate ?? 0),
       isActive: row.isActive,
       createdAt: row.createdAt.toISOString(),
       updatedAt: row.updatedAt.toISOString()
@@ -8752,6 +8907,29 @@ export class MasterDataService {
     if (input.locked !== undefined) payload.locked = Boolean(input.locked);
 
     return payload;
+  }
+
+  private normalizePersonnelSalaryType(value: unknown): PersonnelSalaryType {
+    const normalized = String(value ?? 'MONTHLY')
+      .trim()
+      .toUpperCase()
+      .replace(/[-\s]+/g, '_');
+    if (
+      normalized === PersonnelSalaryType.DAILY ||
+      normalized === PersonnelSalaryType.HOURLY ||
+      normalized === PersonnelSalaryType.PER_TRANSACTION
+    ) {
+      return normalized;
+    }
+    return PersonnelSalaryType.MONTHLY;
+  }
+
+  private normalizeMoneyRate(value: number, label: string): number {
+    const parsed = Number(value);
+    if (!Number.isFinite(parsed) || parsed < 0) {
+      throw new BadRequestException(`${label} must be a non-negative number`);
+    }
+    return this.round(parsed, 2);
   }
 
   private normalizeStandardCost(value: number): number {
@@ -8980,6 +9158,9 @@ export class MasterDataService {
         roleName: 'Driver',
         phone: null,
         email: null,
+        salaryType: 'DAILY',
+        salaryRate: 500,
+        commissionEligible: true,
         isActive: true,
         ...stamp
       },
@@ -8993,6 +9174,9 @@ export class MasterDataService {
         roleName: 'Helper',
         phone: null,
         email: null,
+        salaryType: 'DAILY',
+        salaryRate: 450,
+        commissionEligible: true,
         isActive: true,
         ...stamp
       }
@@ -9065,6 +9249,8 @@ export class MasterDataService {
         cylinderTypeId: 'ctype-11',
         standardCost: 700,
         lowStockAlertQty: 5,
+        pickupCommissionRate: 5,
+        deliveryCommissionRate: 10,
         isActive: true,
         ...stamp
       },
@@ -9079,6 +9265,8 @@ export class MasterDataService {
         cylinderTypeId: 'ctype-22',
         standardCost: 1300,
         lowStockAlertQty: 3,
+        pickupCommissionRate: 8,
+        deliveryCommissionRate: 15,
         isActive: true,
         ...stamp
       }

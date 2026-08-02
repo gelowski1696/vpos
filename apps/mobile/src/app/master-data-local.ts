@@ -25,6 +25,48 @@ export type MasterDataOption = {
   locationId?: string;
   isLpg?: boolean;
   cylinderTypeId?: string;
+  roleName?: string | null;
+  salaryType?: 'MONTHLY' | 'DAILY' | 'HOURLY' | 'PER_TRANSACTION';
+  salaryRate?: number;
+  commissionEligible?: boolean;
+  pickupCommissionRate?: number;
+  deliveryCommissionRate?: number;
+};
+
+export type TenantAddonFlags = {
+  email_features: boolean;
+  email_report: boolean;
+  email_customer_balance: boolean;
+  sms_alerts: boolean;
+  auto_report_digest: boolean;
+  custom_pricing: boolean;
+  customer_category: boolean;
+  item_price_cost_audit: boolean;
+  petty_cash_attachments: boolean;
+  shift_security_controls: boolean;
+  kilo_overview_chart: boolean;
+  receipt_amount_privacy: boolean;
+  purchase_order_suite: boolean;
+  delivery_dispatch_suite: boolean;
+  queue_order_filtering: boolean;
+};
+
+export const DEFAULT_TENANT_ADDONS: TenantAddonFlags = {
+  email_features: false,
+  email_report: false,
+  email_customer_balance: false,
+  sms_alerts: false,
+  auto_report_digest: false,
+  custom_pricing: false,
+  customer_category: false,
+  item_price_cost_audit: false,
+  petty_cash_attachments: false,
+  shift_security_controls: false,
+  kilo_overview_chart: false,
+  receipt_amount_privacy: false,
+  purchase_order_suite: false,
+  delivery_dispatch_suite: false,
+  queue_order_filtering: false
 };
 
 function parsePayload(value: string): Record<string, unknown> {
@@ -70,6 +112,19 @@ function asNumber(value: unknown): number | undefined {
     }
   }
   return undefined;
+}
+
+function normalizeSalaryType(value: unknown): MasterDataOption['salaryType'] {
+  const normalized = asString(value)?.toUpperCase();
+  if (
+    normalized === 'MONTHLY' ||
+    normalized === 'DAILY' ||
+    normalized === 'HOURLY' ||
+    normalized === 'PER_TRANSACTION'
+  ) {
+    return normalized;
+  }
+  return 'MONTHLY';
 }
 
 function resolveId(payload: Record<string, unknown>, fallback: string): string {
@@ -132,6 +187,12 @@ function buildOption(args: {
   locationId?: string;
   isLpg?: boolean;
   cylinderTypeId?: string;
+  roleName?: string | null;
+  salaryType?: 'MONTHLY' | 'DAILY' | 'HOURLY' | 'PER_TRANSACTION';
+  salaryRate?: number;
+  commissionEligible?: boolean;
+  pickupCommissionRate?: number;
+  deliveryCommissionRate?: number;
 }): MasterDataOption {
   const option: MasterDataOption = {
     id: args.id,
@@ -175,6 +236,24 @@ function buildOption(args: {
   }
   if (args.cylinderTypeId) {
     option.cylinderTypeId = args.cylinderTypeId;
+  }
+  if (args.roleName !== undefined) {
+    option.roleName = args.roleName;
+  }
+  if (args.salaryType) {
+    option.salaryType = args.salaryType;
+  }
+  if (typeof args.salaryRate === 'number') {
+    option.salaryRate = args.salaryRate;
+  }
+  if (typeof args.commissionEligible === 'boolean') {
+    option.commissionEligible = args.commissionEligible;
+  }
+  if (typeof args.pickupCommissionRate === 'number') {
+    option.pickupCommissionRate = args.pickupCommissionRate;
+  }
+  if (typeof args.deliveryCommissionRate === 'number') {
+    option.deliveryCommissionRate = args.deliveryCommissionRate;
   }
   return option;
 }
@@ -428,11 +507,65 @@ export async function loadProductOptions(db: SQLiteDatabase): Promise<MasterData
         subtitle: code && name ? code : undefined,
         group: category,
         isLpg,
-        cylinderTypeId: cylinderTypeId ?? undefined
+        cylinderTypeId: cylinderTypeId ?? undefined,
+        pickupCommissionRate: Math.max(
+          0,
+          asNumber(payload.pickupCommissionRate ?? payload.pickup_commission_rate) ?? 0
+        ),
+        deliveryCommissionRate: Math.max(
+          0,
+          asNumber(payload.deliveryCommissionRate ?? payload.delivery_commission_rate) ?? 0
+        )
       })
     );
   }
   return dedupe(options);
+}
+
+function toTenantAddonsSource(payload: Record<string, unknown>): Record<string, unknown> {
+  const nested = payload.addons;
+  if (nested && typeof nested === 'object' && !Array.isArray(nested)) {
+    return nested as Record<string, unknown>;
+  }
+  return payload;
+}
+
+export async function loadTenantAddons(db: SQLiteDatabase): Promise<TenantAddonFlags> {
+  const row = await db.getFirstAsync<{ payload: string }>(
+    `
+    SELECT payload
+    FROM master_data_local
+    WHERE entity = ?
+    ORDER BY updated_at DESC
+    LIMIT 1
+    `,
+    'tenant_addons'
+  );
+
+  if (!row?.payload) {
+    return { ...DEFAULT_TENANT_ADDONS };
+  }
+
+  const payload = parsePayload(row.payload);
+  const source = toTenantAddonsSource(payload);
+  return {
+    ...DEFAULT_TENANT_ADDONS,
+    email_features: asBoolean(source.email_features) === true,
+    email_report: asBoolean(source.email_report) === true,
+    email_customer_balance: asBoolean(source.email_customer_balance) === true,
+    sms_alerts: asBoolean(source.sms_alerts) === true,
+    auto_report_digest: asBoolean(source.auto_report_digest) === true,
+    custom_pricing: asBoolean(source.custom_pricing) === true,
+    customer_category: asBoolean(source.customer_category) === true,
+    item_price_cost_audit: asBoolean(source.item_price_cost_audit) === true,
+    petty_cash_attachments: asBoolean(source.petty_cash_attachments) === true,
+    shift_security_controls: asBoolean(source.shift_security_controls) === true,
+    kilo_overview_chart: asBoolean(source.kilo_overview_chart) === true,
+    receipt_amount_privacy: asBoolean(source.receipt_amount_privacy) === true,
+    purchase_order_suite: asBoolean(source.purchase_order_suite) === true,
+    delivery_dispatch_suite: asBoolean(source.delivery_dispatch_suite) === true,
+    queue_order_filtering: asBoolean(source.queue_order_filtering) === true
+  };
 }
 
 export async function loadUserOptions(db: SQLiteDatabase): Promise<MasterDataOption[]> {
@@ -480,7 +613,14 @@ export async function loadPersonnelOptions(db: SQLiteDatabase): Promise<MasterDa
         id,
         label: fullName ?? code ?? id,
         subtitle: [code, roleName].filter((value): value is string => Boolean(value)).join(' - ') || undefined,
-        branchId
+        branchId,
+        roleName: roleName ?? null,
+        salaryType: normalizeSalaryType(payload.salaryType ?? payload.salary_type),
+        salaryRate: Math.max(0, asNumber(payload.salaryRate ?? payload.salary_rate) ?? 0),
+        commissionEligible:
+          payload.commissionEligible === undefined && payload.commission_eligible === undefined
+            ? true
+            : asBoolean(payload.commissionEligible ?? payload.commission_eligible) !== false
       })
     );
   }

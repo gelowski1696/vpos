@@ -40,11 +40,32 @@ type PersonnelRecord = {
   id: string;
   code?: string;
   name?: string;
+  fullName?: string;
+  full_name?: string;
+  displayName?: string;
+  display_name?: string;
+  firstName?: string;
+  first_name?: string;
+  middleName?: string;
+  middle_name?: string;
+  lastName?: string;
+  last_name?: string;
+  suffix?: string;
+  roleName?: string;
+  role_name?: string;
+  roleCode?: string;
+  role_code?: string;
   branchId?: string | null;
   roleId?: string | null;
   personnelRoleId?: string | null;
   role?: { id?: string; name?: string; code?: string } | null;
   isActive?: boolean;
+  salaryType?: 'MONTHLY' | 'DAILY' | 'HOURLY' | 'PER_TRANSACTION';
+  salary_type?: 'MONTHLY' | 'DAILY' | 'HOURLY' | 'PER_TRANSACTION';
+  salaryRate?: number | string | null;
+  salary_rate?: number | string | null;
+  commissionEligible?: boolean | string | null;
+  commission_eligible?: boolean | string | null;
 };
 
 type ProductRecord = {
@@ -63,6 +84,10 @@ type ProductRecord = {
   cylinder_size?: number | string | null;
   cylinderTypeId?: string | null;
   cylinder_type_id?: string | null;
+  pickupCommissionRate?: number | string | null;
+  pickup_commission_rate?: number | string | null;
+  deliveryCommissionRate?: number | string | null;
+  delivery_commission_rate?: number | string | null;
 };
 
 type InventorySnapshotRow = {
@@ -89,10 +114,90 @@ type PriceListRecord = {
   id: string;
   scope?: string;
   branchId?: string | null;
+  customerTier?: string | null;
+  customerCategoryId?: string | null;
+  customerId?: string | null;
   startsAt?: string;
   endsAt?: string | null;
   isActive?: boolean;
   rules?: PriceRuleRecord[];
+};
+
+export type TenantAddonFlags = {
+  email_features: boolean;
+  email_report: boolean;
+  email_customer_balance: boolean;
+  sms_alerts: boolean;
+  auto_report_digest: boolean;
+  custom_pricing: boolean;
+  customer_category: boolean;
+  item_price_cost_audit: boolean;
+  petty_cash_attachments: boolean;
+  shift_security_controls: boolean;
+  kilo_overview_chart: boolean;
+  receipt_amount_privacy: boolean;
+  purchase_order_suite: boolean;
+  delivery_dispatch_suite: boolean;
+  queue_order_filtering: boolean;
+  cashier_end_of_day_inventory_count: boolean;
+};
+
+type CustomerPricingProfile = {
+  id: string;
+  tier: string | null;
+  customerCategoryId: string | null;
+  contractPrice: number | null;
+};
+
+export type DesktopPosControlPolicy = {
+  reports_enabled: boolean;
+  inventory_reports_enabled: boolean;
+  customers_enabled: boolean;
+  items_enabled: boolean;
+  transfer_enabled: boolean;
+  lending_enabled: boolean;
+  expense_enabled: boolean;
+  shift_enabled: boolean;
+  settings_enabled: boolean;
+  purchase_orders_enabled: boolean;
+  delivery_dispatch_enabled: boolean;
+  updated_at: string;
+  updated_by: string | null;
+};
+
+export const DEFAULT_TENANT_ADDONS: TenantAddonFlags = {
+  email_features: false,
+  email_report: false,
+  email_customer_balance: false,
+  sms_alerts: false,
+  auto_report_digest: false,
+  custom_pricing: false,
+  customer_category: false,
+  item_price_cost_audit: false,
+  petty_cash_attachments: false,
+  shift_security_controls: false,
+  kilo_overview_chart: false,
+  receipt_amount_privacy: false,
+  purchase_order_suite: false,
+  delivery_dispatch_suite: false,
+  queue_order_filtering: false,
+  cashier_end_of_day_inventory_count: false
+};
+
+export const DEFAULT_DESKTOP_POS_CONTROL_POLICY: DesktopPosControlPolicy = {
+  reports_enabled: true,
+  inventory_reports_enabled: true,
+  customers_enabled: true,
+  items_enabled: true,
+  transfer_enabled: true,
+  lending_enabled: true,
+  expense_enabled: true,
+  shift_enabled: true,
+  settings_enabled: true,
+  purchase_orders_enabled: true,
+  delivery_dispatch_enabled: true,
+  updated_at: new Date(0).toISOString(),
+  updated_by: null
 };
 
 type SalesListReportRow = {
@@ -154,6 +259,20 @@ type SaleDetailReport = {
     method: string;
     amount: number;
     reference_no?: string | null;
+    notes?: string | null;
+    posted_at?: string | null;
+  }>;
+  commissions?: Array<{
+    product_id: string;
+    product_name: string;
+    personnel_id?: string | null;
+    personnel_name: string;
+    personnel_role?: string | null;
+    sale_type: 'PICKUP' | 'DELIVERY';
+    qty: number;
+    commission_rate: number;
+    split_percent: number;
+    commission_amount: number;
   }>;
 };
 
@@ -195,6 +314,24 @@ function asString(value: unknown): string | null {
   return normalized.length > 0 ? normalized : null;
 }
 
+function buildFullName(payload: Record<string, unknown>): string | null {
+  const direct =
+    asString(payload.fullName) ??
+    asString(payload.full_name) ??
+    asString(payload.displayName) ??
+    asString(payload.display_name) ??
+    asString(payload.name);
+  if (direct) {
+    return direct;
+  }
+  const first = asString(payload.firstName) ?? asString(payload.first_name);
+  const middle = asString(payload.middleName) ?? asString(payload.middle_name);
+  const last = asString(payload.lastName) ?? asString(payload.last_name);
+  const suffix = asString(payload.suffix);
+  const combined = [first, middle, last, suffix].filter((value): value is string => Boolean(value)).join(' ').trim();
+  return combined.length > 0 ? combined : null;
+}
+
 function asNumber(value: unknown): number {
   if (typeof value === 'number' && Number.isFinite(value)) {
     return value;
@@ -208,9 +345,93 @@ function asNumber(value: unknown): number {
   return 0;
 }
 
+function asOptionalNumber(value: unknown): number | null {
+  if (typeof value === 'number' && Number.isFinite(value)) {
+    return value;
+  }
+  if (typeof value === 'string' && value.trim()) {
+    const parsed = Number(value);
+    if (Number.isFinite(parsed)) {
+      return parsed;
+    }
+  }
+  return null;
+}
+
+function asBoolean(value: unknown): boolean {
+  if (typeof value === 'boolean') {
+    return value;
+  }
+  if (typeof value === 'string') {
+    const normalized = value.trim().toLowerCase();
+    if (normalized === 'true') {
+      return true;
+    }
+    if (normalized === 'false') {
+      return false;
+    }
+  }
+  return false;
+}
+
+function normalizePosControlPolicy(
+  source: Record<string, unknown>,
+  fallbackUpdatedAt?: string
+): DesktopPosControlPolicy {
+  const readFlag = (
+    key: keyof Pick<
+      DesktopPosControlPolicy,
+      | 'reports_enabled'
+      | 'inventory_reports_enabled'
+      | 'customers_enabled'
+      | 'items_enabled'
+      | 'transfer_enabled'
+      | 'lending_enabled'
+      | 'expense_enabled'
+      | 'shift_enabled'
+      | 'settings_enabled'
+      | 'purchase_orders_enabled'
+      | 'delivery_dispatch_enabled'
+    >
+  ): boolean => (source[key] === undefined ? DEFAULT_DESKTOP_POS_CONTROL_POLICY[key] : asBoolean(source[key]));
+
+  return {
+    ...DEFAULT_DESKTOP_POS_CONTROL_POLICY,
+    reports_enabled: readFlag('reports_enabled'),
+    inventory_reports_enabled: readFlag('inventory_reports_enabled'),
+    customers_enabled: readFlag('customers_enabled'),
+    items_enabled: readFlag('items_enabled'),
+    transfer_enabled: readFlag('transfer_enabled'),
+    lending_enabled: readFlag('lending_enabled'),
+    expense_enabled: readFlag('expense_enabled'),
+    shift_enabled: readFlag('shift_enabled'),
+    settings_enabled: readFlag('settings_enabled'),
+    purchase_orders_enabled: readFlag('purchase_orders_enabled'),
+    delivery_dispatch_enabled: readFlag('delivery_dispatch_enabled'),
+    updated_at:
+      asString(source.updated_at) ??
+      asString(source.updatedAt) ??
+      fallbackUpdatedAt ??
+      DEFAULT_DESKTOP_POS_CONTROL_POLICY.updated_at,
+    updated_by: asString(source.updated_by) ?? asString(source.updatedBy) ?? null
+  };
+}
+
+function parseDateMs(value: string | null | undefined): number | null {
+  if (!value) {
+    return null;
+  }
+  const ms = Date.parse(value);
+  return Number.isFinite(ms) ? ms : null;
+}
+
 function isProjectedSaleStatus(value: string | null | undefined): boolean {
   const normalized = String(value ?? '').trim().toLowerCase();
   return normalized === 'pending' || normalized === 'processing' || normalized === 'synced';
+}
+
+function isCancelledSaleStatus(value: string | null | undefined): boolean {
+  return String(value ?? '').trim().toUpperCase() === 'CANCELLED';
 }
 
 function isProjectedOutboxStatus(value: string | null | undefined): boolean {
@@ -220,6 +441,34 @@ function isProjectedOutboxStatus(value: string | null | undefined): boolean {
 
 function normalizeBaseUrl(baseUrl: string): string {
   return baseUrl.replace(/\/$/, '');
+}
+
+function compactErrorText(value: string): string {
+  return value.replace(/\s+/g, ' ').trim();
+}
+
+async function readFetchErrorDetail(response: Response): Promise<string> {
+  const raw = await response.text().catch(() => '');
+  const normalized = compactErrorText(raw);
+  if (!normalized) {
+    return '';
+  }
+  try {
+    const parsed = JSON.parse(normalized) as Record<string, unknown>;
+    const messageValue = parsed.message;
+    if (typeof messageValue === 'string' && messageValue.trim()) {
+      return messageValue.trim();
+    }
+    if (Array.isArray(messageValue) && messageValue.length > 0) {
+      const merged = compactErrorText(messageValue.map((entry) => String(entry ?? '')).join('; '));
+      if (merged) {
+        return merged;
+      }
+    }
+  } catch {
+    // Preserve raw text when payload is not JSON.
+  }
+  return normalized;
 }
 
 function toDesktopPaymentMethod(value: string | null | undefined): 'CASH' | 'CARD' | 'E_WALLET' {
@@ -289,9 +538,29 @@ function toDesktopSaleRecord(detail: SaleDetailReport): DesktopSaleRecord {
       changeAmount: Math.max(0, Number((detail.sale.payment_total - detail.sale.total_amount).toFixed(2))),
       creditBalance: Math.max(0, Number((detail.sale.total_amount - detail.sale.payment_total).toFixed(2))),
       payments: detail.payments.map((payment) => ({
+        id: payment.payment_id,
+        source: payment.payment_source,
         method: toDesktopPaymentMethod(payment.method),
         amount: payment.amount,
-        referenceNo: payment.reference_no ?? null
+        referenceNo: payment.reference_no ?? null,
+        notes: payment.notes ?? null,
+        createdAt: payment.posted_at ?? detail.sale.created_at
+      })),
+      commissionSplitMode: 'EQUAL',
+      commissionTotal: Number(
+        (detail.commissions ?? []).reduce((sum, commission) => sum + asNumber(commission.commission_amount), 0).toFixed(2)
+      ),
+      commissions: (detail.commissions ?? []).map((commission) => ({
+        productId: commission.product_id,
+        productName: commission.product_name,
+        personnelId: commission.personnel_id ?? null,
+        personnelName: commission.personnel_name,
+        personnelRole: commission.personnel_role ?? null,
+        saleType: commission.sale_type,
+        quantity: asNumber(commission.qty),
+        commissionRate: asNumber(commission.commission_rate),
+        splitPercent: asNumber(commission.split_percent),
+        commissionAmount: asNumber(commission.commission_amount)
       })),
       notes: null,
       lines: detail.lines.map((line) => ({
@@ -301,7 +570,9 @@ function toDesktopSaleRecord(detail: SaleDetailReport): DesktopSaleRecord {
         quantity: line.qty,
         unitPrice: line.unit_price,
         lineTotal: line.line_total,
-        cylinderFlow: line.cylinder_flow ?? null
+        cylinderFlow: line.cylinder_flow ?? null,
+        pickupCommissionRate: 0,
+        deliveryCommissionRate: 0
       })),
       createdAt
     }
@@ -414,6 +685,61 @@ function withinWindow(priceList: PriceListRecord, now: Date): boolean {
 }
 
 export class DesktopMasterDataService {
+  private isDetailCacheEligibleLendingStatus(status: DesktopLendingRecord['status'] | string | null | undefined): boolean {
+    const normalized = String(status ?? '')
+      .trim()
+      .toUpperCase();
+    return normalized === 'OPEN' || normalized === 'PARTIALLY_RETURNED' || normalized === 'OVERDUE';
+  }
+
+  private async cacheLendingDetails(
+    state: DesktopAppState,
+    lendingRows: DesktopLendingRecord[]
+  ): Promise<{ rows: DesktopMasterDataRow[]; state: DesktopAppState }> {
+    const lendingIds = Array.from(
+      new Set(
+        lendingRows
+          .filter((row) => this.isDetailCacheEligibleLendingStatus(row.status))
+          .map((row) => asString(row.lending_id) ?? asString((row as unknown as Record<string, unknown>).id))
+          .filter((id): id is string => Boolean(id))
+      )
+    );
+
+    if (lendingIds.length === 0) {
+      return { rows: [], state };
+    }
+
+    const apiBase = normalizeBaseUrl(state.setup.apiBaseUrl);
+    const updatedAt = new Date().toISOString();
+    let nextState = state;
+    const rows: DesktopMasterDataRow[] = [];
+
+    for (const lendingId of lendingIds) {
+      try {
+        const detailResult = await desktopAuthService.authorizedFetch(
+          nextState,
+          `${apiBase}/lending/${encodeURIComponent(lendingId)}`
+        );
+        nextState = detailResult.state ?? nextState;
+        if (!detailResult.response.ok) {
+          continue;
+        }
+        const detail = (await detailResult.response.json()) as DesktopLendingDetail;
+        const recordId = asString(detail.lending_id) ?? lendingId;
+        rows.push({
+          entity: 'lending_detail',
+          recordId,
+          payload: JSON.stringify(detail),
+          updatedAt
+        });
+      } catch {
+        // Non-blocking: keep already-cached details if one record fails to load.
+      }
+    }
+
+    return { rows, state: nextState };
+  }
+
   async fetchBranchOptions(state: DesktopAppState): Promise<{ options: DesktopOption[]; state: DesktopAppState }> {
     const { response, state: nextState } = await desktopAuthService.authorizedFetch(
       state,
@@ -477,6 +803,7 @@ export class DesktopMasterDataService {
       branchesResult,
       locationsResult,
       productsResult,
+      cylinderTypesResult,
       inventoryOpeningResult,
       priceListsResult,
       expenseCategoriesResult,
@@ -491,6 +818,7 @@ export class DesktopMasterDataService {
       desktopAuthService.authorizedFetch(state, `${apiBase}/master-data/branches`),
       desktopAuthService.authorizedFetch(state, `${apiBase}/master-data/locations`),
       desktopAuthService.authorizedFetch(state, `${apiBase}/master-data/products`),
+      desktopAuthService.authorizedFetch(state, `${apiBase}/master-data/cylinder-types`),
       desktopAuthService.authorizedFetch(state, `${apiBase}/master-data/inventory/opening-stock`),
       desktopAuthService.authorizedFetch(state, `${apiBase}/master-data/price-lists`),
       desktopAuthService.authorizedFetch(state, `${apiBase}/master-data/expense-categories`),
@@ -529,31 +857,81 @@ export class DesktopMasterDataService {
       expenseCategoriesResult.state ??
       priceListsResult.state ??
       inventoryOpeningResult.state ??
+      cylinderTypesResult.state ??
       productsResult.state ??
       locationsResult.state ??
       branchesResult.state;
 
-    if (
-      !branchesResult.response.ok ||
-      !locationsResult.response.ok ||
-      !productsResult.response.ok ||
-      !inventoryOpeningResult.response.ok ||
-      !priceListsResult.response.ok ||
-      !expenseCategoriesResult.response.ok ||
-      !suppliersResult.response.ok ||
-      !personnelsResult.response.ok ||
-      !customersResult.response.ok ||
-      !lendingResult.response.ok ||
-      !lpgActionsResult.response.ok ||
-      !salesListResult.response.ok ||
-      !transfersResult.response.ok
-    ) {
-      throw new Error('Unable to refresh desktop branch data from the server.');
+    const endpointResults: Array<{ path: string; response: Response }> = [
+      { path: '/master-data/branches', response: branchesResult.response },
+      { path: '/master-data/locations', response: locationsResult.response },
+      { path: '/master-data/products', response: productsResult.response },
+      { path: '/master-data/cylinder-types', response: cylinderTypesResult.response },
+      { path: '/master-data/inventory/opening-stock', response: inventoryOpeningResult.response },
+      { path: '/master-data/price-lists', response: priceListsResult.response },
+      { path: '/master-data/expense-categories', response: expenseCategoriesResult.response },
+      { path: '/master-data/suppliers', response: suppliersResult.response },
+      { path: '/master-data/personnels', response: personnelsResult.response },
+      { path: '/master-data/customers', response: customersResult.response },
+      { path: '/lending', response: lendingResult.response },
+      { path: '/lpg-item-actions', response: lpgActionsResult.response },
+      { path: '/reports/sales/list', response: salesListResult.response },
+      { path: '/transfers', response: transfersResult.response }
+    ];
+    const failedEndpoints = endpointResults.filter((entry) => !entry.response.ok);
+    if (failedEndpoints.length > 0) {
+      const details = await Promise.all(
+        failedEndpoints.map(async (entry) => {
+          const detail = await readFetchErrorDetail(entry.response);
+          return `${entry.path} (${entry.response.status})${detail ? `: ${detail}` : ''}`;
+        })
+      );
+      const preview = details.slice(0, 2).join(' | ');
+      const remainder = details.length > 2 ? ` (+${details.length - 2} more)` : '';
+      throw new Error(`Unable to refresh desktop branch data from the server. ${preview}${remainder}`);
+    }
+
+    let finalState = nextState;
+    let tenantAddonsRecord: Record<string, unknown> | null = null;
+    try {
+      const entitlementResult = await desktopAuthService.authorizedFetch(
+        nextState,
+        `${apiBase}/platform/entitlements/current`
+      );
+      finalState = entitlementResult.state ?? finalState;
+      if (entitlementResult.response.ok) {
+        const payload = (await entitlementResult.response.json()) as Record<string, unknown>;
+        tenantAddonsRecord = {
+          id: 'current',
+          ...(payload.addons && typeof payload.addons === 'object' ? (payload.addons as Record<string, unknown>) : {})
+        };
+      }
+    } catch {
+      // Non-blocking: catalog refresh should still continue even if add-on fetch is unavailable.
+    }
+
+    let posControlPolicyRecord: Record<string, unknown> | null = null;
+    try {
+      const posSettingsResult = await desktopAuthService.authorizedFetch(
+        finalState,
+        `${apiBase}/platform/pos-settings/current`
+      );
+      finalState = posSettingsResult.state ?? finalState;
+      if (posSettingsResult.response.ok) {
+        const payload = (await posSettingsResult.response.json()) as Record<string, unknown>;
+        posControlPolicyRecord = {
+          id: 'current',
+          ...normalizePosControlPolicy(payload)
+        };
+      }
+    } catch {
+      // Non-blocking: branch data refresh should still continue even if POS settings are unavailable.
     }
 
     const branchRows = (await branchesResult.response.json()) as BranchRecord[];
     const locationRows = (await locationsResult.response.json()) as LocationRecord[];
     const productRows = (await productsResult.response.json()) as ProductRecord[];
+    const cylinderTypeRows = (await cylinderTypesResult.response.json()) as Record<string, unknown>[];
     const inventorySnapshot = (await inventoryOpeningResult.response.json()) as InventoryOpeningSnapshot;
     const priceListRows = (await priceListsResult.response.json()) as PriceListRecord[];
     const expenseCategoryRows = (await expenseCategoriesResult.response.json()) as Record<string, unknown>[];
@@ -580,6 +958,8 @@ export class DesktopMasterDataService {
     );
     const salesRecords = salesDetailResults.filter((row): row is SaleDetailReport => Boolean(row)).map(toDesktopSaleRecord);
     const transferRecords = transferRows.map(toDesktopTransferRecord);
+    const lendingDetailCache = await this.cacheLendingDetails(finalState, lendingRows);
+    finalState = lendingDetailCache.state;
 
     const scopedLocations = locationRows.filter((row) => !row.branchId || row.branchId === branchId);
     const locationIdSet = new Set(scopedLocations.map((row) => row.id));
@@ -595,12 +975,16 @@ export class DesktopMasterDataService {
       if (scope === 'BRANCH') {
         return row.branchId === branchId;
       }
-      return false;
+      return true;
     });
 
     await desktopDb.replaceMasterDataEntity('branch', toRows('branch', branchRows as Record<string, unknown>[]));
     await desktopDb.replaceMasterDataEntity('location', toRows('location', scopedLocations as Record<string, unknown>[]));
     await desktopDb.replaceMasterDataEntity('product', toRows('product', productRows as Record<string, unknown>[]));
+    await desktopDb.replaceMasterDataEntity(
+      'cylinder_type',
+      toRows('cylinder_type', cylinderTypeRows)
+    );
     await desktopDb.replaceMasterDataEntity(
       'inventory_balance',
       toRows('inventory_balance', scopedInventoryRows as Record<string, unknown>[])
@@ -609,6 +993,15 @@ export class DesktopMasterDataService {
       'price_list',
       toRows('price_list', scopedPriceLists as Record<string, unknown>[])
     );
+    if (tenantAddonsRecord) {
+      await desktopDb.replaceMasterDataEntity('tenant_addons', toRows('tenant_addons', [tenantAddonsRecord]));
+    }
+    if (posControlPolicyRecord) {
+      await desktopDb.replaceMasterDataEntity(
+        'pos_control_policy',
+        toRows('pos_control_policy', [posControlPolicyRecord])
+      );
+    }
     await desktopDb.replaceMasterDataEntity(
       'expense_category',
       toRows('expense_category', expenseCategoryRows)
@@ -625,7 +1018,14 @@ export class DesktopMasterDataService {
       )
     );
     await desktopDb.replaceMasterDataEntity('customer', await mergeLocalOnlyRows('customer', toRows('customer', customerRows)));
-    await desktopDb.replaceMasterDataEntity('lending', toRows('lending', lendingRows as unknown as Record<string, unknown>[]));
+    await desktopDb.replaceMasterDataEntity(
+      'lending',
+      await mergeLocalOnlyRows('lending', toRows('lending', lendingRows as unknown as Record<string, unknown>[]))
+    );
+    await desktopDb.replaceMasterDataEntity(
+      'lending_detail',
+      await mergeLocalOnlyRows('lending_detail', lendingDetailCache.rows)
+    );
     await desktopDb.replaceMasterDataEntity(
       'lpg_item_action',
       toRows('lpg_item_action', lpgActionRows as unknown as Record<string, unknown>[])
@@ -643,15 +1043,19 @@ export class DesktopMasterDataService {
       branches: branchRows.length,
       locations: scopedLocations.length,
       products: productRows.length,
+      cylinder_types: cylinderTypeRows.length,
       customers: customerRows.length,
       suppliers: supplierRows.length,
       personnels: personnelRows.length,
+      tenant_addons: tenantAddonsRecord ? 1 : 0,
+      pos_control_policy: posControlPolicyRecord ? 1 : 0,
       lending: lendingRows.length,
+      lending_details: lendingDetailCache.rows.length,
       lpg_item_actions: lpgActionRows.length,
       sales: salesRecords.length,
       transfers: transferRecords.length
     };
-    await this.reportDownloadAudit(nextState, branchId, downloadCounts);
+    await this.reportDownloadAudit(finalState, branchId, downloadCounts);
 
     return {
       productCount: productRows.filter((row) => row.isActive !== false).length,
@@ -660,7 +1064,7 @@ export class DesktopMasterDataService {
       salesCount: salesRecords.length,
       transferCount: transferRecords.length,
       syncedAt: new Date().toISOString(),
-      state: nextState
+      state: finalState
     };
   }
 
@@ -705,9 +1109,16 @@ export class DesktopMasterDataService {
       desktopDb.listOutboxItems()
     ]);
 
+    const projectedLocalSaleIds = new Set(
+      saleRows.filter((sale) => isProjectedSaleStatus(sale.syncStatus)).map((sale) => sale.id)
+    );
+
     const receivablesByCustomerId = new Map<string, number>();
     for (const sale of saleRows) {
       if (!isProjectedSaleStatus(sale.syncStatus)) {
+        continue;
+      }
+      if (isCancelledSaleStatus(sale.saleStatus)) {
         continue;
       }
       const customerId = sale.payload.customerId?.trim() || '';
@@ -733,6 +1144,15 @@ export class DesktopMasterDataService {
         asString(payload.customerId) ??
         asString(payload.customer_code) ??
         asString(payload.customerCode);
+      const purpose = asString(payload.purpose)?.trim().toUpperCase() ?? 'SALE_BALANCE';
+      if (purpose === 'LENDING_DEPOSIT') {
+        continue;
+      }
+      const linkedSaleId = asString(payload.sale_id) ?? asString(payload.saleId);
+      if (linkedSaleId && projectedLocalSaleIds.has(linkedSaleId)) {
+        // Sale-linked payments are already reflected in the local sale credit balance.
+        continue;
+      }
       const amount = asNumber(payload.amount);
       if (!customerId || amount <= 0) {
         continue;
@@ -757,6 +1177,9 @@ export class DesktopMasterDataService {
       const gas = asString(payload.gas);
       const province = asString(payload.province);
       const city = asString(payload.city);
+      const tier = asString(payload.tier);
+      const customerCategoryId = asString(payload.customerCategoryId ?? payload.customer_category_id);
+      const contractPrice = asOptionalNumber(payload.contractPrice ?? payload.contract_price);
       const baseBalance = asNumber(payload.outstandingBalance ?? payload.outstanding_balance);
       const receivable = receivablesByCustomerId.get(id) ?? 0;
       const payment = paymentsByCustomerId.get(id) ?? 0;
@@ -774,10 +1197,59 @@ export class DesktopMasterDataService {
           .filter(Boolean)
           .join(' · '),
         balance,
-        pointsBalance: Math.floor(pointsBalance)
+        pointsBalance: Math.floor(pointsBalance),
+        tier,
+        customerCategoryId,
+        contractPrice
       });
     }
     return options.sort((a, b) => a.label.localeCompare(b.label));
+  }
+
+  async loadTenantAddons(): Promise<TenantAddonFlags> {
+    const rows = await desktopDb.listMasterData('tenant_addons');
+    const latest = rows
+      .slice()
+      .sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime())[0];
+    if (!latest?.payload) {
+      return { ...DEFAULT_TENANT_ADDONS };
+    }
+    const payload = safeParse(latest.payload);
+    const source =
+      payload.addons && typeof payload.addons === 'object' && !Array.isArray(payload.addons)
+        ? (payload.addons as Record<string, unknown>)
+        : payload;
+    return {
+      ...DEFAULT_TENANT_ADDONS,
+      email_features: asBoolean(source.email_features),
+      email_report: asBoolean(source.email_report),
+      email_customer_balance: asBoolean(source.email_customer_balance),
+      sms_alerts: asBoolean(source.sms_alerts),
+      auto_report_digest: asBoolean(source.auto_report_digest),
+      custom_pricing: asBoolean(source.custom_pricing),
+      customer_category: asBoolean(source.customer_category),
+      item_price_cost_audit: asBoolean(source.item_price_cost_audit),
+      petty_cash_attachments: asBoolean(source.petty_cash_attachments),
+      shift_security_controls: asBoolean(source.shift_security_controls),
+      kilo_overview_chart: asBoolean(source.kilo_overview_chart),
+      receipt_amount_privacy: asBoolean(source.receipt_amount_privacy),
+      purchase_order_suite: asBoolean(source.purchase_order_suite),
+      delivery_dispatch_suite: asBoolean(source.delivery_dispatch_suite),
+      queue_order_filtering: asBoolean(source.queue_order_filtering),
+      cashier_end_of_day_inventory_count: asBoolean(source.cashier_end_of_day_inventory_count)
+    };
+  }
+
+  async loadPosControlPolicy(): Promise<DesktopPosControlPolicy> {
+    const rows = await desktopDb.listMasterData('pos_control_policy');
+    const latest = rows
+      .slice()
+      .sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime())[0];
+    if (!latest?.payload) {
+      return { ...DEFAULT_DESKTOP_POS_CONTROL_POLICY };
+    }
+    const payload = safeParse(latest.payload);
+    return normalizePosControlPolicy(payload, latest.updatedAt);
   }
 
   async createOfflineCustomer(input: {
@@ -875,11 +1347,31 @@ export class DesktopMasterDataService {
       .map((row) => safeParse(row.payload) as unknown as PersonnelRecord)
       .filter((row) => row.isActive !== false)
       .map((row) => {
-        const roleLabel = row.role?.name?.trim() || row.role?.code?.trim() || null;
+        const code = asString(row.code) ?? null;
+        const fullName =
+          buildFullName(row as unknown as Record<string, unknown>) ??
+          asString(row.fullName) ??
+          asString(row.full_name) ??
+          asString(row.name);
+        const roleLabel =
+          row.role?.name?.trim() ||
+          row.role?.code?.trim() ||
+          asString(row.roleName) ||
+          asString(row.role_name) ||
+          asString(row.roleCode) ||
+          asString(row.role_code) ||
+          null;
         return {
           id: row.id,
-          label: row.name?.trim() || row.code?.trim() || row.id,
-          subtitle: [row.code?.trim(), roleLabel].filter(Boolean).join(' | ') || undefined
+          label: code && fullName ? `${code} - ${fullName}` : fullName ?? code ?? row.id,
+          subtitle: roleLabel ?? undefined,
+          roleName: roleLabel,
+          salaryType: row.salaryType ?? row.salary_type ?? 'MONTHLY',
+          salaryRate: asNumber(row.salaryRate ?? row.salary_rate),
+          commissionEligible:
+            row.commissionEligible === undefined && row.commission_eligible === undefined
+              ? true
+              : asBoolean(row.commissionEligible ?? row.commission_eligible)
         } satisfies DesktopOption;
       })
       .sort((a, b) => a.label.localeCompare(b.label));
@@ -1007,7 +1499,15 @@ export class DesktopMasterDataService {
           qtyOnHand: inventory.qtyOnHand,
           qtyFull: inventory.qtyFull,
           qtyEmpty: inventory.qtyEmpty,
-          isLpg: Boolean(row.isLpg)
+          isLpg: Boolean(row.isLpg),
+          pickupCommissionRate: Math.max(
+            0,
+            asNumber(row.pickupCommissionRate ?? row.pickup_commission_rate)
+          ),
+          deliveryCommissionRate: Math.max(
+            0,
+            asNumber(row.deliveryCommissionRate ?? row.delivery_commission_rate)
+          )
         } satisfies DesktopCatalogProduct;
       })
       .sort((a, b) => a.name.localeCompare(b.name));
@@ -1034,10 +1534,18 @@ export class DesktopMasterDataService {
       throw new Error(`Unable to load lending records (${response.status})`);
     }
     const rows = (await response.json()) as DesktopLendingRecord[];
-    await desktopDb.replaceMasterDataEntity('lending', toRows('lending', rows as unknown as Record<string, unknown>[]));
+    const detailCache = await this.cacheLendingDetails(nextState, rows);
+    await desktopDb.replaceMasterDataEntity(
+      'lending',
+      await mergeLocalOnlyRows('lending', toRows('lending', rows as unknown as Record<string, unknown>[]))
+    );
+    await desktopDb.replaceMasterDataEntity(
+      'lending_detail',
+      await mergeLocalOnlyRows('lending_detail', detailCache.rows)
+    );
     return {
       count: rows.length,
-      state: nextState
+      state: detailCache.state
     };
   }
 

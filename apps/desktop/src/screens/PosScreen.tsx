@@ -13,6 +13,7 @@ import type {
   DesktopPosRewardRecord,
   DesktopPosRewardType,
   DesktopSaleLine,
+  DesktopSalePersonnelCommission,
   DesktopSalePayload,
   DesktopSaleRecord,
   DesktopSaleType,
@@ -22,7 +23,10 @@ import type {
 import { desktopAuthService } from "../services/desktop-auth.service";
 import { desktopDeliveryService } from "../services/desktop-delivery.service";
 import { desktopHeldCartService } from "../services/desktop-held-cart.service";
-import { desktopMasterDataService } from "../services/desktop-master-data.service";
+import {
+  desktopMasterDataService,
+  type TenantAddonFlags,
+} from "../services/desktop-master-data.service";
 import {
   desktopReceiptService,
   type DesktopQueueOrderReceiptPayload,
@@ -76,7 +80,9 @@ type LocalPriceList = {
 
 type Props = {
   appState: DesktopAppState;
+  tenantAddons?: TenantAddonFlags;
   onOutboxChanged?: () => Promise<void> | void;
+  onAfterInventoryCountClose?: () => Promise<void> | void;
   reopenedSale?: DesktopSaleRecord | null;
   reopenedSaleMode?: "copy" | "recreate";
   reopenedSaleNonce?: number;
@@ -462,16 +468,6 @@ function parseCashInput(value: string): number {
   return Number.isFinite(parsed) ? parsed : 0;
 }
 
-function parseInventoryInput(value: string): number {
-  const parsed = Number(value);
-  return Number.isFinite(parsed) && parsed >= 0 ? parsed : 0;
-}
-
-function formatInventoryInput(value: number): string {
-  const rounded = Math.round(value * 100) / 100;
-  return Number.isInteger(rounded) ? String(rounded) : rounded.toFixed(2).replace(/\.?0+$/, "");
-}
-
 const openingCashDenominationOptions = [
   1000,
   500,
@@ -516,12 +512,23 @@ function createInventoryCountInputs(
     snapshot.lines.map((line) => [
       line.productId,
       {
-        qtyOnHand: formatInventoryInput(line.qtyOnHand),
-        qtyFull: formatInventoryInput(line.qtyFull),
-        qtyEmpty: formatInventoryInput(line.qtyEmpty),
+        qtyOnHand: "",
+        qtyFull: "",
+        qtyEmpty: "",
       },
     ]),
   ) as InventoryCountInputMap;
+}
+
+function parseInventoryCountOrFallback(
+  value: string | undefined,
+  fallback: number,
+): number {
+  if (typeof value !== "string" || value.trim() === "") {
+    return fallback;
+  }
+  const parsed = Number(value);
+  return Number.isFinite(parsed) && parsed >= 0 ? parsed : fallback;
 }
 
 function buildInventoryCountSnapshot(
@@ -534,12 +541,8 @@ function buildInventoryCountSnapshot(
     lines: snapshot.lines.map((line) => {
       const entry = counts[line.productId];
       if (line.isLpg) {
-        const qtyFull = parseInventoryInput(
-          entry?.qtyFull ?? formatInventoryInput(line.qtyFull),
-        );
-        const qtyEmpty = parseInventoryInput(
-          entry?.qtyEmpty ?? formatInventoryInput(line.qtyEmpty),
-        );
+        const qtyFull = parseInventoryCountOrFallback(entry?.qtyFull, line.qtyFull);
+        const qtyEmpty = parseInventoryCountOrFallback(entry?.qtyEmpty, line.qtyEmpty);
         return {
           ...line,
           qtyFull,
@@ -547,9 +550,7 @@ function buildInventoryCountSnapshot(
           qtyOnHand: Number((qtyFull + qtyEmpty).toFixed(2)),
         };
       }
-      const qtyOnHand = parseInventoryInput(
-        entry?.qtyOnHand ?? formatInventoryInput(line.qtyOnHand),
-      );
+      const qtyOnHand = parseInventoryCountOrFallback(entry?.qtyOnHand, line.qtyOnHand);
       return {
         ...line,
         qtyOnHand,
@@ -659,6 +660,18 @@ function normalizeWholeQuantity(value: number): number {
   return Math.max(0, Math.floor(value));
 }
 
+export function normalizeCartQuantityDraftInput(value: string): string {
+  return toWholeNumberInput(value);
+}
+
+export function parseCartQuantityDraftInput(value: string): number | null {
+  const normalized = normalizeCartQuantityDraftInput(value);
+  if (!normalized) {
+    return null;
+  }
+  return normalizeWholeQuantity(Number(normalized));
+}
+
 function resolveAvailableQty(product: DesktopCatalogProduct): number {
   if (product.isLpg) {
     const full = Math.max(0, Number(product.qtyFull || 0));
@@ -713,6 +726,70 @@ function makeCartLineId(): string {
 
 function round2(value: number): number {
   return Math.round(value * 100) / 100;
+}
+
+function buildEqualSplitCommissionPreview(args: {
+  lines: DesktopSaleLine[];
+  personnel: Array<{
+    id: string | null;
+    name: string | null;
+    role: "DRIVER" | "HELPER";
+    commissionEligible?: boolean;
+  }>;
+  saleType: DesktopSaleType;
+}): DesktopSalePersonnelCommission[] {
+  const eligiblePersonnel = args.personnel
+    .filter((person) => person.commissionEligible !== false)
+    .filter((person) => (person.id ?? "").trim().length > 0 || (person.name ?? "").trim().length > 0);
+
+  if (eligiblePersonnel.length === 0) {
+    return [];
+  }
+
+  const splitPercent = round2(100 / eligiblePersonnel.length);
+  const rows: DesktopSalePersonnelCommission[] = [];
+
+  for (const line of args.lines) {
+    const quantity = Math.max(0, Number(line.quantity || 0));
+    const commissionRate = round2(
+      Math.max(
+        0,
+        args.saleType === "DELIVERY"
+          ? Number(line.deliveryCommissionRate || 0)
+          : Number(line.pickupCommissionRate || 0),
+      ),
+    );
+    const totalCommission = round2(quantity * commissionRate);
+    if (quantity <= 0 || commissionRate <= 0 || totalCommission <= 0) {
+      continue;
+    }
+
+    let allocated = 0;
+    eligiblePersonnel.forEach((person, index) => {
+      const isLast = index === eligiblePersonnel.length - 1;
+      const commissionAmount = isLast
+        ? round2(totalCommission - allocated)
+        : round2(totalCommission / eligiblePersonnel.length);
+      allocated = round2(allocated + commissionAmount);
+      if (commissionAmount <= 0) {
+        return;
+      }
+      rows.push({
+        productId: line.productId,
+        productName: line.productName,
+        personnelId: person.id,
+        personnelName: person.name ?? person.id ?? "Personnel",
+        personnelRole: person.role,
+        saleType: args.saleType,
+        quantity,
+        commissionRate,
+        splitPercent,
+        commissionAmount,
+      });
+    });
+  }
+
+  return rows;
 }
 
 function parseRecord<T>(value: string, fallback: T): T {
@@ -1131,9 +1208,76 @@ function PickerModal(props: PickerModalProps): JSX.Element | null {
   );
 }
 
+type CartQuantityInputProps = {
+  lineId: string;
+  quantity: number;
+  onUpdateQuantity: (lineId: string, nextQuantity: number) => void;
+};
+
+function CartQuantityInput({
+  lineId,
+  quantity,
+  onUpdateQuantity,
+}: CartQuantityInputProps): JSX.Element {
+  const [draftValue, setDraftValue] = useState(() =>
+    String(normalizeWholeQuantity(quantity)),
+  );
+  const [isFocused, setIsFocused] = useState(false);
+
+  useEffect(() => {
+    if (!isFocused) {
+      setDraftValue(String(normalizeWholeQuantity(quantity)));
+    }
+  }, [isFocused, quantity]);
+
+  const commitDraftValue = (nextDraftValue: string): void => {
+    const committedQuantity = parseCartQuantityDraftInput(nextDraftValue);
+    onUpdateQuantity(lineId, committedQuantity ?? 0);
+  };
+
+  return (
+    <input
+      className="pos-cart-qty-input"
+      inputMode="numeric"
+      pattern="[0-9]*"
+      value={draftValue}
+      onFocus={() => {
+        setIsFocused(true);
+      }}
+      onBlur={(event) => {
+        setIsFocused(false);
+        const nextTarget = event.relatedTarget;
+        const container = event.currentTarget.parentElement;
+        if (
+          draftValue === "" &&
+          nextTarget instanceof Node &&
+          container?.contains(nextTarget)
+        ) {
+          return;
+        }
+        commitDraftValue(draftValue);
+      }}
+      onChange={(event) => {
+        const nextDraftValue = normalizeCartQuantityDraftInput(
+          event.target.value,
+        );
+        setDraftValue(nextDraftValue);
+        if (nextDraftValue !== "") {
+          const committedQuantity = parseCartQuantityDraftInput(nextDraftValue);
+          if (committedQuantity !== null) {
+            onUpdateQuantity(lineId, committedQuantity);
+          }
+        }
+      }}
+    />
+  );
+}
+
 export function PosScreen({
   appState,
+  tenantAddons,
   onOutboxChanged,
+  onAfterInventoryCountClose,
   reopenedSale = null,
   reopenedSaleMode = "copy",
   reopenedSaleNonce = 0,
@@ -1147,6 +1291,8 @@ export function PosScreen({
   const customerTarget = useDesktopTutorialTarget("pos-customer");
   const itemSelectorTarget = useDesktopTutorialTarget("pos-item-selector");
   const proceedPaymentTarget = useDesktopTutorialTarget("pos-proceed-payment");
+  const cachedCashierEndOfDayInventoryCountAddonEnabled =
+    tenantAddons?.cashier_end_of_day_inventory_count === true;
   const [customerSearch, setCustomerSearch] = useState("");
   const [personnelSearch, setPersonnelSearch] = useState("");
   const [helperSearch, setHelperSearch] = useState("");
@@ -1177,7 +1323,7 @@ export function PosScreen({
   const [
     cashierEndOfDayInventoryCountAddonEnabled,
     setCashierEndOfDayInventoryCountAddonEnabled,
-  ] = useState(false);
+  ] = useState(cachedCashierEndOfDayInventoryCountAddonEnabled);
   const [deliveryDispatchAddonEnabled, setDeliveryDispatchAddonEnabled] =
     useState(false);
   const [purchaseOrderAddonEnabled, setPurchaseOrderAddonEnabled] =
@@ -1887,6 +2033,8 @@ export function PosScreen({
                 qtyOnHand: match.qtyOnHand,
                 qtyFull: match.qtyFull,
                 qtyEmpty: match.qtyEmpty,
+                pickupCommissionRate: match.pickupCommissionRate ?? 0,
+                deliveryCommissionRate: match.deliveryCommissionRate ?? 0,
               }
             : line;
         }),
@@ -1904,7 +2052,9 @@ export function PosScreen({
   const refreshReceiptAmountPrivacyAddon = async (): Promise<void> => {
     if (!appState.auth.accessToken) {
       setReceiptAmountPrivacyAddonEnabled(false);
-      setCashierEndOfDayInventoryCountAddonEnabled(false);
+      setCashierEndOfDayInventoryCountAddonEnabled(
+        cachedCashierEndOfDayInventoryCountAddonEnabled,
+      );
       setHideReceiptAmounts(false);
       return;
     }
@@ -1933,7 +2083,9 @@ export function PosScreen({
       }
     } catch {
       setReceiptAmountPrivacyAddonEnabled(false);
-      setCashierEndOfDayInventoryCountAddonEnabled(false);
+      setCashierEndOfDayInventoryCountAddonEnabled(
+        cachedCashierEndOfDayInventoryCountAddonEnabled,
+      );
       setHideReceiptAmounts(false);
     }
   };
@@ -1948,7 +2100,11 @@ export function PosScreen({
 
   useEffect(() => {
     void refreshReceiptAmountPrivacyAddon();
-  }, [appState.auth.accessToken, appState.setup.apiBaseUrl]);
+  }, [
+    appState.auth.accessToken,
+    appState.setup.apiBaseUrl,
+    cachedCashierEndOfDayInventoryCountAddonEnabled,
+  ]);
 
   useEffect(() => {
     if (catalogBase.length === 0) {
@@ -2776,6 +2932,8 @@ export function PosScreen({
         unitPrice: line.unitPrice,
         lineTotal: Number((line.quantity * line.unitPrice).toFixed(2)),
         cylinderFlow: line.cylinderFlow ?? null,
+        pickupCommissionRate: round2(Number(line.pickupCommissionRate || 0)),
+        deliveryCommissionRate: round2(Number(line.deliveryCommissionRate || 0)),
       })),
     });
 
@@ -2807,15 +2965,19 @@ export function PosScreen({
           unitPrice: line.unitPrice,
           qtyOnHand: 0,
           qtyFull: 0,
-          qtyEmpty: 0,
-          isLpg: false,
-        }),
-        lineId: line.lineId ?? makeCartLineId(),
-        quantity: Math.max(1, normalizeWholeQuantity(line.quantity)),
-        unitPrice: line.unitPrice,
-        cylinderFlow:
-          (match?.isLpg ?? false) ? (line.cylinderFlow ?? null) : null,
-      };
+        qtyEmpty: 0,
+        isLpg: false,
+        pickupCommissionRate: line.pickupCommissionRate ?? 0,
+        deliveryCommissionRate: line.deliveryCommissionRate ?? 0,
+      }),
+      lineId: line.lineId ?? makeCartLineId(),
+      quantity: Math.max(1, normalizeWholeQuantity(line.quantity)),
+      unitPrice: line.unitPrice,
+      pickupCommissionRate: line.pickupCommissionRate ?? match?.pickupCommissionRate ?? 0,
+      deliveryCommissionRate: line.deliveryCommissionRate ?? match?.deliveryCommissionRate ?? 0,
+      cylinderFlow:
+        (match?.isLpg ?? false) ? (line.cylinderFlow ?? null) : null,
+    };
     });
 
     setCart(cartLines);
@@ -2948,6 +3110,9 @@ export function PosScreen({
       );
       await submitEndDayClose(closingInventorySnapshot);
       setEndDayInventoryModalOpen(false);
+      if (onAfterInventoryCountClose) {
+        await onAfterInventoryCountClose();
+      }
     } catch (error) {
       showError(
         error instanceof Error ? error.message : "Unable to end day from POS.",
@@ -3168,7 +3333,34 @@ export function PosScreen({
       unitPrice: line.unitPrice,
       lineTotal: Number((line.quantity * line.unitPrice).toFixed(2)),
       cylinderFlow: line.isLpg ? (line.cylinderFlow ?? null) : null,
+      pickupCommissionRate: round2(Number(line.pickupCommissionRate || 0)),
+      deliveryCommissionRate: round2(Number(line.deliveryCommissionRate || 0)),
     }));
+    const commissionRows = buildEqualSplitCommissionPreview({
+      lines,
+      saleType: orderType,
+      personnel: [
+        {
+          id: selectedPersonnel?.id ?? null,
+          role: "DRIVER",
+          name: selectedPersonnel?.label ?? null,
+          commissionEligible: selectedPersonnel?.commissionEligible,
+        },
+        ...(selectedHelper?.id
+          ? [
+              {
+                id: selectedHelper.id,
+                role: "HELPER" as const,
+                name: selectedHelper.label ?? null,
+                commissionEligible: selectedHelper.commissionEligible,
+              },
+            ]
+          : []),
+      ],
+    });
+    const commissionTotal = round2(
+      commissionRows.reduce((sum, row) => sum + row.commissionAmount, 0),
+    );
     const syncedPaymentAmount = Number(
       (paymentMode === "FULL"
         ? total
@@ -3234,6 +3426,9 @@ export function PosScreen({
       rewardDiscountAmount: totalRewardValue,
       rewardBaseAmount,
       rewardRedemptionUsed: Boolean(selectedReward),
+      commissionSplitMode: "EQUAL",
+      commissionTotal,
+      commissions: commissionRows,
       notes: notes.trim() || null,
       lines,
       createdAt: now,
@@ -3674,20 +3869,10 @@ export function PosScreen({
                             >
                               -
                             </button>
-                            <input
-                              className="pos-cart-qty-input"
-                              inputMode="numeric"
-                              pattern="[0-9]*"
-                              value={String(line.quantity)}
-                              onChange={(event) => {
-                                const digits = toWholeNumberInput(
-                                  event.target.value,
-                                );
-                                if (!digits) {
-                                  return;
-                                }
-                                updateQuantity(line.lineId, Number(digits));
-                              }}
+                            <CartQuantityInput
+                              lineId={line.lineId}
+                              quantity={line.quantity}
+                              onUpdateQuantity={updateQuantity}
                             />
                             <button
                               type="button"

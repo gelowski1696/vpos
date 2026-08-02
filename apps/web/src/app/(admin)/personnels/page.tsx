@@ -29,6 +29,11 @@ function yesNo(value: unknown): string {
   return 'No';
 }
 
+function formatMoney(value: unknown): string {
+  const parsed = Number(value ?? 0);
+  return Number.isFinite(parsed) ? parsed.toFixed(2) : '0.00';
+}
+
 function generateShortCode(prefix: string): string {
   const normalizedPrefix = prefix
     .trim()
@@ -181,6 +186,15 @@ export default function PersonnelsPage(): JSX.Element {
     ],
     [roleOptions]
   );
+  const salaryTypeOptions = useMemo<SelectOption[]>(
+    () => [
+      { value: 'MONTHLY', label: 'Monthly' },
+      { value: 'DAILY', label: 'Daily' },
+      { value: 'HOURLY', label: 'Hourly' },
+      { value: 'PER_TRANSACTION', label: 'Per Transaction' }
+    ],
+    []
+  );
   const importColumns = useMemo<ImportColumn[]>(() => {
     const branchTemplateValues = branches
       .filter((row) => row.isActive)
@@ -233,6 +247,26 @@ export default function PersonnelsPage(): JSX.Element {
         example: 'personnel@tenant.local'
       },
       {
+        key: 'salaryType',
+        label: 'Salary Type',
+        example: 'DAILY',
+        aliases: ['salary_type'],
+        templateDropdownValues: salaryTypeOptions.map((option) => option.value)
+      },
+      {
+        key: 'salaryRate',
+        label: 'Salary Rate',
+        example: 500,
+        aliases: ['salary_rate']
+      },
+      {
+        key: 'commissionEligible',
+        label: 'Commission Eligible',
+        example: true,
+        aliases: ['commission_eligible'],
+        templateDropdownValues: boolTemplateValues
+      },
+      {
         key: 'isActive',
         label: 'Active',
         example: true,
@@ -240,7 +274,7 @@ export default function PersonnelsPage(): JSX.Element {
         templateDropdownValues: boolTemplateValues
       }
     ];
-  }, [branches, roles]);
+  }, [branches, roles, salaryTypeOptions]);
 
   return (
     <EntityManager
@@ -252,6 +286,9 @@ export default function PersonnelsPage(): JSX.Element {
         roleId: '',
         phone: '',
         email: '',
+        salaryType: 'MONTHLY',
+        salaryRate: 0,
+        commissionEligible: true,
         isActive: true
       }}
       endpoint="/master-data/personnels"
@@ -290,6 +327,23 @@ export default function PersonnelsPage(): JSX.Element {
         },
         { key: 'phone', label: 'Phone' },
         { key: 'email', label: 'Email' },
+        {
+          key: 'salaryType',
+          label: 'Salary Type',
+          type: 'select',
+          options: salaryTypeOptions
+        },
+        {
+          key: 'salaryRate',
+          label: 'Salary Rate',
+          type: 'number',
+          helperText: 'Base payroll rate for the selected salary type.'
+        },
+        {
+          key: 'commissionEligible',
+          label: 'Commission Eligible',
+          type: 'boolean'
+        },
         { key: 'isActive', label: 'Active', type: 'boolean' }
       ]}
       onFormStateChange={(form, context) => {
@@ -341,6 +395,20 @@ export default function PersonnelsPage(): JSX.Element {
           label: 'Role',
           render: (value) => roleLabelById.get(String(value ?? '')) ?? String(value ?? '-')
         },
+        salaryType: {
+          label: 'Salary Type',
+          render: (value) =>
+            salaryTypeOptions.find((option) => option.value === String(value ?? ''))?.label ??
+            String(value ?? '-')
+        },
+        salaryRate: {
+          label: 'Salary Rate',
+          render: (value) => formatMoney(value)
+        },
+        commissionEligible: {
+          label: 'Commission',
+          render: (value) => yesNo(value)
+        },
         isActive: {
           label: 'Active',
           render: (value) => yesNo(value)
@@ -389,7 +457,13 @@ export default function PersonnelsPage(): JSX.Element {
           branchId,
           roleId,
           phone: payload.phone ? String(payload.phone).trim() : null,
-          email: payload.email ? String(payload.email).trim() : null
+          email: payload.email ? String(payload.email).trim() : null,
+          salaryType: String(payload.salaryType ?? 'MONTHLY'),
+          salaryRate:
+            payload.salaryRate === '' || payload.salaryRate === null
+              ? 0
+              : Number(payload.salaryRate),
+          commissionEligible: Boolean(payload.commissionEligible)
         };
       }}
     />

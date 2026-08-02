@@ -20,8 +20,16 @@ import {
   loadBranchOptions,
   loadCustomerOptions,
   loadLocationOptions,
-  loadPersonnelOptions
+  loadPersonnelOptions,
+  loadTenantAddons
 } from '../master-data-local';
+import {
+  buildMobileQueueOrderAddressOptions,
+  filterMobileQueueOrders,
+  paginateMobileQueueOrders,
+  sortMobileQueueOrders,
+  type MobileQueueOrderSortMode
+} from './pos-queue-order-filtering';
 
 type Product = {
   id: string;
@@ -34,6 +42,8 @@ type Product = {
   qtyEmpty?: number;
   qtyOnHand?: number | null;
   isLpg?: boolean;
+  pickupCommissionRate?: number;
+  deliveryCommissionRate?: number;
 };
 
 type CylinderFlowSelection = 'REFILL_EXCHANGE' | 'NON_REFILL';
@@ -41,6 +51,7 @@ type CylinderFlowSelection = 'REFILL_EXCHANGE' | 'NON_REFILL';
 type CustomerProfile = {
   id: string;
   tier: string | null;
+  customerCategoryId: string | null;
   contractPrice: number | null;
   pointsBalance: number;
 };
@@ -65,13 +76,6 @@ type PosRewardRecord = {
   status: 'ACTIVE' | 'DRAFT' | 'INACTIVE' | 'ARCHIVED';
 };
 
-type PosRewardRedemptionRecord = {
-  id: string;
-  reward_id: string;
-  status: 'RESERVED' | 'APPLIED' | 'CANCELLED' | 'VOIDED' | 'EXPIRED';
-  points_spent: number;
-};
-
 type LendingEligibleProductRecord = {
   product_id: string;
   sku: string;
@@ -92,9 +96,10 @@ type LocalPriceRule = {
 
 type LocalPriceList = {
   id: string;
-  scope: 'GLOBAL' | 'BRANCH' | 'TIER' | 'CONTRACT';
+  scope: 'GLOBAL' | 'BRANCH' | 'TIER' | 'CUSTOMER_GROUP' | 'CONTRACT';
   branchId: string | null;
   customerTier: string | null;
+  customerCategoryId?: string | null;
   customerId: string | null;
   startsAt: string;
   endsAt: string | null;
@@ -116,6 +121,8 @@ type HeldCartLine = {
   quantity: number;
   unitPrice: number;
   cylinderFlow?: CylinderFlowSelection | null;
+  pickupCommissionRate?: number;
+  deliveryCommissionRate?: number;
 };
 
 type HeldCartRecord = {
@@ -143,6 +150,19 @@ type HeldCartDbRow = {
   record_id: string;
   payload: string;
   updated_at: string;
+};
+
+type MobileSalePersonnelCommission = {
+  productId: string;
+  productName: string;
+  personnelId: string | null;
+  personnelName: string;
+  personnelRole: string | null;
+  saleType: 'PICKUP' | 'DELIVERY';
+  quantity: number;
+  commissionRate: number;
+  splitPercent: number;
+  commissionAmount: number;
 };
 
 export type PosRecreateDraft = {
@@ -209,6 +229,10 @@ export type PosQueuedSaleReceiptPayload = {
   paymentMode: 'FULL' | 'PARTIAL';
   paymentMethod: 'CASH' | 'CARD' | 'E_WALLET';
   rewardRedemptionUsed?: boolean;
+  hideReceiptAmounts?: boolean;
+  skipReceiptNfcVerification?: boolean;
+  verifiedCardInventoryId?: string | null;
+  verifiedCardNumber?: string | null;
   createdAt: string;
 };
 
@@ -242,6 +266,19 @@ type PosQueuedSaleReceiptResult = {
   message?: string;
 };
 
+type CurrentEntitlementResponse = {
+  addons?: {
+    receipt_amount_privacy?: boolean;
+  };
+};
+
+type PosQueuedSaleCardVerificationResult = {
+  allowed: boolean;
+  message?: string;
+  cardInventoryId?: string | null;
+  cardNumber?: string | null;
+};
+
 type Props = {
   db: SQLiteDatabase;
   theme: AppTheme;
@@ -251,6 +288,7 @@ type Props = {
   defaultLpgFlowForNewItem?: 'NONE' | CylinderFlowSelection;
   inventoryProjectionVersion?: number;
   onDataChanged?: () => Promise<void> | void;
+  onVerifyQueuedSaleCustomerCard?: (payload: PosQueuedSaleReceiptPayload) => Promise<PosQueuedSaleCardVerificationResult>;
   onPrintQueuedSaleReceipt?: (payload: PosQueuedSaleReceiptPayload) => Promise<PosQueuedSaleReceiptResult>;
   onPrintQueueOrderReceipt?: (payload: PosQueueOrderReceiptPayload) => Promise<PosQueuedSaleReceiptResult>;
   onGoToShift?: () => void;
@@ -269,6 +307,76 @@ function parseRecord<T>(value: string, fallback: T): T {
 
 function round2(value: number): number {
   return Math.round(value * 100) / 100;
+}
+
+function buildEqualSplitCommissionPreview(args: {
+  lines: Array<{
+    productId: string;
+    productName: string;
+    quantity: number;
+    pickupCommissionRate?: number;
+    deliveryCommissionRate?: number;
+  }>;
+  personnel: Array<{
+    id: string | null;
+    name: string | null;
+    role: 'DRIVER' | 'HELPER';
+    commissionEligible?: boolean;
+  }>;
+  saleType: 'PICKUP' | 'DELIVERY';
+}): MobileSalePersonnelCommission[] {
+  const eligiblePersonnel = args.personnel
+    .filter((person) => person.commissionEligible !== false)
+    .filter((person) => (person.id ?? '').trim().length > 0 || (person.name ?? '').trim().length > 0);
+
+  if (eligiblePersonnel.length === 0) {
+    return [];
+  }
+
+  const splitPercent = round2(100 / eligiblePersonnel.length);
+  const rows: MobileSalePersonnelCommission[] = [];
+
+  for (const line of args.lines) {
+    const quantity = Math.max(0, Number(line.quantity || 0));
+    const commissionRate = round2(
+      Math.max(
+        0,
+        args.saleType === 'DELIVERY'
+          ? Number(line.deliveryCommissionRate || 0)
+          : Number(line.pickupCommissionRate || 0)
+      )
+    );
+    const totalCommission = round2(quantity * commissionRate);
+    if (quantity <= 0 || commissionRate <= 0 || totalCommission <= 0) {
+      continue;
+    }
+
+    let allocated = 0;
+    eligiblePersonnel.forEach((person, index) => {
+      const isLast = index === eligiblePersonnel.length - 1;
+      const commissionAmount = isLast
+        ? round2(totalCommission - allocated)
+        : round2(totalCommission / eligiblePersonnel.length);
+      allocated = round2(allocated + commissionAmount);
+      if (commissionAmount <= 0) {
+        return;
+      }
+      rows.push({
+        productId: line.productId,
+        productName: line.productName,
+        personnelId: person.id,
+        personnelName: person.name ?? person.id ?? 'Personnel',
+        personnelRole: person.role,
+        saleType: args.saleType,
+        quantity,
+        commissionRate,
+        splitPercent,
+        commissionAmount
+      });
+    });
+  }
+
+  return rows;
 }
 
 function formatQty(value: number | null | undefined): string {
@@ -319,6 +427,7 @@ function parseCustomerProfile(payload: Record<string, unknown>): CustomerProfile
   return {
     id,
     tier: asString(payload.tier),
+    customerCategoryId: asString(payload.customerCategoryId ?? payload.customer_category_id),
     contractPrice: asNumber(payload.contractPrice ?? payload.contract_price),
     pointsBalance: Math.max(0, asNumber(payload.pointsBalance ?? payload.points_balance) ?? 0)
   };
@@ -427,6 +536,7 @@ function parsePriceLists(rows: Array<{ payload: string }>): LocalPriceList[] {
       scope,
       branchId: asString(payload.branchId ?? payload.branch_id),
       customerTier: asString(payload.customerTier ?? payload.customer_tier)?.toUpperCase() ?? null,
+      customerCategoryId: asString(payload.customerCategoryId ?? payload.customer_category_id),
       customerId: asString(payload.customerId ?? payload.customer_id),
       startsAt,
       endsAt: asString(payload.endsAt ?? payload.ends_at),
@@ -460,6 +570,7 @@ function resolveLocalPrice(input: {
   branchId: string;
   customer: CustomerProfile | null;
   priceLists: LocalPriceList[];
+  allowCustomPricing: boolean;
   atIso: string;
   flowMode?: CylinderFlowSelection | null;
 }): number | null {
@@ -521,6 +632,20 @@ function resolveLocalPrice(input: {
   );
   if (contract !== null) {
     return contract;
+  }
+
+  if (input.allowCustomPricing && input.customer?.customerCategoryId) {
+    const customerGroup = pick(
+      activeLists.filter(
+        (list) =>
+          list.scope === 'CUSTOMER_GROUP' &&
+          list.customerCategoryId &&
+          list.customerCategoryId === input.customer?.customerCategoryId
+      )
+    );
+    if (customerGroup !== null) {
+      return customerGroup;
+    }
   }
 
   if (input.customer?.contractPrice !== null && input.customer?.contractPrice !== undefined) {
@@ -709,6 +834,7 @@ export function PosScreen({
   defaultLpgFlowForNewItem = 'NONE',
   inventoryProjectionVersion = 0,
   onDataChanged,
+  onVerifyQueuedSaleCustomerCard,
   onPrintQueuedSaleReceipt,
   onPrintQueueOrderReceipt,
   onGoToShift,
@@ -738,6 +864,7 @@ export function PosScreen({
   const [customers, setCustomers] = useState<MasterDataOption[]>([]);
   const [personnels, setPersonnels] = useState<MasterDataOption[]>([]);
   const [priceLists, setPriceLists] = useState<LocalPriceList[]>([]);
+  const [allowCustomPricing, setAllowCustomPricing] = useState(false);
   const [customerProfile, setCustomerProfile] = useState<CustomerProfile | null>(null);
   const [projectedInventoryByProduct, setProjectedInventoryByProduct] = useState<
     Map<string, ProjectedInventoryTotals>
@@ -747,6 +874,11 @@ export function PosScreen({
   const [paymentMode, setPaymentMode] = useState<'FULL' | 'PARTIAL'>('FULL');
   const [paymentMethod, setPaymentMethod] = useState<'CASH' | 'CARD' | 'E_WALLET'>('CASH');
   const [paidAmount, setPaidAmount] = useState('0');
+  const [receiptAmountPrivacyAddonEnabled, setReceiptAmountPrivacyAddonEnabled] = useState(false);
+  const [deliveryDispatchAddonEnabled, setDeliveryDispatchAddonEnabled] = useState(false);
+  const [purchaseOrderAddonEnabled, setPurchaseOrderAddonEnabled] = useState(false);
+  const [queueOrderFilteringAddonEnabled, setQueueOrderFilteringAddonEnabled] = useState(false);
+  const [hideReceiptAmounts, setHideReceiptAmounts] = useState(false);
   const [showPaymentStep, setShowPaymentStep] = useState(false);
   const [paymentNotes, setPaymentNotes] = useState('');
   const [availableRewards, setAvailableRewards] = useState<PosRewardRecord[]>([]);
@@ -769,7 +901,6 @@ export function PosScreen({
   const [customerSearch, setCustomerSearch] = useState('');
   const [createCustomerName, setCreateCustomerName] = useState('');
   const [createCustomerAddress, setCreateCustomerAddress] = useState('');
-  const [createCustomerCode, setCreateCustomerCode] = useState('');
   const [createCustomerContactNumber, setCreateCustomerContactNumber] = useState('');
   const [createCustomerGas, setCreateCustomerGas] = useState('');
   const [createCustomerProvince, setCreateCustomerProvince] = useState('');
@@ -779,6 +910,11 @@ export function PosScreen({
   const [helperSearch, setHelperSearch] = useState('');
   const [itemSearch, setItemSearch] = useState('');
   const [heldCartSearch, setHeldCartSearch] = useState('');
+  const [heldCartProvinceFilter, setHeldCartProvinceFilter] = useState('ALL');
+  const [heldCartCityFilter, setHeldCartCityFilter] = useState('ALL');
+  const [heldCartSortMode, setHeldCartSortMode] = useState<MobileQueueOrderSortMode>('queue-time-newest');
+  const [heldCartPage, setHeldCartPage] = useState(1);
+  const [heldCartPageSize, setHeldCartPageSize] = useState(10);
   const [heldCarts, setHeldCarts] = useState<HeldCartRecord[]>([]);
   const [itemCategoryFilter, setItemCategoryFilter] = useState<string>('ALL');
   const offlineTransactions = useMemo(() => new OfflineTransactionService(db), [db]);
@@ -826,7 +962,6 @@ export function PosScreen({
     setCreateCustomerModalOpen(false);
     setCreateCustomerName('');
     setCreateCustomerAddress('');
-    setCreateCustomerCode('');
     setCreateCustomerContactNumber('');
     setCreateCustomerGas('');
     setCreateCustomerProvince('');
@@ -845,7 +980,6 @@ export function PosScreen({
       const createdId = await offlineTransactions.createOfflineCustomer({
         name,
         address: createCustomerAddress.trim() || undefined,
-        code: createCustomerCode.trim() || undefined,
         contactNumber: createCustomerContactNumber.trim() || undefined,
         gas: createCustomerGas.trim() || undefined,
         province: createCustomerProvince.trim() || undefined,
@@ -884,6 +1018,9 @@ export function PosScreen({
     [parsedPaidAmount, paymentMode, total]
   );
   const creditBalance = useMemo(() => round2(Math.max(0, total - appliedPaidAmount)), [appliedPaidAmount, total]);
+  const amountPrivacyMaskEnabled = hideReceiptAmounts && receiptAmountPrivacyAddonEnabled;
+  const formatAmountForSummary = (value: number): string =>
+    amountPrivacyMaskEnabled ? '*** HIDDEN ***' : `PHP ${value.toFixed(2)}`;
   const lpgFlowSummary = useMemo(() => {
     return cart.reduce(
       (acc, line) => {
@@ -909,6 +1046,48 @@ export function PosScreen({
     }
     return parsedPaidAmount >= 0 && parsedPaidAmount < round2(total);
   }, [showPaymentStep, canProceedToPayment, paymentMode, parsedPaidAmount, total]);
+  const hasDraftToClear = useMemo(() => {
+    if (cart.length > 0) {
+      return true;
+    }
+    if (customerId.trim() || driverId.trim() || helperId.trim()) {
+      return true;
+    }
+    if (paymentNotes.trim().length > 0) {
+      return true;
+    }
+    if (activeRecreatedFromSaleIdRef.current) {
+      return true;
+    }
+    if (orderType !== 'PICKUP' || paymentMode !== 'FULL' || paymentMethod !== 'CASH') {
+      return true;
+    }
+    if (showPaymentStep || hideReceiptAmounts || selectedRewardId.trim().length > 0) {
+      return true;
+    }
+    if (round2(Math.max(0, Number(discount || '0'))) > 0 || round2(Math.max(0, Number(deliveryFee || '0'))) > 0) {
+      return true;
+    }
+    if (round2(Math.max(0, Number(paidAmount || '0'))) > 0) {
+      return true;
+    }
+    return false;
+  }, [
+    cart.length,
+    customerId,
+    driverId,
+    helperId,
+    paymentNotes,
+    orderType,
+    paymentMode,
+    paymentMethod,
+    showPaymentStep,
+    hideReceiptAmounts,
+    selectedRewardId,
+    discount,
+    deliveryFee,
+    paidAmount
+  ]);
   const selectedReward = useMemo(
     () => availableRewards.find((reward) => reward.id === selectedRewardId) ?? null,
     [availableRewards, selectedRewardId]
@@ -991,17 +1170,75 @@ export function PosScreen({
       .slice(0, 120);
   }, [catalog, itemSearch, itemCategoryFilter]);
 
-  const filteredHeldCarts = useMemo(() => {
-    const q = normalizeSearchTerm(heldCartSearch);
-    if (!q) {
-      return heldCarts;
+  const heldCartAddressOptions = useMemo(
+    () => buildMobileQueueOrderAddressOptions(heldCarts, customers, heldCartProvinceFilter),
+    [customers, heldCartProvinceFilter, heldCarts]
+  );
+
+  useEffect(() => {
+    if (!queueOrderFilteringAddonEnabled) {
+      if (heldCartProvinceFilter !== 'ALL') {
+        setHeldCartProvinceFilter('ALL');
+      }
+      if (heldCartCityFilter !== 'ALL') {
+        setHeldCartCityFilter('ALL');
+      }
+      return;
     }
-    return heldCarts.filter((held) => {
-      const lineNames = held.lines.map((line) => line.productName).join(' ');
-      const blob = `${held.label} ${held.customerName ?? ''} ${lineNames}`.toLowerCase();
-      return blob.includes(q);
-    });
-  }, [heldCartSearch, heldCarts]);
+    if (heldCartProvinceFilter !== 'ALL' && !heldCartAddressOptions.provinceOptions.includes(heldCartProvinceFilter)) {
+      setHeldCartProvinceFilter('ALL');
+    }
+    if (heldCartCityFilter !== 'ALL' && !heldCartAddressOptions.cityOptions.includes(heldCartCityFilter)) {
+      setHeldCartCityFilter('ALL');
+    }
+  }, [
+    heldCartAddressOptions.cityOptions,
+    heldCartAddressOptions.provinceOptions,
+    heldCartCityFilter,
+    heldCartProvinceFilter,
+    queueOrderFilteringAddonEnabled
+  ]);
+
+  useEffect(() => {
+    setHeldCartPage(1);
+  }, [
+    heldCartSearch,
+    heldCartProvinceFilter,
+    heldCartCityFilter,
+    heldCartSortMode,
+    heldCartPageSize,
+    heldCartModalOpen
+  ]);
+
+  const filteredHeldCarts = useMemo(
+    () =>
+      filterMobileQueueOrders(
+        heldCarts,
+        {
+          search: heldCartSearch,
+          province: heldCartProvinceFilter,
+          city: heldCartCityFilter,
+          addressFilteringEnabled: queueOrderFilteringAddonEnabled
+        },
+        customers
+      ),
+    [
+      customers,
+      heldCartCityFilter,
+      heldCartProvinceFilter,
+      heldCartSearch,
+      heldCarts,
+      queueOrderFilteringAddonEnabled
+    ]
+  );
+  const sortedHeldCarts = useMemo(
+    () => sortMobileQueueOrders(filteredHeldCarts, heldCartSortMode),
+    [filteredHeldCarts, heldCartSortMode]
+  );
+  const pagedHeldCarts = useMemo(
+    () => paginateMobileQueueOrders(sortedHeldCarts, heldCartPage, heldCartPageSize),
+    [heldCartPage, heldCartPageSize, sortedHeldCarts]
+  );
 
   const resolveProjectedStock = (
     product: Pick<Product, 'id' | 'qtyOnHand' | 'qtyFull' | 'qtyEmpty'>
@@ -1042,6 +1279,7 @@ export function PosScreen({
         branchId,
         customer: customerProfile,
         priceLists,
+        allowCustomPricing,
         atIso: nowIso,
         flowMode: 'REFILL_EXCHANGE'
       });
@@ -1050,6 +1288,7 @@ export function PosScreen({
         branchId,
         customer: customerProfile,
         priceLists,
+        allowCustomPricing,
         atIso: nowIso,
         flowMode: 'NON_REFILL'
       });
@@ -1059,7 +1298,7 @@ export function PosScreen({
       });
     }
     return map;
-  }, [filteredCatalog, branchId, customerProfile, priceLists]);
+  }, [filteredCatalog, branchId, customerProfile, priceLists, allowCustomPricing]);
 
   const personnelChoicesForDriver = useMemo(
     () => personnels.filter((option) => option.id !== helperId || option.id === driverId),
@@ -1119,6 +1358,22 @@ export function PosScreen({
       return undefined as T;
     }
     return (await response.json()) as T;
+  };
+
+  const refreshReceiptAmountPrivacyAddon = async (): Promise<void> => {
+    try {
+      const entitlement = await vcardApiRequest<CurrentEntitlementResponse>(
+        '/platform/entitlements/current'
+      );
+      const enabled = entitlement?.addons?.receipt_amount_privacy === true;
+      setReceiptAmountPrivacyAddonEnabled(enabled);
+      if (!enabled) {
+        setHideReceiptAmounts(false);
+      }
+    } catch {
+      setReceiptAmountPrivacyAddonEnabled(false);
+      setHideReceiptAmounts(false);
+    }
   };
 
   const loadRewardsForCheckout = async (): Promise<void> => {
@@ -1205,6 +1460,12 @@ export function PosScreen({
   }, [total, cart.length, paymentMode, paidAmount]);
 
   useEffect(() => {
+    if (!receiptAmountPrivacyAddonEnabled || paymentMode === 'PARTIAL' || creditBalance > 0.0001) {
+      setHideReceiptAmounts(false);
+    }
+  }, [receiptAmountPrivacyAddonEnabled, paymentMode, creditBalance]);
+
+  useEffect(() => {
     if (orderType !== 'DELIVERY') {
       setDeliveryFee('0.00');
     }
@@ -1227,6 +1488,13 @@ export function PosScreen({
   useEffect(() => {
     void refreshActiveShift();
   }, []);
+
+  useEffect(() => {
+    if (syncBusy) {
+      return;
+    }
+    void refreshReceiptAmountPrivacyAddon();
+  }, [syncBusy]);
 
   useEffect(() => {
     void refreshCatalog();
@@ -1367,6 +1635,7 @@ export function PosScreen({
     setSelectedRewardId('');
     setAvailableRewards([]);
     setShowPaymentStep(false);
+    setHideReceiptAmounts(false);
     setCustomerModalOpen(false);
     setDriverModalOpen(false);
     setHelperModalOpen(false);
@@ -1458,7 +1727,7 @@ export function PosScreen({
   };
 
   const refreshCatalog = async (): Promise<void> => {
-    const [productRows, cylinderRows] = await Promise.all([
+    const [productRows, cylinderRows, nextTenantAddons] = await Promise.all([
       db.getAllAsync<{ payload: string }>(
       `
       SELECT payload
@@ -1480,8 +1749,14 @@ export function PosScreen({
         'cylinder_types',
         'cylinder-type',
         'cylinder-types'
-      )
+      ),
+      loadTenantAddons(db)
     ]);
+    const allowCustomPricing = nextTenantAddons.custom_pricing === true;
+    setAllowCustomPricing(allowCustomPricing);
+    setDeliveryDispatchAddonEnabled(nextTenantAddons.delivery_dispatch_suite === true);
+    setPurchaseOrderAddonEnabled(nextTenantAddons.purchase_order_suite === true);
+    setQueueOrderFilteringAddonEnabled(nextTenantAddons.queue_order_filtering === true);
 
     if (!productRows.length) {
       setCatalog(FALLBACK_PRODUCTS);
@@ -1601,6 +1876,7 @@ export function PosScreen({
             branchId,
             customer: customerProfile,
             priceLists: localPriceLists,
+            allowCustomPricing,
             atIso: nowIso,
             flowMode: 'REFILL_EXCHANGE'
           }) ??
@@ -1609,6 +1885,7 @@ export function PosScreen({
             branchId,
             customer: customerProfile,
             priceLists: localPriceLists,
+            allowCustomPricing,
             atIso: nowIso,
             flowMode: 'NON_REFILL'
           }) ??
@@ -1617,6 +1894,7 @@ export function PosScreen({
             branchId,
             customer: customerProfile,
             priceLists: localPriceLists,
+            allowCustomPricing,
             atIso: nowIso,
             flowMode: null
           })
@@ -1625,6 +1903,7 @@ export function PosScreen({
             branchId,
             customer: customerProfile,
             priceLists: localPriceLists,
+            allowCustomPricing,
             atIso: nowIso,
             flowMode: null
           });
@@ -1642,7 +1921,9 @@ export function PosScreen({
         qtyEmpty: stock ? stock.qtyEmpty : undefined,
         qtyOnHand: stock ? stock.qtyOnHand : null,
         unitPrice: resolvedPrice !== null ? resolvedPrice : fallbackPrice > 0 ? round2(fallbackPrice) : 0,
-        isLpg
+        isLpg,
+        pickupCommissionRate: round2(Math.max(0, asNumber(payload.pickupCommissionRate ?? payload.pickup_commission_rate) ?? 0)),
+        deliveryCommissionRate: round2(Math.max(0, asNumber(payload.deliveryCommissionRate ?? payload.delivery_commission_rate) ?? 0))
       });
     }
 
@@ -1655,6 +1936,9 @@ export function PosScreen({
 
   const createHeldCartId = (): string =>
     `held-cart-${Date.now()}-${Math.floor(Math.random() * 1_000_000)}`;
+
+  const createSaleId = (): string =>
+    `sale-${Date.now()}-${Math.floor(Math.random() * 1_000_000)}`;
 
   const buildHeldCartLabel = (): string => {
     if (selectedCustomer?.label?.trim()) {
@@ -1791,7 +2075,9 @@ export function PosScreen({
           subtitle: asString(line.subtitle) ?? undefined,
           quantity: Math.max(1, Math.trunc(quantity)),
           unitPrice: round2(unitPrice),
-          cylinderFlow
+          cylinderFlow,
+          pickupCommissionRate: round2(Math.max(0, asNumber(line.pickupCommissionRate ?? line.pickup_commission_rate) ?? 0)),
+          deliveryCommissionRate: round2(Math.max(0, asNumber(line.deliveryCommissionRate ?? line.delivery_commission_rate) ?? 0))
         });
       }
       if (!lines.length) {
@@ -1832,11 +2118,14 @@ export function PosScreen({
     setDiscount('0');
     setDeliveryFee('0.00');
     setPaymentMode('FULL');
+    setPaymentMethod('CASH');
     setPaidAmount('0');
+    setHideReceiptAmounts(false);
     setPaymentNotes('');
     setSelectedRewardId('');
     setAvailableRewards([]);
     setShowPaymentStep(false);
+    setQueuePreviewOpen(false);
     setCustomerId('');
     setCustomerSearch('');
     setDriverId('');
@@ -1844,6 +2133,27 @@ export function PosScreen({
     setHelperId('');
     setHelperSearch('');
     activeRecreatedFromSaleIdRef.current = null;
+  };
+
+  const promptClearCurrentOrder = (): void => {
+    if (saving || syncBusy || !hasDraftToClear) {
+      return;
+    }
+    Alert.alert(
+      'Clear current order?',
+      'This will remove items, customer, personnel, notes, and payment details from this POS order.',
+      [
+        { text: 'Keep Order', style: 'cancel' },
+        {
+          text: 'Clear Order',
+          style: 'destructive',
+          onPress: () => {
+            clearCheckoutForm();
+            toastSuccess('Order cleared', 'POS order was reset. You can start a fresh sale.');
+          }
+        }
+      ]
+    );
   };
 
   const holdCurrentCart = async (): Promise<void> => {
@@ -1875,7 +2185,9 @@ export function PosScreen({
         subtitle: line.subtitle,
         quantity: Math.max(1, Math.trunc(line.quantity)),
         unitPrice: round2(line.unitPrice),
-        cylinderFlow: line.cylinderFlow ?? null
+        cylinderFlow: line.cylinderFlow ?? null,
+        pickupCommissionRate: round2(Number(line.pickupCommissionRate || 0)),
+        deliveryCommissionRate: round2(Number(line.deliveryCommissionRate || 0))
       })),
       createdAt: now,
       updatedAt: now
@@ -1917,11 +2229,15 @@ export function PosScreen({
           name: line.productName,
           subtitle: line.subtitle ?? line.productId,
           unitPrice: line.unitPrice,
-          isLpg: Boolean(line.cylinderFlow)
+          isLpg: Boolean(line.cylinderFlow),
+          pickupCommissionRate: line.pickupCommissionRate ?? 0,
+          deliveryCommissionRate: line.deliveryCommissionRate ?? 0
         }),
         lineId: line.lineId || createLineId(line.productId, line.cylinderFlow ?? null),
         quantity: Math.max(1, Math.trunc(line.quantity)),
         unitPrice: line.unitPrice,
+        pickupCommissionRate: line.pickupCommissionRate ?? product?.pickupCommissionRate ?? 0,
+        deliveryCommissionRate: line.deliveryCommissionRate ?? product?.deliveryCommissionRate ?? 0,
         cylinderFlow: line.cylinderFlow ?? null
       };
     });
@@ -1939,6 +2255,7 @@ export function PosScreen({
     setSelectedRewardId('');
     setAvailableRewards([]);
     setShowPaymentStep(false);
+    setHideReceiptAmounts(false);
     setHeldCartModalOpen(false);
     await removeHeldCart(held.id);
     toastSuccess('Queue order loaded', `${held.label} was restored into POS.`);
@@ -1983,6 +2300,7 @@ export function PosScreen({
         branchId,
         customer: customerProfile,
         priceLists,
+        allowCustomPricing,
         atIso,
         flowMode: null
       });
@@ -1996,6 +2314,7 @@ export function PosScreen({
           branchId,
           customer: customerProfile,
           priceLists,
+          allowCustomPricing,
           atIso,
           flowMode: 'REFILL_EXCHANGE'
         }) ??
@@ -2004,6 +2323,7 @@ export function PosScreen({
           branchId,
           customer: customerProfile,
           priceLists,
+          allowCustomPricing,
           atIso,
           flowMode: 'NON_REFILL'
         }) ??
@@ -2012,6 +2332,7 @@ export function PosScreen({
           branchId,
           customer: customerProfile,
           priceLists,
+          allowCustomPricing,
           atIso,
           flowMode: null
         });
@@ -2023,6 +2344,7 @@ export function PosScreen({
       branchId,
       customer: customerProfile,
       priceLists,
+      allowCustomPricing,
       atIso,
       flowMode: flow
     });
@@ -2145,6 +2467,7 @@ export function PosScreen({
       branchId,
       customer: customerProfile,
       priceLists,
+      allowCustomPricing,
       atIso: new Date().toISOString(),
       flowMode: flow
     });
@@ -2167,7 +2490,7 @@ export function PosScreen({
       });
       return changed ? next : prev;
     });
-  }, [branchId, customerProfile, priceLists]);
+  }, [branchId, customerProfile, priceLists, allowCustomPricing]);
 
   const validateCartInventoryBeforeQueue = async (): Promise<string[]> => {
     if (!locationId.trim() || cart.length === 0) {
@@ -2337,28 +2660,12 @@ export function PosScreen({
     }
 
     setSaving(true);
-    let reservedReward: PosRewardRedemptionRecord | null = null;
     try {
-      if (selectedReward) {
-        reservedReward = await vcardApiRequest<PosRewardRedemptionRecord>(
-          `/vcard/rewards/${encodeURIComponent(selectedReward.id)}/reserve`,
-          {
-            method: 'POST',
-            body: JSON.stringify({
-              customer_id: customerId.trim(),
-              branch_id: branchId.trim(),
-              location_id: locationId.trim(),
-              amount: rewardBaseAmount,
-              remarks: `Reserved from mobile POS (${orderType})`,
-              metadata: {
-                origin: 'MOBILE_POS',
-                order_type: orderType
-              }
-            })
-          }
-        );
-      }
       const creditDue = round2(total - appliedPaidAmount);
+      if (hideReceiptAmounts && creditDue > 0.0001) {
+        toastError('Receipt privacy', 'Hide amount is not allowed when this sale has balance due.');
+        return;
+      }
       const lpgFlowModes = [
         ...new Set(
           cart
@@ -2370,7 +2677,81 @@ export function PosScreen({
       const saleLevelCylinderFlow = lpgFlowModes.length === 1 ? lpgFlowModes[0] : undefined;
       const postingDiscountAmount = round2(discountValue - deliveryFeeValue);
       const service = new OfflineTransactionService(db);
-      const saleId = await service.createOfflineSale({
+      const saleId = createSaleId();
+      const createdAt = new Date().toISOString();
+      const saleLines = cart.map((line) => ({
+        productId: line.id,
+        productName: line.name,
+        quantity: line.quantity,
+        unitPrice: line.unitPrice,
+        isLpg: line.isLpg === true,
+        pickupCommissionRate: round2(Number(line.pickupCommissionRate || 0)),
+        deliveryCommissionRate: round2(Number(line.deliveryCommissionRate || 0)),
+        ...(line.isLpg && line.cylinderFlow ? { cylinderFlow: line.cylinderFlow } : {})
+      }));
+      const commissionRows = buildEqualSplitCommissionPreview({
+        lines: saleLines,
+        saleType: orderType,
+        personnel: [
+          {
+            id: driverId.trim() || null,
+            role: 'DRIVER',
+            name: selectedDriver?.label ?? null,
+            commissionEligible: selectedDriver?.commissionEligible
+          },
+          ...(helperId.trim()
+            ? [
+                {
+                  id: helperId.trim(),
+                  role: 'HELPER' as const,
+                  name: selectedHelper?.label ?? null,
+                  commissionEligible: selectedHelper?.commissionEligible
+                }
+              ]
+            : [])
+        ]
+      });
+      const commissionTotal = round2(commissionRows.reduce((sum, row) => sum + row.commissionAmount, 0));
+      const receiptPayloadBase: PosQueuedSaleReceiptPayload = {
+        saleId,
+        customerId: customerId.trim() || null,
+        branchId: branchId.trim(),
+        branchName: branch?.label ?? branchId.trim(),
+        locationId: locationId.trim(),
+        locationName: location?.label ?? locationId.trim(),
+        cashierName: cashierName?.trim() ? cashierName.trim() : null,
+        orderType,
+        customerName: selectedCustomer?.label ?? null,
+        personnelName: selectedDriver?.label ?? null,
+        helperName: selectedHelper?.label ?? null,
+        lines: cart.map((line) => ({
+          name: line.name,
+          subtitle: line.subtitle,
+          quantity: line.quantity,
+          unitPrice: line.unitPrice
+        })),
+        subtotal,
+        discount: discountValue,
+        total,
+        paidAmount: parsedPaidAmount,
+        changeAmount,
+        creditBalance: creditDue > 0 ? creditDue : 0,
+        notes: paymentNotes.trim() || null,
+        paymentMode,
+        paymentMethod,
+        rewardRedemptionUsed: Boolean(selectedReward),
+        hideReceiptAmounts: hideReceiptAmounts,
+        createdAt
+      };
+      const cardVerification: PosQueuedSaleCardVerificationResult = onVerifyQueuedSaleCustomerCard
+        ? await onVerifyQueuedSaleCustomerCard(receiptPayloadBase)
+        : { allowed: true };
+      if (!cardVerification.allowed) {
+        throw new Error(cardVerification.message ?? 'Customer card verification did not complete.');
+      }
+
+      await service.createOfflineSale({
+        saleId,
         recreatedFromSaleId: activeRecreatedFromSaleIdRef.current,
         branchId: branchId.trim(),
         locationId: locationId.trim(),
@@ -2379,6 +2760,7 @@ export function PosScreen({
         saleType: orderType,
         cylinderFlow: saleLevelCylinderFlow,
         discountAmount: postingDiscountAmount,
+        hideAmounts: hideReceiptAmounts,
         paymentMode,
         creditBalance: creditDue > 0 ? creditDue : 0,
         creditNotes: paymentNotes.trim() || null,
@@ -2396,13 +2778,16 @@ export function PosScreen({
               ? (selectedDriver?.label ?? null)
               : (selectedHelper?.label ?? null)
         })),
-        lines: cart.map((line) => ({
-          productId: line.id,
-          quantity: line.quantity,
-          unitPrice: line.unitPrice,
-          isLpg: line.isLpg === true,
-          ...(line.isLpg && line.cylinderFlow ? { cylinderFlow: line.cylinderFlow } : {})
-        })),
+        rewardId: selectedReward?.id ?? null,
+        rewardName: selectedReward?.name ?? null,
+        rewardPointsCost: selectedReward?.points_cost ?? 0,
+        rewardDiscountAmount: totalRewardValue,
+        rewardBaseAmount,
+        rewardRedemptionUsed: Boolean(selectedReward),
+        commissionSplitMode: 'EQUAL',
+        commissionTotal,
+        commissions: commissionRows,
+        lines: saleLines,
         payments: [{ method: paymentMethod, amount: appliedPaidAmount }]
       });
 
@@ -2410,25 +2795,8 @@ export function PosScreen({
         await linkRecreatedSourceSaleLocally(activeRecreatedFromSaleIdRef.current, saleId);
       }
 
-      if (reservedReward) {
-        await vcardApiRequest<PosRewardRedemptionRecord>(
-          `/vcard/rewards/redemptions/${encodeURIComponent(reservedReward.id)}/apply`,
-          {
-            method: 'PATCH',
-            body: JSON.stringify({
-              sale_id: saleId,
-              amount: rewardBaseAmount,
-              remarks: `Applied from mobile POS sale ${saleId}`,
-              metadata: {
-                origin: 'MOBILE_POS',
-                sale_id: saleId
-              }
-            })
-          }
-        );
-      }
-
-      if (orderType === 'DELIVERY') {
+      const dispatchQueued = orderType === 'DELIVERY' && deliveryDispatchAddonEnabled;
+      if (dispatchQueued) {
         await service.createOfflineDeliveryOrder({
           branchId: branchId.trim(),
           sourceLocationId: locationId.trim(),
@@ -2444,42 +2812,21 @@ export function PosScreen({
         'Sale queued offline',
         creditDue > 0
           ? `Sale ID: ${saleId} (Credit due PHP ${creditDue.toFixed(2)})`
-          : orderType === 'DELIVERY'
+          : dispatchQueued
             ? `Sale + delivery queued: ${saleId}`
             : `Sale ID: ${saleId}`
       );
+      if (orderType === 'DELIVERY' && !dispatchQueued) {
+        toastInfo('Delivery dispatch disabled', 'Sale was queued, but no delivery dispatch order was created.');
+      }
 
       if (onPrintQueuedSaleReceipt) {
         try {
           const printResult = await onPrintQueuedSaleReceipt({
-            saleId,
-            customerId: customerId.trim() || null,
-            branchId: branchId.trim(),
-            branchName: branch?.label ?? branchId.trim(),
-            locationId: locationId.trim(),
-            locationName: location?.label ?? locationId.trim(),
-            cashierName: cashierName?.trim() ? cashierName.trim() : null,
-            orderType,
-            customerName: selectedCustomer?.label ?? null,
-            personnelName: selectedDriver?.label ?? null,
-            helperName: selectedHelper?.label ?? null,
-            lines: cart.map((line) => ({
-              name: line.name,
-              subtitle: line.subtitle,
-              quantity: line.quantity,
-              unitPrice: line.unitPrice
-            })),
-            subtotal,
-            discount: discountValue,
-            total,
-            paidAmount: parsedPaidAmount,
-            changeAmount,
-            creditBalance: creditDue > 0 ? creditDue : 0,
-            notes: paymentNotes.trim() || null,
-            paymentMode,
-            paymentMethod,
-            rewardRedemptionUsed: Boolean(reservedReward),
-            createdAt: new Date().toISOString()
+            ...receiptPayloadBase,
+            skipReceiptNfcVerification: true,
+            verifiedCardInventoryId: cardVerification.cardInventoryId ?? null,
+            verifiedCardNumber: cardVerification.cardNumber ?? null
           });
 
           if (printResult.printed) {
@@ -2500,22 +2847,6 @@ export function PosScreen({
       await refreshCatalog();
       await onDataChanged?.();
     } catch (cause) {
-      if (reservedReward?.id) {
-        try {
-          await vcardApiRequest<PosRewardRedemptionRecord>(
-            `/vcard/rewards/redemptions/${encodeURIComponent(reservedReward.id)}/cancel`,
-            {
-              method: 'PATCH',
-              body: JSON.stringify({
-                remarks: 'Cancelled because POS checkout did not complete',
-                metadata: { origin: 'MOBILE_POS' }
-              })
-            }
-          );
-        } catch {
-          // Leave best-effort rollback only; original error remains primary.
-        }
-      }
       toastError('POS checkout failed', cause instanceof Error ? cause.message : 'Unable to queue sale.');
     } finally {
       setSaving(false);
@@ -2526,14 +2857,18 @@ export function PosScreen({
     if (saving || syncBusy || !paymentReady) {
       return;
     }
+    const hidden = hideReceiptAmounts;
     const parts = [
-      `Total: PHP ${total.toFixed(2)}`,
-      ...(orderType === 'DELIVERY' ? [`Delivery Fee: PHP ${deliveryFeeValue.toFixed(2)}`] : []),
+      `Total: ${hidden ? '*** HIDDEN ***' : `PHP ${total.toFixed(2)}`}`,
+      ...(orderType === 'DELIVERY'
+        ? [`Delivery Fee: ${hidden ? '*** HIDDEN ***' : `PHP ${deliveryFeeValue.toFixed(2)}`}`]
+        : []),
       ...(selectedReward ? [`Reward: ${selectedReward.name} (${selectedReward.points_cost} pts)`] : []),
-      `Paid: PHP ${appliedPaidAmount.toFixed(2)}`,
+      `Paid: ${hidden ? '*** HIDDEN ***' : `PHP ${appliedPaidAmount.toFixed(2)}`}`,
       creditBalance > 0
-        ? `Balance Due: PHP ${creditBalance.toFixed(2)}`
-        : `Change: PHP ${changeAmount.toFixed(2)}`
+        ? `Balance Due: ${hidden ? '*** HIDDEN ***' : `PHP ${creditBalance.toFixed(2)}`}`
+        : `Change: ${hidden ? '*** HIDDEN ***' : `PHP ${changeAmount.toFixed(2)}`}`,
+      ...(hidden ? ['Receipt amount privacy: ON'] : [])
     ];
     Alert.alert('Confirm Sale', parts.join('\n'), [
       { text: 'Cancel', style: 'cancel' },
@@ -2835,11 +3170,11 @@ export function PosScreen({
         <Text className="text-xs" style={{ color: theme.subtext }}>{personnelLabel}: {selectedDriver?.label ?? '-'}</Text>
         <Text className="text-xs" style={{ color: theme.subtext }}>Helper: {selectedHelper?.label ?? '-'}</Text>
         <Text className="text-xs" style={{ color: theme.subtext }}>Items: {cart.length}</Text>
-        <Text className="text-xs" style={{ color: theme.subtext }}>Subtotal: PHP {subtotal.toFixed(2)}</Text>
+        <Text className="text-xs" style={{ color: theme.subtext }}>Subtotal: {formatAmountForSummary(subtotal)}</Text>
         {discountValue > 0 ? (
-          <Text className="text-xs" style={{ color: theme.subtext }}>Discount: PHP {discountValue.toFixed(2)}</Text>
+          <Text className="text-xs" style={{ color: theme.subtext }}>Discount: {formatAmountForSummary(discountValue)}</Text>
         ) : null}
-        <Text className="mt-1 text-base font-extrabold" style={{ color: theme.heading }}>Total: PHP {total.toFixed(2)}</Text>
+        <Text className="mt-1 text-base font-extrabold" style={{ color: theme.heading }}>Total: {formatAmountForSummary(total)}</Text>
       </View>
 
       <View className="flex-row gap-2">
@@ -2850,6 +3185,14 @@ export function PosScreen({
           disabled={!hasCart || saving || syncBusy}
         >
           <Text className="text-[12px] font-bold" style={{ color: theme.pillText }}>Add to Queue</Text>
+        </Pressable>
+        <Pressable
+          className="min-h-10 flex-1 items-center justify-center rounded-xl px-3"
+          style={{ backgroundColor: hasDraftToClear && !saving && !syncBusy ? theme.dangerMuted : theme.cardBorder }}
+          onPress={promptClearCurrentOrder}
+          disabled={!hasDraftToClear || saving || syncBusy}
+        >
+          <Text className="text-[12px] font-bold" style={{ color: hasDraftToClear ? theme.danger : theme.subtext }}>Clear Order</Text>
         </Pressable>
       </View>
 
@@ -2900,92 +3243,98 @@ export function PosScreen({
             ]}
           >
             <View className="gap-1">
+              <View
+                className="mb-1 h-1.5 w-14 self-center rounded-full"
+                style={{ backgroundColor: theme.cardBorder }}
+              />
               <Text className="text-base font-extrabold" style={{ color: theme.heading }}>New Customer</Text>
               <Text className="text-[12px]" style={{ color: theme.subtext }}>
                 Save a customer locally now. We&apos;ll sync it when the device is connected again.
               </Text>
             </View>
 
-            <View className="gap-2">
-              <View className="gap-1">
-                <Text className="text-[11px] font-bold uppercase tracking-[0.4px]" style={{ color: theme.subtext }}>Name</Text>
-                <TextInput
-                  value={createCustomerName}
-                  onChangeText={setCreateCustomerName}
-                  placeholder="Customer name"
-                  placeholderTextColor={theme.inputPlaceholder}
-                  className="rounded-xl px-3 py-[11px] text-[13px]"
-                  style={{ backgroundColor: theme.inputBg, color: theme.inputText }}
-                />
+            <ScrollView className="max-h-[380px]" showsVerticalScrollIndicator={false}>
+              <View className="gap-2 pb-1">
+                <View className="gap-1">
+                  <Text className="text-[11px] font-bold uppercase tracking-[0.4px]" style={{ color: theme.subtext }}>Name</Text>
+                  <TextInput
+                    value={createCustomerName}
+                    onChangeText={setCreateCustomerName}
+                    placeholder="Customer name"
+                    placeholderTextColor={theme.inputPlaceholder}
+                    className="rounded-xl px-3 py-[11px] text-[13px]"
+                    style={{ backgroundColor: theme.inputBg, color: theme.inputText }}
+                  />
+                </View>
+                <View className="gap-1">
+                  <Text className="text-[11px] font-bold uppercase tracking-[0.4px]" style={{ color: theme.subtext }}>Address</Text>
+                  <TextInput
+                    value={createCustomerAddress}
+                    onChangeText={setCreateCustomerAddress}
+                    placeholder="Customer address"
+                    placeholderTextColor={theme.inputPlaceholder}
+                    className="rounded-xl px-3 py-[11px] text-[13px]"
+                    style={{ backgroundColor: theme.inputBg, color: theme.inputText }}
+                  />
+                </View>
+                <View
+                  className="rounded-[14px] border px-3 py-2.5"
+                  style={{ borderColor: theme.cardBorder, backgroundColor: theme.inputBg }}
+                >
+                  <Text className="text-[11px] font-bold uppercase tracking-[0.4px]" style={{ color: theme.subtext }}>Optional Details</Text>
+                  <Text className="mt-1 text-[11px] leading-5" style={{ color: theme.subtext }}>
+                    Customer code is assigned after sync. Add the rest only if needed for this sale.
+                  </Text>
+                </View>
+                <View className="gap-1">
+                  <Text className="text-[11px] font-bold uppercase tracking-[0.4px]" style={{ color: theme.subtext }}>Contact Number</Text>
+                  <TextInput
+                    value={createCustomerContactNumber}
+                    onChangeText={setCreateCustomerContactNumber}
+                    placeholder="Optional contact number"
+                    placeholderTextColor={theme.inputPlaceholder}
+                    keyboardType="phone-pad"
+                    className="rounded-xl px-3 py-[11px] text-[13px]"
+                    style={{ backgroundColor: theme.inputBg, color: theme.inputText }}
+                  />
+                </View>
+                <View className="gap-1">
+                  <Text className="text-[11px] font-bold uppercase tracking-[0.4px]" style={{ color: theme.subtext }}>Gas</Text>
+                  <TextInput
+                    value={createCustomerGas}
+                    onChangeText={setCreateCustomerGas}
+                    placeholder="Optional gas preference"
+                    placeholderTextColor={theme.inputPlaceholder}
+                    className="rounded-xl px-3 py-[11px] text-[13px]"
+                    style={{ backgroundColor: theme.inputBg, color: theme.inputText }}
+                  />
+                </View>
+                <View className="flex-row gap-2">
+                  <View className="flex-1 gap-1">
+                    <Text className="text-[11px] font-bold uppercase tracking-[0.4px]" style={{ color: theme.subtext }}>Province</Text>
+                    <TextInput
+                      value={createCustomerProvince}
+                      onChangeText={setCreateCustomerProvince}
+                      placeholder="Optional province"
+                      placeholderTextColor={theme.inputPlaceholder}
+                      className="rounded-xl px-3 py-[11px] text-[13px]"
+                      style={{ backgroundColor: theme.inputBg, color: theme.inputText }}
+                    />
+                  </View>
+                  <View className="flex-1 gap-1">
+                    <Text className="text-[11px] font-bold uppercase tracking-[0.4px]" style={{ color: theme.subtext }}>City</Text>
+                    <TextInput
+                      value={createCustomerCity}
+                      onChangeText={setCreateCustomerCity}
+                      placeholder="Optional city"
+                      placeholderTextColor={theme.inputPlaceholder}
+                      className="rounded-xl px-3 py-[11px] text-[13px]"
+                      style={{ backgroundColor: theme.inputBg, color: theme.inputText }}
+                    />
+                  </View>
+                </View>
               </View>
-              <View className="gap-1">
-                <Text className="text-[11px] font-bold uppercase tracking-[0.4px]" style={{ color: theme.subtext }}>Address</Text>
-                <TextInput
-                  value={createCustomerAddress}
-                  onChangeText={setCreateCustomerAddress}
-                  placeholder="Customer address"
-                  placeholderTextColor={theme.inputPlaceholder}
-                  className="rounded-xl px-3 py-[11px] text-[13px]"
-                  style={{ backgroundColor: theme.inputBg, color: theme.inputText }}
-                />
-              </View>
-              <View className="gap-1">
-                <Text className="text-[11px] font-bold uppercase tracking-[0.4px]" style={{ color: theme.subtext }}>Code</Text>
-                <TextInput
-                  value={createCustomerCode}
-                  onChangeText={setCreateCustomerCode}
-                  placeholder="Optional code"
-                  placeholderTextColor={theme.inputPlaceholder}
-                  autoCapitalize="characters"
-                  className="rounded-xl px-3 py-[11px] text-[13px]"
-                  style={{ backgroundColor: theme.inputBg, color: theme.inputText }}
-                />
-              </View>
-              <View className="gap-1">
-                <Text className="text-[11px] font-bold uppercase tracking-[0.4px]" style={{ color: theme.subtext }}>Contact Number</Text>
-                <TextInput
-                  value={createCustomerContactNumber}
-                  onChangeText={setCreateCustomerContactNumber}
-                  placeholder="Optional contact number"
-                  placeholderTextColor={theme.inputPlaceholder}
-                  className="rounded-xl px-3 py-[11px] text-[13px]"
-                  style={{ backgroundColor: theme.inputBg, color: theme.inputText }}
-                />
-              </View>
-              <View className="gap-1">
-                <Text className="text-[11px] font-bold uppercase tracking-[0.4px]" style={{ color: theme.subtext }}>Gas</Text>
-                <TextInput
-                  value={createCustomerGas}
-                  onChangeText={setCreateCustomerGas}
-                  placeholder="Optional gas preference"
-                  placeholderTextColor={theme.inputPlaceholder}
-                  className="rounded-xl px-3 py-[11px] text-[13px]"
-                  style={{ backgroundColor: theme.inputBg, color: theme.inputText }}
-                />
-              </View>
-              <View className="gap-1">
-                <Text className="text-[11px] font-bold uppercase tracking-[0.4px]" style={{ color: theme.subtext }}>Province</Text>
-                <TextInput
-                  value={createCustomerProvince}
-                  onChangeText={setCreateCustomerProvince}
-                  placeholder="Optional province"
-                  placeholderTextColor={theme.inputPlaceholder}
-                  className="rounded-xl px-3 py-[11px] text-[13px]"
-                  style={{ backgroundColor: theme.inputBg, color: theme.inputText }}
-                />
-              </View>
-              <View className="gap-1">
-                <Text className="text-[11px] font-bold uppercase tracking-[0.4px]" style={{ color: theme.subtext }}>City</Text>
-                <TextInput
-                  value={createCustomerCity}
-                  onChangeText={setCreateCustomerCity}
-                  placeholder="Optional city"
-                  placeholderTextColor={theme.inputPlaceholder}
-                  className="rounded-xl px-3 py-[11px] text-[13px]"
-                  style={{ backgroundColor: theme.inputBg, color: theme.inputText }}
-                />
-              </View>
-            </View>
+            </ScrollView>
 
             <View className="flex-row gap-2">
               <Pressable
@@ -3223,18 +3572,81 @@ export function PosScreen({
             <TextInput
               value={heldCartSearch}
               onChangeText={setHeldCartSearch}
-              placeholder="Search queued order, customer, or item"
+              placeholder="Search queued order, customer, item, or amount"
               placeholderTextColor={theme.inputPlaceholder}
               className="rounded-xl px-3 py-[11px] text-[13px]"
               style={{ backgroundColor: theme.inputBg, color: theme.inputText }}
             />
+            {queueOrderFilteringAddonEnabled ? (
+              <View className="gap-1.5">
+                <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 6, paddingRight: 8 }}>
+                  {['ALL', ...heldCartAddressOptions.provinceOptions].map((province) => {
+                    const active = heldCartProvinceFilter === province;
+                    return (
+                      <Pressable
+                        key={`province-${province}`}
+                        className="min-h-8 items-center justify-center rounded-full px-3"
+                        style={{ backgroundColor: active ? theme.primary : theme.pillBg }}
+                        onPress={() => {
+                          setHeldCartProvinceFilter(province);
+                          setHeldCartCityFilter('ALL');
+                        }}
+                      >
+                        <Text className="text-[10px] font-bold" style={{ color: active ? '#FFFFFF' : theme.pillText }}>
+                          {province === 'ALL' ? 'All Provinces' : province}
+                        </Text>
+                      </Pressable>
+                    );
+                  })}
+                </ScrollView>
+                <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 6, paddingRight: 8 }}>
+                  {['ALL', ...heldCartAddressOptions.cityOptions].map((city) => {
+                    const active = heldCartCityFilter === city;
+                    return (
+                      <Pressable
+                        key={`city-${city}`}
+                        className="min-h-8 items-center justify-center rounded-full px-3"
+                        style={{ backgroundColor: active ? theme.primary : theme.pillBg }}
+                        onPress={() => setHeldCartCityFilter(city)}
+                      >
+                        <Text className="text-[10px] font-bold" style={{ color: active ? '#FFFFFF' : theme.pillText }}>
+                          {city === 'ALL' ? 'All Cities' : city}
+                        </Text>
+                      </Pressable>
+                    );
+                  })}
+                </ScrollView>
+              </View>
+            ) : null}
+            <View className="flex-row flex-wrap gap-2">
+              {([
+                ['queue-time-newest', 'Newest'],
+                ['queue-time-oldest', 'Oldest'],
+                ['amount-high-low', 'High Amount'],
+                ['amount-low-high', 'Low Amount']
+              ] as Array<[MobileQueueOrderSortMode, string]>).map(([mode, label]) => {
+                const active = heldCartSortMode === mode;
+                return (
+                  <Pressable
+                    key={mode}
+                    className="min-h-8 items-center justify-center rounded-full px-3"
+                    style={{ backgroundColor: active ? theme.primary : theme.pillBg }}
+                    onPress={() => setHeldCartSortMode(mode)}
+                  >
+                    <Text className="text-[10px] font-bold" style={{ color: active ? '#FFFFFF' : theme.pillText }}>
+                      {label}
+                    </Text>
+                  </Pressable>
+                );
+              })}
+            </View>
             <ScrollView className="min-h-0 flex-1" contentContainerStyle={{ gap: 10, paddingBottom: 8 }} keyboardShouldPersistTaps="handled">
               {filteredHeldCarts.length === 0 ? (
                 <Text style={[styles.modalEmpty, { color: theme.subtext }]}>
                   No queued orders yet.
                 </Text>
               ) : (
-                filteredHeldCarts.map((held) => {
+                pagedHeldCarts.rows.map((held) => {
                   const heldTotal = round2(
                     held.lines.reduce((sum, line) => sum + line.unitPrice * line.quantity, 0) -
                       held.discountAmount +
@@ -3322,6 +3734,53 @@ export function PosScreen({
                 })
               )}
             </ScrollView>
+            <View className="gap-2 rounded-xl border px-2.5 py-2" style={{ borderColor: theme.cardBorder, backgroundColor: theme.inputBg }}>
+              <Text className="text-[11px] font-bold" style={{ color: theme.subtext }}>
+                {pagedHeldCarts.rangeLabel}
+              </Text>
+              <View className="flex-row items-center gap-2">
+                <Pressable
+                  className="min-h-8 flex-1 items-center justify-center rounded-[10px] px-2"
+                  style={{ backgroundColor: heldCartPage <= 1 ? theme.pillBg : theme.primary }}
+                  disabled={heldCartPage <= 1}
+                  onPress={() => setHeldCartPage((page) => Math.max(1, page - 1))}
+                >
+                  <Text className="text-[11px] font-bold" style={{ color: heldCartPage <= 1 ? theme.pillText : '#FFFFFF' }}>
+                    Previous
+                  </Text>
+                </Pressable>
+                <Text className="text-[11px] font-extrabold" style={{ color: theme.heading }}>
+                  {pagedHeldCarts.page}/{pagedHeldCarts.totalPages}
+                </Text>
+                <Pressable
+                  className="min-h-8 flex-1 items-center justify-center rounded-[10px] px-2"
+                  style={{ backgroundColor: heldCartPage >= pagedHeldCarts.totalPages ? theme.pillBg : theme.primary }}
+                  disabled={heldCartPage >= pagedHeldCarts.totalPages}
+                  onPress={() => setHeldCartPage((page) => Math.min(pagedHeldCarts.totalPages, page + 1))}
+                >
+                  <Text className="text-[11px] font-bold" style={{ color: heldCartPage >= pagedHeldCarts.totalPages ? theme.pillText : '#FFFFFF' }}>
+                    Next
+                  </Text>
+                </Pressable>
+              </View>
+              <View className="flex-row gap-2">
+                {[10, 20].map((size) => {
+                  const active = heldCartPageSize === size;
+                  return (
+                    <Pressable
+                      key={size}
+                      className="min-h-8 flex-1 items-center justify-center rounded-[10px] px-2"
+                      style={{ backgroundColor: active ? theme.primary : theme.pillBg }}
+                      onPress={() => setHeldCartPageSize(size)}
+                    >
+                      <Text className="text-[11px] font-bold" style={{ color: active ? '#FFFFFF' : theme.pillText }}>
+                        {size} per page
+                      </Text>
+                    </Pressable>
+                  );
+                })}
+              </View>
+            </View>
             <Pressable
               onPress={() => setHeldCartModalOpen(false)}
               className="min-h-10 items-center justify-center rounded-xl px-3"
@@ -3470,20 +3929,27 @@ export function PosScreen({
                       </View>
                     ) : null}
                     {product.category ? <Text className="text-[12px]" style={{ color: theme.subtext }}>Category: {product.category}</Text> : null}
-                    <View style={[styles.itemStockMetrics, isCompactLayout ? { flexWrap: 'wrap', gap: 6 } : null]}>
-                      <View className="min-w-[31%] flex-1 rounded-xl px-3 py-2" style={[isCompactLayout ? { minWidth: '31%', flexBasis: '31%' } : null, { backgroundColor: theme.pillBg }]}>
-                        <Text className="text-[10px] font-semibold uppercase" style={{ color: theme.subtext }}>FULL</Text>
-                        <Text className="text-[13px] font-bold" style={{ color: theme.heading }}>{formatQty(product.qtyFull)}</Text>
+                    {product.isLpg ? (
+                      <View style={[styles.itemStockMetrics, isCompactLayout ? { flexWrap: 'wrap', gap: 6 } : null]}>
+                        <View className="min-w-[31%] flex-1 rounded-xl px-3 py-2" style={[isCompactLayout ? { minWidth: '31%', flexBasis: '31%' } : null, { backgroundColor: theme.pillBg }]}>
+                          <Text className="text-[10px] font-semibold uppercase" style={{ color: theme.subtext }}>FULL</Text>
+                          <Text className="text-[13px] font-bold" style={{ color: theme.heading }}>{formatQty(product.qtyFull)}</Text>
+                        </View>
+                        <View className="min-w-[31%] flex-1 rounded-xl px-3 py-2" style={[isCompactLayout ? { minWidth: '31%', flexBasis: '31%' } : null, { backgroundColor: theme.pillBg }]}>
+                          <Text className="text-[10px] font-semibold uppercase" style={{ color: theme.subtext }}>EMPTY</Text>
+                          <Text className="text-[13px] font-bold" style={{ color: theme.heading }}>{formatQty(product.qtyEmpty)}</Text>
+                        </View>
+                        <View className="min-w-[31%] flex-1 rounded-xl px-3 py-2" style={[isCompactLayout ? { minWidth: '31%', flexBasis: '31%' } : null, { backgroundColor: theme.pillBg }]}>
+                          <Text className="text-[10px] font-semibold uppercase" style={{ color: theme.subtext }}>QOH</Text>
+                          <Text className="text-[13px] font-bold" style={{ color: theme.heading }}>{formatQty(product.qtyOnHand)}</Text>
+                        </View>
                       </View>
-                      <View className="min-w-[31%] flex-1 rounded-xl px-3 py-2" style={[isCompactLayout ? { minWidth: '31%', flexBasis: '31%' } : null, { backgroundColor: theme.pillBg }]}>
-                        <Text className="text-[10px] font-semibold uppercase" style={{ color: theme.subtext }}>EMPTY</Text>
-                        <Text className="text-[13px] font-bold" style={{ color: theme.heading }}>{formatQty(product.qtyEmpty)}</Text>
-                      </View>
-                      <View className="min-w-[31%] flex-1 rounded-xl px-3 py-2" style={[isCompactLayout ? { minWidth: '31%', flexBasis: '31%' } : null, { backgroundColor: theme.pillBg }]}>
-                        <Text className="text-[10px] font-semibold uppercase" style={{ color: theme.subtext }}>QOH</Text>
+                    ) : (
+                      <View className="rounded-xl px-3 py-2" style={{ backgroundColor: theme.pillBg }}>
+                        <Text className="text-[10px] font-semibold uppercase" style={{ color: theme.subtext }}>QTY</Text>
                         <Text className="text-[13px] font-bold" style={{ color: theme.heading }}>{formatQty(product.qtyOnHand)}</Text>
                       </View>
-                    </View>
+                    )}
                     </Pressable>
                   );
                 })
@@ -3566,7 +4032,7 @@ export function PosScreen({
                       Available points: {currentPointsBalance}
                     </Text>
                     <Text className="text-[12px]" style={{ color: theme.subtext }}>
-                      Pick one reward to reserve/apply during checkout. Discount fields can still be adjusted before saving.
+                      Pick one reward to queue with this sale. It will be applied during sync and discount fields can still be adjusted before saving.
                     </Text>
                     {rewardsLoading ? (
                       <Text className="text-[12px]" style={{ color: theme.subtext }}>Loading rewards...</Text>
@@ -3640,6 +4106,43 @@ export function PosScreen({
                   );
                 })}
               </View>
+
+                {receiptAmountPrivacyAddonEnabled ? (
+                  <Pressable
+                    className="flex-row items-center justify-between rounded-xl border px-3 py-2.5"
+                    style={{
+                      borderColor: theme.cardBorder,
+                      backgroundColor: theme.inputBg
+                    }}
+                    onPress={() => {
+                      const blocked = paymentMode === 'PARTIAL' || creditBalance > 0.0001;
+                      if (blocked) {
+                        setHideReceiptAmounts(false);
+                        toastInfo('Receipt privacy', 'Not available for sales with balance due.');
+                        return;
+                      }
+                      setHideReceiptAmounts((prev) => !prev);
+                    }}
+                    disabled={saving}
+                  >
+                    <View className="flex-1 pr-3">
+                      <Text className="text-[11px] font-semibold uppercase tracking-[0.4px]" style={{ color: theme.subtext }}>
+                        Receipt Amount Privacy
+                      </Text>
+                      <Text className="text-[11px]" style={{ color: theme.subtext }}>
+                        Hide amounts on summary and printed receipt
+                      </Text>
+                    </View>
+                    <View
+                      className="min-h-7 min-w-7 items-center justify-center rounded-md px-2"
+                      style={{ backgroundColor: hideReceiptAmounts ? theme.primary : theme.pillBg }}
+                    >
+                      <Text className="text-[11px] font-extrabold" style={{ color: hideReceiptAmounts ? '#FFFFFF' : theme.pillText }}>
+                        {hideReceiptAmounts ? 'ON' : 'OFF'}
+                      </Text>
+                    </View>
+                  </Pressable>
+                ) : null}
 
                 <Text className="text-[11px] font-semibold uppercase tracking-[0.4px]" style={{ color: theme.subtext }}>Payment Method</Text>
                 <View className="flex-row flex-wrap gap-2" style={isCompactLayout ? { flexWrap: 'wrap', gap: 6 } : null}>
@@ -3721,22 +4224,22 @@ export function PosScreen({
                 <View className="flex-row gap-2" style={isCompactLayout ? { flexDirection: 'column', gap: 6 } : null}>
                   <View className="flex-1 gap-0.5 rounded-xl border px-2.5 py-2" style={{ borderColor: theme.cardBorder, backgroundColor: theme.inputBg }}>
                   <Text className="text-[11px] font-semibold" style={{ color: theme.subtext }}>Paid</Text>
-                  <Text className="text-base font-extrabold" style={{ color: theme.heading }}>PHP {parsedPaidAmount.toFixed(2)}</Text>
+                  <Text className="text-base font-extrabold" style={{ color: theme.heading }}>{formatAmountForSummary(parsedPaidAmount)}</Text>
                 </View>
                   <View className="flex-1 gap-0.5 rounded-xl border px-2.5 py-2" style={{ borderColor: theme.cardBorder, backgroundColor: theme.inputBg }}>
                   <Text className="text-[11px] font-semibold" style={{ color: theme.subtext }}>Change</Text>
-                  <Text className="text-base font-extrabold" style={{ color: theme.heading }}>PHP {changeAmount.toFixed(2)}</Text>
+                  <Text className="text-base font-extrabold" style={{ color: theme.heading }}>{formatAmountForSummary(changeAmount)}</Text>
                 </View>
                 </View>
 
                 <View className="flex-row gap-2" style={isCompactLayout ? { flexDirection: 'column', gap: 6 } : null}>
                   <View className="flex-1 gap-0.5 rounded-xl border px-2.5 py-2" style={{ borderColor: theme.cardBorder, backgroundColor: theme.inputBg }}>
                   <Text className="text-[11px] font-semibold" style={{ color: theme.subtext }}>Credit</Text>
-                  <Text className="text-base font-extrabold" style={{ color: theme.heading }}>PHP {creditBalance.toFixed(2)}</Text>
+                  <Text className="text-base font-extrabold" style={{ color: theme.heading }}>{formatAmountForSummary(creditBalance)}</Text>
                 </View>
                   <View className="flex-1 gap-0.5 rounded-xl border px-2.5 py-2" style={{ borderColor: theme.cardBorder, backgroundColor: theme.inputBg }}>
                   <Text className="text-[11px] font-semibold" style={{ color: theme.subtext }}>Total</Text>
-                  <Text className="text-base font-extrabold" style={{ color: theme.heading }}>PHP {total.toFixed(2)}</Text>
+                  <Text className="text-base font-extrabold" style={{ color: theme.heading }}>{formatAmountForSummary(total)}</Text>
                 </View>
                 </View>
 
@@ -3757,20 +4260,20 @@ export function PosScreen({
 
                 <View className="gap-1.5 rounded-xl border px-3 py-3" style={{ borderColor: theme.cardBorder }}>
                   <Text className="text-[12px]" style={{ color: theme.subtext }}>Items: {cart.length}</Text>
-                  <Text className="text-[12px]" style={{ color: theme.subtext }}>Subtotal: PHP {subtotal.toFixed(2)}</Text>
+                  <Text className="text-[12px]" style={{ color: theme.subtext }}>Subtotal: {formatAmountForSummary(subtotal)}</Text>
                   {discountValue > 0 ? (
-                    <Text className="text-[12px]" style={{ color: theme.subtext }}>Discount: PHP {discountValue.toFixed(2)}</Text>
+                    <Text className="text-[12px]" style={{ color: theme.subtext }}>Discount: {formatAmountForSummary(discountValue)}</Text>
                   ) : null}
                   {orderType === 'DELIVERY' ? (
-                    <Text className="text-[12px]" style={{ color: theme.subtext }}>Delivery Fee: PHP {deliveryFeeValue.toFixed(2)}</Text>
+                    <Text className="text-[12px]" style={{ color: theme.subtext }}>Delivery Fee: {formatAmountForSummary(deliveryFeeValue)}</Text>
                   ) : null}
                   {selectedReward ? (
                     <Text className="text-[12px]" style={{ color: theme.subtext }}>
                       Reward: {selectedReward.name} ({selectedReward.points_cost} pts)
                     </Text>
                   ) : null}
-                  <Text className="text-[12px]" style={{ color: theme.subtext }}>Applied Payment: PHP {appliedPaidAmount.toFixed(2)}</Text>
-                  <Text className="text-[12px]" style={{ color: theme.subtext }}>Credit Due: PHP {creditBalance.toFixed(2)}</Text>
+                  <Text className="text-[12px]" style={{ color: theme.subtext }}>Applied Payment: {formatAmountForSummary(appliedPaidAmount)}</Text>
+                  <Text className="text-[12px]" style={{ color: theme.subtext }}>Credit Due: {formatAmountForSummary(creditBalance)}</Text>
                   <Text className="text-[12px]" style={{ color: theme.subtext }}>Mode: {paymentMode}</Text>
                 </View>
               </ScrollView>
@@ -3797,6 +4300,17 @@ export function PosScreen({
                 ]}
               >
                 <Text style={[styles.modalSecondaryText, { color: saving ? '#FFFFFF' : theme.pillText }]}>Back</Text>
+              </Pressable>
+              <Pressable
+                onPress={promptClearCurrentOrder}
+                disabled={saving || syncBusy || !hasDraftToClear}
+                style={[
+                  styles.modalSecondaryBtn,
+                  isCompactLayout ? styles.paymentModalSecondaryBtnCompact : null,
+                  { backgroundColor: saving || syncBusy || !hasDraftToClear ? theme.cardBorder : theme.dangerMuted }
+                ]}
+              >
+                <Text style={[styles.modalSecondaryText, { color: hasDraftToClear ? theme.danger : theme.subtext }]}>Clear</Text>
               </Pressable>
               <Pressable
                 style={[

@@ -17,6 +17,7 @@ type RequestWithTenant = Request & {
   user?: { sub?: string; company_id?: string; roles?: string[] };
   companyId?: string;
 };
+type PersonnelSalaryPayload = 'MONTHLY' | 'DAILY' | 'HOURLY' | 'PER_TRANSACTION';
 
 @Controller('master-data')
 @Roles('admin', 'owner')
@@ -465,6 +466,18 @@ export class MasterDataController {
         roleId: String(body.roleId ?? body.role_id ?? ''),
         phone: body.phone ? String(body.phone) : null,
         email: body.email ? String(body.email) : null,
+        salaryType:
+          body.salaryType === undefined && body.salary_type === undefined
+            ? undefined
+            : this.parsePersonnelSalaryType(body.salaryType ?? body.salary_type),
+        salaryRate:
+          body.salaryRate === undefined && body.salary_rate === undefined
+            ? undefined
+            : Number(body.salaryRate ?? body.salary_rate),
+        commissionEligible:
+          body.commissionEligible === undefined && body.commission_eligible === undefined
+            ? undefined
+            : Boolean(body.commissionEligible ?? body.commission_eligible),
         isActive: body.isActive === undefined ? true : Boolean(body.isActive)
       },
       targetCompanyId
@@ -500,6 +513,18 @@ export class MasterDataController {
             : String(body.roleId ?? body.role_id ?? ''),
         phone: body.phone === undefined ? undefined : body.phone ? String(body.phone) : null,
         email: body.email === undefined ? undefined : body.email ? String(body.email) : null,
+        salaryType:
+          body.salaryType === undefined && body.salary_type === undefined
+            ? undefined
+            : this.parsePersonnelSalaryType(body.salaryType ?? body.salary_type),
+        salaryRate:
+          body.salaryRate === undefined && body.salary_rate === undefined
+            ? undefined
+            : Number(body.salaryRate ?? body.salary_rate),
+        commissionEligible:
+          body.commissionEligible === undefined && body.commission_eligible === undefined
+            ? undefined
+            : Boolean(body.commissionEligible ?? body.commission_eligible),
         isActive: body.isActive === undefined ? undefined : Boolean(body.isActive)
       },
       targetCompanyId
@@ -1189,6 +1214,18 @@ export class MasterDataController {
         body.lowStockAlertQty === undefined || body.lowStockAlertQty === null || body.lowStockAlertQty === ''
           ? null
           : Number(body.lowStockAlertQty),
+      pickupCommissionRate:
+        body.pickupCommissionRate === undefined && body.pickup_commission_rate === undefined
+          ? undefined
+          : body.pickupCommissionRate === null || body.pickupCommissionRate === '' || body.pickup_commission_rate === null || body.pickup_commission_rate === ''
+            ? 0
+            : Number(body.pickupCommissionRate ?? body.pickup_commission_rate),
+      deliveryCommissionRate:
+        body.deliveryCommissionRate === undefined && body.delivery_commission_rate === undefined
+          ? undefined
+          : body.deliveryCommissionRate === null || body.deliveryCommissionRate === '' || body.delivery_commission_rate === null || body.delivery_commission_rate === ''
+            ? 0
+            : Number(body.deliveryCommissionRate ?? body.delivery_commission_rate),
       isActive: body.isActive === undefined ? true : Boolean(body.isActive)
     });
     await this.auditWrite(req, 'MASTER_DATA_PRODUCT_CREATE', 'Product', row.id, {
@@ -1234,6 +1271,18 @@ export class MasterDataController {
           : body.lowStockAlertQty === null || body.lowStockAlertQty === ''
             ? null
             : Number(body.lowStockAlertQty),
+      pickupCommissionRate:
+        body.pickupCommissionRate === undefined && body.pickup_commission_rate === undefined
+          ? undefined
+          : body.pickupCommissionRate === null || body.pickupCommissionRate === '' || body.pickup_commission_rate === null || body.pickup_commission_rate === ''
+            ? 0
+            : Number(body.pickupCommissionRate ?? body.pickup_commission_rate),
+      deliveryCommissionRate:
+        body.deliveryCommissionRate === undefined && body.delivery_commission_rate === undefined
+          ? undefined
+          : body.deliveryCommissionRate === null || body.deliveryCommissionRate === '' || body.delivery_commission_rate === null || body.delivery_commission_rate === ''
+            ? 0
+            : Number(body.deliveryCommissionRate ?? body.delivery_commission_rate),
       isActive: body.isActive === undefined ? undefined : Boolean(body.isActive)
     });
     await this.auditWrite(req, 'MASTER_DATA_PRODUCT_UPDATE', 'Product', row.id, {
@@ -1774,6 +1823,21 @@ export class MasterDataController {
     }
 
     return [];
+  }
+
+  private parsePersonnelSalaryType(value: unknown): PersonnelSalaryPayload {
+    const normalized = String(value ?? 'MONTHLY')
+      .trim()
+      .toUpperCase()
+      .replace(/[-\s]+/g, '_');
+    if (
+      normalized === 'DAILY' ||
+      normalized === 'HOURLY' ||
+      normalized === 'PER_TRANSACTION'
+    ) {
+      return normalized;
+    }
+    return 'MONTHLY';
   }
 
   private parseStringList(value: unknown): string[] {

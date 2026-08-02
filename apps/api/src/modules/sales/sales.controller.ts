@@ -49,6 +49,27 @@ export class SalesController {
       cylinder_flow?: 'AUTO' | 'REFILL_EXCHANGE' | 'NON_REFILL';
       hide_amounts?: boolean;
       hideAmounts?: boolean;
+      personnel_id?: string | null;
+      personnel_name?: string | null;
+      personnelId?: string | null;
+      personnelName?: string | null;
+      driver_id?: string | null;
+      driver_name?: string | null;
+      driverId?: string | null;
+      driverName?: string | null;
+      helper_id?: string | null;
+      helper_name?: string | null;
+      helperId?: string | null;
+      helperName?: string | null;
+      personnel?: Array<{
+        user_id?: string;
+        userId?: string;
+        role?: string;
+        name?: string | null;
+        full_name?: string | null;
+        fullName?: string | null;
+        label?: string | null;
+      }>;
     }
   ): Promise<SalePostResponse> {
     const companyId = this.requireCompanyId(req);

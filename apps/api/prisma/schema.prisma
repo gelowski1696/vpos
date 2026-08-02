@@ -150,6 +150,13 @@ enum SaleStatus {
   VOIDED
 }
 
+enum PersonnelSalaryType {
+  MONTHLY
+  DAILY
+  HOURLY
+  PER_TRANSACTION
+}
+
 enum SaleReturnStatus {
   POSTED
   VOIDED
@@ -410,6 +417,7 @@ model Company {
   eventStock                EventStockMovement[]
   eventDelivery             EventDeliveryPerformance[]
   eventBehavior             EventUserBehavior[]
+  salePersonnelCommissions  SalePersonnelCommission[]
   tenantDatastores          TenantDatastoreRegistry[]
   mobileEnrollmentTokens    MobileEnrollmentToken[]
   nfcCards                  NfcCard[]
@@ -645,6 +653,9 @@ model Personnel {
   personnelRoleId String
   phone           String?
   email           String?
+  salaryType      PersonnelSalaryType @default(MONTHLY)
+  salaryRate      Decimal  @default(0) @db.Decimal(12, 2)
+  commissionEligible Boolean @default(true)
   isActive        Boolean  @default(true)
   createdAt       DateTime @default(now())
   updatedAt       DateTime @updatedAt
@@ -652,6 +663,7 @@ model Personnel {
   company Company       @relation(fields: [companyId], references: [id], onDelete: Cascade)
   branch  Branch        @relation(fields: [branchId], references: [id], onDelete: Restrict)
   role    PersonnelRole @relation(fields: [personnelRoleId], references: [id], onDelete: Restrict)
+  salePersonnelCommissions SalePersonnelCommission[]
 
   @@unique([companyId, code])
   @@index([companyId, branchId, updatedAt])
@@ -1096,6 +1108,8 @@ model Product {
   requiresDeposit      Boolean  @default(false)
   defaultDepositAmount Decimal? @db.Decimal(12, 2)
   lendingUnitType      String?
+  pickupCommissionRate Decimal  @default(0) @db.Decimal(12, 2)
+  deliveryCommissionRate Decimal @default(0) @db.Decimal(12, 2)
   isActive             Boolean  @default(true)
   createdAt            DateTime @default(now())
   updatedAt            DateTime @updatedAt
@@ -1116,6 +1130,7 @@ model Product {
   purchaseOrderLines PurchaseOrderLine[]
   purchaseOrderReceiptLines PurchaseOrderReceiptLine[]
   purchaseOrderPulloutLines PurchaseOrderPulloutLine[]
+  salePersonnelCommissions SalePersonnelCommission[]
 
   @@unique([companyId, sku])
   @@index([companyId, updatedAt])
@@ -1842,6 +1857,7 @@ model Sale {
   lendingTransactions LendingTransaction[]
   returns             SaleReturn[]
   returnLines         SaleReturnLine[]
+  personnelCommissions SalePersonnelCommission[]
 
   @@index([companyId, status, createdAt])
   @@index([companyId, branchId, status, createdAt])
@@ -1862,6 +1878,35 @@ model SaleLine {
   product      Product          @relation(fields: [productId], references: [id], onDelete: Restrict)
   lendingLines LendingLine[]
   returnLines  SaleReturnLine[]
+  personnelCommissions SalePersonnelCommission[]
+}
+
+model SalePersonnelCommission {
+  id                    String   @id @default(uuid())
+  companyId             String
+  saleId                String
+  saleLineId            String
+  productId             String
+  personnelId           String?
+  personnelCodeSnapshot String?
+  personnelNameSnapshot String
+  personnelRoleSnapshot String?
+  saleType              SaleType
+  quantity              Decimal  @db.Decimal(14, 4)
+  commissionRate        Decimal  @db.Decimal(12, 2)
+  splitPercent          Decimal  @db.Decimal(7, 4)
+  commissionAmount      Decimal  @db.Decimal(12, 2)
+  createdAt             DateTime @default(now())
+
+  company   Company   @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  sale      Sale      @relation(fields: [saleId], references: [id], onDelete: Cascade)
+  saleLine  SaleLine  @relation(fields: [saleLineId], references: [id], onDelete: Cascade)
+  product   Product   @relation(fields: [productId], references: [id], onDelete: Restrict)
+  personnel Personnel? @relation(fields: [personnelId], references: [id], onDelete: SetNull)
+
+  @@index([companyId, saleId])
+  @@index([companyId, personnelId, createdAt])
+  @@index([saleLineId])
 }
 
 model SaleReturn {

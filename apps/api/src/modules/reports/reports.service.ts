@@ -1443,6 +1443,22 @@ export class ReportsService {
       notes: string | null;
       posted_at: string | null;
     }>;
+    commissions: Array<{
+      commission_id: string;
+      sale_line_id: string;
+      product_id: string;
+      item_code: string;
+      product_name: string;
+      personnel_id: string | null;
+      personnel_code: string | null;
+      personnel_name: string;
+      personnel_role: string | null;
+      sale_type: string;
+      qty: number;
+      commission_rate: number;
+      split_percent: number;
+      commission_amount: number;
+    }>;
     delivery: {
       id: string;
       status: string;
@@ -1595,6 +1611,29 @@ export class ReportsService {
             purpose: true
           },
           orderBy: { postedAt: 'asc' }
+        },
+        personnelCommissions: {
+          select: {
+            id: true,
+            saleLineId: true,
+            productId: true,
+            personnelId: true,
+            personnelCodeSnapshot: true,
+            personnelNameSnapshot: true,
+            personnelRoleSnapshot: true,
+            saleType: true,
+            quantity: true,
+            commissionRate: true,
+            splitPercent: true,
+            commissionAmount: true,
+            product: {
+              select: {
+                sku: true,
+                name: true
+              }
+            }
+          },
+          orderBy: [{ createdAt: 'asc' }, { id: 'asc' }]
         },
         deliveryOrder: {
           select: {
@@ -1862,6 +1901,22 @@ export class ReportsService {
           posted_at: payment.postedAt ? payment.postedAt.toISOString() : null
         }))
       ],
+      commissions: row.personnelCommissions.map((commission) => ({
+        commission_id: commission.id,
+        sale_line_id: commission.saleLineId,
+        product_id: commission.productId,
+        item_code: commission.product.sku,
+        product_name: commission.product.name,
+        personnel_id: commission.personnelId ?? null,
+        personnel_code: commission.personnelCodeSnapshot ?? null,
+        personnel_name: commission.personnelNameSnapshot,
+        personnel_role: commission.personnelRoleSnapshot ?? null,
+        sale_type: commission.saleType,
+        qty: this.roundQty(this.toNumber(commission.quantity)),
+        commission_rate: this.roundMoney(this.toNumber(commission.commissionRate)),
+        split_percent: this.roundQty(this.toNumber(commission.splitPercent)),
+        commission_amount: this.roundMoney(this.toNumber(commission.commissionAmount))
+      })),
       delivery: row.deliveryOrder
         ? {
             id: row.deliveryOrder.id,

@@ -11,15 +11,19 @@ type SaleInput = {
   customerId?: string | null;
   lines: Array<{
     productId: string;
+    productName?: string | null;
     quantity: number;
     unitPrice: number;
     isLpg?: boolean;
     cylinderFlow?: 'REFILL_EXCHANGE' | 'NON_REFILL';
+    pickupCommissionRate?: number;
+    deliveryCommissionRate?: number;
   }>;
   payments: Array<{ method: 'CASH' | 'CARD' | 'E_WALLET'; amount: number }>;
   discountAmount?: number;
   saleType?: 'PICKUP' | 'DELIVERY';
   cylinderFlow?: 'REFILL_EXCHANGE' | 'NON_REFILL';
+  hideAmounts?: boolean;
   paymentMode?: 'FULL' | 'PARTIAL';
   creditBalance?: number;
   creditNotes?: string | null;
@@ -30,6 +34,36 @@ type SaleInput = {
   helperId?: string | null;
   helperName?: string | null;
   personnel?: Array<{ userId: string; role: 'DRIVER' | 'HELPER' | 'PERSONNEL' | 'LOADER' | 'OTHER'; name?: string | null }>;
+  commissionSplitMode?: 'EQUAL' | null;
+  commissionTotal?: number;
+  commissions?: Array<{
+    productId?: string;
+    product_id?: string;
+    productName?: string;
+    product_name?: string;
+    personnelId?: string | null;
+    personnel_id?: string | null;
+    personnelName?: string;
+    personnel_name?: string;
+    personnelRole?: string | null;
+    personnel_role?: string | null;
+    saleType?: 'PICKUP' | 'DELIVERY';
+    sale_type?: 'PICKUP' | 'DELIVERY';
+    quantity?: number;
+    qty?: number;
+    commissionRate?: number;
+    commission_rate?: number;
+    splitPercent?: number;
+    split_percent?: number;
+    commissionAmount?: number;
+    commission_amount?: number;
+  }>;
+  rewardId?: string | null;
+  rewardName?: string | null;
+  rewardPointsCost?: number;
+  rewardDiscountAmount?: number;
+  rewardBaseAmount?: number;
+  rewardRedemptionUsed?: boolean;
 };
 
 type CustomerPaymentInput = {
@@ -153,6 +187,16 @@ type PettyCashInput = {
   direction: 'IN' | 'OUT';
   amount: number;
   notes?: string;
+  attachments?: Array<{
+    id?: string;
+    fileName: string;
+    mimeType: string;
+    sizeBytes: number;
+    dataBase64?: string | null;
+    uploadedUrl?: string | null;
+    sourceChannel?: string | null;
+    createdAt?: string;
+  }>;
 };
 
 type DeliveryAssignmentInput = {
@@ -210,6 +254,13 @@ type SaleReturnInput = {
   }>;
 };
 
+const ALLOWED_PETTY_CASH_ATTACHMENT_MIME_TYPES = new Set([
+  'image/jpeg',
+  'image/jpg',
+  'image/png',
+  'image/webp'
+]);
+
 export class OfflineTransactionService {
   constructor(
     private readonly db: SQLiteDatabase,
@@ -229,6 +280,7 @@ export class OfflineTransactionService {
       customer_id: input.customerId ?? null,
       sale_type: input.saleType ?? 'PICKUP',
       cylinder_flow: input.cylinderFlow ?? null,
+      hide_amounts: input.hideAmounts === true,
       lines: input.lines,
       payments: input.payments,
       discount_amount: input.discountAmount ?? 0,
@@ -242,6 +294,15 @@ export class OfflineTransactionService {
       helper_id: input.helperId ?? null,
       helper_name: input.helperName ?? null,
       personnel: input.personnel ?? [],
+      commission_split_mode: input.commissionSplitMode ?? 'EQUAL',
+      commission_total: input.commissionTotal ?? 0,
+      commissions: input.commissions ?? [],
+      reward_id: input.rewardId ?? null,
+      reward_name: input.rewardName ?? null,
+      reward_points_cost: input.rewardPointsCost ?? 0,
+      reward_discount_amount: input.rewardDiscountAmount ?? 0,
+      reward_base_amount: input.rewardBaseAmount ?? null,
+      reward_redemption_used: input.rewardRedemptionUsed === true,
       created_at: now
     };
 
@@ -592,6 +653,32 @@ export class OfflineTransactionService {
     await this.assertCanCreate('petty_cash');
     const id = input.entryId ?? this.id('petty');
     const now = new Date().toISOString();
+    const attachments = (input.attachments ?? [])
+      .map((attachment) => ({
+        id: attachment.id?.trim() || this.id('petty-attachment'),
+        file_name: attachment.fileName.trim(),
+        mime_type: attachment.mimeType.trim().toLowerCase(),
+        size_bytes: Math.trunc(Number(attachment.sizeBytes)),
+        data_base64: attachment.dataBase64?.trim() || null,
+        uploaded_url: attachment.uploadedUrl?.trim() || null,
+        source_channel: attachment.sourceChannel?.trim() || 'mobile',
+        created_at: attachment.createdAt ?? now
+      }))
+      .filter((attachment) => attachment.file_name && Number.isFinite(attachment.size_bytes) && attachment.size_bytes > 0);
+    if (attachments.length > 3) {
+      throw new Error('Petty cash allows up to 3 attachments only.');
+    }
+    for (const attachment of attachments) {
+      if (!ALLOWED_PETTY_CASH_ATTACHMENT_MIME_TYPES.has(attachment.mime_type)) {
+        throw new Error('Petty cash attachments must be jpg/jpeg/png/webp image files.');
+      }
+      if (attachment.size_bytes > 5 * 1024 * 1024) {
+        throw new Error('Petty cash attachment cannot exceed 5 MB.');
+      }
+      if (!attachment.data_base64 && !attachment.uploaded_url) {
+        throw new Error('Petty cash attachment is missing upload data.');
+      }
+    }
     const payload = {
       id,
       shift_id: input.shiftId,
@@ -599,6 +686,7 @@ export class OfflineTransactionService {
       direction: input.direction,
       amount: input.amount,
       notes: input.notes ?? null,
+      attachments,
       created_at: now
     };
 

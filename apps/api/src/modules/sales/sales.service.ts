@@ -84,11 +84,20 @@ type ResolvedSaleLine = {
     isLpg: boolean;
     cylinderTypeId: string | null;
     standardCost: number | null;
+    pickupCommissionRate: number;
+    deliveryCommissionRate: number;
   };
   originalProductRef: string;
   quantity: number;
   unitPrice: number;
   cylinderFlow: CylinderFlowMode | null;
+};
+
+type CommissionPersonnelSnapshot = {
+  personnelId: string | null;
+  personnelCode: string | null;
+  personnelName: string;
+  personnelRole: string | null;
 };
 
 type PostedSale = {
@@ -111,6 +120,20 @@ type PostedSale = {
   receiptHideReason: string | null;
   receiptNumber: string;
   postedAt: string;
+  commissionSplitMode?: 'EQUAL';
+  commissionTotal?: number;
+  commissions?: Array<{
+    personnel_id: string | null;
+    personnel_name: string;
+    personnel_role: string | null;
+    product_id: string;
+    sale_line_id?: string | null;
+    sale_type: 'PICKUP' | 'DELIVERY';
+    quantity: number;
+    commission_rate: number;
+    split_percent: number;
+    commission_amount: number;
+  }>;
 };
 
 type DbClient = PrismaService | PrismaClient;
@@ -141,6 +164,20 @@ export type SalePostResponse = {
   deposit_liability_delta: number;
   receipt_hide_amounts: boolean;
   receipt_number: string;
+  commission_split_mode: 'EQUAL';
+  commission_total: number;
+  commissions: Array<{
+    personnel_id: string | null;
+    personnel_name: string;
+    personnel_role: string | null;
+    product_id: string;
+    sale_line_id?: string | null;
+    sale_type: 'PICKUP' | 'DELIVERY';
+    quantity: number;
+    commission_rate: number;
+    split_percent: number;
+    commission_amount: number;
+  }>;
   receipt_document: {
     title: string;
     isReprint: boolean;
@@ -372,7 +409,10 @@ export class SalesService {
       receiptHideAmounts: effectiveHideAmounts,
       receiptHideReason: effectiveHideAmounts ? 'MANUAL_HIDE' : null,
       receiptNumber,
-      postedAt
+      postedAt,
+      commissionSplitMode: 'EQUAL',
+      commissionTotal: 0,
+      commissions: []
     };
     this.postedSales.set(this.saleKey(companyId, sale.saleId), sale);
 
@@ -386,6 +426,9 @@ export class SalesService {
       deposit_liability_delta: sale.depositLiabilityDelta,
       receipt_hide_amounts: sale.receiptHideAmounts,
       receipt_number: sale.receiptNumber,
+      commission_split_mode: 'EQUAL',
+      commission_total: 0,
+      commissions: [],
       receipt_document: this.buildReceiptDocument(sale, false)
     };
   }
@@ -437,6 +480,7 @@ export class SalesService {
               orderBy: { id: 'asc' }
             },
             payments: true,
+            personnelCommissions: true,
             receipt: true
           }
         });
@@ -507,6 +551,8 @@ export class SalesService {
           input.shift_id
         );
         const normalizedLines = await this.resolveLines(tx, companyId, input.lines);
+        const saleType = input.sale_type === 'DELIVERY' ? 'DELIVERY' : 'PICKUP';
+        const commissionPersonnel = await this.resolveCommissionPersonnel(tx, companyId, input);
         const cylinderFlowMode = this.resolveCylinderFlowMode(input);
         const normalizedPayments = this.normalizePayments(input.payments);
         const paymentMode: 'FULL' | 'PARTIAL' = input.payment_mode === 'PARTIAL' ? 'PARTIAL' : 'FULL';
@@ -567,6 +613,8 @@ export class SalesService {
           qtyAfter: number;
           avgCostAfter: number;
           ledgerRefId: string;
+          pickupCommissionRate: number;
+          deliveryCommissionRate: number;
         }> = [];
         const inventoryLedgers: Array<{
           locationId: string;
@@ -657,7 +705,9 @@ export class SalesService {
             unitCost: unitCostForLedger,
             qtyAfter: nextQty,
             avgCostAfter: this.roundQty(balance.avgCost),
-            ledgerRefId
+            ledgerRefId,
+            pickupCommissionRate: line.product.pickupCommissionRate,
+            deliveryCommissionRate: line.product.deliveryCommissionRate
           });
           inventoryLedgers.push({
             locationId: location.id,
@@ -689,7 +739,7 @@ export class SalesService {
             userId: actor.id,
             customerId: customer?.id ?? null,
             recreatedFromSaleId,
-            saleType: input.sale_type ?? 'PICKUP',
+            saleType,
             subtotal,
             discountAmount,
             totalAmount,
@@ -709,16 +759,42 @@ export class SalesService {
           });
         }
 
-        await tx.saleLine.createMany({
-          data: saleLineRows.map((row) => ({
-            saleId: sale.id,
+        const createdSaleLineByLedgerRef = new Map<string, string>();
+        for (const row of saleLineRows) {
+          const createdLine = await tx.saleLine.create({
+            data: {
+              saleId: sale.id,
+              productId: row.productId,
+              quantity: row.quantity,
+              unitPrice: row.unitPrice,
+              estimatedCost: row.lineCogs,
+              lineTotal: row.lineTotal
+            },
+            select: { id: true }
+          });
+          createdSaleLineByLedgerRef.set(row.ledgerRefId, createdLine.id);
+        }
+
+        const commissionRows = this.buildEqualSplitCommissionRows({
+          companyId,
+          saleId: sale.id,
+          saleType,
+          personnel: commissionPersonnel,
+          lines: saleLineRows.map((row) => ({
+            saleLineId: createdSaleLineByLedgerRef.get(row.ledgerRefId) ?? '',
             productId: row.productId,
             quantity: row.quantity,
-            unitPrice: row.unitPrice,
-            estimatedCost: row.lineCogs,
-            lineTotal: row.lineTotal
+            commissionRate:
+              saleType === 'DELIVERY'
+                ? row.deliveryCommissionRate
+                : row.pickupCommissionRate
           }))
         });
+        if (commissionRows.length > 0) {
+          await tx.salePersonnelCommission.createMany({
+            data: commissionRows
+          });
+        }
 
         await tx.payment.createMany({
           data: normalizedPayments.map((payment) => ({
@@ -815,6 +891,22 @@ export class SalesService {
               helper_id: input.helper_id ?? null,
               helper_name: input.helper_name ?? null,
               personnel: Array.isArray(input.personnel) ? input.personnel : [],
+              commission_split_mode: 'EQUAL',
+              commission_total: this.roundMoney(
+                commissionRows.reduce((sum, row) => sum + Number(row.commissionAmount), 0)
+              ),
+              commissions: commissionRows.map((row) => ({
+                personnel_id: row.personnelId ?? null,
+                personnel_name: row.personnelNameSnapshot,
+                personnel_role: row.personnelRoleSnapshot ?? null,
+                product_id: row.productId,
+                sale_line_id: row.saleLineId,
+                sale_type: row.saleType,
+                quantity: Number(row.quantity),
+                commission_rate: Number(row.commissionRate),
+                split_percent: Number(row.splitPercent),
+                commission_amount: Number(row.commissionAmount)
+              })),
               lines: normalizedLines.map((line) => ({
                 product_id: line.product.id,
                 product_sku: line.product.sku,
@@ -905,7 +997,23 @@ export class SalesService {
           receiptHideAmounts: receiptPrivacy.hideAmounts,
           receiptHideReason: receiptPrivacy.hideReason,
           receiptNumber,
-          postedAt: now.toISOString()
+          postedAt: now.toISOString(),
+          commissionSplitMode: 'EQUAL',
+          commissionTotal: this.roundMoney(
+            commissionRows.reduce((sum, row) => sum + Number(row.commissionAmount), 0)
+          ),
+          commissions: commissionRows.map((row) => ({
+            personnel_id: row.personnelId ?? null,
+            personnel_name: row.personnelNameSnapshot,
+            personnel_role: row.personnelRoleSnapshot ?? null,
+            product_id: row.productId,
+            sale_line_id: row.saleLineId,
+            sale_type: row.saleType,
+            quantity: Number(row.quantity),
+            commission_rate: Number(row.commissionRate),
+            split_percent: Number(row.splitPercent),
+            commission_amount: Number(row.commissionAmount)
+          }))
         };
 
         return this.toSalePostResponse(postedSale);
@@ -2118,6 +2226,178 @@ export class SalesService {
     };
   }
 
+  private async resolveCommissionPersonnel(
+    tx: DbTransaction,
+    companyId: string,
+    input: SalePostInput
+  ): Promise<CommissionPersonnelSnapshot[]> {
+    const candidates = this.buildCommissionPersonnelCandidates(input);
+    const resolved: CommissionPersonnelSnapshot[] = [];
+    const seen = new Set<string>();
+
+    for (const candidate of candidates) {
+      const personnel = candidate.ref
+        ? await tx.personnel.findFirst({
+            where: {
+              companyId,
+              OR: [
+                { id: candidate.ref },
+                { code: { equals: candidate.ref, mode: 'insensitive' } }
+              ]
+            },
+            select: {
+              id: true,
+              code: true,
+              fullName: true,
+              commissionEligible: true,
+              role: {
+                select: {
+                  code: true,
+                  name: true
+                }
+              }
+            }
+          })
+        : null;
+
+      if (personnel && !personnel.commissionEligible) {
+        continue;
+      }
+
+      const key = personnel
+        ? `id:${personnel.id}`
+        : `fallback:${candidate.ref ?? ''}:${candidate.name ?? ''}:${candidate.role}`;
+      if (seen.has(key)) {
+        continue;
+      }
+      seen.add(key);
+
+      const role =
+        candidate.role ||
+        personnel?.role?.code ||
+        personnel?.role?.name ||
+        null;
+      const name =
+        personnel?.fullName ||
+        candidate.name ||
+        candidate.ref ||
+        role ||
+        'Personnel';
+
+      resolved.push({
+        personnelId: personnel?.id ?? null,
+        personnelCode: personnel?.code ?? null,
+        personnelName: name,
+        personnelRole: role
+      });
+    }
+
+    return resolved;
+  }
+
+  private buildCommissionPersonnelCandidates(input: SalePostInput): Array<{
+    ref: string | null;
+    name: string | null;
+    role: string;
+  }> {
+    const rows: Array<{ ref: string | null; name: string | null; role: string }> = [];
+    const seen = new Set<string>();
+    const normalizeRole = (value: unknown): string => {
+      const normalized = String(value ?? 'PERSONNEL').trim().toUpperCase();
+      return normalized || 'PERSONNEL';
+    };
+    const push = (ref: unknown, name: unknown, role: unknown): void => {
+      const normalizedRef = typeof ref === 'string' ? ref.trim() || null : null;
+      const normalizedName = typeof name === 'string' ? name.trim() || null : null;
+      const normalizedRole = normalizeRole(role);
+      if (!normalizedRef && !normalizedName) {
+        return;
+      }
+      const key = `${normalizedRef?.toUpperCase() ?? ''}|${normalizedName?.toUpperCase() ?? ''}|${normalizedRole}`;
+      if (seen.has(key)) {
+        return;
+      }
+      seen.add(key);
+      rows.push({
+        ref: normalizedRef,
+        name: normalizedName,
+        role: normalizedRole
+      });
+    };
+
+    push(input.driver_id, input.driver_name ?? input.personnel_name, 'DRIVER');
+    push(input.helper_id, input.helper_name, 'HELPER');
+    push(input.personnel_id, input.personnel_name, 'PERSONNEL');
+
+    for (const row of Array.isArray(input.personnel) ? input.personnel : []) {
+      push(
+        row.user_id ?? row.userId,
+        row.name ?? row.full_name ?? row.fullName ?? row.label,
+        row.role
+      );
+    }
+
+    return rows;
+  }
+
+  private buildEqualSplitCommissionRows(input: {
+    companyId: string;
+    saleId: string;
+    saleType: 'PICKUP' | 'DELIVERY';
+    personnel: CommissionPersonnelSnapshot[];
+    lines: Array<{
+      saleLineId: string;
+      productId: string;
+      quantity: number;
+      commissionRate: number;
+    }>;
+  }): Prisma.SalePersonnelCommissionCreateManyInput[] {
+    if (input.personnel.length === 0) {
+      return [];
+    }
+
+    const rows: Prisma.SalePersonnelCommissionCreateManyInput[] = [];
+    const splitPercent = this.roundToScale(100 / input.personnel.length, 4);
+
+    for (const line of input.lines) {
+      if (!line.saleLineId) {
+        continue;
+      }
+      const quantity = this.roundQty(Number(line.quantity));
+      const commissionRate = this.roundMoney(Number(line.commissionRate));
+      const totalCommission = this.roundMoney(quantity * commissionRate);
+      if (!Number.isFinite(totalCommission) || totalCommission <= 0) {
+        continue;
+      }
+
+      let allocated = 0;
+      input.personnel.forEach((personnel, index) => {
+        const isLast = index === input.personnel.length - 1;
+        const commissionAmount = isLast
+          ? this.roundMoney(totalCommission - allocated)
+          : this.roundMoney(totalCommission / input.personnel.length);
+        allocated = this.roundMoney(allocated + commissionAmount);
+        rows.push({
+          companyId: input.companyId,
+          saleId: input.saleId,
+          saleLineId: line.saleLineId,
+          productId: line.productId,
+          personnelId: personnel.personnelId,
+          personnelCodeSnapshot: personnel.personnelCode,
+          personnelNameSnapshot: personnel.personnelName,
+          personnelRoleSnapshot: personnel.personnelRole,
+          saleType: input.saleType,
+          quantity,
+          commissionRate,
+          splitPercent,
+          commissionAmount
+        });
+      });
+    }
+
+    return rows;
+  }
+
   private async resolveReceiptAmountPrivacyConfig(
     tx: DbTransaction,
     companyId: string,
@@ -2544,7 +2824,9 @@ export class SalesService {
           name: true,
           isLpg: true,
           cylinderTypeId: true,
-          standardCost: true
+          standardCost: true,
+          pickupCommissionRate: true,
+          deliveryCommissionRate: true
         }
       });
       if (!product) {
@@ -2557,7 +2839,9 @@ export class SalesService {
           name: product.name,
           isLpg: product.isLpg,
           cylinderTypeId: product.cylinderTypeId,
-          standardCost: product.standardCost ? Number(product.standardCost) : null
+          standardCost: product.standardCost ? Number(product.standardCost) : null,
+          pickupCommissionRate: Number(product.pickupCommissionRate ?? 0),
+          deliveryCommissionRate: Number(product.deliveryCommissionRate ?? 0)
         },
         originalProductRef: ref,
         quantity: this.roundQty(quantity),
@@ -3524,6 +3808,18 @@ export class SalesService {
         referenceNo: string | null;
       }>;
       receipt: { receiptNumber: string } | null;
+      personnelCommissions?: Array<{
+        personnelId: string | null;
+        personnelNameSnapshot: string;
+        personnelRoleSnapshot: string | null;
+        productId: string;
+        saleLineId: string;
+        saleType: 'PICKUP' | 'DELIVERY';
+        quantity: Prisma.Decimal;
+        commissionRate: Prisma.Decimal;
+        splitPercent: Prisma.Decimal;
+        commissionAmount: Prisma.Decimal;
+      }>;
     },
     refs?: {
       branchRef?: string;
@@ -3564,11 +3860,28 @@ export class SalesService {
       receiptHideAmounts: row.receiptHideAmounts,
       receiptHideReason: row.receiptHideReason ?? null,
       receiptNumber: row.receipt.receiptNumber,
-      postedAt: (row.postedAt ?? new Date()).toISOString()
+      postedAt: (row.postedAt ?? new Date()).toISOString(),
+      commissionSplitMode: 'EQUAL',
+      commissionTotal: this.roundMoney(
+        (row.personnelCommissions ?? []).reduce((sum, commission) => sum + Number(commission.commissionAmount), 0)
+      ),
+      commissions: (row.personnelCommissions ?? []).map((commission) => ({
+        personnel_id: commission.personnelId ?? null,
+        personnel_name: commission.personnelNameSnapshot,
+        personnel_role: commission.personnelRoleSnapshot ?? null,
+        product_id: commission.productId,
+        sale_line_id: commission.saleLineId,
+        sale_type: commission.saleType,
+        quantity: Number(commission.quantity),
+        commission_rate: Number(commission.commissionRate),
+        split_percent: Number(commission.splitPercent),
+        commission_amount: Number(commission.commissionAmount)
+      }))
     };
   }
 
   private toSalePostResponse(sale: PostedSale): SalePostResponse {
+    const commissions = sale.commissions ?? [];
     return {
       sale_id: sale.saleId,
       posted: true,
@@ -3579,6 +3892,11 @@ export class SalesService {
       deposit_liability_delta: this.roundMoney(sale.depositLiabilityDelta),
       receipt_hide_amounts: sale.receiptHideAmounts,
       receipt_number: sale.receiptNumber,
+      commission_split_mode: sale.commissionSplitMode ?? 'EQUAL',
+      commission_total: this.roundMoney(
+        sale.commissionTotal ?? commissions.reduce((sum, commission) => sum + commission.commission_amount, 0)
+      ),
+      commissions,
       receipt_document: this.buildReceiptDocument(sale, false)
     };
   }

@@ -21,6 +21,8 @@ type ProductRecord = {
   cylinderTypeId: string | null;
   standardCost: number | null;
   lowStockAlertQty: number | null;
+  pickupCommissionRate: number;
+  deliveryCommissionRate: number;
   isActive: boolean;
   createdAt: string;
   updatedAt: string;
@@ -549,6 +551,8 @@ export default function ProductsPage(): JSX.Element {
       'isLpg',
       'cylinderTypeId',
       'lowStockAlertQty',
+      'pickupCommissionRate',
+      'deliveryCommissionRate',
       'isActive',
       'createdAt',
       'updatedAt'
@@ -576,8 +580,12 @@ export default function ProductsPage(): JSX.Element {
                 ? 'Active'
                 : key === 'cylinderTypeId'
                   ? 'Cylinder Type'
-                  : key === 'lowStockAlertQty'
-                    ? 'Low Stock Alert Qty'
+                : key === 'lowStockAlertQty'
+                  ? 'Low Stock Alert Qty'
+                  : key === 'pickupCommissionRate'
+                    ? 'Pickup Commission'
+                    : key === 'deliveryCommissionRate'
+                      ? 'Delivery Commission'
                   : key.replace(/([A-Z])/g, ' $1').replace(/^./, (char) => char.toUpperCase()),
         value:
           key === 'isLpg' || key === 'isActive'
@@ -593,6 +601,8 @@ export default function ProductsPage(): JSX.Element {
                   ? selectedProduct.lowStockAlertQty === null
                     ? 'N/A'
                     : formatQty(selectedProduct.lowStockAlertQty)
+                : key === 'pickupCommissionRate' || key === 'deliveryCommissionRate'
+                  ? formatMoney(Number((selectedProduct as Record<string, unknown>)[key] ?? 0))
                 : String((selectedProduct as Record<string, unknown>)[key] ?? '')
       });
     }
@@ -706,6 +716,18 @@ export default function ProductsPage(): JSX.Element {
         aliases: ['low_stock_alert_qty']
       },
       {
+        key: 'pickupCommissionRate',
+        label: 'Pickup Commission',
+        example: 5,
+        aliases: ['pickup_commission_rate', 'pickup_commission']
+      },
+      {
+        key: 'deliveryCommissionRate',
+        label: 'Delivery Commission',
+        example: 10,
+        aliases: ['delivery_commission_rate', 'delivery_commission']
+      },
+      {
         key: 'isActive',
         label: 'Active',
         example: true,
@@ -727,6 +749,8 @@ export default function ProductsPage(): JSX.Element {
           isLpg: true,
           cylinderTypeId: '',
           lowStockAlertQty: '',
+          pickupCommissionRate: 0,
+          deliveryCommissionRate: 0,
           isActive: true
         }}
         endpoint="/master-data/products"
@@ -794,6 +818,18 @@ export default function ProductsPage(): JSX.Element {
             helperText:
               'Set per product. LPG products use FULL qty for low-stock alerts; non-LPG products use Qty On Hand.'
           },
+          {
+            key: 'pickupCommissionRate',
+            label: 'Pickup Commission',
+            type: 'number',
+            helperText: 'Fixed commission per item when the sale type is Pickup.'
+          },
+          {
+            key: 'deliveryCommissionRate',
+            label: 'Delivery Commission',
+            type: 'number',
+            helperText: 'Fixed commission per item when the sale type is Delivery.'
+          },
           { key: 'isActive', label: 'Active', type: 'boolean' }
         ]}
         rowActions={[
@@ -828,7 +864,15 @@ export default function ProductsPage(): JSX.Element {
           lowStockAlertQty:
             payload.lowStockAlertQty === '' || payload.lowStockAlertQty === null
               ? null
-              : Number(payload.lowStockAlertQty)
+              : Number(payload.lowStockAlertQty),
+          pickupCommissionRate:
+            payload.pickupCommissionRate === '' || payload.pickupCommissionRate === null
+              ? 0
+              : Number(payload.pickupCommissionRate),
+          deliveryCommissionRate:
+            payload.deliveryCommissionRate === '' || payload.deliveryCommissionRate === null
+              ? 0
+              : Number(payload.deliveryCommissionRate)
         })}
         tableColumnOverrides={{
           sku: { label: 'Item Code' },
@@ -864,6 +908,14 @@ export default function ProductsPage(): JSX.Element {
               const parsed = Number(value);
               return Number.isFinite(parsed) ? formatQty(parsed) : String(value);
             }
+          },
+          pickupCommissionRate: {
+            label: 'Pickup Commission',
+            render: (value) => formatMoney(Number(value ?? 0))
+          },
+          deliveryCommissionRate: {
+            label: 'Delivery Commission',
+            render: (value) => formatMoney(Number(value ?? 0))
           }
         }}
         allowDelete

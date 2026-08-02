@@ -420,7 +420,10 @@ export class SyncService {
                     receipt_number: salePosting.sale.receipt_number,
                     total_amount: salePosting.sale.total_amount,
                     final_cogs: salePosting.sale.final_cogs,
-                    deposit_liability_delta: salePosting.sale.deposit_liability_delta
+                    deposit_liability_delta: salePosting.sale.deposit_liability_delta,
+                    commission_split_mode: salePosting.sale.commission_split_mode,
+                    commission_total: salePosting.sale.commission_total,
+                    commissions: salePosting.sale.commissions
                   }
                 }
               : {}),

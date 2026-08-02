@@ -95,6 +95,7 @@ export type DesktopAppState = {
   walkthrough: DesktopWalkthroughState;
   sync: {
     lastSyncedAt: string | null;
+    lastPullToken: string | null;
     lastSyncStatus: 'idle' | 'running' | 'success' | 'error';
     lastSyncMessage: string;
   };
@@ -129,10 +130,26 @@ export type DesktopSaleLine = {
   lineId?: string;
   productId: string;
   productName: string;
+  subtitle?: string | null;
   quantity: number;
   unitPrice: number;
   lineTotal: number;
   cylinderFlow?: DesktopCylinderFlowSelection | null;
+  pickupCommissionRate?: number;
+  deliveryCommissionRate?: number;
+};
+
+export type DesktopSalePersonnelCommission = {
+  productId: string;
+  productName: string;
+  personnelId: string | null;
+  personnelName: string;
+  personnelRole: string | null;
+  saleType: DesktopSaleType;
+  quantity: number;
+  commissionRate: number;
+  splitPercent: number;
+  commissionAmount: number;
 };
 
 export type DesktopSalePayload = {
@@ -149,6 +166,7 @@ export type DesktopSalePayload = {
   saleType: DesktopSaleType;
   paymentMode?: DesktopPaymentMode;
   paymentMethod: DesktopPaymentMethod;
+  hideAmounts?: boolean;
   branchId?: string | null;
   branchLabel: string;
   locationId?: string | null;
@@ -161,15 +179,23 @@ export type DesktopSalePayload = {
   changeAmount?: number;
   creditBalance?: number;
   payments?: Array<{
+    id?: string | null;
+    source?: 'SALE' | 'SETTLEMENT' | null;
     method: DesktopPaymentMethod;
     amount: number;
     referenceNo?: string | null;
+    notes?: string | null;
+    createdAt?: string | null;
   }>;
   rewardId?: string | null;
   rewardName?: string | null;
   rewardPointsCost?: number;
   rewardDiscountAmount?: number;
+  rewardBaseAmount?: number;
   rewardRedemptionUsed?: boolean;
+  commissionSplitMode?: 'EQUAL' | null;
+  commissionTotal?: number;
+  commissions?: DesktopSalePersonnelCommission[];
   notes: string | null;
   lines: DesktopSaleLine[];
   createdAt: string;
@@ -211,6 +237,8 @@ export type DesktopHeldCartRecord = {
   label: string;
   customerId: string | null;
   customerName: string | null;
+  customerProvince?: string | null;
+  customerCity?: string | null;
   personnelId?: string | null;
   personnelName?: string | null;
   helperId?: string | null;
@@ -267,6 +295,25 @@ export type DesktopTransferRecord = {
   updatedAt: string;
 };
 
+export type DesktopShiftInventorySnapshotLine = {
+  productId: string;
+  sku: string;
+  productName: string;
+  category: string;
+  unit: string;
+  isLpg: boolean;
+  qtyOnHand: number;
+  qtyFull: number;
+  qtyEmpty: number;
+};
+
+export type DesktopShiftInventorySnapshot = {
+  capturedAt: string;
+  locationId: string;
+  locationLabel?: string | null;
+  lines: DesktopShiftInventorySnapshotLine[];
+};
+
 export type DesktopShiftRecord = {
   id: string;
   branchId: string;
@@ -276,8 +323,15 @@ export type DesktopShiftRecord = {
   userId: string;
   cashierName: string;
   openingCash: number;
+  openingCashDenominations?: Array<{
+    denomination: number;
+    quantity: number;
+    total: number;
+  }>;
+  openingInventorySnapshot?: DesktopShiftInventorySnapshot;
   closingCash?: number | null;
   cashVariance?: number | null;
+  closingInventorySnapshot?: DesktopShiftInventorySnapshot | null;
   status: 'OPEN' | 'CLOSED';
   syncStatus: 'pending' | 'failed' | 'synced';
   lastError?: string | null;
@@ -307,6 +361,15 @@ export type DesktopExpenseRecord = {
   direction: 'IN' | 'OUT';
   amount: number;
   notes?: string | null;
+  attachments?: Array<{
+    id: string;
+    fileName: string;
+    mimeType: string;
+    sizeBytes: number;
+    previewDataUrl?: string | null;
+    uploadedUrl?: string | null;
+    createdAt: string;
+  }>;
   syncStatus: 'pending' | 'failed' | 'synced';
   lastError?: string | null;
   createdAt: string;
@@ -332,6 +395,13 @@ export type DesktopOption = {
   branchId?: string;
   balance?: number;
   pointsBalance?: number;
+  tier?: string | null;
+  customerCategoryId?: string | null;
+  contractPrice?: number | null;
+  roleName?: string | null;
+  salaryType?: 'MONTHLY' | 'DAILY' | 'HOURLY' | 'PER_TRANSACTION';
+  salaryRate?: number;
+  commissionEligible?: boolean;
 };
 
 export type DesktopCatalogProduct = {
@@ -346,6 +416,136 @@ export type DesktopCatalogProduct = {
   qtyFull: number;
   qtyEmpty: number;
   isLpg: boolean;
+  pickupCommissionRate?: number;
+  deliveryCommissionRate?: number;
+};
+
+export type DesktopPurchaseOrderStatus =
+  | 'DRAFT'
+  | 'SUBMITTED'
+  | 'PARTIALLY_RECEIVED'
+  | 'COMPLETED'
+  | 'CANCELLED';
+
+export type DesktopPurchaseOrderLineRecord = {
+  id: string;
+  productId: string;
+  productSku: string;
+  productName: string;
+  isLpg: boolean;
+  orderedQty: number;
+  receivedQty: number;
+  pulledOutQty: number;
+  unitCost: number;
+  notes: string | null;
+};
+
+export type DesktopPurchaseOrderAttachmentRecord = {
+  id: string;
+  fileName: string;
+  mimeType: string;
+  sizeBytes: number;
+  uploadedUrl: string | null;
+  sourceChannel: string | null;
+  retentionUntil: string | null;
+  createdAt: string;
+};
+
+export type DesktopPurchaseOrderReceiptLineRecord = {
+  id: string;
+  purchaseOrderLineId: string;
+  productId: string;
+  productSku: string;
+  productName: string;
+  quantity: number;
+  unitCost: number;
+  ledgerReferenceId: string | null;
+};
+
+export type DesktopPurchaseOrderReceiptRecord = {
+  id: string;
+  locationId: string;
+  locationLabel: string;
+  receivedByUserId: string | null;
+  notes: string | null;
+  createdAt: string;
+  lines: DesktopPurchaseOrderReceiptLineRecord[];
+};
+
+export type DesktopPurchaseOrderPulloutReason =
+  | 'EXPIRED'
+  | 'DAMAGED'
+  | 'WRONG_ITEM'
+  | 'OVERDELIVERY'
+  | 'EMPTIES'
+  | 'OTHER';
+
+export type DesktopPurchaseOrderPulloutLineRecord = {
+  id: string;
+  purchaseOrderLineId: string;
+  productId: string;
+  productSku: string;
+  productName: string;
+  quantity: number;
+  unitCost: number;
+  pulloutReason: DesktopPurchaseOrderPulloutReason | null;
+  ledgerReferenceId: string | null;
+};
+
+export type DesktopPurchaseOrderPulloutRecord = {
+  id: string;
+  locationId: string;
+  locationLabel: string;
+  pulledOutByUserId: string | null;
+  notes: string | null;
+  createdAt: string;
+  lines: DesktopPurchaseOrderPulloutLineRecord[];
+};
+
+export type DesktopPurchaseOrderDeliveryRecord = {
+  id: string;
+  locationId: string;
+  locationLabel: string;
+  referenceNo: string | null;
+  postedByUserId: string | null;
+  notes: string | null;
+  createdAt: string;
+  receipts: DesktopPurchaseOrderReceiptRecord[];
+  pullouts: DesktopPurchaseOrderPulloutRecord[];
+};
+
+export type DesktopPurchaseOrderRecord = {
+  id: string;
+  poNumber: string | null;
+  status: DesktopPurchaseOrderStatus;
+  branchId: string;
+  branchLabel: string;
+  locationId: string;
+  locationLabel: string;
+  supplierId: string;
+  supplierLabel: string;
+  notes: string | null;
+  createdByUserId: string | null;
+  submittedByUserId: string | null;
+  completedByUserId: string | null;
+  cancelledByUserId: string | null;
+  submittedAt: string | null;
+  completedAt: string | null;
+  cancelledAt: string | null;
+  cancelReason: string | null;
+  orderedQtyTotal: number;
+  receivedQtyTotal: number;
+  pulledOutQtyTotal: number;
+  attachmentCount: number;
+  syncStatus: 'pending' | 'failed' | 'synced';
+  lastError: string | null;
+  createdAt: string;
+  updatedAt: string;
+  lines: DesktopPurchaseOrderLineRecord[];
+  receipts: DesktopPurchaseOrderReceiptRecord[];
+  pullouts: DesktopPurchaseOrderPulloutRecord[];
+  deliveries: DesktopPurchaseOrderDeliveryRecord[];
+  attachments: DesktopPurchaseOrderAttachmentRecord[];
 };
 
 export type DesktopDeliveryOrderRecord = {
@@ -358,11 +558,27 @@ export type DesktopDeliveryOrderRecord = {
   orderType: 'PICKUP' | 'DELIVERY';
   status: 'created' | 'synced' | 'failed';
   syncStatus: 'pending' | 'failed' | 'synced';
-  personnel: Array<{ userId: string; role: 'DRIVER' | 'HELPER'; name?: string | null }>;
+  personnel: Array<{ userId: string; role: 'DRIVER' | 'HELPER' | 'LOADER' | 'OTHER'; name?: string | null }>;
   notes?: string | null;
   createdAt: string;
   updatedAt: string;
   lastError?: string | null;
+};
+
+export type DesktopDispatchStatusHistoryEntry = {
+  status: 'TRANSIT' | 'DELIVERED' | 'COMPLETED';
+  notes: string | null;
+  updatedAt: string;
+};
+
+export type DesktopDispatchStatusRecord = {
+  saleId: string;
+  status: 'TRANSIT' | 'DELIVERED' | 'COMPLETED';
+  notes: string | null;
+  syncStatus: 'pending' | 'failed' | 'synced';
+  lastError: string | null;
+  updatedAt: string;
+  history?: DesktopDispatchStatusHistoryEntry[];
 };
 
 export type DesktopLpgItemActionRecord = {
@@ -413,6 +629,16 @@ export type DesktopLendingReturn = {
   created_at: string;
 };
 
+export type DesktopLendingDepositPayment = {
+  payment_id: string;
+  method: DesktopPaymentMethod;
+  amount: number;
+  reference_no: string | null;
+  notes: string | null;
+  posted_at: string;
+  created_at: string;
+};
+
 export type DesktopLendingRecord = {
   lending_id: string;
   company_id: string;
@@ -441,6 +667,7 @@ export type DesktopLendingRecord = {
   line_count: number;
   total_quantity_lent: number;
   total_quantity_returned: number;
+  deposit_payment?: DesktopLendingDepositPayment | null;
 };
 
 export type DesktopLendingDetail = DesktopLendingRecord & {
@@ -539,6 +766,7 @@ export const DEFAULT_DESKTOP_APP_STATE: DesktopAppState = {
   },
   sync: {
     lastSyncedAt: null,
+    lastPullToken: null,
     lastSyncStatus: 'idle',
     lastSyncMessage: 'Desktop setup has not been completed yet.'
   }

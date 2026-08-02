@@ -12,10 +12,29 @@ const TRANSACTION_TABLE_BY_ENTITY: Record<string, string> = {
   transfer: 'transfers_local',
   petty_cash: 'petty_cash_local',
   delivery_order: 'delivery_orders_local',
+  sale_dispatch_status: 'delivery_dispatch_status_local',
+  purchase_order: 'purchase_orders_local',
+  purchase_order_submit: 'purchase_orders_local',
+  purchase_order_receive: 'purchase_orders_local',
+  purchase_order_pullout: 'purchase_orders_local',
+  purchase_order_delivery: 'purchase_orders_local',
+  purchase_order_complete: 'purchase_orders_local',
+  purchase_order_cancel: 'purchase_orders_local',
+  purchase_order_attachment: 'purchase_orders_local',
   shift: 'shifts_local',
   shift_cash_entry: 'shift_cash_entries_local',
   cylinder_event: 'cylinder_events_local'
 };
+
+const PURCHASE_ORDER_ACTION_ENTITIES = new Set([
+  'purchase_order_submit',
+  'purchase_order_receive',
+  'purchase_order_pullout',
+  'purchase_order_delivery',
+  'purchase_order_complete',
+  'purchase_order_cancel',
+  'purchase_order_attachment'
+]);
 
 function resolveLocalRecordId(item: { id: string; entity: string; payload: Record<string, unknown> }): string | undefined {
   const payloadId = typeof item.payload.id === 'string' ? item.payload.id : undefined;
@@ -25,14 +44,125 @@ function resolveLocalRecordId(item: { id: string; entity: string; payload: Recor
   if ((item.entity === 'sale_cancel' || item.entity === 'sale_return') && typeof item.payload.sale_id === 'string') {
     return item.payload.sale_id;
   }
+  if (item.entity === 'sale_dispatch_status') {
+    return (
+      (typeof item.payload.sale_id === 'string' && item.payload.sale_id) ||
+      (typeof item.payload.saleId === 'string' && item.payload.saleId) ||
+      payloadId ||
+      item.id
+    );
+  }
+  if (PURCHASE_ORDER_ACTION_ENTITIES.has(item.entity)) {
+    return (
+      (typeof item.payload.purchase_order_id === 'string' && item.payload.purchase_order_id) ||
+      (typeof item.payload.purchaseOrderId === 'string' && item.payload.purchaseOrderId) ||
+      payloadId ||
+      item.id
+    );
+  }
   return payloadId ?? item.id;
 }
 
-function resolvePullRecordId(change: { payload: Record<string, unknown> }): string | undefined {
+function resolvePullRecordId(change: { entity: string; payload: Record<string, unknown> }): string | undefined {
+  if (change.entity === 'sale_dispatch_status') {
+    return (
+      (typeof change.payload.sale_id === 'string' && change.payload.sale_id) ||
+      (typeof change.payload.saleId === 'string' && change.payload.saleId) ||
+      (typeof change.payload.id === 'string' && change.payload.id) ||
+      undefined
+    );
+  }
+  if (PURCHASE_ORDER_ACTION_ENTITIES.has(change.entity)) {
+    return (
+      (typeof change.payload.purchase_order_id === 'string' && change.payload.purchase_order_id) ||
+      (typeof change.payload.purchaseOrderId === 'string' && change.payload.purchaseOrderId) ||
+      (typeof change.payload.id === 'string' && change.payload.id) ||
+      undefined
+    );
+  }
   if (typeof change.payload.id === 'string') {
     return change.payload.id;
   }
   return undefined;
+}
+
+function readString(value: unknown): string | null {
+  if (typeof value !== 'string') {
+    return null;
+  }
+  const normalized = value.trim();
+  return normalized.length > 0 ? normalized : null;
+}
+
+function readNumber(value: unknown): number | null {
+  if (typeof value === 'number' && Number.isFinite(value)) {
+    return value;
+  }
+  if (typeof value === 'string' && value.trim()) {
+    const parsed = Number(value);
+    if (Number.isFinite(parsed)) {
+      return parsed;
+    }
+  }
+  return null;
+}
+
+function round2(value: number): number {
+  return Math.round(value * 100) / 100;
+}
+
+function normalizeServerCommissionRows(value: unknown): Array<Record<string, unknown>> {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  const rows: Array<Record<string, unknown>> = [];
+  for (const entry of value) {
+    if (!entry || typeof entry !== 'object' || Array.isArray(entry)) {
+      continue;
+    }
+    const row = entry as Record<string, unknown>;
+    const productId = readString(row.product_id ?? row.productId);
+    const personnelName = readString(row.personnel_name ?? row.personnelName);
+    const commissionAmount = readNumber(row.commission_amount ?? row.commissionAmount);
+    if (!productId || !personnelName || commissionAmount === null) {
+      continue;
+    }
+    rows.push({
+      productId,
+      productName: readString(row.product_name ?? row.productName) ?? productId,
+      personnelId: readString(row.personnel_id ?? row.personnelId),
+      personnelName,
+      personnelRole: readString(row.personnel_role ?? row.personnelRole),
+      saleType: readString(row.sale_type ?? row.saleType)?.toUpperCase() === 'DELIVERY' ? 'DELIVERY' : 'PICKUP',
+      quantity: readNumber(row.quantity ?? row.qty) ?? 0,
+      commissionRate: readNumber(row.commission_rate ?? row.commissionRate) ?? 0,
+      splitPercent: readNumber(row.split_percent ?? row.splitPercent) ?? 0,
+      commissionAmount: round2(commissionAmount)
+    });
+  }
+  return rows;
+}
+
+function mergeServerSaleResult(payload: Record<string, unknown>): Record<string, unknown> {
+  const serverResult =
+    payload.server_sale_result && typeof payload.server_sale_result === 'object' && !Array.isArray(payload.server_sale_result)
+      ? (payload.server_sale_result as Record<string, unknown>)
+      : null;
+  if (!serverResult) {
+    return payload;
+  }
+  const commissions = normalizeServerCommissionRows(serverResult.commissions);
+  const commissionTotal =
+    readNumber(serverResult.commission_total) ??
+    round2(commissions.reduce((sum, row) => sum + (readNumber(row.commissionAmount) ?? 0), 0));
+  return {
+    ...payload,
+    commissionSplitMode: 'EQUAL',
+    commission_split_mode: 'EQUAL',
+    commissionTotal,
+    commission_total: commissionTotal,
+    commissions
+  };
 }
 
 export class SQLiteSyncChangeApplier {
@@ -72,6 +202,10 @@ export class SQLiteSyncChangeApplier {
     for (const change of response.changes) {
       if (change.entity === 'lending' && change.action === 'create') {
         await this.rewritePendingLendingReturnReferences(change.payload, change.updated_at);
+        const reconciled = await this.rewriteSyncedLendingRecord(change.payload, change.updated_at);
+        if (reconciled) {
+          continue;
+        }
       }
 
       if (change.entity === 'customer' && change.action === 'create') {
@@ -111,7 +245,8 @@ export class SQLiteSyncChangeApplier {
       }
 
       const updatedAt = change.updated_at || new Date().toISOString();
-      const payload = JSON.stringify(change.payload);
+      const nextPayload = change.entity === 'sale' ? mergeServerSaleResult(change.payload) : change.payload;
+      const payload = JSON.stringify(nextPayload);
       if (existing) {
         await this.db.runAsync(
           `UPDATE ${table} SET payload = ?, sync_status = ?, updated_at = ? WHERE id = ?`,
@@ -189,7 +324,7 @@ export class SQLiteSyncChangeApplier {
     }
 
     const lendingReturnRows = await this.db.getAllAsync<{ id: string; payload: string; sync_status: string | null }>(
-      `SELECT id, payload, sync_status FROM lending_returns_local WHERE lower(coalesce(sync_status, 'pending')) != 'synced'`
+      `SELECT id, payload, sync_status FROM lending_returns_local`
     );
     for (const row of lendingReturnRows) {
       let nextPayload: Record<string, unknown>;
@@ -241,6 +376,86 @@ export class SQLiteSyncChangeApplier {
         row.id
       );
     }
+  }
+
+  private async rewriteSyncedLendingRecord(
+    payload: Record<string, unknown>,
+    updatedAt: string
+  ): Promise<boolean> {
+    const localLendingId =
+      (typeof payload.id === 'string' && payload.id.trim()) ||
+      (typeof payload.lending_id === 'string' && payload.lending_id.trim()) ||
+      (typeof payload.lendingId === 'string' && payload.lendingId.trim()) ||
+      '';
+    const serverResult =
+      payload.server_lending_result && typeof payload.server_lending_result === 'object'
+        ? (payload.server_lending_result as Record<string, unknown>)
+        : null;
+    const serverLendingId =
+      (typeof serverResult?.lending_id === 'string' && serverResult.lending_id.trim()) || '';
+
+    if (!localLendingId || !serverLendingId || localLendingId === serverLendingId) {
+      return false;
+    }
+
+    const existing = await this.db.getFirstAsync<{
+      payload: string;
+      created_at: string | null;
+      updated_at: string | null;
+    }>(
+      `SELECT payload, created_at, updated_at FROM lending_local WHERE id = ?`,
+      localLendingId
+    );
+
+    const timestamp = updatedAt || new Date().toISOString();
+    let nextPayload: Record<string, unknown> = {
+      ...payload,
+      id: serverLendingId,
+      lending_id: serverLendingId,
+      lendingId: serverLendingId
+    };
+    if (serverResult && typeof serverResult.status === 'string' && serverResult.status.trim()) {
+      nextPayload.status = serverResult.status.trim();
+    }
+
+    if (existing?.payload) {
+      try {
+        const current = JSON.parse(existing.payload) as Record<string, unknown>;
+        nextPayload = {
+          ...current,
+          ...payload,
+          id: serverLendingId,
+          lending_id: serverLendingId,
+          lendingId: serverLendingId,
+          status:
+            (typeof serverResult?.status === 'string' && serverResult.status.trim()) ||
+            (typeof payload.status === 'string' && payload.status.trim()) ||
+            (typeof current.status === 'string' && current.status.trim()) ||
+            'OPEN'
+        };
+      } catch {
+        // Keep the payload built from sync change data if the local row is malformed.
+      }
+    }
+
+    await this.db.runAsync(`DELETE FROM lending_local WHERE id = ?`, localLendingId);
+    await this.db.runAsync(
+      `
+      INSERT INTO lending_local(id, payload, sync_status, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?)
+      ON CONFLICT(id) DO UPDATE SET
+        payload = excluded.payload,
+        sync_status = excluded.sync_status,
+        updated_at = excluded.updated_at
+      `,
+      serverLendingId,
+      JSON.stringify(nextPayload),
+      'synced',
+      existing?.created_at ?? timestamp,
+      timestamp
+    );
+
+    return true;
   }
 
   private async rewritePendingCustomerReferences(

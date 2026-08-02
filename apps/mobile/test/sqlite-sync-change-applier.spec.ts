@@ -39,6 +39,12 @@ function createDbMock() {
           return status ? { status } : null;
         }
 
+        if (sql.includes('FROM master_data_local')) {
+          const key = `${String(params[0])}:${String(params[1])}`;
+          const row = state.masterData.get(key);
+          return row ? { payload: row.payload, updated_at: row.updated_at } : null;
+        }
+
         const tableMatch = sql.match(/FROM ([a-z_]+) WHERE id = \?/i);
         if (tableMatch) {
           const table = ensureTable(tableMatch[1]);
@@ -47,6 +53,21 @@ function createDbMock() {
         }
 
         return null;
+      }),
+      getAllAsync: jest.fn(async (sql: string) => {
+        const tableMatch = sql.match(/FROM ([a-z_]+)/i);
+        if (!tableMatch) {
+          return [];
+        }
+        if (tableMatch[1] === 'outbox') {
+          return [];
+        }
+        const table = ensureTable(tableMatch[1]);
+        return Array.from(table.entries()).map(([id, row]) => ({
+          id,
+          payload: row.payload,
+          sync_status: row.sync_status
+        }));
       }),
       runAsync: jest.fn(async (sql: string, ...params: unknown[]) => {
         const normalized = sql.replace(/\s+/g, ' ').trim();
@@ -77,6 +98,25 @@ function createDbMock() {
           return { changes: 1 };
         }
 
+        const updatePayloadOnlyMatch = normalized.match(
+          /^UPDATE ([a-z_]+) SET payload = \?, updated_at = \? WHERE id = \?/i
+        );
+        if (updatePayloadOnlyMatch) {
+          const tableName = updatePayloadOnlyMatch[1];
+          if (tableName === 'outbox') {
+            return { changes: 1 };
+          }
+          const table = ensureTable(tableName);
+          const id = String(params[2]);
+          table.set(id, {
+            payload: String(params[0]),
+            sync_status: table.get(id)?.sync_status ?? 'pending',
+            created_at: table.get(id)?.created_at ?? String(params[1]),
+            updated_at: String(params[1])
+          });
+          return { changes: 1 };
+        }
+
         const insertTxnMatch = normalized.match(
           /^INSERT INTO ([a-z_]+)\(id, payload, sync_status, created_at, updated_at\) VALUES \(\?, \?, \?, \?, \?\)/i
         );
@@ -94,6 +134,15 @@ function createDbMock() {
         if (normalized.startsWith('INSERT INTO master_data_local')) {
           const key = `${String(params[0])}:${String(params[1])}`;
           state.masterData.set(key, { payload: String(params[2]), updated_at: String(params[3]) });
+          return { changes: 1 };
+        }
+
+        const deleteMasterDataMatch = normalized.match(
+          /^DELETE FROM master_data_local WHERE entity = \? AND record_id = \?/i
+        );
+        if (deleteMasterDataMatch) {
+          const key = `${String(params[0])}:${String(params[1])}`;
+          state.masterData.delete(key);
           return { changes: 1 };
         }
 
@@ -204,6 +253,132 @@ describe('SQLiteSyncChangeApplier', () => {
     expect(state.tables.get('shifts_local')?.get('shift-1')?.sync_status).toBe('needs_review');
   });
 
+  it('applies sale dispatch status push and pull changes to the local dispatch table', async () => {
+    const { db, state } = createDbMock();
+    const dispatchStatuses = new Map<string, TableRow>();
+    dispatchStatuses.set('sale-1', {
+      payload: JSON.stringify({ sale_id: 'sale-1', status: 'TRANSIT' }),
+      sync_status: OutboxStatus.PENDING,
+      created_at: '2026-06-27T00:00:00.000Z',
+      updated_at: '2026-06-27T00:00:00.000Z'
+    });
+    state.tables.set('delivery_dispatch_status_local', dispatchStatuses);
+
+    const pending: OutboxItem[] = [
+      {
+        id: 'dispatch-status-1',
+        entity: 'sale_dispatch_status',
+        action: 'update',
+        payload: { sale_id: 'sale-1', status: 'TRANSIT' },
+        idempotency_key: 'idem-dispatch-status-1',
+        status: OutboxStatus.PENDING,
+        retry_count: 0,
+        created_at: '2026-06-27T00:00:00.000Z',
+        updated_at: '2026-06-27T00:00:00.000Z'
+      }
+    ];
+
+    const applier = new SQLiteSyncChangeApplier(db as never);
+    await applier.applyPushResult({
+      pending,
+      syncedIds: ['dispatch-status-1'],
+      rejectedIds: []
+    });
+
+    expect(state.tables.get('delivery_dispatch_status_local')?.get('sale-1')?.sync_status).toBe('synced');
+
+    await applier.applyPullResponse({
+      changes: [
+        {
+          entity: 'sale_dispatch_status',
+          action: 'upsert',
+          payload: {
+            sale_id: 'sale-2',
+            status: 'DELIVERED',
+            notes: 'Signed by customer',
+            updated_at: '2026-06-27T01:00:00.000Z'
+          },
+          updated_at: '2026-06-27T01:00:00.000Z'
+        }
+      ],
+      conflicts: [],
+      next_token: 'dispatch-2'
+    });
+
+    const pulled = state.tables.get('delivery_dispatch_status_local')?.get('sale-2');
+    expect(pulled?.sync_status).toBe('synced');
+    expect(pulled?.payload).toContain('"status":"DELIVERED"');
+  });
+
+  it('applies purchase order push and pull changes to the local purchase order table', async () => {
+    const { db, state } = createDbMock();
+    const purchaseOrders = new Map<string, TableRow>();
+    purchaseOrders.set('po-1', {
+      payload: JSON.stringify({ id: 'po-1', status: 'SUBMITTED' }),
+      sync_status: OutboxStatus.PENDING,
+      created_at: '2026-06-27T00:00:00.000Z',
+      updated_at: '2026-06-27T00:00:00.000Z'
+    });
+    state.tables.set('purchase_orders_local', purchaseOrders);
+
+    const poEntities = [
+      'purchase_order',
+      'purchase_order_submit',
+      'purchase_order_receive',
+      'purchase_order_pullout',
+      'purchase_order_delivery',
+      'purchase_order_complete',
+      'purchase_order_cancel',
+      'purchase_order_attachment'
+    ];
+
+    const pending: OutboxItem[] = poEntities.map((entity, index) => ({
+      id: `po-outbox-${index}`,
+      entity,
+      action: entity === 'purchase_order' ? 'create' : 'update',
+      payload:
+        entity === 'purchase_order'
+          ? { id: 'po-1', status: 'DRAFT' }
+          : { purchase_order_id: 'po-1' },
+      idempotency_key: `idem-po-${index}`,
+      status: OutboxStatus.PENDING,
+      retry_count: 0,
+      created_at: '2026-06-27T00:00:00.000Z',
+      updated_at: '2026-06-27T00:00:00.000Z'
+    }));
+
+    const applier = new SQLiteSyncChangeApplier(db as never);
+    await applier.applyPushResult({
+      pending,
+      syncedIds: pending.map((item) => item.id),
+      rejectedIds: []
+    });
+
+    expect(state.tables.get('purchase_orders_local')?.get('po-1')?.sync_status).toBe('synced');
+
+    await applier.applyPullResponse({
+      changes: [
+        {
+          entity: 'purchase_order',
+          action: 'upsert',
+          payload: {
+            id: 'po-2',
+            status: 'COMPLETED',
+            supplierId: 'sup-1',
+            updatedAt: '2026-06-27T01:00:00.000Z'
+          },
+          updated_at: '2026-06-27T01:00:00.000Z'
+        }
+      ],
+      conflicts: [],
+      next_token: 'po-2'
+    });
+
+    const pulled = state.tables.get('purchase_orders_local')?.get('po-2');
+    expect(pulled?.sync_status).toBe('synced');
+    expect(pulled?.payload).toContain('"status":"COMPLETED"');
+  });
+
   it('applies pull changes without overwriting unsynced rows and stores conflicts', async () => {
     const { db, state } = createDbMock();
     const sales = new Map<string, TableRow>();
@@ -249,6 +424,70 @@ describe('SQLiteSyncChangeApplier', () => {
     expect(state.reviews.get('review-1')?.status).toBe('OPEN');
   });
 
+  it('merges server sale commission results into synced local sale payloads', async () => {
+    const { db, state } = createDbMock();
+    const sales = new Map<string, TableRow>();
+    sales.set('sale-1', {
+      payload: JSON.stringify({ id: 'sale-1', total: 300 }),
+      sync_status: OutboxStatus.SYNCED,
+      created_at: '2026-08-02T00:00:00.000Z',
+      updated_at: '2026-08-02T00:00:00.000Z'
+    });
+    state.tables.set('sales_local', sales);
+
+    const applier = new SQLiteSyncChangeApplier(db as never);
+    await applier.applyPullResponse({
+      changes: [
+        {
+          entity: 'sale',
+          action: 'create',
+          payload: {
+            id: 'sale-1',
+            server_sale_result: {
+              commission_total: 30,
+              commissions: [
+                {
+                  product_id: 'prod-1',
+                  product_name: 'LPG 11kg',
+                  personnel_id: 'person-1',
+                  personnel_name: 'Driver One',
+                  personnel_role: 'DRIVER',
+                  sale_type: 'DELIVERY',
+                  quantity: 3,
+                  commission_rate: 10,
+                  split_percent: 50,
+                  commission_amount: 15
+                },
+                {
+                  product_id: 'prod-1',
+                  product_name: 'LPG 11kg',
+                  personnel_id: 'person-2',
+                  personnel_name: 'Helper One',
+                  personnel_role: 'HELPER',
+                  sale_type: 'DELIVERY',
+                  quantity: 3,
+                  commission_rate: 10,
+                  split_percent: 50,
+                  commission_amount: 15
+                }
+              ]
+            }
+          },
+          updated_at: '2026-08-02T00:01:00.000Z'
+        }
+      ],
+      conflicts: [],
+      next_token: 'commission-1'
+    });
+
+    const payload = JSON.parse(state.tables.get('sales_local')?.get('sale-1')?.payload ?? '{}') as Record<string, unknown>;
+    expect(payload.commissionTotal).toBe(30);
+    expect(payload.commissions).toEqual([
+      expect.objectContaining({ personnelId: 'person-1', commissionAmount: 15 }),
+      expect.objectContaining({ personnelId: 'person-2', commissionAmount: 15 })
+    ]);
+  });
+
   it('applies entitlement policy changes from pull payload', async () => {
     const { db, state } = createDbMock();
     const pull: SyncPullResponse = {
@@ -274,5 +513,69 @@ describe('SQLiteSyncChangeApplier', () => {
     expect(state.subscriptionPolicy?.status).toBe('PAST_DUE');
     expect(state.subscriptionPolicy?.grace_until).toBe('2026-03-05T00:00:00.000Z');
     expect(state.subscriptionPolicy?.source).toBe('subscription_webhook');
+  });
+
+  it('rewrites pending customer references when synced customer gets a server id', async () => {
+    const { db, state } = createDbMock();
+
+    state.masterData.set('customer:customer-local-1', {
+      payload: JSON.stringify({
+        id: 'customer-local-1',
+        name: 'Offline Customer',
+        address: 'Barangay 1',
+        is_local_only: true
+      }),
+      updated_at: '2026-04-27T00:00:00.000Z'
+    });
+
+    const sales = new Map<string, TableRow>();
+    sales.set('sale-1', {
+      payload: JSON.stringify({ id: 'sale-1', customer_id: 'customer-local-1' }),
+      sync_status: 'pending',
+      created_at: '2026-04-27T00:00:00.000Z',
+      updated_at: '2026-04-27T00:00:00.000Z'
+    });
+    state.tables.set('sales_local', sales);
+
+    const customerPayments = new Map<string, TableRow>();
+    customerPayments.set('cp-1', {
+      payload: JSON.stringify({ id: 'cp-1', customer_id: 'customer-local-1', amount: 100 }),
+      sync_status: 'pending',
+      created_at: '2026-04-27T00:00:00.000Z',
+      updated_at: '2026-04-27T00:00:00.000Z'
+    });
+    state.tables.set('customer_payments_local', customerPayments);
+
+    const pull: SyncPullResponse = {
+      changes: [
+        {
+          entity: 'customer',
+          action: 'create',
+          payload: {
+            id: 'customer-local-1',
+            name: 'Offline Customer',
+            server_customer_result: {
+              id: 'cust-server-1',
+              code: 'CU-001',
+              name: 'Offline Customer',
+              address: 'Barangay 1',
+              type: 'RETAIL',
+              isActive: true
+            }
+          },
+          updated_at: '2026-04-27T01:00:00.000Z'
+        }
+      ],
+      conflicts: [],
+      next_token: '1'
+    };
+
+    const applier = new SQLiteSyncChangeApplier(db as never);
+    await applier.applyPullResponse(pull);
+
+    expect(state.tables.get('sales_local')?.get('sale-1')?.payload).toContain('"customer_id":"cust-server-1"');
+    expect(state.tables.get('customer_payments_local')?.get('cp-1')?.payload).toContain('"customer_id":"cust-server-1"');
+    expect(state.masterData.has('customer:customer-local-1')).toBe(false);
+    expect(state.masterData.get('customer:cust-server-1')?.payload).toContain('"Offline Customer"');
   });
 });
