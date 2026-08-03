@@ -167,6 +167,16 @@ type PriceCostAuditRow = {
   createdAt: string;
 };
 
+type ProductDetailTab = 'overview' | 'pricing' | 'inventory' | 'audit' | 'movements';
+
+const PRODUCT_DETAIL_TABS: Array<{ id: ProductDetailTab; label: string }> = [
+  { id: 'overview', label: 'Overview' },
+  { id: 'pricing', label: 'Pricing' },
+  { id: 'inventory', label: 'Inventory' },
+  { id: 'audit', label: 'Price/Cost Audit' },
+  { id: 'movements', label: 'Movements' }
+];
+
 function yesNo(value: unknown): string {
   if (value === true || value === 'true' || value === 1 || value === '1') {
     return 'Yes';
@@ -251,7 +261,7 @@ export default function ProductsPage(): JSX.Element {
   const [priceCostAuditError, setPriceCostAuditError] = useState<string | null>(null);
   const [movementFromDate, setMovementFromDate] = useState(() => toDateInput(new Date()));
   const [movementToDate, setMovementToDate] = useState(() => toDateInput(new Date()));
-  const [itemHistoryOpen, setItemHistoryOpen] = useState(false);
+  const [productDetailTab, setProductDetailTab] = useState<ProductDetailTab>('overview');
   const [handledSearchProductId, setHandledSearchProductId] = useState<string | null>(null);
 
   async function loadDetailData(): Promise<void> {
@@ -328,7 +338,7 @@ export default function ProductsPage(): JSX.Element {
     }
     setHandledSearchProductId(productId);
     setViewProductId(productId);
-    setItemHistoryOpen(false);
+    setProductDetailTab('overview');
     setCostSnapshot(null);
     setCostError(null);
     void loadCostSnapshot(productId);
@@ -839,7 +849,7 @@ export default function ProductsPage(): JSX.Element {
             onClick: (row) => {
               const productId = String(row.id);
               setViewProductId(productId);
-              setItemHistoryOpen(false);
+              setProductDetailTab('overview');
               setCostSnapshot(null);
               setCostError(null);
               setMovementRows([]);
@@ -939,13 +949,6 @@ export default function ProductsPage(): JSX.Element {
               <div className="flex items-center gap-2">
                 <button
                   className="rounded-lg border border-slate-300 px-3 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-100 dark:border-slate-600 dark:text-slate-200 dark:hover:bg-slate-800"
-                  onClick={() => setItemHistoryOpen(true)}
-                  type="button"
-                >
-                  Item History
-                </button>
-                <button
-                  className="rounded-lg border border-slate-300 px-3 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-100 dark:border-slate-600 dark:text-slate-200 dark:hover:bg-slate-800"
                   onClick={() => {
                     void loadDetailData();
                     if (viewProductId) {
@@ -962,7 +965,7 @@ export default function ProductsPage(): JSX.Element {
                   className="rounded-lg border border-slate-300 px-3 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-100 dark:border-slate-600 dark:text-slate-200 dark:hover:bg-slate-800"
                   onClick={() => {
                     setViewProductId(null);
-                    setItemHistoryOpen(false);
+                    setProductDetailTab('overview');
                     setCostSnapshot(null);
                     setCostError(null);
                     setPriceCostAuditRows([]);
@@ -975,6 +978,34 @@ export default function ProductsPage(): JSX.Element {
               </div>
             </header>
 
+            <div className="border-b border-slate-200 px-4 pt-3 dark:border-slate-700">
+              <div
+                aria-label="Product detail sections"
+                className="flex gap-1 overflow-x-auto"
+                role="tablist"
+              >
+                {PRODUCT_DETAIL_TABS.map((tab) => {
+                  const active = productDetailTab === tab.id;
+                  return (
+                    <button
+                      aria-selected={active}
+                      className={`whitespace-nowrap border-b-2 px-3 py-2 text-xs font-semibold transition-colors ${
+                        active
+                          ? 'border-brandPrimary text-brandPrimary'
+                          : 'border-transparent text-slate-500 hover:border-slate-300 hover:text-slate-800 dark:text-slate-400 dark:hover:border-slate-600 dark:hover:text-slate-100'
+                      }`}
+                      key={tab.id}
+                      onClick={() => setProductDetailTab(tab.id)}
+                      role="tab"
+                      type="button"
+                    >
+                      {tab.label}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+
             <div className="overflow-auto p-4">
               {detailLoading ? (
                 <p className="text-sm text-slate-500 dark:text-slate-400">Loading product details...</p>
@@ -986,57 +1017,62 @@ export default function ProductsPage(): JSX.Element {
                 </p>
               ) : (
                 <div className="space-y-4">
-                  <article className="rounded-xl border border-slate-200 p-3 dark:border-slate-700">
-                    <h3 className="mb-2 text-sm font-semibold text-slate-900 dark:text-slate-100">
-                      Attributes
-                    </h3>
-                    <div className="grid gap-2 text-sm md:grid-cols-2">
-                      {productAttributeRows.map((row) => (
-                        <p key={row.key} className={row.key === 'cylinderTypeId' ? 'md:col-span-2' : ''}>
-                          <span className="font-medium text-slate-500 dark:text-slate-400">
-                            {row.label}:
-                          </span>{' '}
-                          {row.value}
-                        </p>
-                      ))}
-                    </div>
-                  </article>
+                  {productDetailTab === 'overview' ? (
+                    <>
+                      <article className="rounded-xl border border-slate-200 p-3 dark:border-slate-700">
+                        <h3 className="mb-2 text-sm font-semibold text-slate-900 dark:text-slate-100">
+                          Attributes
+                        </h3>
+                        <div className="grid gap-2 text-sm md:grid-cols-2">
+                          {productAttributeRows.map((row) => (
+                            <p key={row.key} className={row.key === 'cylinderTypeId' ? 'md:col-span-2' : ''}>
+                              <span className="font-medium text-slate-500 dark:text-slate-400">
+                                {row.label}:
+                              </span>{' '}
+                              {row.value}
+                            </p>
+                          ))}
+                        </div>
+                      </article>
 
-                  <article className="rounded-xl border border-slate-200 p-3 dark:border-slate-700">
-                    <h3 className="mb-2 text-sm font-semibold text-slate-900 dark:text-slate-100">
-                      Linked Cylinder Type
-                    </h3>
-                    {!selectedCylinder ? (
-                      <p className="text-sm text-slate-500 dark:text-slate-400">
-                        No cylinder type linked.
-                      </p>
-                    ) : (
-                      <div className="grid gap-2 text-sm md:grid-cols-2">
-                        <p>
-                          <span className="font-medium text-slate-500 dark:text-slate-400">Code:</span>{' '}
-                          {selectedCylinder.code}
-                        </p>
-                        <p>
-                          <span className="font-medium text-slate-500 dark:text-slate-400">Name:</span>{' '}
-                          {selectedCylinder.name}
-                        </p>
-                        <p>
-                          <span className="font-medium text-slate-500 dark:text-slate-400">Size:</span>{' '}
-                          {selectedCylinder.sizeKg} kg
-                        </p>
-                        <p className="md:col-span-2">
-                          <span className="font-medium text-slate-500 dark:text-slate-400">
-                            Deposit Amount:
-                          </span>{' '}
-                          {selectedCylinder.depositAmount === undefined
-                            ? 'N/A'
-                            : selectedCylinder.depositAmount.toFixed(2)}
-                        </p>
-                      </div>
-                    )}
-                  </article>
+                      <article className="rounded-xl border border-slate-200 p-3 dark:border-slate-700">
+                        <h3 className="mb-2 text-sm font-semibold text-slate-900 dark:text-slate-100">
+                          Linked Cylinder Type
+                        </h3>
+                        {!selectedCylinder ? (
+                          <p className="text-sm text-slate-500 dark:text-slate-400">
+                            No cylinder type linked.
+                          </p>
+                        ) : (
+                          <div className="grid gap-2 text-sm md:grid-cols-2">
+                            <p>
+                              <span className="font-medium text-slate-500 dark:text-slate-400">Code:</span>{' '}
+                              {selectedCylinder.code}
+                            </p>
+                            <p>
+                              <span className="font-medium text-slate-500 dark:text-slate-400">Name:</span>{' '}
+                              {selectedCylinder.name}
+                            </p>
+                            <p>
+                              <span className="font-medium text-slate-500 dark:text-slate-400">Size:</span>{' '}
+                              {selectedCylinder.sizeKg} kg
+                            </p>
+                            <p className="md:col-span-2">
+                              <span className="font-medium text-slate-500 dark:text-slate-400">
+                                Deposit Amount:
+                              </span>{' '}
+                              {selectedCylinder.depositAmount === undefined
+                                ? 'N/A'
+                                : selectedCylinder.depositAmount.toFixed(2)}
+                            </p>
+                          </div>
+                        )}
+                      </article>
+                    </>
+                  ) : null}
 
-                  <article className="rounded-xl border border-slate-200 p-3 dark:border-slate-700">
+                  {productDetailTab === 'inventory' ? (
+                    <article className="rounded-xl border border-slate-200 p-3 dark:border-slate-700">
                     <h3 className="mb-2 text-sm font-semibold text-slate-900 dark:text-slate-100">
                       Cost Snapshot (WAC)
                     </h3>
@@ -1154,9 +1190,11 @@ export default function ProductsPage(): JSX.Element {
                         )}
                       </div>
                     )}
-                  </article>
+                    </article>
+                  ) : null}
 
-                  <article className="rounded-xl border border-slate-200 p-3 dark:border-slate-700">
+                  {productDetailTab === 'audit' ? (
+                    <article className="rounded-xl border border-slate-200 p-3 dark:border-slate-700">
                     <h3 className="mb-2 text-sm font-semibold text-slate-900 dark:text-slate-100">
                       Price/Cost Audit History
                     </h3>
@@ -1209,9 +1247,11 @@ export default function ProductsPage(): JSX.Element {
                         </table>
                       </div>
                     )}
-                  </article>
+                    </article>
+                  ) : null}
 
-                  <article className="rounded-xl border border-slate-200 p-3 dark:border-slate-700">
+                  {productDetailTab === 'pricing' ? (
+                    <article className="rounded-xl border border-slate-200 p-3 dark:border-slate-700">
                     <h3 className="mb-2 text-sm font-semibold text-slate-900 dark:text-slate-100">
                       Linked Pricing Rules
                     </h3>
@@ -1268,131 +1308,117 @@ export default function ProductsPage(): JSX.Element {
                         </table>
                       </div>
                     )}
-                  </article>
-                </div>
-              )}
-            </div>
-          </section>
-        </div>
-      ) : null}
-      {viewProductId && selectedProduct && itemHistoryOpen ? (
-        <div className="fixed inset-0 z-[60] flex items-center justify-center bg-slate-950/65 p-4">
-          <section className="flex max-h-[92vh] w-full max-w-5xl flex-col overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-2xl dark:border-slate-700 dark:bg-slate-900">
-            <header className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-200 px-4 py-3 dark:border-slate-700">
-              <div>
-                <h2 className="text-lg font-semibold text-slate-900 dark:text-slate-100">
-                  Item Movement History
-                </h2>
-                <p className="text-xs text-slate-500 dark:text-slate-400">
-                  {selectedProduct.name} ({selectedProduct.sku})
-                </p>
-              </div>
-              <div className="flex items-center gap-2">
-                <button
-                  className="rounded-lg border border-slate-300 px-3 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-100 dark:border-slate-600 dark:text-slate-200 dark:hover:bg-slate-800"
-                  onClick={() => void loadMovementHistory(viewProductId)}
-                  type="button"
-                  disabled={movementLoading}
-                >
-                  {movementLoading ? 'Refreshing...' : 'Refresh'}
-                </button>
-                <button
-                  className="rounded-lg border border-slate-300 px-3 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-100 dark:border-slate-600 dark:text-slate-200 dark:hover:bg-slate-800"
-                  onClick={() => setItemHistoryOpen(false)}
-                  type="button"
-                >
-                  Close
-                </button>
-              </div>
-            </header>
-            <div className="overflow-auto p-4">
-              <div className="mb-3 grid gap-2 sm:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_auto]">
-                <label className="grid gap-1 text-xs font-medium text-slate-500 dark:text-slate-400">
-                  <span>From</span>
-                  <input
-                    type="date"
-                    value={movementFromDate}
-                    onChange={(event) => setMovementFromDate(event.target.value)}
-                    className="rounded-lg border border-slate-200 bg-white px-2.5 py-2 text-xs text-slate-900 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100"
-                  />
-                </label>
-                <label className="grid gap-1 text-xs font-medium text-slate-500 dark:text-slate-400">
-                  <span>To</span>
-                  <input
-                    type="date"
-                    value={movementToDate}
-                    onChange={(event) => setMovementToDate(event.target.value)}
-                    className="rounded-lg border border-slate-200 bg-white px-2.5 py-2 text-xs text-slate-900 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100"
-                  />
-                </label>
-                <div className="flex items-end">
-                  <button
-                    type="button"
-                    className="rounded-lg border border-slate-300 px-3 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-100 dark:border-slate-600 dark:text-slate-200 dark:hover:bg-slate-800"
-                    onClick={() => {
-                      setMovementFromDate('');
-                      setMovementToDate('');
-                    }}
-                  >
-                    Clear
-                  </button>
-                </div>
-              </div>
-              {movementLoading ? (
-                <p className="text-sm text-slate-500 dark:text-slate-400">
-                  Loading movement history...
-                </p>
-              ) : movementError ? (
-                <p className="text-sm text-rose-700">{movementError}</p>
-              ) : movementRows.length === 0 ? (
-                <p className="text-sm text-slate-500 dark:text-slate-400">
-                  No movement records found for this item.
-                </p>
-              ) : (
-                <div className="overflow-x-auto">
-                  <table className="w-full min-w-[860px] text-left text-xs">
-                    <thead>
-                      <tr className="border-b border-slate-200 text-slate-500 dark:border-slate-700 dark:text-slate-400">
-                        <th className="px-2 py-2">Date</th>
-                        <th className="px-2 py-2">Movement</th>
-                        <th className="px-2 py-2">Location</th>
-                        <th className="px-2 py-2">Qty</th>
-                        <th className="px-2 py-2">FULL</th>
-                        <th className="px-2 py-2">EMPTY</th>
-                        <th className="px-2 py-2">Qty After</th>
-                        <th className="px-2 py-2">FULL After</th>
-                        <th className="px-2 py-2">EMPTY After</th>
-                        <th className="px-2 py-2">Reference</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {movementRows.slice(0, 120).map((row) => (
-                        <tr
-                          className="border-b border-slate-100 dark:border-slate-800"
-                          key={row.id}
+                    </article>
+                  ) : null}
+
+                  {productDetailTab === 'movements' ? (
+                    <article className="rounded-xl border border-slate-200 p-3 dark:border-slate-700">
+                      <div className="mb-3 flex flex-wrap items-start justify-between gap-3">
+                        <h3 className="text-sm font-semibold text-slate-900 dark:text-slate-100">
+                          Item Movement History
+                        </h3>
+                        <button
+                          className="rounded-lg border border-slate-300 px-3 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-60 dark:border-slate-600 dark:text-slate-200 dark:hover:bg-slate-800"
+                          disabled={movementLoading}
+                          onClick={() => void loadMovementHistory(viewProductId)}
+                          type="button"
                         >
-                          <td className="px-2 py-2">{formatDate(row.created_at)}</td>
-                          <td className="px-2 py-2">{formatMovementLabel(row.reference_type, row.movement_type)}</td>
-                          <td className="px-2 py-2">{row.location_name}</td>
-                          <td className="px-2 py-2">{formatQty(row.qty_delta)}</td>
-                          <td className="px-2 py-2">{formatQty(row.qty_full_delta)}</td>
-                          <td className="px-2 py-2">{formatQty(row.qty_empty_delta)}</td>
-                          <td className="px-2 py-2">
-                            {row.qty_after_known === false ? '-' : formatQty(row.qty_after)}
-                          </td>
-                          <td className="px-2 py-2">
-                            {row.qty_full_after_known === false ? '-' : formatQty(row.qty_full_after)}
-                          </td>
-                          <td className="px-2 py-2">
-                            {row.qty_empty_after_known === false ? '-' : formatQty(row.qty_empty_after)}
-                          </td>
-                          <td className="px-2 py-2">
-                            {formatMovementReference(row.reference_type, row.reference_id)}
-                          </td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
+                          {movementLoading ? 'Refreshing...' : 'Refresh'}
+                        </button>
+                      </div>
+                      <div className="mb-3 grid gap-2 sm:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_auto]">
+                        <label className="grid gap-1 text-xs font-medium text-slate-500 dark:text-slate-400">
+                          <span>From</span>
+                          <input
+                            className="rounded-lg border border-slate-200 bg-white px-2.5 py-2 text-xs text-slate-900 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100"
+                            onChange={(event) => setMovementFromDate(event.target.value)}
+                            type="date"
+                            value={movementFromDate}
+                          />
+                        </label>
+                        <label className="grid gap-1 text-xs font-medium text-slate-500 dark:text-slate-400">
+                          <span>To</span>
+                          <input
+                            className="rounded-lg border border-slate-200 bg-white px-2.5 py-2 text-xs text-slate-900 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100"
+                            onChange={(event) => setMovementToDate(event.target.value)}
+                            type="date"
+                            value={movementToDate}
+                          />
+                        </label>
+                        <div className="flex items-end">
+                          <button
+                            className="rounded-lg border border-slate-300 px-3 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-100 dark:border-slate-600 dark:text-slate-200 dark:hover:bg-slate-800"
+                            onClick={() => {
+                              setMovementFromDate('');
+                              setMovementToDate('');
+                            }}
+                            type="button"
+                          >
+                            Clear
+                          </button>
+                        </div>
+                      </div>
+                      {movementLoading ? (
+                        <p className="text-sm text-slate-500 dark:text-slate-400">
+                          Loading movement history...
+                        </p>
+                      ) : movementError ? (
+                        <p className="text-sm text-rose-700">{movementError}</p>
+                      ) : movementRows.length === 0 ? (
+                        <p className="text-sm text-slate-500 dark:text-slate-400">
+                          No movement records found for this item.
+                        </p>
+                      ) : (
+                        <div className="overflow-x-auto">
+                          <table className="w-full min-w-[860px] text-left text-xs">
+                            <thead>
+                              <tr className="border-b border-slate-200 text-slate-500 dark:border-slate-700 dark:text-slate-400">
+                                <th className="px-2 py-2">Date</th>
+                                <th className="px-2 py-2">Movement</th>
+                                <th className="px-2 py-2">Location</th>
+                                <th className="px-2 py-2">Qty</th>
+                                <th className="px-2 py-2">FULL</th>
+                                <th className="px-2 py-2">EMPTY</th>
+                                <th className="px-2 py-2">Qty After</th>
+                                <th className="px-2 py-2">FULL After</th>
+                                <th className="px-2 py-2">EMPTY After</th>
+                                <th className="px-2 py-2">Reference</th>
+                              </tr>
+                            </thead>
+                            <tbody>
+                              {movementRows.slice(0, 120).map((row) => (
+                                <tr
+                                  className="border-b border-slate-100 dark:border-slate-800"
+                                  key={row.id}
+                                >
+                                  <td className="px-2 py-2">{formatDate(row.created_at)}</td>
+                                  <td className="px-2 py-2">
+                                    {formatMovementLabel(row.reference_type, row.movement_type)}
+                                  </td>
+                                  <td className="px-2 py-2">{row.location_name}</td>
+                                  <td className="px-2 py-2">{formatQty(row.qty_delta)}</td>
+                                  <td className="px-2 py-2">{formatQty(row.qty_full_delta)}</td>
+                                  <td className="px-2 py-2">{formatQty(row.qty_empty_delta)}</td>
+                                  <td className="px-2 py-2">
+                                    {row.qty_after_known === false ? '-' : formatQty(row.qty_after)}
+                                  </td>
+                                  <td className="px-2 py-2">
+                                    {row.qty_full_after_known === false ? '-' : formatQty(row.qty_full_after)}
+                                  </td>
+                                  <td className="px-2 py-2">
+                                    {row.qty_empty_after_known === false ? '-' : formatQty(row.qty_empty_after)}
+                                  </td>
+                                  <td className="px-2 py-2">
+                                    {formatMovementReference(row.reference_type, row.reference_id)}
+                                  </td>
+                                </tr>
+                              ))}
+                            </tbody>
+                          </table>
+                        </div>
+                      )}
+                    </article>
+                  ) : null}
                 </div>
               )}
             </div>
