@@ -73,4 +73,66 @@ describe('sales cancellation lending guard', () => {
     expect(rows.map((row) => row.splitPercent)).toEqual([50, 50]);
     expect(rows.reduce((sum, row) => sum + row.commissionAmount, 0)).toBe(30);
   });
+
+  it('does not infer a duplicate driver commission candidate for pickup personnel', () => {
+    const service = new SalesService();
+    const candidates = (
+      service as unknown as {
+        buildCommissionPersonnelCandidates(input: {
+          sale_type?: 'PICKUP' | 'DELIVERY';
+          personnel_id?: string | null;
+          personnel_name?: string | null;
+          personnel?: Array<{ userId?: string; role?: string; name?: string | null }>;
+        }): Array<{
+          ref: string | null;
+          name: string | null;
+          role: string;
+        }>;
+      }
+    ).buildCommissionPersonnelCandidates({
+      sale_type: 'PICKUP',
+      personnel_id: 'EMP2',
+      personnel_name: 'EMP2 - Employee 2',
+      personnel: [{ userId: 'EMP2', role: 'DRIVER', name: 'EMP2 - Employee 2' }]
+    });
+
+    expect(candidates).toEqual([
+      {
+        ref: 'EMP2',
+        name: 'EMP2 - Employee 2',
+        role: 'PERSONNEL'
+      }
+    ]);
+  });
+
+  it('treats legacy delivery personnel fields as a single driver candidate', () => {
+    const service = new SalesService();
+    const candidates = (
+      service as unknown as {
+        buildCommissionPersonnelCandidates(input: {
+          sale_type?: 'PICKUP' | 'DELIVERY';
+          personnel_id?: string | null;
+          personnel_name?: string | null;
+          personnel?: Array<{ userId?: string; role?: string; name?: string | null }>;
+        }): Array<{
+          ref: string | null;
+          name: string | null;
+          role: string;
+        }>;
+      }
+    ).buildCommissionPersonnelCandidates({
+      sale_type: 'DELIVERY',
+      personnel_id: 'EMP2',
+      personnel_name: 'EMP2 - Employee 2',
+      personnel: [{ userId: 'EMP2', role: 'DRIVER', name: 'EMP2 - Employee 2' }]
+    });
+
+    expect(candidates).toEqual([
+      {
+        ref: 'EMP2',
+        name: 'EMP2 - Employee 2',
+        role: 'DRIVER'
+      }
+    ]);
+  });
 });

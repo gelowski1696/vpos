@@ -2302,18 +2302,31 @@ export class SalesService {
   }> {
     const rows: Array<{ ref: string | null; name: string | null; role: string }> = [];
     const seen = new Set<string>();
+    const saleType = input.sale_type === 'DELIVERY' ? 'DELIVERY' : 'PICKUP';
     const normalizeRole = (value: unknown): string => {
       const normalized = String(value ?? 'PERSONNEL').trim().toUpperCase();
       return normalized || 'PERSONNEL';
     };
+    const normalizePrimaryRole = (value: unknown): string => {
+      const role = normalizeRole(value);
+      if (saleType === 'PICKUP' && role === 'DRIVER') {
+        return 'PERSONNEL';
+      }
+      if (saleType === 'DELIVERY' && role === 'PERSONNEL') {
+        return 'DRIVER';
+      }
+      return role;
+    };
     const push = (ref: unknown, name: unknown, role: unknown): void => {
       const normalizedRef = typeof ref === 'string' ? ref.trim() || null : null;
       const normalizedName = typeof name === 'string' ? name.trim() || null : null;
-      const normalizedRole = normalizeRole(role);
+      const normalizedRole = normalizePrimaryRole(role);
       if (!normalizedRef && !normalizedName) {
         return;
       }
-      const key = `${normalizedRef?.toUpperCase() ?? ''}|${normalizedName?.toUpperCase() ?? ''}|${normalizedRole}`;
+      const key = normalizedRef
+        ? `REF:${normalizedRef.toUpperCase()}`
+        : `NAME:${normalizedName?.toUpperCase() ?? ''}`;
       if (seen.has(key)) {
         return;
       }
@@ -2325,9 +2338,13 @@ export class SalesService {
       });
     };
 
-    push(input.driver_id, input.driver_name ?? input.personnel_name, 'DRIVER');
-    push(input.helper_id, input.helper_name, 'HELPER');
-    push(input.personnel_id, input.personnel_name, 'PERSONNEL');
+    if (saleType === 'DELIVERY') {
+      push(input.driver_id ?? input.personnel_id, input.driver_name ?? input.personnel_name, 'DRIVER');
+      push(input.helper_id, input.helper_name, 'HELPER');
+    } else {
+      push(input.personnel_id ?? input.driver_id, input.personnel_name ?? input.driver_name, 'PERSONNEL');
+      push(input.helper_id, input.helper_name, 'HELPER');
+    }
 
     for (const row of Array.isArray(input.personnel) ? input.personnel : []) {
       push(

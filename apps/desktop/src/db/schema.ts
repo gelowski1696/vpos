@@ -162,7 +162,7 @@ export type DesktopSalePayload = {
   personnelName?: string | null;
   helperId?: string | null;
   helperName?: string | null;
-  personnel?: Array<{ userId: string; role: 'DRIVER' | 'HELPER'; name: string | null }>;
+  personnel?: Array<{ userId: string; role: 'DRIVER' | 'HELPER' | 'PERSONNEL'; name: string | null }>;
   saleType: DesktopSaleType;
   paymentMode?: DesktopPaymentMode;
   paymentMethod: DesktopPaymentMethod;

@@ -320,7 +320,7 @@ function buildEqualSplitCommissionPreview(args: {
   personnel: Array<{
     id: string | null;
     name: string | null;
-    role: 'DRIVER' | 'HELPER';
+    role: 'DRIVER' | 'HELPER' | 'PERSONNEL';
     commissionEligible?: boolean;
   }>;
   saleType: 'PICKUP' | 'DELIVERY';
@@ -2615,20 +2615,26 @@ export function PosScreen({
       return;
     }
 
-    const deliveryPersonnel: Array<{ userId: string; role: 'DRIVER' | 'HELPER' }> = [];
+    const primaryPersonnelRole = orderType === 'DELIVERY' ? 'DRIVER' : 'PERSONNEL';
+    const salePersonnel: Array<{ userId: string; role: 'DRIVER' | 'HELPER' | 'PERSONNEL' }> = [];
     if (driverId.trim()) {
-      deliveryPersonnel.push({ userId: driverId.trim(), role: 'DRIVER' });
+      salePersonnel.push({ userId: driverId.trim(), role: primaryPersonnelRole });
     }
     if (helperId.trim()) {
-      deliveryPersonnel.push({ userId: helperId.trim(), role: 'HELPER' });
+      salePersonnel.push({ userId: helperId.trim(), role: 'HELPER' });
     }
+    const deliveryPersonnel = salePersonnel.flatMap((item) =>
+      item.role === 'DRIVER' || item.role === 'HELPER'
+        ? [{ userId: item.userId, role: item.role }]
+        : []
+    );
 
     if (!driverId.trim()) {
       toastError('POS', `${personnelLabel} is required before payment.`);
       return;
     }
 
-    if (deliveryPersonnel.length === 0) {
+    if (salePersonnel.length === 0) {
       toastError('POS', 'Assign at least one personnel before payment.');
       return;
     }
@@ -2695,7 +2701,7 @@ export function PosScreen({
         personnel: [
           {
             id: driverId.trim() || null,
-            role: 'DRIVER',
+            role: primaryPersonnelRole,
             name: selectedDriver?.label ?? null,
             commissionEligible: selectedDriver?.commissionEligible
           },
@@ -2770,11 +2776,11 @@ export function PosScreen({
         driverName: selectedDriver?.label ?? null,
         helperId: helperId.trim() || null,
         helperName: selectedHelper?.label ?? null,
-        personnel: deliveryPersonnel.map((item) => ({
+        personnel: salePersonnel.map((item) => ({
           userId: item.userId,
           role: item.role,
           name:
-            item.role === 'DRIVER'
+            item.role === 'DRIVER' || item.role === 'PERSONNEL'
               ? (selectedDriver?.label ?? null)
               : (selectedHelper?.label ?? null)
         })),

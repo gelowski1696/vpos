@@ -733,7 +733,7 @@ function buildEqualSplitCommissionPreview(args: {
   personnel: Array<{
     id: string | null;
     name: string | null;
-    role: "DRIVER" | "HELPER";
+    role: "DRIVER" | "HELPER" | "PERSONNEL";
     commissionEligible?: boolean;
   }>;
   saleType: DesktopSaleType;
@@ -3336,13 +3336,15 @@ export function PosScreen({
       pickupCommissionRate: round2(Number(line.pickupCommissionRate || 0)),
       deliveryCommissionRate: round2(Number(line.deliveryCommissionRate || 0)),
     }));
+    const primaryPersonnelRole: "DRIVER" | "PERSONNEL" =
+      orderType === "DELIVERY" ? "DRIVER" : "PERSONNEL";
     const commissionRows = buildEqualSplitCommissionPreview({
       lines,
       saleType: orderType,
       personnel: [
         {
           id: selectedPersonnel?.id ?? null,
-          role: "DRIVER",
+          role: primaryPersonnelRole,
           name: selectedPersonnel?.label ?? null,
           commissionEligible: selectedPersonnel?.commissionEligible,
         },
@@ -3381,7 +3383,7 @@ export function PosScreen({
       personnel: [
         {
           userId: selectedPersonnel?.id ?? "",
-          role: "DRIVER" as const,
+          role: primaryPersonnelRole,
           name: selectedPersonnel?.label ?? null,
         },
         ...(selectedHelper?.id
