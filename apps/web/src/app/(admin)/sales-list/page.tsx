@@ -220,6 +220,26 @@ function splitCsvNames(value: string | null | undefined): string[] {
     .filter((item) => item.length > 0);
 }
 
+function normalizePersonnelLabel(value: string): string {
+  const trimmed = value.trim();
+  const codePrefixMatch = trimmed.match(/^[A-Za-z0-9._-]+\s+-\s+(.+)$/);
+  return codePrefixMatch?.[1]?.trim() || trimmed;
+}
+
+function joinUniquePersonnelLabels(values: Array<string | null | undefined>): string {
+  const labels: string[] = [];
+  const seen = new Set<string>();
+  for (const value of values.flatMap((entry) => splitCsvNames(entry))) {
+    const label = normalizePersonnelLabel(value);
+    const key = label.toLowerCase();
+    if (!seen.has(key)) {
+      seen.add(key);
+      labels.push(label);
+    }
+  }
+  return labels.length > 0 ? labels.join(', ') : 'N/A';
+}
+
 export default function SalesListPage(): JSX.Element {
   const router = useRouter();
   const pathname = usePathname();
@@ -390,17 +410,14 @@ export default function SalesListPage(): JSX.Element {
   const selectedCommissionTotal =
     selectedCommissions.reduce((sum, row) => sum + row.commission_amount, 0);
   const selectedPersonnelNames = (() => {
-    const values = [
-      selectedDetails?.sale.personnel_name,
-      selectedDetails?.sale.driver_name,
-      selectedDetails?.sale.helper_name,
+    return joinUniquePersonnelLabels([
       assignmentNamesByRole(selectedAssignments, 'PERSONNEL'),
       assignmentNamesByRole(selectedAssignments, 'DRIVER'),
-      assignmentNamesByRole(selectedAssignments, 'HELPER')
-    ];
-    const names = values.flatMap((value) => splitCsvNames(value));
-    const unique = [...new Set(names)];
-    return unique.length > 0 ? unique.join(', ') : 'N/A';
+      assignmentNamesByRole(selectedAssignments, 'HELPER'),
+      selectedDetails?.sale.driver_name,
+      selectedDetails?.sale.helper_name,
+      selectedDetails?.sale.personnel_name
+    ]);
   })();
 
   const paginatedRows = useTablePagination(rows, {

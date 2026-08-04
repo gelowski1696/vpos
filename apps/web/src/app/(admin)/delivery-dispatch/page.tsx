@@ -49,7 +49,7 @@ type DeliveryOrderRow = {
   status: DeliveryStatus;
   customer_id?: string | null;
   sale_id?: string | null;
-  personnel: Array<{ user_id: string; role: string }>;
+  personnel: Array<{ user_id: string; role: string; name?: string | null }>;
   cashier_validated_at?: string | null;
   cashier_validated_by_user_id?: string | null;
   cashier_validated_by_name?: string | null;
@@ -93,6 +93,21 @@ function statusClasses(status: DeliveryStatus): string {
     default:
       return 'bg-slate-100 text-slate-800 dark:bg-slate-800 dark:text-slate-200';
   }
+}
+
+function shortRef(value: string): string {
+  return value.length > 12 ? `${value.slice(0, 8)}...` : value;
+}
+
+function deliveryPersonnelLabel(
+  entry: DeliveryOrderRow['personnel'][number],
+  userById: Map<string, UserRow>
+): string {
+  const name = entry.name?.trim() || userById.get(entry.user_id)?.fullName?.trim();
+  if (name) {
+    return name;
+  }
+  return `Unresolved rider (${shortRef(entry.user_id)})`;
 }
 
 export default function DeliveryDispatchPage(): JSX.Element {
@@ -490,7 +505,7 @@ export default function DeliveryDispatchPage(): JSX.Element {
                   <tr><td className="px-3 py-6 text-center text-slate-500" colSpan={5}>{loading ? 'Loading...' : 'No delivery orders found.'}</td></tr>
                 ) : paginatedRows.pageRows.map((row) => {
                   const riderLabel = row.personnel
-                    .map((entry) => userById.get(entry.user_id)?.fullName ?? entry.user_id)
+                    .map((entry) => deliveryPersonnelLabel(entry, userById))
                     .join(', ') || '-';
                   return (
                     <tr key={row.id} className={`cursor-pointer border-t border-slate-100 dark:border-slate-800 ${selectedId === row.id ? 'bg-brandPrimary/10 dark:bg-brandPrimary/20' : ''}`} onClick={() => void openRow(row)}>
