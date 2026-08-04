@@ -404,6 +404,7 @@ model Company {
   shifts                    Shift[]
   sales                     Sale[]
   deliveryOrders            DeliveryOrder[]
+  deliveryLocationPings     DeliveryLocationPing[]
   pettyCashEntries          PettyCashEntry[]
   pettyCashAttachments      PettyCashAttachment[]
   customerPayments          CustomerPayment[]
@@ -2050,6 +2051,7 @@ model DeliveryOrder {
   cashierValidatedByUser User?      @relation("DeliveryOrderCashierValidatedBy", fields: [cashierValidatedByUserId], references: [id], onDelete: SetNull)
   assignments DeliveryAssignment[]
   events      DeliveryStatusEvent[]
+  locationPings DeliveryLocationPing[]
 
   @@index([companyId, branchId, status, createdAt])
   @@index([companyId, status, createdAt])
@@ -2079,6 +2081,26 @@ model DeliveryStatusEvent {
   actor         User?         @relation("DeliveryStatusEventActor", fields: [actorUserId], references: [id], onDelete: SetNull)
 
   @@index([deliveryOrderId, createdAt])
+}
+
+model DeliveryLocationPing {
+  id              String   @id @default(uuid())
+  companyId       String
+  deliveryOrderId String
+  riderUserId     String?
+  latitude        Decimal  @db.Decimal(10, 7)
+  longitude       Decimal  @db.Decimal(10, 7)
+  accuracy        Decimal? @db.Decimal(10, 2)
+  heading         Decimal? @db.Decimal(10, 2)
+  speed           Decimal? @db.Decimal(10, 2)
+  recordedAt      DateTime
+  createdAt       DateTime @default(now())
+
+  company       Company       @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  deliveryOrder DeliveryOrder @relation(fields: [deliveryOrderId], references: [id], onDelete: Cascade)
+
+  @@index([companyId, deliveryOrderId, recordedAt])
+  @@index([companyId, riderUserId, recordedAt])
 }
 
 model PettyCashEntry {

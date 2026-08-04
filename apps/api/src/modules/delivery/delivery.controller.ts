@@ -4,6 +4,7 @@ import { isWebChannel, resolveRequestChannel } from '../../common/request-channe
 import {
   DeliveryListFilters,
   DeliveryActorContext,
+  DeliveryLocationPingRecord,
   DeliveryOrderRecord,
   DeliveryService,
   DeliveryStatusEventRecord
@@ -210,6 +211,43 @@ export class DeliveryController {
       }
     });
     return result;
+  }
+
+  @Post(':id/location')
+  async recordLocation(
+    @Req() req: Request & { user?: { sub?: string; company_id?: string; roles?: string[] } },
+    @Param('id') id: string,
+    @Body()
+    body: {
+      latitude?: number;
+      longitude?: number;
+      accuracy?: number | null;
+      heading?: number | null;
+      speed?: number | null;
+      recorded_at?: string | null;
+    }
+  ): Promise<DeliveryLocationPingRecord> {
+    this.enforcePosWriteChannel(req);
+    const companyId = this.requireCompanyId(req);
+    await this.tenantRoutingPolicy.assertRoutable(companyId);
+    await this.entitlementsService.enforceTenantAddonEnabled(
+      'delivery_dispatch_suite',
+      companyId,
+      'Delivery Dispatch Suite'
+    );
+    return this.deliveryService.recordLocationPing(
+      companyId,
+      id,
+      {
+        latitude: Number(body.latitude),
+        longitude: Number(body.longitude),
+        accuracy: body.accuracy === undefined || body.accuracy === null ? null : Number(body.accuracy),
+        heading: body.heading === undefined || body.heading === null ? null : Number(body.heading),
+        speed: body.speed === undefined || body.speed === null ? null : Number(body.speed),
+        recorded_at: body.recorded_at ?? null
+      },
+      this.actor(req)
+    );
   }
 
   @Get(':id/events')

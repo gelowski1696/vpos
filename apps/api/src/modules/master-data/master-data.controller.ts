@@ -1,7 +1,7 @@
 import { Body, Controller, Delete, ForbiddenException, Get, Param, Post, Put, Query, UnauthorizedException } from '@nestjs/common';
 import { Req } from '@nestjs/common';
 import { Request } from 'express';
-import { resolveRequestChannel } from '../../common/request-channel';
+import { resolveRequestChannel, type RequestChannel } from '../../common/request-channel';
 import { Roles } from '../auth/decorators/roles.decorator';
 import {
   CreateCustomerCategory,
@@ -13,11 +13,17 @@ import {
 import { AuditService } from '../audit/audit.service';
 
 type PrimitivePayload = Record<string, unknown>;
+type PriceListRollbackChannel = Exclude<RequestChannel, 'RIDER'>;
 type RequestWithTenant = Request & {
   user?: { sub?: string; company_id?: string; roles?: string[] };
   companyId?: string;
 };
 type PersonnelSalaryPayload = 'MONTHLY' | 'DAILY' | 'HOURLY' | 'PER_TRANSACTION';
+
+function resolvePriceListRollbackChannel(req: Pick<Request, 'headers' | 'originalUrl'>): PriceListRollbackChannel {
+  const channel = resolveRequestChannel(req);
+  return channel === 'RIDER' ? 'API' : channel;
+}
 
 @Controller('master-data')
 @Roles('admin', 'owner')
@@ -1882,7 +1888,7 @@ export class MasterDataController {
           : String(body.effective_from ?? body.effectiveFrom ?? ''),
       notes: body.notes === undefined ? null : String(body.notes),
       actorUserId: req.user?.sub ?? null,
-      channel: resolveRequestChannel(req)
+      channel: resolvePriceListRollbackChannel(req)
     });
     await this.auditWrite(req, 'MASTER_DATA_PRICE_LIST_VERSION_ROLLBACK', 'PriceListRollbackAudit', result.rollbackAuditId, {
       priceListId: id,

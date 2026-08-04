@@ -1,6 +1,6 @@
 import type { Request } from 'express';
 
-export type RequestChannel = 'WEB' | 'MOBILE' | 'DESKTOP' | 'SYNC' | 'API';
+export type RequestChannel = 'WEB' | 'MOBILE' | 'DESKTOP' | 'RIDER' | 'SYNC' | 'API';
 
 function pickHeader(value: unknown): string | null {
   if (Array.isArray(value)) {
@@ -26,6 +26,7 @@ function normalizeChannel(value: string | null): RequestChannel | null {
     normalized === 'WEB' ||
     normalized === 'MOBILE' ||
     normalized === 'DESKTOP' ||
+    normalized === 'RIDER' ||
     normalized === 'SYNC' ||
     normalized === 'API'
   ) {

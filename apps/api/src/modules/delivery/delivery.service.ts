@@ -36,9 +36,15 @@ export type DeliveryOrderRecord = {
   id: string;
   order_type: OrderType;
   status: DeliveryStatus;
+  branch_id?: string | null;
+  branch_name?: string | null;
+  branch_code?: string | null;
   customer_id?: string | null;
+  customer_name?: string | null;
+  customer_address?: string | null;
   sale_id?: string | null;
-  personnel: Array<{ user_id: string; role: string }>;
+  receipt_number?: string | null;
+  personnel: Array<{ user_id: string; role: string; name?: string | null }>;
   cashier_validated_at?: string | null;
   cashier_validated_by_user_id?: string | null;
   cashier_validated_by_name?: string | null;
@@ -54,6 +60,19 @@ export type DeliveryStatusEventRecord = {
   notes?: string;
   actor_user_id?: string;
   metadata?: Record<string, unknown>;
+  created_at: string;
+};
+
+export type DeliveryLocationPingRecord = {
+  id: string;
+  delivery_order_id: string;
+  rider_user_id?: string | null;
+  latitude: number;
+  longitude: number;
+  accuracy?: number | null;
+  heading?: number | null;
+  speed?: number | null;
+  recorded_at: string;
   created_at: string;
 };
 
@@ -74,6 +93,7 @@ export class DeliveryService {
   private readonly eventSeqByCompany = new Map<string, number>();
   private readonly orderMetaByCompany = new Map<string, Map<string, OrderMeta>>();
   private readonly eventMetaByCompany = new Map<string, Map<string, EventMeta>>();
+  private readonly locationPingsByCompany = new Map<string, Map<string, DeliveryLocationPingRecord[]>>();
 
   constructor(
     @Optional() private readonly prisma?: PrismaService,
@@ -184,6 +204,48 @@ export class DeliveryService {
     return [...(this.getEvents(companyId).get(id) ?? [])];
   }
 
+  async recordLocationPing(
+    companyId: string,
+    id: string,
+    input: {
+      latitude: number;
+      longitude: number;
+      accuracy?: number | null;
+      heading?: number | null;
+      speed?: number | null;
+      recorded_at?: string | null;
+    },
+    actor?: DeliveryActorContext
+  ): Promise<DeliveryLocationPingRecord> {
+    await this.enforceAddonPolicy(companyId);
+    const normalized = this.normalizeLocationPingInput(input);
+    const binding = await this.getTenantBinding(companyId);
+    if (binding) {
+      return this.recordLocationPingWithDatabase(binding, id, normalized, actor);
+    }
+    const row = this.getOrders(companyId).get(id);
+    if (!row) {
+      throw new NotFoundException('Delivery order not found');
+    }
+    this.assertInMemoryActorCanAccessOrder(row, actor);
+    const ping: DeliveryLocationPingRecord = {
+      id: this.nextLocationPingId(companyId),
+      delivery_order_id: row.id,
+      rider_user_id: this.toNonEmpty(actor?.user_id),
+      latitude: normalized.latitude,
+      longitude: normalized.longitude,
+      accuracy: normalized.accuracy,
+      heading: normalized.heading,
+      speed: normalized.speed,
+      recorded_at: normalized.recordedAt.toISOString(),
+      created_at: new Date().toISOString()
+    };
+    const pings = this.getLocationPings(companyId).get(row.id) ?? [];
+    pings.push(ping);
+    this.getLocationPings(companyId).set(row.id, pings);
+    return ping;
+  }
+
   async exportCsv(
     companyId: string,
     filters: DeliveryListFilters = {},
@@ -278,6 +340,12 @@ export class DeliveryService {
       status: order_type === 'PICKUP' ? 'DELIVERED' : 'CREATED',
       customer_id: input.customer_id ?? null,
       sale_id: input.sale_id ?? null,
+      branch_id: null,
+      branch_name: null,
+      branch_code: null,
+      customer_name: null,
+      customer_address: null,
+      receipt_number: null,
       personnel,
       created_at: now,
       updated_at: now
@@ -531,6 +599,29 @@ export class DeliveryService {
           },
           orderBy: { assignedAt: 'asc' }
         },
+        branch: {
+          select: {
+            id: true,
+            code: true,
+            name: true
+          }
+        },
+        sale: {
+          select: {
+            customerId: true,
+            customer: {
+              select: {
+                name: true,
+                address: true
+              }
+            },
+            receipt: {
+              select: {
+                receiptNumber: true
+              }
+            }
+          }
+        },
         cashierValidatedByUser: {
           select: {
             id: true,
@@ -567,6 +658,29 @@ export class DeliveryService {
             }
           },
           orderBy: { assignedAt: 'asc' }
+        },
+        branch: {
+          select: {
+            id: true,
+            code: true,
+            name: true
+          }
+        },
+        sale: {
+          select: {
+            customerId: true,
+            customer: {
+              select: {
+                name: true,
+                address: true
+              }
+            },
+            receipt: {
+              select: {
+                receiptNumber: true
+              }
+            }
+          }
         },
         cashierValidatedByUser: {
           select: {
@@ -769,6 +883,55 @@ export class DeliveryService {
     return this.getWithDatabase(binding, id, actor);
   }
 
+  private async recordLocationPingWithDatabase(
+    binding: TenantPrismaBinding,
+    id: string,
+    input: {
+      latitude: number;
+      longitude: number;
+      accuracy?: number | null;
+      heading?: number | null;
+      speed?: number | null;
+      recordedAt: Date;
+    },
+    actor?: DeliveryActorContext
+  ): Promise<DeliveryLocationPingRecord> {
+    const db = binding.client as DbClient;
+    const order = await db.deliveryOrder.findFirst({
+      where: { id, companyId: binding.companyId },
+      select: { id: true }
+    });
+    if (!order) {
+      throw new NotFoundException('Delivery order not found');
+    }
+    await this.assertDbActorCanAccessOrder(db, binding.companyId, order.id, actor);
+    const row = await db.deliveryLocationPing.create({
+      data: {
+        companyId: binding.companyId,
+        deliveryOrderId: order.id,
+        riderUserId: this.toNonEmpty(actor?.user_id),
+        latitude: input.latitude,
+        longitude: input.longitude,
+        accuracy: input.accuracy ?? null,
+        heading: input.heading ?? null,
+        speed: input.speed ?? null,
+        recordedAt: input.recordedAt
+      }
+    });
+    return {
+      id: row.id,
+      delivery_order_id: row.deliveryOrderId,
+      rider_user_id: row.riderUserId,
+      latitude: Number(row.latitude),
+      longitude: Number(row.longitude),
+      accuracy: row.accuracy === null ? null : Number(row.accuracy),
+      heading: row.heading === null ? null : Number(row.heading),
+      speed: row.speed === null ? null : Number(row.speed),
+      recorded_at: row.recordedAt.toISOString(),
+      created_at: row.createdAt.toISOString()
+    };
+  }
+
   private async eventsForOrderWithDatabase(
     binding: TenantPrismaBinding,
     id: string,
@@ -893,6 +1056,51 @@ export class DeliveryService {
     }
     const normalized = value.trim();
     return normalized.length > 0 ? normalized : null;
+  }
+
+  private normalizeLocationPingInput(input: {
+    latitude: number;
+    longitude: number;
+    accuracy?: number | null;
+    heading?: number | null;
+    speed?: number | null;
+    recorded_at?: string | null;
+  }): {
+    latitude: number;
+    longitude: number;
+    accuracy: number | null;
+    heading: number | null;
+    speed: number | null;
+    recordedAt: Date;
+  } {
+    const latitude = Number(input.latitude);
+    const longitude = Number(input.longitude);
+    if (!Number.isFinite(latitude) || latitude < -90 || latitude > 90) {
+      throw new BadRequestException('Latitude must be between -90 and 90.');
+    }
+    if (!Number.isFinite(longitude) || longitude < -180 || longitude > 180) {
+      throw new BadRequestException('Longitude must be between -180 and 180.');
+    }
+    const recordedAt = input.recorded_at ? new Date(input.recorded_at) : new Date();
+    if (Number.isNaN(recordedAt.getTime())) {
+      throw new BadRequestException('recorded_at must be a valid date.');
+    }
+    return {
+      latitude,
+      longitude,
+      accuracy: this.optionalFiniteNumber(input.accuracy),
+      heading: this.optionalFiniteNumber(input.heading),
+      speed: this.optionalFiniteNumber(input.speed),
+      recordedAt
+    };
+  }
+
+  private optionalFiniteNumber(value: number | null | undefined): number | null {
+    if (value === null || value === undefined) {
+      return null;
+    }
+    const parsed = Number(value);
+    return Number.isFinite(parsed) ? parsed : null;
   }
 
   private normalizeRoleList(roles: string[] | undefined): Set<string> {
@@ -1337,6 +1545,16 @@ export class DeliveryService {
     return created;
   }
 
+  private getLocationPings(companyId: string): Map<string, DeliveryLocationPingRecord[]> {
+    const existing = this.locationPingsByCompany.get(companyId);
+    if (existing) {
+      return existing;
+    }
+    const created = new Map<string, DeliveryLocationPingRecord[]>();
+    this.locationPingsByCompany.set(companyId, created);
+    return created;
+  }
+
   private nextOrderId(companyId: string): string {
     const current = this.sequenceByCompany.get(companyId) ?? 0;
     const next = current + 1;
@@ -1349,6 +1567,11 @@ export class DeliveryService {
     const next = current + 1;
     this.eventSeqByCompany.set(companyId, next);
     return `delivery-event-${String(next).padStart(6, '0')}`;
+  }
+
+  private nextLocationPingId(companyId: string): string {
+    const count = [...this.getLocationPings(companyId).values()].reduce((sum, rows) => sum + rows.length, 0);
+    return `delivery-location-${String(count + 1).padStart(6, '0')}`;
   }
 
   private canUseDatabase(): boolean {
@@ -1472,10 +1695,17 @@ export class DeliveryService {
       id: string;
       status: string;
       saleId: string | null;
+      branchId?: string;
       createdAt: Date;
       assignments: Array<{ userId: string; role: string; user?: { id: string; fullName: string } }>;
       completedAt: Date | null;
       updatedAt?: Date;
+      branch?: { id: string; code: string; name: string };
+      sale?: {
+        customerId: string | null;
+        customer: { name: string; address: string | null } | null;
+        receipt: { receiptNumber: string } | null;
+      } | null;
       cashierValidatedAt?: Date | null;
       cashierValidatedByUserId?: string | null;
       cashierValidatedByUser?: { id: string; fullName: string } | null;
@@ -1489,11 +1719,18 @@ export class DeliveryService {
       id: row.id,
       order_type: inferredType,
       status: this.normalizeStatus(row.status),
-      customer_id: meta?.customer_id ?? null,
+      branch_id: row.branch?.id ?? row.branchId ?? null,
+      branch_name: row.branch?.name ?? null,
+      branch_code: row.branch?.code ?? null,
+      customer_id: row.sale?.customerId ?? meta?.customer_id ?? null,
+      customer_name: row.sale?.customer?.name ?? null,
+      customer_address: row.sale?.customer?.address ?? null,
       sale_id: row.saleId,
+      receipt_number: row.sale?.receipt?.receiptNumber ?? null,
       personnel: row.assignments.map((assignment) => ({
         user_id: assignment.userId,
-        role: assignment.role
+        role: assignment.role,
+        name: assignment.user?.fullName ?? null
       })),
       cashier_validated_at: row.cashierValidatedAt ? row.cashierValidatedAt.toISOString() : null,
       cashier_validated_by_user_id: row.cashierValidatedByUserId ?? null,
