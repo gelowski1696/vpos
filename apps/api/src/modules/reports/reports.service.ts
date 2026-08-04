@@ -1663,7 +1663,7 @@ export class ReportsService {
       throw new NotFoundException(`Sale ${normalizedSaleId} not found`);
     }
 
-    const saleEvent = await db.eventSales.findFirst({
+    const saleEvents = await db.eventSales.findMany({
       where: {
         companyId,
         saleId: row.id
@@ -1671,8 +1671,17 @@ export class ReportsService {
       select: {
         payload: true
       },
-      orderBy: { happenedAt: 'desc' }
+      orderBy: { happenedAt: 'desc' },
+      take: 50
     });
+    const saleEvent =
+      saleEvents.find((event) => {
+        const payload =
+          event.payload && typeof event.payload === 'object' && !Array.isArray(event.payload)
+            ? (event.payload as Record<string, unknown>)
+            : undefined;
+        return Array.isArray(payload?.lines);
+      }) ?? saleEvents[0];
     const salePayload =
       saleEvent?.payload && typeof saleEvent.payload === 'object' && !Array.isArray(saleEvent.payload)
         ? (saleEvent.payload as Record<string, unknown>)
