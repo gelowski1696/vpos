@@ -756,13 +756,22 @@ export class AuthService {
     this.assertProductionDatabaseAuth();
     await this.ensureSeedUsers();
     const normalizedEmail = input.email.trim().toLowerCase();
+    const normalizedUsername = input.username?.trim().toLowerCase() || null;
+    const normalizedPersonnelId = input.personnel_id?.trim() || null;
 
     const prisma = this.getPrismaIfEnabled();
     if (prisma) {
       try {
+        const selectManagedUser = {
+          id: true,
+          companyId: true,
+          fullName: true,
+          passwordHash: true,
+          mustChangePassword: true
+        } as const;
         const byId = await prisma.user.findUnique({
           where: { id: input.id },
-          select: { id: true, companyId: true, fullName: true, passwordHash: true, mustChangePassword: true }
+          select: selectManagedUser
         });
 
         const byEmail = await prisma.user.findUnique({
@@ -772,10 +781,47 @@ export class AuthService {
               email: normalizedEmail
             }
           },
-          select: { id: true, companyId: true, fullName: true, passwordHash: true, mustChangePassword: true }
+          select: selectManagedUser
         });
 
-        const existing = byId && byId.companyId === input.company_id ? byId : byEmail;
+        const byUsername = normalizedUsername
+          ? await prisma.user.findUnique({
+              where: {
+                companyId_username: {
+                  companyId: input.company_id,
+                  username: normalizedUsername
+                }
+              },
+              select: selectManagedUser
+            })
+          : null;
+
+        const byPersonnel = normalizedPersonnelId
+          ? await prisma.user.findUnique({
+              where: {
+                companyId_personnelId: {
+                  companyId: input.company_id,
+                  personnelId: normalizedPersonnelId
+                }
+              },
+              select: selectManagedUser
+            })
+          : null;
+
+        if (byId && byId.companyId !== input.company_id) {
+          throw new BadRequestException('Auth user id already belongs to another tenant.');
+        }
+
+        const candidates = [byId, byEmail, byUsername, byPersonnel].filter(
+          (row): row is NonNullable<typeof byId> => Boolean(row)
+        );
+        const candidateIds = new Set(candidates.map((row) => row.id));
+        if (candidateIds.size > 1) {
+          throw new BadRequestException(
+            'Rider login conflicts with an existing username or personnel assignment.'
+          );
+        }
+        const existing = candidates[0] ?? null;
         const shouldForcePasswordChange =
           input.require_password_change === true
             ? true
@@ -797,8 +843,8 @@ export class AuthService {
             ? await prisma.user.update({
                 where: { id: existing.id },
                 data: {
-                  username: input.username?.trim().toLowerCase() || null,
-                  personnelId: input.personnel_id?.trim() || null,
+                  username: normalizedUsername,
+                  personnelId: normalizedPersonnelId,
                   email: normalizedEmail,
                   fullName,
                   isActive: input.active,
@@ -810,8 +856,8 @@ export class AuthService {
                 data: {
                   id: input.id,
                   companyId: input.company_id,
-                  username: input.username?.trim().toLowerCase() || null,
-                  personnelId: input.personnel_id?.trim() || null,
+                  username: normalizedUsername,
+                  personnelId: normalizedPersonnelId,
                   email: normalizedEmail,
                   fullName,
                   passwordHash,
@@ -857,7 +903,10 @@ export class AuthService {
           }
         }
         return;
-      } catch {
+      } catch (error) {
+        if (error instanceof BadRequestException) {
+          throw error;
+        }
         throw new InternalServerErrorException('Failed to provision auth user');
       }
     }

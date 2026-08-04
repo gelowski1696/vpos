@@ -13,6 +13,8 @@ describe('rider personnel users', () => {
   let masterDataService: MasterDataService;
 
   beforeEach(() => {
+    delete process.env.VPOS_TEST_USE_DB;
+    delete process.env.VPOS_AUTH_SEED_LEGACY_DEMO;
     process.env.VPOS_AUTH_ALLOW_MEMORY_FALLBACK = 'true';
     const authRepository = new AuthRepository();
     authService = new AuthService(authRepository, new JwtService());
@@ -103,6 +105,113 @@ describe('rider personnel users', () => {
     await expect(
       authService.login('loose-rider', 'StrongPass1', 'device-rider-loose', undefined, { riderChannel: true })
     ).rejects.toThrow('Rider app login is restricted to assigned rider accounts');
+  });
+
+  it('reuses existing database auth users by rider username during provisioning', async () => {
+    process.env.VPOS_TEST_USE_DB = 'true';
+    process.env.VPOS_AUTH_SEED_LEGACY_DEMO = 'false';
+    const users = new Map<string, Record<string, unknown>>();
+    users.set('existing-rider-id', {
+      id: 'existing-rider-id',
+      companyId: 'comp-demo',
+      username: 'rider2',
+      personnelId: null,
+      email: 'old-rider2@rider.vpos.local',
+      fullName: 'Old Rider',
+      passwordHash: 'old-hash',
+      mustChangePassword: false,
+      isActive: true
+    });
+    const roles = new Map<string, { id: string; name: string }>();
+    const userRoles: Array<{ userId: string; roleId: string }> = [];
+    const prisma = {
+      user: {
+        findUnique: jest.fn(async (args: { where: Record<string, unknown> }) => {
+          const where = args.where;
+          if (typeof where.id === 'string') {
+            return users.get(where.id) ?? null;
+          }
+          const companyEmail = where.companyId_email as { companyId: string; email: string } | undefined;
+          if (companyEmail) {
+            return (
+              [...users.values()].find(
+                (row) => row.companyId === companyEmail.companyId && row.email === companyEmail.email
+              ) ?? null
+            );
+          }
+          const companyUsername = where.companyId_username as { companyId: string; username: string } | undefined;
+          if (companyUsername) {
+            return (
+              [...users.values()].find(
+                (row) => row.companyId === companyUsername.companyId && row.username === companyUsername.username
+              ) ?? null
+            );
+          }
+          const companyPersonnel = where.companyId_personnelId as { companyId: string; personnelId: string } | undefined;
+          if (companyPersonnel) {
+            return (
+              [...users.values()].find(
+                (row) => row.companyId === companyPersonnel.companyId && row.personnelId === companyPersonnel.personnelId
+              ) ?? null
+            );
+          }
+          return null;
+        }),
+        update: jest.fn(async (args: { where: { id: string }; data: Record<string, unknown> }) => {
+          const current = users.get(args.where.id);
+          const row = { ...current, ...args.data, id: args.where.id, companyId: current?.companyId ?? 'comp-demo' };
+          users.set(args.where.id, row);
+          return row;
+        }),
+        create: jest.fn(async (args: { data: Record<string, unknown> }) => {
+          users.set(String(args.data.id), args.data);
+          return args.data;
+        })
+      },
+      role: {
+        upsert: jest.fn(async (args: { where: { companyId_name: { name: string } } }) => {
+          const name = args.where.companyId_name.name;
+          const role = { id: `role-${name}`, name };
+          roles.set(role.id, role);
+          return role;
+        })
+      },
+      userRole: {
+        deleteMany: jest.fn(async () => ({ count: 0 })),
+        upsert: jest.fn(async (args: { create: { userId: string; roleId: string } }) => {
+          userRoles.push(args.create);
+          return args.create;
+        })
+      }
+    } as unknown as PrismaService;
+    const service = new AuthService(new AuthRepository(), new JwtService(), prisma);
+
+    await service.upsertManagedUser({
+      id: 'new-rider-id',
+      company_id: 'comp-demo',
+      personnel_id: 'personnel-driver-1',
+      username: 'rider2',
+      email: 'rider2@rider.vpos.local',
+      full_name: 'Demo Driver',
+      roles: ['rider'],
+      active: true,
+      password: 'StrongPass1'
+    });
+
+    expect(prisma.user.create).not.toHaveBeenCalled();
+    expect(prisma.user.update).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { id: 'existing-rider-id' },
+        data: expect.objectContaining({
+          username: 'rider2',
+          personnelId: 'personnel-driver-1',
+          email: 'rider2@rider.vpos.local',
+          fullName: 'Demo Driver',
+          isActive: true
+        })
+      })
+    );
+    expect(userRoles).toEqual([{ userId: 'existing-rider-id', roleId: 'role-rider' }]);
   });
 
   it('writes rider app logins to the tenant-routed datastore', async () => {
