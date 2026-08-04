@@ -27,6 +27,8 @@ type LoginTokenPair = TokenPair & {
 type ManagedAuthUserInput = {
   id: string;
   company_id: string;
+  personnel_id?: string | null;
+  username?: string | null;
   email: string;
   full_name?: string;
   roles: string[];
@@ -37,6 +39,7 @@ type ManagedAuthUserInput = {
 
 type AuthChannelOptions = {
   mobileChannel?: boolean;
+  riderChannel?: boolean;
   authAction?: string;
 };
 
@@ -261,7 +264,7 @@ export class AuthService {
     return this.seedReady;
   }
 
-  private async resolveCompanyId(clientId?: string, emailHint?: string): Promise<{ companyId: string; clientCode: string }> {
+  private async resolveCompanyId(clientId?: string, loginHint?: string): Promise<{ companyId: string; clientCode: string }> {
     const explicitClientCode = clientId?.trim();
     const hasExplicitClientCode = Boolean(explicitClientCode);
     const configuredDefaultClient = process.env.DEFAULT_CLIENT_ID?.trim() ?? '';
@@ -271,11 +274,15 @@ export class AuthService {
     const prisma = this.getPrismaIfEnabled();
     if (prisma) {
       try {
-        if (!hasExplicitClientCode && emailHint) {
-          const emailMatches = await prisma.user.findMany({
+        if (!hasExplicitClientCode && loginHint) {
+          const normalizedLoginHint = loginHint.trim().toLowerCase();
+          const loginMatches = await prisma.user.findMany({
             where: {
-              email: emailHint,
-              isActive: true
+              isActive: true,
+              OR: [
+                { email: normalizedLoginHint },
+                { username: normalizedLoginHint }
+              ]
             },
             select: {
               companyId: true,
@@ -289,16 +296,16 @@ export class AuthService {
             take: 2
           });
 
-          if (emailMatches.length === 1) {
-            const row = emailMatches[0];
+          if (loginMatches.length === 1) {
+            const row = loginMatches[0];
             return {
               companyId: row.companyId,
               clientCode: row.company.externalClientId ?? row.company.code
             };
           }
 
-          if (emailMatches.length > 1) {
-            throw new BadRequestException('Multiple tenant accounts found for this email. Enter tenant client id.');
+          if (loginMatches.length > 1) {
+            throw new BadRequestException('Multiple tenant accounts found for this login. Enter tenant client id.');
           }
         }
 
@@ -328,8 +335,8 @@ export class AuthService {
       }
     }
 
-    if (!hasExplicitClientCode && emailHint && this.memoryFallbackAllowed()) {
-      const match = this.repository.findByEmail(emailHint);
+    if (!hasExplicitClientCode && loginHint && this.memoryFallbackAllowed()) {
+      const match = this.repository.findByLogin(loginHint);
       if (match) {
         const inferredClientCode = match.company_id === 'comp-demo' ? 'DEMO' : match.company_id.replace(/^comp-/, '').toUpperCase();
         return { companyId: match.company_id, clientCode: inferredClientCode };
@@ -365,7 +372,7 @@ export class AuthService {
   }
 
   async login(
-    email: string,
+    login: string,
     password: string,
     deviceId: string,
     clientId?: string,
@@ -373,18 +380,19 @@ export class AuthService {
   ): Promise<LoginTokenPair> {
     this.assertProductionDatabaseAuth();
     await this.ensureSeedUsers();
-    const normalizedEmail = email.trim().toLowerCase();
-    const { companyId, clientCode } = await this.resolveCompanyId(clientId, normalizedEmail);
+    const normalizedLogin = login.trim().toLowerCase();
+    const { companyId, clientCode } = await this.resolveCompanyId(clientId, normalizedLogin);
 
     const prisma = this.getPrismaIfEnabled();
     if (prisma) {
       try {
-        const dbUser = await prisma.user.findUnique({
+        const dbUser = await prisma.user.findFirst({
           where: {
-            companyId_email: {
-              companyId,
-              email: normalizedEmail
-            }
+            companyId,
+            OR: [
+              { email: normalizedLogin },
+              { username: normalizedLogin }
+            ]
           },
           include: {
             userRoles: { include: { role: true } }
@@ -399,12 +407,13 @@ export class AuthService {
           throw new UnauthorizedException('Invalid credentials');
         }
         const roles = dbUser.userRoles.map((entry) => entry.role.name);
-        await this.assertMobileCashierRolePolicy(
+        await this.assertClientLoginPolicy(
           options,
           dbUser.companyId,
           dbUser.id,
           dbUser.email,
-          roles
+          roles,
+          dbUser.personnelId ?? null
         );
         await this.assertSubscriptionLoginAllowed(dbUser.companyId);
         const tokenPair = await this.issueTokenPair(
@@ -437,8 +446,8 @@ export class AuthService {
     }
 
     const memoryUser =
-      this.repository.findByEmailAndCompany(normalizedEmail, companyId) ??
-      (companyId === 'comp-demo' ? this.repository.findByEmail(normalizedEmail) : undefined);
+      this.repository.findByLoginAndCompany(normalizedLogin, companyId) ??
+      (companyId === 'comp-demo' ? this.repository.findByLogin(normalizedLogin) : undefined);
     if (!memoryUser || !memoryUser.active) {
       throw new UnauthorizedException('Invalid credentials');
     }
@@ -447,12 +456,13 @@ export class AuthService {
     if (!validPassword) {
       throw new UnauthorizedException('Invalid credentials');
     }
-    await this.assertMobileCashierRolePolicy(
+    await this.assertClientLoginPolicy(
       options,
       memoryUser.company_id,
       memoryUser.id,
       memoryUser.email,
-      memoryUser.roles
+      memoryUser.roles,
+      memoryUser.personnel_id ?? null
     );
     await this.assertSubscriptionLoginAllowed(memoryUser.company_id);
 
@@ -535,12 +545,13 @@ export class AuthService {
         }
 
         const roles = stored.user.userRoles.map((entry) => entry.role.name);
-        await this.assertMobileCashierRolePolicy(
+        await this.assertClientLoginPolicy(
           options,
           stored.user.companyId,
           stored.user.id,
           stored.user.email,
-          roles
+          roles,
+          stored.user.personnelId ?? null
         );
         await this.assertSubscriptionLoginAllowed(stored.user.companyId);
         return this.issueTokenPair(
@@ -585,12 +596,13 @@ export class AuthService {
     if (!user) {
       throw new UnauthorizedException('User not found');
     }
-    await this.assertMobileCashierRolePolicy(
+    await this.assertClientLoginPolicy(
       options,
       user.company_id,
       user.id,
       user.email,
-      user.roles
+      user.roles,
+      user.personnel_id ?? null
     );
     await this.assertSubscriptionLoginAllowed(user.company_id);
 
@@ -779,6 +791,8 @@ export class AuthService {
             ? await prisma.user.update({
                 where: { id: existing.id },
                 data: {
+                  username: input.username?.trim().toLowerCase() || null,
+                  personnelId: input.personnel_id?.trim() || null,
                   email: normalizedEmail,
                   fullName,
                   isActive: input.active,
@@ -790,6 +804,8 @@ export class AuthService {
                 data: {
                   id: input.id,
                   companyId: input.company_id,
+                  username: input.username?.trim().toLowerCase() || null,
+                  personnelId: input.personnel_id?.trim() || null,
                   email: normalizedEmail,
                   fullName,
                   passwordHash,
@@ -864,6 +880,8 @@ export class AuthService {
     this.repository.upsertUser({
       id: input.id,
       company_id: input.company_id,
+      personnel_id: input.personnel_id?.trim() || null,
+      username: input.username?.trim().toLowerCase() || null,
       email: normalizedEmail,
       password_hash: passwordHash,
       roles: input.roles,
@@ -1041,22 +1059,51 @@ export class AuthService {
     };
   }
 
-  private async assertMobileCashierRolePolicy(
+  private async assertClientLoginPolicy(
     options: AuthChannelOptions | undefined,
     companyId: string,
     userId: string,
     email: string,
-    roles: string[]
+    roles: string[],
+    personnelId?: string | null
   ): Promise<void> {
-    if (!options?.mobileChannel) {
-      return;
+    if (options?.riderChannel) {
+      const normalizedRoles = roles.map((role) => role.trim().toLowerCase());
+      const hasRiderRole = normalizedRoles.includes('rider') || normalizedRoles.includes('driver');
+      if (hasRiderRole && personnelId?.trim()) {
+        return;
+      }
+      await this.recordMobileAuthDeniedAudit(companyId, userId, email, roles);
+      throw new UnauthorizedException('Rider app login is restricted to assigned rider accounts');
     }
-    const hasCashierRole = roles.some((role) => role.trim().toLowerCase() === 'cashier');
-    if (hasCashierRole) {
-      return;
+
+    if (options?.mobileChannel) {
+      const hasCashierRole = roles.some((role) => role.trim().toLowerCase() === 'cashier');
+      if (hasCashierRole) {
+        return;
+      }
+      await this.recordMobileAuthDeniedAudit(companyId, userId, email, roles);
+      throw new UnauthorizedException('Mobile login is restricted to cashier accounts');
     }
-    await this.recordMobileAuthDeniedAudit(companyId, userId, email, roles);
-    throw new UnauthorizedException('Mobile login is restricted to cashier accounts');
+
+    if (this.isRiderOnlyAccount(roles, personnelId)) {
+      await this.recordMobileAuthDeniedAudit(companyId, userId, email, roles);
+      throw new UnauthorizedException('Rider accounts can only sign in from the Rider app');
+    }
+  }
+
+  private isRiderOnlyAccount(roles: string[], personnelId?: string | null): boolean {
+    if (!personnelId?.trim()) {
+      return false;
+    }
+    const normalizedRoles = new Set(roles.map((role) => role.trim().toLowerCase()).filter(Boolean));
+    if (normalizedRoles.has('admin') || normalizedRoles.has('owner') || normalizedRoles.has('platform_owner')) {
+      return false;
+    }
+    if (normalizedRoles.has('supervisor') || normalizedRoles.has('cashier')) {
+      return false;
+    }
+    return normalizedRoles.has('rider') || normalizedRoles.has('driver');
   }
 
   private async assertSubscriptionLoginAllowed(companyId: string): Promise<void> {

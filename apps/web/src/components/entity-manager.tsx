@@ -53,6 +53,7 @@ type EntityManagerProps = {
     form: Record<string, unknown>,
     context: { mode: 'create' | 'edit'; editingId: string | null }
   ) => void;
+  onRowClick?: (row: Record<string, unknown>) => void;
   renderFieldIndicator?: (args: {
     field: EntityField;
     value: unknown;
@@ -137,6 +138,7 @@ export function EntityManager({
   transformBeforeDelete,
   transformBeforeReactivate,
   onFormStateChange,
+  onRowClick,
   renderFieldIndicator,
   renderFieldAction,
   readOnly = false,
@@ -480,6 +482,16 @@ export function EntityManager({
     setDeleteConfirmOpen(true);
   }
 
+  function handleRowKeyDown(event: React.KeyboardEvent<HTMLElement>, item: Record<string, unknown>): void {
+    if (!onRowClick) {
+      return;
+    }
+    if (event.key === 'Enter' || event.key === ' ') {
+      event.preventDefault();
+      onRowClick(item);
+    }
+  }
+
   function requestSubmit(event: React.FormEvent<HTMLFormElement>): void {
     event.preventDefault();
     setConfirmOpen(true);
@@ -655,8 +667,12 @@ export function EntityManager({
                 <tbody>
                   {paginatedItems.pageRows.map((item, rowIndex) => (
                     <tr
-                      className={`border-b border-slate-100 text-sm text-slate-800 transition hover:bg-slate-50 dark:border-slate-800 dark:text-slate-200 dark:hover:bg-slate-800/50 ${rowIndex % 2 === 0 ? 'bg-white dark:bg-slate-900' : 'bg-slate-50/50 dark:bg-slate-900/70'}`}
+                      className={`border-b border-slate-100 text-sm text-slate-800 transition hover:bg-slate-50 dark:border-slate-800 dark:text-slate-200 dark:hover:bg-slate-800/50 ${onRowClick ? 'cursor-pointer focus:outline-none focus:ring-2 focus:ring-brandPrimary/40' : ''} ${rowIndex % 2 === 0 ? 'bg-white dark:bg-slate-900' : 'bg-slate-50/50 dark:bg-slate-900/70'}`}
                       key={String(item.id)}
+                      onClick={onRowClick ? () => onRowClick(item) : undefined}
+                      onKeyDown={(event) => handleRowKeyDown(event, item)}
+                      role={onRowClick ? 'button' : undefined}
+                      tabIndex={onRowClick ? 0 : undefined}
                     >
                       {columns.map((column) => (
                         <td className="max-w-[240px] px-4 py-3 align-top" key={`${String(item.id)}-${column}`}>
@@ -675,7 +691,10 @@ export function EntityManager({
                                   }
                                   disabled={isRowActionDisabled(action, item)}
                                   key={`${String(item.id)}-${action.key}`}
-                                  onClick={() => action.onClick(item)}
+                                  onClick={(event) => {
+                                    event.stopPropagation();
+                                    action.onClick(item);
+                                  }}
                                   type="button"
                                 >
                                   {action.label}
@@ -686,7 +705,10 @@ export function EntityManager({
                               <button
                                 className="rounded-lg border border-slate-300 px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-100 dark:border-slate-600 dark:text-slate-200 dark:hover:bg-slate-800"
                                 disabled={saving}
-                                onClick={() => openEdit(item)}
+                                onClick={(event) => {
+                                  event.stopPropagation();
+                                  openEdit(item);
+                                }}
                                 type="button"
                               >
                                 Edit
@@ -700,7 +722,10 @@ export function EntityManager({
                                     : 'border border-emerald-300 text-emerald-700 hover:bg-emerald-50 dark:border-emerald-700 dark:text-emerald-300 dark:hover:bg-emerald-950/40'
                                 }`}
                                 disabled={saving}
-                                onClick={() => openDelete(item)}
+                                onClick={(event) => {
+                                  event.stopPropagation();
+                                  openDelete(item);
+                                }}
                                 type="button"
                               >
                                 {Boolean(item.isActive) ? 'Deactivate' : 'Reactivate'}
@@ -717,7 +742,14 @@ export function EntityManager({
 
             <div className="space-y-3 p-3 md:hidden">
               {paginatedItems.pageRows.map((item) => (
-                <article className="rounded-xl border border-slate-200 bg-white p-3 shadow-sm dark:border-slate-700 dark:bg-slate-800/70" key={String(item.id)}>
+                <article
+                  className={`rounded-xl border border-slate-200 bg-white p-3 shadow-sm dark:border-slate-700 dark:bg-slate-800/70 ${onRowClick ? 'cursor-pointer focus:outline-none focus:ring-2 focus:ring-brandPrimary/40' : ''}`}
+                  key={String(item.id)}
+                  onClick={onRowClick ? () => onRowClick(item) : undefined}
+                  onKeyDown={(event) => handleRowKeyDown(event, item)}
+                  role={onRowClick ? 'button' : undefined}
+                  tabIndex={onRowClick ? 0 : undefined}
+                >
                   <div className="mb-2 flex items-center justify-between">
                     <p className="text-sm font-semibold text-slate-900 dark:text-slate-100">{compactPreview(item.name ?? item.code ?? item.id)}</p>
                     {!readOnly || rowActions.some((action) => action.showWhenReadOnly === true) ? (
@@ -731,7 +763,10 @@ export function EntityManager({
                               }
                               disabled={isRowActionDisabled(action, item)}
                               key={`${String(item.id)}-mobile-${action.key}`}
-                              onClick={() => action.onClick(item)}
+                              onClick={(event) => {
+                                event.stopPropagation();
+                                action.onClick(item);
+                              }}
                               type="button"
                             >
                               {action.label}
@@ -742,7 +777,10 @@ export function EntityManager({
                           <button
                             className="rounded-md border border-slate-300 px-2 py-1 text-xs font-semibold text-slate-700 dark:border-slate-600 dark:text-slate-200"
                             disabled={saving}
-                            onClick={() => openEdit(item)}
+                            onClick={(event) => {
+                              event.stopPropagation();
+                              openEdit(item);
+                            }}
                             type="button"
                           >
                             Edit
@@ -756,7 +794,10 @@ export function EntityManager({
                                 : 'border border-emerald-300 text-emerald-700 dark:border-emerald-700 dark:text-emerald-300'
                             }`}
                             disabled={saving}
-                            onClick={() => openDelete(item)}
+                            onClick={(event) => {
+                              event.stopPropagation();
+                              openDelete(item);
+                            }}
                             type="button"
                           >
                             {Boolean(item.isActive) ? 'Deactivate' : 'Reactivate'}

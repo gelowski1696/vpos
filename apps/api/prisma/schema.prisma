@@ -713,6 +713,8 @@ model User {
   id           String   @id @default(uuid())
   companyId    String
   branchId     String?
+  personnelId  String?
+  username     String?
   email        String
   fullName     String
   passwordHash String
@@ -755,7 +757,10 @@ model User {
   createdLpgItemServiceActions  LpgItemServiceAction[]     @relation("LpgItemServiceActionCreatedBy")
 
   @@unique([companyId, email])
+  @@unique([companyId, username])
+  @@unique([companyId, personnelId])
   @@index([companyId, updatedAt])
+  @@index([companyId, personnelId, updatedAt])
 }
 
 model MobileEnrollmentToken {

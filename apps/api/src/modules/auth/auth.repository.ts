@@ -3,6 +3,8 @@ import { Injectable } from '@nestjs/common';
 export interface AuthUser {
   id: string;
   company_id: string;
+  personnel_id?: string | null;
+  username?: string | null;
   email: string;
   password_hash: string;
   roles: string[];
@@ -23,6 +25,7 @@ export interface StoredRefreshToken {
 @Injectable()
 export class AuthRepository {
   private readonly users = new Map<string, AuthUser>();
+  private readonly usernames = new Map<string, string>();
   private readonly refreshTokens = new Map<string, StoredRefreshToken>();
 
   upsertUser(user: AuthUser): void {
@@ -32,11 +35,22 @@ export class AuthRepository {
         this.users.delete(key);
       }
     }
+    for (const [usernameKey, mappedEmail] of this.usernames.entries()) {
+      const existing = this.users.get(mappedEmail);
+      if (!existing || existing.id === user.id) {
+        this.usernames.delete(usernameKey);
+      }
+    }
+    const username = user.username?.trim().toLowerCase() || null;
     this.users.set(emailKey, {
       ...user,
+      username,
       email: emailKey,
       must_change_password: user.must_change_password === true
     });
+    if (username) {
+      this.usernames.set(this.companyScopedLoginKey(user.company_id, username), emailKey);
+    }
   }
 
   findByEmail(email: string): AuthUser | undefined {
@@ -49,6 +63,29 @@ export class AuthRepository {
       return undefined;
     }
     return user.company_id === companyId ? user : undefined;
+  }
+
+  findByLoginAndCompany(login: string, companyId: string): AuthUser | undefined {
+    const normalized = login.trim().toLowerCase();
+    const byEmail = this.findByEmailAndCompany(normalized, companyId);
+    if (byEmail) {
+      return byEmail;
+    }
+    const emailKey = this.usernames.get(this.companyScopedLoginKey(companyId, normalized));
+    return emailKey ? this.users.get(emailKey) : undefined;
+  }
+
+  findByLogin(login: string): AuthUser | undefined {
+    const normalized = login.trim().toLowerCase();
+    const byEmail = this.findByEmail(normalized);
+    if (byEmail) {
+      return byEmail;
+    }
+    const matches = [...this.usernames.entries()]
+      .filter(([key]) => key.endsWith(`::${normalized}`))
+      .map(([, emailKey]) => this.users.get(emailKey))
+      .filter((user): user is AuthUser => Boolean(user));
+    return matches.length === 1 ? matches[0] : undefined;
   }
 
   findById(userId: string): AuthUser | undefined {
@@ -70,5 +107,9 @@ export class AuthRepository {
     }
     token.revoked = true;
     token.replaced_by = replacement;
+  }
+
+  private companyScopedLoginKey(companyId: string, login: string): string {
+    return `${companyId}::${login}`;
   }
 }

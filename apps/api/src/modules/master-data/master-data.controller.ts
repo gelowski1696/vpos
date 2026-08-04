@@ -337,6 +337,124 @@ export class MasterDataController {
     return row;
   }
 
+  @Get('rider-users')
+  @Roles('admin', 'owner', 'platform_owner', 'supervisor')
+  listRiderUsers(
+    @Req() req: RequestWithTenant,
+    @Query('companyId') companyId?: string
+  ): ReturnType<MasterDataService['listRiderUsers']> {
+    const targetCompanyId = this.resolveTargetCompanyId(req, companyId);
+    return this.masterDataService.listRiderUsers(targetCompanyId);
+  }
+
+  @Get('rider-users/username-exists')
+  @Roles('admin', 'owner', 'platform_owner', 'supervisor')
+  async riderUsernameExists(
+    @Req() req: RequestWithTenant,
+    @Query('username') username?: string,
+    @Query('excludeUserId') excludeUserId?: string,
+    @Query('companyId') companyId?: string
+  ): Promise<{ exists: boolean }> {
+    const targetCompanyId = this.resolveTargetCompanyId(req, companyId);
+    const exists = await this.masterDataService.riderUsernameExists(
+      String(username ?? ''),
+      targetCompanyId,
+      excludeUserId
+    );
+    return { exists };
+  }
+
+  @Post('rider-users')
+  @Roles('admin', 'owner', 'platform_owner')
+  async createRiderUser(
+    @Req() req: RequestWithTenant,
+    @Body() body: PrimitivePayload
+  ): Promise<ReturnType<MasterDataService['createRiderUser']>> {
+    const targetCompanyId = this.resolveTargetCompanyId(req, body.companyId);
+    const row = await this.masterDataService.createRiderUser(
+      {
+        username: String(body.username ?? ''),
+        password: body.password === undefined ? undefined : String(body.password),
+        personnelId: String(body.personnelId ?? body.personnel_id ?? ''),
+        isActive: body.isActive === undefined ? true : Boolean(body.isActive)
+      },
+      targetCompanyId
+    );
+    await this.auditWrite(req, 'MASTER_DATA_RIDER_USER_CREATE', 'User', row.id, {
+      username: row.username,
+      personnelId: row.personnelId
+    }, targetCompanyId);
+    return row;
+  }
+
+  @Put('rider-users/:id')
+  @Roles('admin', 'owner', 'platform_owner')
+  async updateRiderUser(
+    @Req() req: RequestWithTenant,
+    @Param('id') id: string,
+    @Body() body: PrimitivePayload
+  ): Promise<ReturnType<MasterDataService['updateRiderUser']>> {
+    const targetCompanyId = this.resolveTargetCompanyId(req, body.companyId);
+    const row = await this.masterDataService.updateRiderUser(
+      id,
+      {
+        username: body.username === undefined ? undefined : String(body.username),
+        password: body.password === undefined ? undefined : String(body.password),
+        personnelId:
+          body.personnelId === undefined && body.personnel_id === undefined
+            ? undefined
+            : String(body.personnelId ?? body.personnel_id ?? ''),
+        isActive: body.isActive === undefined ? undefined : Boolean(body.isActive)
+      },
+      targetCompanyId
+    );
+    await this.auditWrite(req, 'MASTER_DATA_RIDER_USER_UPDATE', 'User', row.id, {
+      username: row.username,
+      personnelId: row.personnelId,
+      isActive: row.isActive
+    }, targetCompanyId);
+    return row;
+  }
+
+  @Delete('rider-users/:id')
+  @Roles('admin', 'owner', 'platform_owner')
+  async deleteRiderUser(
+    @Req() req: RequestWithTenant,
+    @Param('id') id: string,
+    @Query('companyId') companyId?: string
+  ): Promise<ReturnType<MasterDataService['safeDeleteRiderUser']>> {
+    if (req.user?.sub && req.user.sub === id) {
+      throw new ForbiddenException('You cannot deactivate your own account');
+    }
+    const targetCompanyId = this.resolveTargetCompanyId(req, companyId);
+    const row = await this.masterDataService.safeDeleteRiderUser(id, targetCompanyId);
+    await this.auditWrite(req, 'MASTER_DATA_RIDER_USER_DEACTIVATE', 'User', row.id, {
+      username: row.username,
+      personnelId: row.personnelId
+    }, targetCompanyId);
+    return row;
+  }
+
+  @Delete('rider-users/:id/permanent')
+  @Roles('admin', 'owner', 'platform_owner')
+  async hardDeleteRiderUser(
+    @Req() req: RequestWithTenant,
+    @Param('id') id: string,
+    @Query('companyId') companyId?: string
+  ): Promise<ReturnType<MasterDataService['hardDeleteRiderUser']>> {
+    if (req.user?.sub && req.user.sub === id) {
+      throw new ForbiddenException('You cannot delete your own account');
+    }
+    const targetCompanyId = this.resolveTargetCompanyId(req, companyId);
+    const row = await this.masterDataService.hardDeleteRiderUser(id, targetCompanyId);
+    await this.auditWrite(req, 'MASTER_DATA_RIDER_USER_DELETE', 'User', row.id, {
+      username: row.username,
+      personnelId: row.personnelId,
+      permanent: true
+    }, targetCompanyId);
+    return row;
+  }
+
   @Get('personnel-roles')
   @Roles('admin', 'owner', 'platform_owner', 'supervisor', 'cashier', 'driver', 'helper')
   listPersonnelRoles(
@@ -449,6 +567,17 @@ export class MasterDataController {
       excludeId
     );
     return { exists };
+  }
+
+  @Get('personnels/:id/transactions')
+  @Roles('admin', 'owner', 'platform_owner', 'supervisor')
+  listPersonnelTransactions(
+    @Req() req: RequestWithTenant,
+    @Param('id') id: string,
+    @Query('companyId') companyId?: string
+  ): ReturnType<MasterDataService['listPersonnelTransactions']> {
+    const targetCompanyId = this.resolveTargetCompanyId(req, companyId);
+    return this.masterDataService.listPersonnelTransactions(id, targetCompanyId);
   }
 
   @Post('personnels')

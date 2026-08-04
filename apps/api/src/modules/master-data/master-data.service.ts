@@ -50,8 +50,23 @@ export type UserRecord = Timestamped & {
   id: string;
   companyId?: string;
   branchId?: string | null;
+  personnelId?: string | null;
+  username?: string | null;
   email: string;
   fullName: string;
+  roles: string[];
+  isActive: boolean;
+};
+
+export type RiderUserRecord = Timestamped & {
+  id: string;
+  companyId?: string;
+  username: string;
+  personnelId: string;
+  personnelCode?: string | null;
+  personnelName?: string | null;
+  branchId?: string | null;
+  branchName?: string | null;
   roles: string[];
   isActive: boolean;
 };
@@ -77,6 +92,34 @@ export type PersonnelRecord = Timestamped & {
   salaryRate: number;
   commissionEligible: boolean;
   isActive: boolean;
+};
+
+export type PersonnelTransactionRecord = {
+  id: string;
+  saleId: string;
+  saleLineId: string;
+  receiptNumber: string | null;
+  postedAt: string;
+  saleType: string;
+  saleStatus: string;
+  branchId: string;
+  branchCode: string | null;
+  branchName: string | null;
+  customerId: string | null;
+  customerCode: string | null;
+  customerName: string | null;
+  productId: string;
+  productSku: string | null;
+  productName: string;
+  quantity: number;
+  unitPrice: number;
+  lineTotal: number;
+  saleTotalAmount: number;
+  commissionRate: number;
+  splitPercent: number;
+  commissionAmount: number;
+  personnelRole: string | null;
+  createdAt: string;
 };
 
 export type CustomerRecord = Timestamped & {
@@ -293,6 +336,13 @@ export type CreateUser = Pick<UserRecord, 'email' | 'fullName' | 'roles'> &
   Partial<Pick<UserRecord, 'isActive'>> & {
     password?: string;
   };
+export type CreateRiderUser = {
+  username: string;
+  password?: string;
+  personnelId: string;
+  isActive?: boolean;
+};
+export type UpdateRiderUser = Partial<CreateRiderUser>;
 export type CreatePersonnelRole = Pick<PersonnelRoleRecord, 'code' | 'name'> &
   Partial<Pick<PersonnelRoleRecord, 'isActive'>>;
 export type CreatePersonnel = Pick<PersonnelRecord, 'code' | 'fullName' | 'branchId' | 'roleId'> &
@@ -1391,6 +1441,287 @@ export class MasterDataService {
     return row;
   }
 
+  async listRiderUsers(targetCompanyId?: string): Promise<RiderUserRecord[]> {
+    const companyId = targetCompanyId ?? (await this.getCompanyIdOrNull());
+    const personnels = await this.listPersonnel(companyId ?? undefined);
+    const personnelById = new Map(personnels.map((row) => [row.id, row]));
+    const usePrisma =
+      Boolean(companyId && this.prisma) &&
+      (process.env.NODE_ENV !== 'test' || process.env.VPOS_TEST_USE_DB === 'true');
+
+    if (usePrisma && companyId) {
+      const rows = await this.prisma!.user.findMany({
+        where: {
+          companyId,
+          personnelId: { not: null },
+          userRoles: {
+            some: {
+              role: {
+                name: { in: ['rider', 'driver'] }
+              }
+            }
+          }
+        },
+        include: {
+          userRoles: { include: { role: true } }
+        },
+        orderBy: [{ isActive: 'desc' }, { username: 'asc' }, { fullName: 'asc' }]
+      });
+      return rows.map((row) => this.mapRiderUserFromUser(row, personnelById.get(row.personnelId ?? '')));
+    }
+
+    const resolvedCompanyId = companyId ?? 'comp-demo';
+    return this.users
+      .filter((row) => (row.companyId ?? 'comp-demo') === resolvedCompanyId)
+      .filter((row) => Boolean(row.personnelId?.trim()))
+      .filter((row) => this.isRiderRoleList(row.roles))
+      .sort((left, right) => {
+        if (left.isActive !== right.isActive) {
+          return left.isActive ? -1 : 1;
+        }
+        return String(left.username ?? left.fullName).localeCompare(String(right.username ?? right.fullName));
+      })
+      .map((row) => this.mapRiderUserFromUser(row, personnelById.get(row.personnelId ?? '')));
+  }
+
+  async riderUsernameExists(
+    username: string,
+    targetCompanyId?: string,
+    excludeUserId?: string
+  ): Promise<boolean> {
+    const companyId = targetCompanyId ?? (await this.getCompanyIdOrNull());
+    const normalizedUsername = this.normalizeRiderUsername(username);
+    const excludeId = excludeUserId?.trim() || null;
+    const usePrisma =
+      Boolean(companyId && this.prisma) &&
+      (process.env.NODE_ENV !== 'test' || process.env.VPOS_TEST_USE_DB === 'true');
+
+    if (usePrisma && companyId) {
+      const existing = await this.prisma!.user.findFirst({
+        where: {
+          companyId,
+          username: normalizedUsername,
+          ...(excludeId ? { id: { not: excludeId } } : {})
+        },
+        select: { id: true }
+      });
+      return Boolean(existing);
+    }
+
+    const resolvedCompanyId = companyId ?? 'comp-demo';
+    return this.users.some((row) => {
+      if ((row.companyId ?? 'comp-demo') !== resolvedCompanyId) {
+        return false;
+      }
+      if (excludeId && row.id === excludeId) {
+        return false;
+      }
+      return (row.username ?? '').trim().toLowerCase() === normalizedUsername;
+    });
+  }
+
+  async createRiderUser(input: CreateRiderUser, targetCompanyId?: string): Promise<RiderUserRecord> {
+    const companyId = targetCompanyId ?? (await this.getCompanyIdOrNull());
+    await this.enforceMasterDataWritePolicy(companyId ?? undefined);
+    const username = this.normalizeRiderUsername(input.username);
+    const password = this.requireRiderPassword(input.password);
+    this.validatePasswordOrThrow(password);
+    const personnel = await this.resolveRiderPersonnel(input.personnelId, companyId ?? undefined);
+
+    if (await this.riderUsernameExists(username, companyId ?? undefined)) {
+      throw new BadRequestException(`Rider username "${username}" already exists.`);
+    }
+    if (await this.riderPersonnelInUse(personnel.id, companyId ?? undefined)) {
+      throw new BadRequestException('Selected personnel already has a rider user login.');
+    }
+
+    const row: UserRecord = {
+      id: uuidv4(),
+      ...this.stamp(),
+      companyId: companyId ?? 'comp-demo',
+      personnelId: personnel.id,
+      username,
+      email: this.riderEmailForUsername(username),
+      fullName: personnel.fullName,
+      roles: ['rider'],
+      isActive: input.isActive ?? true
+    };
+    await this.syncAuthUser(row, password, companyId ?? row.companyId);
+
+    const usePrisma =
+      Boolean(companyId && this.prisma) &&
+      (process.env.NODE_ENV !== 'test' || process.env.VPOS_TEST_USE_DB === 'true');
+    if (usePrisma && companyId) {
+      const created = await this.prisma!.user.findUnique({
+        where: { id: row.id },
+        include: {
+          userRoles: { include: { role: true } }
+        }
+      });
+      if (!created) {
+        throw new NotFoundException('Rider user not found');
+      }
+      return this.mapRiderUserFromUser(created, personnel);
+    }
+
+    this.users.push(row);
+    return this.mapRiderUserFromUser(row, personnel);
+  }
+
+  async updateRiderUser(
+    id: string,
+    input: UpdateRiderUser,
+    targetCompanyId?: string
+  ): Promise<RiderUserRecord> {
+    const companyId = targetCompanyId ?? (await this.getCompanyIdOrNull());
+    await this.enforceMasterDataWritePolicy(companyId ?? undefined);
+    const usePrisma =
+      Boolean(companyId && this.prisma) &&
+      (process.env.NODE_ENV !== 'test' || process.env.VPOS_TEST_USE_DB === 'true');
+
+    const nextUsername = input.username === undefined ? undefined : this.normalizeRiderUsername(input.username);
+    if (input.password !== undefined && input.password.trim()) {
+      this.validatePasswordOrThrow(input.password);
+    }
+    const nextPersonnel =
+      input.personnelId === undefined
+        ? undefined
+        : await this.resolveRiderPersonnel(input.personnelId, companyId ?? undefined);
+
+    if (usePrisma && companyId) {
+      const existing = await this.prisma!.user.findFirst({
+        where: { id, companyId },
+        include: {
+          userRoles: { include: { role: true } }
+        }
+      });
+      if (!existing || !this.isRiderRoleList(existing.userRoles.map((entry) => entry.role.name))) {
+        throw new NotFoundException('Rider user not found');
+      }
+
+      if (nextUsername && (await this.riderUsernameExists(nextUsername, companyId, existing.id))) {
+        throw new BadRequestException(`Rider username "${nextUsername}" already exists.`);
+      }
+      if (
+        nextPersonnel &&
+        nextPersonnel.id !== existing.personnelId &&
+        (await this.riderPersonnelInUse(nextPersonnel.id, companyId, existing.id))
+      ) {
+        throw new BadRequestException('Selected personnel already has a rider user login.');
+      }
+
+      const username = nextUsername ?? existing.username ?? this.usernameFromRiderEmail(existing.email);
+      const personnel =
+        nextPersonnel ??
+        (await this.resolveRiderPersonnel(existing.personnelId ?? '', companyId));
+      const nextRow: UserRecord = {
+        id: existing.id,
+        companyId: existing.companyId,
+        personnelId: personnel.id,
+        username,
+        email: this.riderEmailForUsername(username),
+        fullName: personnel.fullName,
+        roles: ['rider'],
+        isActive: input.isActive === undefined ? existing.isActive : input.isActive,
+        createdAt: existing.createdAt.toISOString(),
+        updatedAt: new Date().toISOString()
+      };
+      await this.syncAuthUser(nextRow, input.password?.trim() || undefined, companyId);
+
+      const updated = await this.prisma!.user.findUnique({
+        where: { id: existing.id },
+        include: {
+          userRoles: { include: { role: true } }
+        }
+      });
+      if (!updated) {
+        throw new NotFoundException('Rider user not found');
+      }
+      return this.mapRiderUserFromUser(updated, personnel);
+    }
+
+    const row = this.find(this.users, id, 'Rider user');
+    if (!this.isRiderRoleList(row.roles) || !row.personnelId) {
+      throw new NotFoundException('Rider user not found');
+    }
+    const resolvedCompanyId = companyId ?? row.companyId ?? 'comp-demo';
+    if (nextUsername && (await this.riderUsernameExists(nextUsername, resolvedCompanyId, row.id))) {
+      throw new BadRequestException(`Rider username "${nextUsername}" already exists.`);
+    }
+    if (
+      nextPersonnel &&
+      nextPersonnel.id !== row.personnelId &&
+      (await this.riderPersonnelInUse(nextPersonnel.id, resolvedCompanyId, row.id))
+    ) {
+      throw new BadRequestException('Selected personnel already has a rider user login.');
+    }
+
+    const personnel = nextPersonnel ?? (await this.resolveRiderPersonnel(row.personnelId, resolvedCompanyId));
+    const username = nextUsername ?? row.username ?? this.usernameFromRiderEmail(row.email);
+    Object.assign(row, {
+      personnelId: personnel.id,
+      username,
+      email: this.riderEmailForUsername(username),
+      fullName: personnel.fullName,
+      roles: ['rider'],
+      isActive: input.isActive === undefined ? row.isActive : input.isActive,
+      updatedAt: this.now()
+    });
+    await this.syncAuthUser(row, input.password?.trim() || undefined, resolvedCompanyId);
+    return this.mapRiderUserFromUser(row, personnel);
+  }
+
+  async safeDeleteRiderUser(id: string, targetCompanyId?: string): Promise<RiderUserRecord> {
+    return this.updateRiderUser(id, { isActive: false }, targetCompanyId);
+  }
+
+  async hardDeleteRiderUser(id: string, targetCompanyId?: string): Promise<RiderUserRecord> {
+    const companyId = targetCompanyId ?? (await this.getCompanyIdOrNull());
+    await this.enforceMasterDataWritePolicy(companyId ?? undefined);
+    const usePrisma =
+      Boolean(companyId && this.prisma) &&
+      (process.env.NODE_ENV !== 'test' || process.env.VPOS_TEST_USE_DB === 'true');
+
+    if (usePrisma && companyId) {
+      const existing = await this.prisma!.user.findFirst({
+        where: { id, companyId },
+        include: {
+          userRoles: { include: { role: true } }
+        }
+      });
+      if (!existing || !this.isRiderRoleList(existing.userRoles.map((entry) => entry.role.name))) {
+        throw new NotFoundException('Rider user not found');
+      }
+      const personnel = existing.personnelId
+        ? await this.resolveRiderPersonnel(existing.personnelId, companyId)
+        : null;
+      const mapped = this.mapRiderUserFromUser(existing, personnel ?? undefined);
+      try {
+        await this.prisma!.user.delete({ where: { id: existing.id } });
+      } catch (error) {
+        if (this.isRelationConstraintError(error)) {
+          throw new BadRequestException(
+            'Rider user cannot be permanently deleted because it is linked to delivery records. Deactivate it instead.'
+          );
+        }
+        throw error;
+      }
+      return mapped;
+    }
+
+    const row = this.find(this.users, id, 'Rider user');
+    if (!this.isRiderRoleList(row.roles) || !row.personnelId) {
+      throw new NotFoundException('Rider user not found');
+    }
+    const personnel = await this.resolveRiderPersonnel(row.personnelId, companyId ?? row.companyId);
+    const mapped = this.mapRiderUserFromUser(row, personnel);
+    const userIndex = this.users.findIndex((entry) => entry.id === id);
+    if (userIndex >= 0) {
+      this.users.splice(userIndex, 1);
+    }
+    return mapped;
+  }
+
   async listPersonnelRoles(targetCompanyId?: string): Promise<PersonnelRoleRecord[]> {
     const companyId = targetCompanyId ?? (await this.getCompanyIdOrNull());
     const binding = await this.getTenantBinding(companyId);
@@ -1629,6 +1960,119 @@ export class MasterDataService {
         throw error;
       }
       return this.personnels;
+    }
+  }
+
+  async listPersonnelTransactions(
+    personnelId: string,
+    targetCompanyId?: string
+  ): Promise<PersonnelTransactionRecord[]> {
+    const id = personnelId?.trim();
+    if (!id) {
+      throw new BadRequestException('Personnel id is required.');
+    }
+    const companyId = targetCompanyId ?? (await this.getCompanyIdOrNull());
+    const binding = await this.getTenantBinding(companyId);
+    if (!binding || !companyId) {
+      this.find(this.personnels, id, 'Personnel');
+      return [];
+    }
+
+    try {
+      const personnel = await binding.client.personnel.findFirst({
+        where: { id, companyId },
+        select: { id: true }
+      });
+      if (!personnel) {
+        throw new NotFoundException('Personnel not found');
+      }
+
+      const rows = await binding.client.salePersonnelCommission.findMany({
+        where: {
+          companyId,
+          personnelId: id
+        },
+        include: {
+          product: {
+            select: {
+              id: true,
+              sku: true,
+              name: true
+            }
+          },
+          saleLine: {
+            select: {
+              quantity: true,
+              unitPrice: true,
+              lineTotal: true
+            }
+          },
+          sale: {
+            select: {
+              id: true,
+              saleType: true,
+              status: true,
+              totalAmount: true,
+              postedAt: true,
+              createdAt: true,
+              branchId: true,
+              customerId: true,
+              branch: {
+                select: {
+                  code: true,
+                  name: true
+                }
+              },
+              customer: {
+                select: {
+                  code: true,
+                  name: true
+                }
+              },
+              receipt: {
+                select: {
+                  receiptNumber: true
+                }
+              }
+            }
+          }
+        },
+        orderBy: [{ createdAt: 'desc' }, { id: 'desc' }]
+      });
+
+      return rows.map((row) => ({
+        id: row.id,
+        saleId: row.saleId,
+        saleLineId: row.saleLineId,
+        receiptNumber: row.sale.receipt?.receiptNumber ?? null,
+        postedAt: (row.sale.postedAt ?? row.sale.createdAt).toISOString(),
+        saleType: row.sale.saleType,
+        saleStatus: row.sale.status,
+        branchId: row.sale.branchId,
+        branchCode: row.sale.branch?.code ?? null,
+        branchName: row.sale.branch?.name ?? null,
+        customerId: row.sale.customerId ?? null,
+        customerCode: row.sale.customer?.code ?? null,
+        customerName: row.sale.customer?.name ?? null,
+        productId: row.productId,
+        productSku: row.product?.sku ?? null,
+        productName: row.product?.name ?? row.productId,
+        quantity: Number(row.quantity),
+        unitPrice: Number(row.saleLine.unitPrice),
+        lineTotal: Number(row.saleLine.lineTotal),
+        saleTotalAmount: Number(row.sale.totalAmount),
+        commissionRate: Number(row.commissionRate),
+        splitPercent: Number(row.splitPercent),
+        commissionAmount: Number(row.commissionAmount),
+        personnelRole: row.personnelRoleSnapshot ?? null,
+        createdAt: row.createdAt.toISOString()
+      }));
+    } catch (error) {
+      if (error instanceof NotFoundException || binding.mode === TenancyDatastoreMode.DEDICATED_DB) {
+        throw error;
+      }
+      this.find(this.personnels, id, 'Personnel');
+      return [];
     }
   }
 
@@ -7655,6 +8099,8 @@ export class MasterDataService {
     await this.authService.upsertManagedUser({
       id: user.id,
       company_id: companyId,
+      personnel_id: user.personnelId ?? null,
+      username: user.username ?? null,
       email: user.email,
       full_name: user.fullName,
       roles: user.roles,
@@ -8404,10 +8850,144 @@ export class MasterDataService {
     return (code ?? '').trim().toUpperCase() === 'LOC-CUST-OUT';
   }
 
+  private normalizeRiderUsername(username: string): string {
+    const normalized = String(username ?? '').trim().toLowerCase();
+    if (!normalized) {
+      throw new BadRequestException('Rider username is required.');
+    }
+    if (normalized.length < 3 || normalized.length > 40) {
+      throw new BadRequestException('Rider username must be 3 to 40 characters.');
+    }
+    if (!/^[a-z0-9._-]+$/.test(normalized)) {
+      throw new BadRequestException('Rider username can only use letters, numbers, dot, underscore, and dash.');
+    }
+    if (normalized.includes('@')) {
+      throw new BadRequestException('Use username only, not an email address.');
+    }
+    return normalized;
+  }
+
+  private requireRiderPassword(password?: string): string {
+    const normalized = password?.trim();
+    if (!normalized) {
+      throw new BadRequestException('Password is required for rider user creation.');
+    }
+    return normalized;
+  }
+
+  private riderEmailForUsername(username: string): string {
+    return `${this.normalizeRiderUsername(username)}@rider.vpos.local`;
+  }
+
+  private usernameFromRiderEmail(email: string): string {
+    return String(email ?? '').trim().toLowerCase().replace(/@rider\.vpos\.local$/, '');
+  }
+
+  private isRiderRoleList(roles: string[]): boolean {
+    const normalized = new Set(roles.map((role) => role.trim().toLowerCase()).filter(Boolean));
+    return normalized.has('rider') || normalized.has('driver');
+  }
+
+  private async resolveRiderPersonnel(personnelId: string, targetCompanyId?: string): Promise<PersonnelRecord> {
+    const id = personnelId?.trim();
+    if (!id) {
+      throw new BadRequestException('Personnel assignment is required.');
+    }
+    const rows = await this.listPersonnel(targetCompanyId);
+    const row = rows.find((entry) => entry.id === id);
+    if (!row || row.isActive === false) {
+      throw new BadRequestException('Selected personnel was not found or is inactive.');
+    }
+    return row;
+  }
+
+  private async riderPersonnelInUse(
+    personnelId: string,
+    targetCompanyId?: string,
+    excludeUserId?: string
+  ): Promise<boolean> {
+    const companyId = targetCompanyId ?? (await this.getCompanyIdOrNull());
+    const normalizedPersonnelId = personnelId.trim();
+    const normalizedExcludeId = excludeUserId?.trim() || null;
+    const usePrisma =
+      Boolean(companyId && this.prisma) &&
+      (process.env.NODE_ENV !== 'test' || process.env.VPOS_TEST_USE_DB === 'true');
+
+    if (usePrisma && companyId) {
+      const existing = await this.prisma!.user.findFirst({
+        where: {
+          companyId,
+          personnelId: normalizedPersonnelId,
+          ...(normalizedExcludeId ? { id: { not: normalizedExcludeId } } : {}),
+          userRoles: {
+            some: {
+              role: {
+                name: { in: ['rider', 'driver'] }
+              }
+            }
+          }
+        },
+        select: { id: true }
+      });
+      return Boolean(existing);
+    }
+
+    const resolvedCompanyId = companyId ?? 'comp-demo';
+    return this.users.some((row) => {
+      if ((row.companyId ?? 'comp-demo') !== resolvedCompanyId) {
+        return false;
+      }
+      if (normalizedExcludeId && row.id === normalizedExcludeId) {
+        return false;
+      }
+      return row.personnelId === normalizedPersonnelId && this.isRiderRoleList(row.roles);
+    });
+  }
+
+  private mapRiderUserFromUser(
+    row: {
+      id: string;
+      companyId?: string | null;
+      personnelId?: string | null;
+      username?: string | null;
+      email: string;
+      fullName: string;
+      isActive: boolean;
+      createdAt: string | Date;
+      updatedAt: string | Date;
+      roles?: string[];
+      userRoles?: Array<{ role: { name: string } }>;
+    },
+    personnel?: PersonnelRecord
+  ): RiderUserRecord {
+    const roles =
+      row.roles ??
+      row.userRoles?.map((entry) => entry.role.name) ??
+      ['rider'];
+    const createdAt = row.createdAt instanceof Date ? row.createdAt.toISOString() : row.createdAt;
+    const updatedAt = row.updatedAt instanceof Date ? row.updatedAt.toISOString() : row.updatedAt;
+    return {
+      id: row.id,
+      companyId: row.companyId ?? undefined,
+      username: row.username?.trim() || this.usernameFromRiderEmail(row.email),
+      personnelId: row.personnelId ?? personnel?.id ?? '',
+      personnelCode: personnel?.code ?? null,
+      personnelName: personnel?.fullName ?? row.fullName,
+      branchId: personnel?.branchId ?? null,
+      branchName: null,
+      roles: [...new Set(roles)],
+      isActive: row.isActive,
+      createdAt,
+      updatedAt
+    };
+  }
+
   private mapUserFromPrisma(row: {
     id: string;
     companyId: string;
     branchId?: string | null;
+    personnelId?: string | null;
+    username?: string | null;
     email: string;
     fullName: string;
     isActive: boolean;
@@ -8419,6 +8999,8 @@ export class MasterDataService {
       id: row.id,
       companyId: row.companyId,
       branchId: row.branchId ?? null,
+      personnelId: row.personnelId ?? null,
+      username: row.username ?? null,
       email: row.email,
       fullName: row.fullName,
       roles: [...new Set(row.userRoles.map((entry) => entry.role.name))],

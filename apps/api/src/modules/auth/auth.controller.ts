@@ -24,8 +24,9 @@ export class AuthController {
     client_id: string;
     must_change_password: boolean;
   }> {
-    return this.authService.login(dto.email, dto.password, dto.device_id, clientId, {
-      mobileChannel: this.isMobileClient(vposClient)
+    return this.authService.login(dto.email ?? dto.username ?? '', dto.password, dto.device_id, clientId, {
+      mobileChannel: this.isMobileClient(vposClient),
+      riderChannel: this.isRiderClient(vposClient)
     });
   }
 
@@ -42,7 +43,8 @@ export class AuthController {
     must_change_password?: boolean;
   }> {
     return this.authService.refresh(dto.refresh_token, {
-      mobileChannel: this.isMobileClient(vposClient)
+      mobileChannel: this.isMobileClient(vposClient),
+      riderChannel: this.isRiderClient(vposClient)
     });
   }
 
@@ -55,6 +57,7 @@ export class AuthController {
   ): Promise<{ success: true }> {
     return this.authService.logout(dto.refresh_token, {
       mobileChannel: this.isMobileClient(vposClient),
+      riderChannel: this.isRiderClient(vposClient),
       authAction: vposAuthAction
     });
   }
@@ -77,5 +80,9 @@ export class AuthController {
 
   private isMobileClient(value: string | undefined): boolean {
     return (value ?? '').trim().toLowerCase() === 'mobile';
+  }
+
+  private isRiderClient(value: string | undefined): boolean {
+    return (value ?? '').trim().toLowerCase() === 'rider';
   }
 }
