@@ -107,7 +107,7 @@ describe('rider personnel users', () => {
     ).rejects.toThrow('Rider app login is restricted to assigned rider accounts');
   });
 
-  it('reuses existing database auth users by rider username during provisioning', async () => {
+  it('repairs stale database auth rider username and personnel collisions during provisioning', async () => {
     process.env.VPOS_TEST_USE_DB = 'true';
     process.env.VPOS_AUTH_SEED_LEGACY_DEMO = 'false';
     const users = new Map<string, Record<string, unknown>>();
@@ -118,6 +118,17 @@ describe('rider personnel users', () => {
       personnelId: null,
       email: 'old-rider2@rider.vpos.local',
       fullName: 'Old Rider',
+      passwordHash: 'old-hash',
+      mustChangePassword: false,
+      isActive: true
+    });
+    users.set('stale-personnel-rider-id', {
+      id: 'stale-personnel-rider-id',
+      companyId: 'comp-demo',
+      username: 'testrider1',
+      personnelId: 'personnel-driver-1',
+      email: 'testrider1@rider.vpos.local',
+      fullName: 'Stale Rider',
       passwordHash: 'old-hash',
       mustChangePassword: false,
       isActive: true
@@ -208,6 +219,17 @@ describe('rider personnel users', () => {
           email: 'rider2@rider.vpos.local',
           fullName: 'Demo Driver',
           isActive: true
+        })
+      })
+    );
+    expect(prisma.user.update).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { id: 'stale-personnel-rider-id' },
+        data: expect.objectContaining({
+          username: null,
+          personnelId: null,
+          email: 'archived+stale-personnel-rider-id@rider.vpos.local',
+          isActive: false
         })
       })
     );

@@ -37,6 +37,19 @@ type ManagedAuthUserInput = {
   require_password_change?: boolean;
 };
 
+type ManagedAuthUserRow = {
+  id: string;
+  companyId: string;
+  personnelId: string | null;
+  username: string | null;
+  email: string;
+  fullName: string;
+  passwordHash: string;
+  mustChangePassword: boolean;
+  isActive: boolean;
+  userRoles: Array<{ role: { name: string } }>;
+};
+
 type AuthChannelOptions = {
   mobileChannel?: boolean;
   riderChannel?: boolean;
@@ -765,9 +778,22 @@ export class AuthService {
         const selectManagedUser = {
           id: true,
           companyId: true,
+          personnelId: true,
+          username: true,
+          email: true,
           fullName: true,
           passwordHash: true,
-          mustChangePassword: true
+          mustChangePassword: true,
+          isActive: true,
+          userRoles: {
+            select: {
+              role: {
+                select: {
+                  name: true
+                }
+              }
+            }
+          }
         } as const;
         const byId = await prisma.user.findUnique({
           where: { id: input.id },
@@ -813,15 +839,48 @@ export class AuthService {
         }
 
         const candidates = [byId, byEmail, byUsername, byPersonnel].filter(
-          (row): row is NonNullable<typeof byId> => Boolean(row)
+          (row): row is ManagedAuthUserRow => Boolean(row)
         );
         const candidateIds = new Set(candidates.map((row) => row.id));
+        const inputIsRiderManaged = this.isRiderManagedRoleList(input.roles);
+        let existing: ManagedAuthUserRow | null = candidates[0] ?? null;
         if (candidateIds.size > 1) {
+          if (
+            !inputIsRiderManaged ||
+            !candidates.every((row) => row.companyId === input.company_id && this.isRiderManagedAuthRow(row))
+          ) {
+            throw new BadRequestException(
+              'Rider login conflicts with an existing username or personnel assignment.'
+            );
+          }
+          const canonical = byUsername ?? byPersonnel ?? byEmail ?? byId;
+          if (!canonical) {
+            throw new BadRequestException(
+              'Rider login conflicts with an existing username or personnel assignment.'
+            );
+          }
+          for (const stale of candidates) {
+            if (stale.id === canonical.id) {
+              continue;
+            }
+            await prisma.userRole.deleteMany({ where: { userId: stale.id } });
+            await prisma.user.update({
+              where: { id: stale.id },
+              data: {
+                username: null,
+                personnelId: null,
+                email: this.archivedManagedRiderEmail(stale),
+                isActive: false
+              }
+            });
+          }
+          existing = canonical;
+        }
+        if (inputIsRiderManaged && existing && !this.isRiderManagedAuthRow(existing)) {
           throw new BadRequestException(
-            'Rider login conflicts with an existing username or personnel assignment.'
+            'Rider login conflicts with an existing non-rider username or personnel assignment.'
           );
         }
-        const existing = candidates[0] ?? null;
         const shouldForcePasswordChange =
           input.require_password_change === true
             ? true
@@ -943,6 +1002,33 @@ export class AuthService {
       active: input.active,
       must_change_password: shouldForcePasswordChange
     });
+  }
+
+  private isRiderManagedRoleList(roles: string[] | undefined): boolean {
+    const normalized = new Set((roles ?? []).map((role) => role.trim().toLowerCase()).filter(Boolean));
+    const hasRiderRole = normalized.has('rider') || normalized.has('driver');
+    if (!hasRiderRole) {
+      return false;
+    }
+    return !(
+      normalized.has('admin') ||
+      normalized.has('owner') ||
+      normalized.has('platform_owner') ||
+      normalized.has('supervisor') ||
+      normalized.has('cashier')
+    );
+  }
+
+  private isRiderManagedAuthRow(row: ManagedAuthUserRow): boolean {
+    if (row.email.trim().toLowerCase().endsWith('@rider.vpos.local')) {
+      return true;
+    }
+    return this.isRiderManagedRoleList(row.userRoles?.map((entry) => entry.role.name));
+  }
+
+  private archivedManagedRiderEmail(row: ManagedAuthUserRow): string {
+    const safeId = row.id.toLowerCase().replace(/[^a-z0-9._-]/g, '-');
+    return `archived+${safeId}@rider.vpos.local`;
   }
 
   async changePassword(input: {
