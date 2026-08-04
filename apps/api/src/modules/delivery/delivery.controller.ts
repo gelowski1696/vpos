@@ -24,7 +24,7 @@ export class DeliveryController {
 
   @Post()
   async create(
-    @Req() req: Request & { user?: { sub?: string; company_id?: string } },
+    @Req() req: Request & { user?: { sub?: string; company_id?: string; personnel_id?: string | null } },
     @Body()
     body: {
       order_type: 'PICKUP' | 'DELIVERY';
@@ -62,7 +62,7 @@ export class DeliveryController {
 
   @Get()
   async list(
-    @Req() req: Request & { user?: { sub?: string; company_id?: string; roles?: string[] } },
+    @Req() req: Request & { user?: { sub?: string; company_id?: string; roles?: string[]; personnel_id?: string | null } },
     @Query('status') status?: string,
     @Query('branch_id') branchId?: string,
     @Query('rider_user_id') riderUserId?: string,
@@ -92,7 +92,7 @@ export class DeliveryController {
 
   @Get('export.csv')
   async exportCsv(
-    @Req() req: Request & { user?: { sub?: string; company_id?: string; roles?: string[] } },
+    @Req() req: Request & { user?: { sub?: string; company_id?: string; roles?: string[]; personnel_id?: string | null } },
     @Res() res: Response,
     @Query('status') status?: string,
     @Query('branch_id') branchId?: string,
@@ -127,7 +127,7 @@ export class DeliveryController {
 
   @Get(':id')
   async get(
-    @Req() req: Request & { user?: { sub?: string; company_id?: string; roles?: string[] } },
+    @Req() req: Request & { user?: { sub?: string; company_id?: string; roles?: string[]; personnel_id?: string | null } },
     @Param('id') id: string
   ): Promise<DeliveryOrderRecord> {
     const companyId = this.requireCompanyId(req);
@@ -142,7 +142,7 @@ export class DeliveryController {
 
   @Post(':id/assign')
   async assign(
-    @Req() req: Request & { user?: { sub?: string; company_id?: string; roles?: string[] } },
+    @Req() req: Request & { user?: { sub?: string; company_id?: string; roles?: string[]; personnel_id?: string | null } },
     @Param('id') id: string,
     @Body() body: { personnel: Array<{ user_id: string; role: string }>; actor_user_id?: string; notes?: string }
   ): Promise<DeliveryOrderRecord> {
@@ -172,7 +172,7 @@ export class DeliveryController {
 
   @Post(':id/status')
   async updateStatus(
-    @Req() req: Request & { user?: { sub?: string; company_id?: string; roles?: string[] } },
+    @Req() req: Request & { user?: { sub?: string; company_id?: string; roles?: string[]; personnel_id?: string | null } },
     @Param('id') id: string,
     @Body()
     body: {
@@ -215,7 +215,7 @@ export class DeliveryController {
 
   @Post(':id/location')
   async recordLocation(
-    @Req() req: Request & { user?: { sub?: string; company_id?: string; roles?: string[] } },
+    @Req() req: Request & { user?: { sub?: string; company_id?: string; roles?: string[]; personnel_id?: string | null } },
     @Param('id') id: string,
     @Body()
     body: {
@@ -252,7 +252,7 @@ export class DeliveryController {
 
   @Get(':id/events')
   async events(
-    @Req() req: Request & { user?: { sub?: string; company_id?: string; roles?: string[] } },
+    @Req() req: Request & { user?: { sub?: string; company_id?: string; roles?: string[]; personnel_id?: string | null } },
     @Param('id') id: string
   ): Promise<DeliveryStatusEventRecord[]> {
     const companyId = this.requireCompanyId(req);
@@ -273,9 +273,10 @@ export class DeliveryController {
     return companyId;
   }
 
-  private actor(req: Request & { user?: { sub?: string; roles?: string[] } }): DeliveryActorContext {
+  private actor(req: Request & { user?: { sub?: string; roles?: string[]; personnel_id?: string | null } }): DeliveryActorContext {
     return {
       user_id: req.user?.sub ?? null,
+      personnel_id: req.user?.personnel_id ?? null,
       roles: req.user?.roles ?? []
     };
   }

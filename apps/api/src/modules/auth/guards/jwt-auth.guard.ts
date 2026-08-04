@@ -25,7 +25,7 @@ export class JwtAuthGuard implements CanActivate {
       originalUrl?: string;
       clientId?: string;
       companyId?: string;
-      user?: { sub: string; email: string; roles: string[]; company_id: string };
+      user?: { sub: string; email: string; roles: string[]; company_id: string; personnel_id?: string | null };
     }>();
 
     const authorization = this.pickHeader(request.headers.authorization);
@@ -46,6 +46,7 @@ export class JwtAuthGuard implements CanActivate {
         roles: string[];
         type: string;
         company_id: string;
+        personnel_id?: string | null;
         must_change_password?: boolean;
       };
 
@@ -66,7 +67,8 @@ export class JwtAuthGuard implements CanActivate {
         sub: payload.sub,
         email: payload.email,
         roles: payload.roles,
-        company_id: payload.company_id
+        company_id: payload.company_id,
+        personnel_id: payload.personnel_id ?? null
       };
       if (
         payload.must_change_password &&

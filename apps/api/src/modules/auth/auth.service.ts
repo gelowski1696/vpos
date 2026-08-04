@@ -421,6 +421,7 @@ export class AuthService {
           dbUser.companyId,
           dbUser.email,
           roles,
+          dbUser.personnelId ?? null,
           deviceId,
           dbUser.mustChangePassword
         );
@@ -471,6 +472,7 @@ export class AuthService {
       memoryUser.company_id,
       memoryUser.email,
       memoryUser.roles,
+      memoryUser.personnel_id ?? null,
       deviceId,
       memoryUser.must_change_password === true
     );
@@ -559,6 +561,7 @@ export class AuthService {
           stored.user.companyId,
           stored.user.email,
           roles,
+          stored.user.personnelId ?? null,
           payload.device_id,
           stored.user.mustChangePassword,
           nextJti
@@ -611,6 +614,7 @@ export class AuthService {
       user.company_id,
       user.email,
       user.roles,
+      user.personnel_id ?? null,
       payload.device_id,
       user.must_change_password === true,
       nextJti
@@ -705,6 +709,7 @@ export class AuthService {
           dbUser.companyId,
           dbUser.email,
           roles,
+          dbUser.personnelId ?? null,
           input.deviceId,
           dbUser.mustChangePassword
         );
@@ -735,6 +740,7 @@ export class AuthService {
       user.company_id,
       user.email,
       user.roles,
+      user.personnel_id ?? null,
       input.deviceId,
       user.must_change_password === true
     );
@@ -987,6 +993,7 @@ export class AuthService {
     companyId: string,
     email: string,
     roles: string[],
+    personnelId: string | null | undefined,
     deviceId: string,
     mustChangePassword = false,
     forcedJti?: string
@@ -997,6 +1004,7 @@ export class AuthService {
       company_id: companyId,
       email,
       roles,
+      personnel_id: personnelId?.trim() || undefined,
       must_change_password: mustChangePassword,
       type: 'access'
     };

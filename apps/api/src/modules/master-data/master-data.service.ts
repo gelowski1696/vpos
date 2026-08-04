@@ -1,4 +1,5 @@
 import { BadRequestException, ForbiddenException, Injectable, NotFoundException, Optional } from '@nestjs/common';
+import * as argon2 from 'argon2';
 import {
   ActorChannel,
   CostAllocationBasis,
@@ -1445,29 +1446,33 @@ export class MasterDataService {
     const companyId = targetCompanyId ?? (await this.getCompanyIdOrNull());
     const personnels = await this.listPersonnel(companyId ?? undefined);
     const personnelById = new Map(personnels.map((row) => [row.id, row]));
-    const usePrisma =
-      Boolean(companyId && this.prisma) &&
-      (process.env.NODE_ENV !== 'test' || process.env.VPOS_TEST_USE_DB === 'true');
+    const binding = await this.getTenantBinding(companyId);
 
-    if (usePrisma && companyId) {
-      const rows = await this.prisma!.user.findMany({
-        where: {
-          companyId,
-          personnelId: { not: null },
-          userRoles: {
-            some: {
-              role: {
-                name: { in: ['rider', 'driver'] }
+    if (binding && companyId) {
+      try {
+        const rows = await binding.client.user.findMany({
+          where: {
+            companyId,
+            personnelId: { not: null },
+            userRoles: {
+              some: {
+                role: {
+                  name: { in: ['rider', 'driver'] }
+                }
               }
             }
-          }
-        },
-        include: {
-          userRoles: { include: { role: true } }
-        },
-        orderBy: [{ isActive: 'desc' }, { username: 'asc' }, { fullName: 'asc' }]
-      });
-      return rows.map((row) => this.mapRiderUserFromUser(row, personnelById.get(row.personnelId ?? '')));
+          },
+          include: {
+            userRoles: { include: { role: true } }
+          },
+          orderBy: [{ isActive: 'desc' }, { username: 'asc' }, { fullName: 'asc' }]
+        });
+        return rows.map((row) => this.mapRiderUserFromUser(row, personnelById.get(row.personnelId ?? '')));
+      } catch (error) {
+        if (binding.mode === TenancyDatastoreMode.DEDICATED_DB) {
+          throw error;
+        }
+      }
     }
 
     const resolvedCompanyId = companyId ?? 'comp-demo';
@@ -1492,12 +1497,10 @@ export class MasterDataService {
     const companyId = targetCompanyId ?? (await this.getCompanyIdOrNull());
     const normalizedUsername = this.normalizeRiderUsername(username);
     const excludeId = excludeUserId?.trim() || null;
-    const usePrisma =
-      Boolean(companyId && this.prisma) &&
-      (process.env.NODE_ENV !== 'test' || process.env.VPOS_TEST_USE_DB === 'true');
+    const binding = await this.getTenantBinding(companyId);
 
-    if (usePrisma && companyId) {
-      const existing = await this.prisma!.user.findFirst({
+    if (binding && companyId) {
+      const existing = await binding.client.user.findFirst({
         where: {
           companyId,
           username: normalizedUsername,
@@ -1539,6 +1542,7 @@ export class MasterDataService {
       id: uuidv4(),
       ...this.stamp(),
       companyId: companyId ?? 'comp-demo',
+      branchId: personnel.branchId,
       personnelId: personnel.id,
       username,
       email: this.riderEmailForUsername(username),
@@ -1546,13 +1550,11 @@ export class MasterDataService {
       roles: ['rider'],
       isActive: input.isActive ?? true
     };
-    await this.syncAuthUser(row, password, companyId ?? row.companyId);
-
-    const usePrisma =
-      Boolean(companyId && this.prisma) &&
-      (process.env.NODE_ENV !== 'test' || process.env.VPOS_TEST_USE_DB === 'true');
-    if (usePrisma && companyId) {
-      const created = await this.prisma!.user.findUnique({
+    const binding = await this.getTenantBinding(companyId);
+    if (binding && companyId) {
+      await this.syncAuthUser(row, password, companyId);
+      await this.upsertTenantRiderUser(binding.client, row, password);
+      const created = await binding.client.user.findUnique({
         where: { id: row.id },
         include: {
           userRoles: { include: { role: true } }
@@ -1565,6 +1567,7 @@ export class MasterDataService {
     }
 
     this.users.push(row);
+    await this.syncAuthUser(row, password);
     return this.mapRiderUserFromUser(row, personnel);
   }
 
@@ -1575,9 +1578,7 @@ export class MasterDataService {
   ): Promise<RiderUserRecord> {
     const companyId = targetCompanyId ?? (await this.getCompanyIdOrNull());
     await this.enforceMasterDataWritePolicy(companyId ?? undefined);
-    const usePrisma =
-      Boolean(companyId && this.prisma) &&
-      (process.env.NODE_ENV !== 'test' || process.env.VPOS_TEST_USE_DB === 'true');
+    const binding = await this.getTenantBinding(companyId);
 
     const nextUsername = input.username === undefined ? undefined : this.normalizeRiderUsername(input.username);
     if (input.password !== undefined && input.password.trim()) {
@@ -1588,8 +1589,8 @@ export class MasterDataService {
         ? undefined
         : await this.resolveRiderPersonnel(input.personnelId, companyId ?? undefined);
 
-    if (usePrisma && companyId) {
-      const existing = await this.prisma!.user.findFirst({
+    if (binding && companyId) {
+      const existing = await binding.client.user.findFirst({
         where: { id, companyId },
         include: {
           userRoles: { include: { role: true } }
@@ -1617,6 +1618,7 @@ export class MasterDataService {
       const nextRow: UserRecord = {
         id: existing.id,
         companyId: existing.companyId,
+        branchId: personnel.branchId,
         personnelId: personnel.id,
         username,
         email: this.riderEmailForUsername(username),
@@ -1627,8 +1629,9 @@ export class MasterDataService {
         updatedAt: new Date().toISOString()
       };
       await this.syncAuthUser(nextRow, input.password?.trim() || undefined, companyId);
+      await this.upsertTenantRiderUser(binding.client, nextRow, input.password?.trim() || undefined);
 
-      const updated = await this.prisma!.user.findUnique({
+      const updated = await binding.client.user.findUnique({
         where: { id: existing.id },
         include: {
           userRoles: { include: { role: true } }
@@ -1659,6 +1662,7 @@ export class MasterDataService {
     const personnel = nextPersonnel ?? (await this.resolveRiderPersonnel(row.personnelId, resolvedCompanyId));
     const username = nextUsername ?? row.username ?? this.usernameFromRiderEmail(row.email);
     Object.assign(row, {
+      branchId: personnel.branchId,
       personnelId: personnel.id,
       username,
       email: this.riderEmailForUsername(username),
@@ -1678,12 +1682,10 @@ export class MasterDataService {
   async hardDeleteRiderUser(id: string, targetCompanyId?: string): Promise<RiderUserRecord> {
     const companyId = targetCompanyId ?? (await this.getCompanyIdOrNull());
     await this.enforceMasterDataWritePolicy(companyId ?? undefined);
-    const usePrisma =
-      Boolean(companyId && this.prisma) &&
-      (process.env.NODE_ENV !== 'test' || process.env.VPOS_TEST_USE_DB === 'true');
+    const binding = await this.getTenantBinding(companyId);
 
-    if (usePrisma && companyId) {
-      const existing = await this.prisma!.user.findFirst({
+    if (binding && companyId) {
+      const existing = await binding.client.user.findFirst({
         where: { id, companyId },
         include: {
           userRoles: { include: { role: true } }
@@ -1696,8 +1698,25 @@ export class MasterDataService {
         ? await this.resolveRiderPersonnel(existing.personnelId, companyId)
         : null;
       const mapped = this.mapRiderUserFromUser(existing, personnel ?? undefined);
+      await this.syncAuthUser(
+        {
+          id: existing.id,
+          companyId: existing.companyId,
+          branchId: existing.branchId ?? null,
+          personnelId: existing.personnelId ?? null,
+          username: existing.username ?? null,
+          email: existing.email,
+          fullName: existing.fullName,
+          roles: existing.userRoles.map((entry) => entry.role.name),
+          isActive: false,
+          createdAt: existing.createdAt.toISOString(),
+          updatedAt: new Date().toISOString()
+        },
+        undefined,
+        companyId
+      );
       try {
-        await this.prisma!.user.delete({ where: { id: existing.id } });
+        await binding.client.user.delete({ where: { id: existing.id } });
       } catch (error) {
         if (this.isRelationConstraintError(error)) {
           throw new BadRequestException(
@@ -8109,6 +8128,91 @@ export class MasterDataService {
     });
   }
 
+  private async upsertTenantRiderUser(
+    db: TenantPrismaClient,
+    user: UserRecord,
+    password?: string
+  ): Promise<void> {
+    const existing = await db.user.findUnique({
+      where: { id: user.id },
+      select: {
+        id: true,
+        passwordHash: true,
+        mustChangePassword: true
+      }
+    });
+    let passwordHash = existing?.passwordHash;
+    const normalizedPassword = password?.trim();
+    if (normalizedPassword) {
+      passwordHash = await argon2.hash(normalizedPassword);
+    }
+    if (!passwordHash) {
+      passwordHash = await argon2.hash('Welcome@123');
+    }
+
+    const data = {
+      username: user.username?.trim().toLowerCase() || null,
+      personnelId: user.personnelId?.trim() || null,
+      branchId: user.branchId?.trim() || null,
+      email: user.email.trim().toLowerCase(),
+      fullName: user.fullName.trim() || user.email.trim().toLowerCase(),
+      isActive: user.isActive,
+      passwordHash,
+      mustChangePassword: existing?.mustChangePassword ?? false
+    };
+
+    const saved = existing
+      ? await db.user.update({
+          where: { id: existing.id },
+          data
+        })
+      : await db.user.create({
+          data: {
+            id: user.id,
+            companyId: user.companyId ?? 'comp-demo',
+            ...data
+          }
+        });
+
+    const uniqueRoles = [...new Set(user.roles.map((role) => role.trim()).filter(Boolean))];
+    const roleIds: string[] = [];
+    for (const roleName of uniqueRoles) {
+      const role = await db.role.upsert({
+        where: {
+          companyId_name: {
+            companyId: saved.companyId,
+            name: roleName
+          }
+        },
+        update: {},
+        create: {
+          companyId: saved.companyId,
+          name: roleName
+        }
+      });
+      roleIds.push(role.id);
+    }
+
+    if (roleIds.length === 0) {
+      await db.userRole.deleteMany({ where: { userId: saved.id } });
+      return;
+    }
+
+    await db.userRole.deleteMany({
+      where: {
+        userId: saved.id,
+        roleId: { notIn: roleIds }
+      }
+    });
+    for (const roleId of roleIds) {
+      await db.userRole.upsert({
+        where: { userId_roleId: { userId: saved.id, roleId } },
+        update: {},
+        create: { userId: saved.id, roleId }
+      });
+    }
+  }
+
   private async ensurePrismaBranchLocationSeed(
     companyId: string,
     prismaClient?: TenantPrismaClient
@@ -8909,12 +9013,10 @@ export class MasterDataService {
     const companyId = targetCompanyId ?? (await this.getCompanyIdOrNull());
     const normalizedPersonnelId = personnelId.trim();
     const normalizedExcludeId = excludeUserId?.trim() || null;
-    const usePrisma =
-      Boolean(companyId && this.prisma) &&
-      (process.env.NODE_ENV !== 'test' || process.env.VPOS_TEST_USE_DB === 'true');
+    const binding = await this.getTenantBinding(companyId);
 
-    if (usePrisma && companyId) {
-      const existing = await this.prisma!.user.findFirst({
+    if (binding && companyId) {
+      const existing = await binding.client.user.findFirst({
         where: {
           companyId,
           personnelId: normalizedPersonnelId,

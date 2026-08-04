@@ -20,6 +20,7 @@ type OrderType = 'PICKUP' | 'DELIVERY';
 
 export type DeliveryActorContext = {
   user_id?: string | null;
+  personnel_id?: string | null;
   roles?: string[];
 };
 
@@ -1210,14 +1211,19 @@ export class DeliveryService {
       return null;
     }
     const actorUserId = this.toNonEmpty(actor?.user_id);
+    const actorPersonnelId = this.toNonEmpty(actor?.personnel_id);
     if (!actorUserId) {
       throw new ForbiddenException('Rider account is missing actor user id.');
+    }
+    const riderIdentityFilters: Prisma.UserWhereInput[] = [{ id: actorUserId }];
+    if (actorPersonnelId) {
+      riderIdentityFilters.push({ personnelId: actorPersonnelId });
     }
     const actorUser = await db.user.findFirst({
       where: {
         companyId,
-        id: actorUserId,
-        isActive: true
+        isActive: true,
+        OR: riderIdentityFilters
       },
       select: {
         id: true,
@@ -1225,7 +1231,10 @@ export class DeliveryService {
       }
     });
     if (!actorUser) {
-      throw new ForbiddenException('Rider account is inactive or not found.');
+      return {
+        userId: actorUserId,
+        branchId: null
+      };
     }
     return {
       userId: actorUser.id,

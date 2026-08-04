@@ -1,8 +1,12 @@
 import { UnauthorizedException } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
+import { TenancyDatastoreMode } from '@prisma/client';
 import { AuthRepository } from '../src/modules/auth/auth.repository';
 import { AuthService } from '../src/modules/auth/auth.service';
 import { MasterDataService } from '../src/modules/master-data/master-data.service';
+import type { CompanyContextService } from '../src/common/company-context.service';
+import type { PrismaService } from '../src/common/prisma.service';
+import type { TenantDatasourceRouterService } from '../src/common/tenant-datasource-router.service';
 
 describe('rider personnel users', () => {
   let authService: AuthService;
@@ -99,5 +103,150 @@ describe('rider personnel users', () => {
     await expect(
       authService.login('loose-rider', 'StrongPass1', 'device-rider-loose', undefined, { riderChannel: true })
     ).rejects.toThrow('Rider app login is restricted to assigned rider accounts');
+  });
+
+  it('writes rider app logins to the tenant-routed datastore', async () => {
+    process.env.VPOS_TEST_USE_DB = 'true';
+    const now = new Date('2026-08-04T10:00:00.000Z');
+    const tenantRoles = new Map<string, { id: string; name: string }>();
+    const tenantUsers = new Map<string, Record<string, unknown>>();
+    const tenantUserRoles: Array<{ userId: string; roleId: string }> = [];
+    const dedicatedClient = {
+      personnel: {
+        findMany: jest.fn().mockResolvedValue([
+          {
+            id: 'personnel-dedicated-1',
+            code: 'RIDER1',
+            fullName: 'Dedicated Rider',
+            branchId: 'branch-dedicated-1',
+            personnelRoleId: 'role-driver-1',
+            phone: null,
+            email: null,
+            salaryType: 'PER_TRANSACTION',
+            salaryRate: 0,
+            commissionEligible: true,
+            isActive: true,
+            createdAt: now,
+            updatedAt: now,
+            role: { id: 'role-driver-1', code: 'DRIVER', name: 'Driver' }
+          }
+        ])
+      },
+      user: {
+        findFirst: jest.fn(async (args: { where: { username?: string; personnelId?: string; id?: string } }) => {
+          const rows = [...tenantUsers.values()];
+          return rows.find((row) => {
+            if (args.where.id && row.id !== args.where.id) {
+              return false;
+            }
+            if (args.where.username && row.username !== args.where.username) {
+              return false;
+            }
+            if (args.where.personnelId && row.personnelId !== args.where.personnelId) {
+              return false;
+            }
+            return true;
+          }) ?? null;
+        }),
+        findUnique: jest.fn(async (args: { where: { id: string } }) => {
+          const row = tenantUsers.get(args.where.id);
+          if (!row) {
+            return null;
+          }
+          return {
+            ...row,
+            userRoles: tenantUserRoles
+              .filter((entry) => entry.userId === row.id)
+              .map((entry) => ({ role: tenantRoles.get(entry.roleId)! }))
+          };
+        }),
+        create: jest.fn(async (args: { data: Record<string, unknown> }) => {
+          const row: Record<string, unknown> = {
+            ...args.data,
+            createdAt: now,
+            updatedAt: now
+          };
+          tenantUsers.set(String(row.id), row);
+          return row;
+        }),
+        update: jest.fn(async (args: { where: { id: string }; data: Record<string, unknown> }) => {
+          const current = tenantUsers.get(args.where.id) ?? { id: args.where.id, companyId: 'comp-dedicated' };
+          const row = {
+            ...current,
+            ...args.data,
+            updatedAt: now
+          };
+          tenantUsers.set(args.where.id, row);
+          return row;
+        })
+      },
+      role: {
+        upsert: jest.fn(async (args: { where: { companyId_name: { name: string } } }) => {
+          const name = args.where.companyId_name.name;
+          const existing = [...tenantRoles.values()].find((role) => role.name === name);
+          if (existing) {
+            return existing;
+          }
+          const role = { id: `role-${name}`, name };
+          tenantRoles.set(role.id, role);
+          return role;
+        })
+      },
+      userRole: {
+        deleteMany: jest.fn(async () => ({ count: 0 })),
+        upsert: jest.fn(async (args: { create: { userId: string; roleId: string } }) => {
+          tenantUserRoles.push(args.create);
+          return args.create;
+        })
+      }
+    };
+    const companyContext = {
+      getCompanyId: jest.fn().mockResolvedValue('comp-dedicated')
+    } as unknown as CompanyContextService;
+    const router = {
+      forCompany: jest.fn().mockResolvedValue({
+        companyId: 'comp-dedicated',
+        mode: TenancyDatastoreMode.DEDICATED_DB,
+        datastoreRef: 'dedicated-demo',
+        client: dedicatedClient
+      })
+    } as unknown as TenantDatasourceRouterService;
+    const service = new MasterDataService(
+      {} as PrismaService,
+      companyContext,
+      router,
+      authService
+    );
+    (service as unknown as { prismaSeededKeys: Set<string> }).prismaSeededKeys.add('comp-dedicated::ROUTED');
+
+    const created = await service.createRiderUser({
+      username: 'dedicated-rider',
+      password: 'StrongPass1',
+      personnelId: 'personnel-dedicated-1'
+    });
+
+    expect(created).toMatchObject({
+      username: 'dedicated-rider',
+      personnelId: 'personnel-dedicated-1',
+      branchId: 'branch-dedicated-1',
+      roles: ['rider'],
+      isActive: true
+    });
+    expect(dedicatedClient.user.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          companyId: 'comp-dedicated',
+          username: 'dedicated-rider',
+          personnelId: 'personnel-dedicated-1',
+          branchId: 'branch-dedicated-1',
+          isActive: true
+        })
+      })
+    );
+    expect(dedicatedClient.role.upsert).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { companyId_name: { companyId: 'comp-dedicated', name: 'rider' } }
+      })
+    );
   });
 });
