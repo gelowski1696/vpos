@@ -1292,12 +1292,7 @@ export class DeliveryService {
       ...(statusFilter ? { status: statusFilter } : {}),
       ...(saleIdFilter ? { saleId: saleIdFilter } : {}),
       ...(branchFilter ? { branchId: branchFilter } : {}),
-      ...(andClauses.length > 0 ? { AND: andClauses } : {}),
-      ...(riderScope
-        ? {
-            ...(riderScope.branchId ? { branchId: riderScope.branchId } : {})
-          }
-        : {})
+      ...(andClauses.length > 0 ? { AND: andClauses } : {})
     };
   }
 
@@ -1319,8 +1314,7 @@ export class DeliveryService {
           some: {
             userId: riderScope.userId
           }
-        },
-        ...(riderScope.branchId ? { branchId: riderScope.branchId } : {})
+        }
       },
       select: { id: true }
     });

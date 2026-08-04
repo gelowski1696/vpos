@@ -73,4 +73,27 @@ describe('delivery assignment resolver', () => {
       })
     );
   });
+
+  it('does not hide rider-assigned deliveries because of rider branch mismatch', () => {
+    const service = new DeliveryService();
+    const where = (service as unknown as {
+      buildDatabaseListWhere: (
+        companyId: string,
+        filters: { order_type?: 'DELIVERY'; branch_id?: string },
+        riderScope: { userId: string; branchId: string | null }
+      ) => Record<string, unknown>;
+    }).buildDatabaseListWhere(
+      'company-1',
+      { order_type: 'DELIVERY' },
+      { userId: 'user-rider-1', branchId: 'branch-from-rider-profile' }
+    );
+
+    expect(where).toEqual({
+      companyId: 'company-1',
+      AND: [
+        { assignments: { some: {} } },
+        { assignments: { some: { userId: 'user-rider-1' } } }
+      ]
+    });
+  });
 });
