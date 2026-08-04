@@ -106,6 +106,7 @@ export class DeliveryService {
   async create(
     companyId: string,
     input: {
+      id?: string | null;
       order_type: OrderType;
       customer_id?: string | null;
       sale_id?: string | null;
@@ -321,6 +322,7 @@ export class DeliveryService {
   private createInMemory(
     companyId: string,
     input: {
+      id?: string | null;
       order_type: OrderType;
       customer_id?: string | null;
       sale_id?: string | null;
@@ -333,7 +335,7 @@ export class DeliveryService {
     const order_type = this.normalizeOrderType(input.order_type);
     const personnel = (input.personnel ?? []).filter((row) => row.user_id?.trim() && row.role?.trim());
 
-    const id = this.nextOrderId(companyId);
+    const id = this.toNonEmpty(input.id) ?? this.nextOrderId(companyId);
     const now = new Date().toISOString();
     const order: DeliveryOrderRecord = {
       id,
@@ -484,6 +486,7 @@ export class DeliveryService {
   private async createWithDatabase(
     binding: TenantPrismaBinding,
     input: {
+      id?: string | null;
       order_type: OrderType;
       customer_id?: string | null;
       sale_id?: string | null;
@@ -497,6 +500,7 @@ export class DeliveryService {
     const companyId = binding.companyId;
     const orderType = this.normalizeOrderType(input.order_type);
     const personnel = (input.personnel ?? []).filter((row) => row.user_id?.trim() && row.role?.trim());
+    const requestedId = this.toNonEmpty(input.id);
 
     const now = new Date();
     const status: DeliveryStatus = orderType === 'PICKUP' ? 'DELIVERED' : 'CREATED';
@@ -507,6 +511,7 @@ export class DeliveryService {
 
       const order = await tx.deliveryOrder.create({
         data: {
+          ...(requestedId ? { id: requestedId } : {}),
           companyId,
           branchId: branch.id,
           saleId: sale?.id ?? null,
@@ -1338,7 +1343,11 @@ export class DeliveryService {
       where: {
         companyId,
         isActive: true,
-        OR: [{ id: normalized }, { email: { equals: mappedEmail, mode: 'insensitive' } }]
+        OR: [
+          { id: normalized },
+          { personnelId: normalized },
+          { email: { equals: mappedEmail, mode: 'insensitive' } }
+        ]
       },
       select: {
         id: true,

@@ -24,6 +24,7 @@ import {
 import { VcardService } from '../vcard/vcard.service';
 import { TenantDatasourceRouterService } from '../../common/tenant-datasource-router.service';
 import { EntitlementsService } from '../entitlements/entitlements.service';
+import { DeliveryService, type DeliveryOrderRecord } from '../delivery/delivery.service';
 
 export interface SyncReviewRecord {
   id: string;
@@ -69,7 +70,8 @@ export class SyncService {
     @Optional() private readonly purchaseOrdersService?: PurchaseOrdersService,
     @Optional() private readonly vcardService?: VcardService,
     @Optional() private readonly tenantRouter?: TenantDatasourceRouterService,
-    @Optional() private readonly entitlementsService?: EntitlementsService
+    @Optional() private readonly entitlementsService?: EntitlementsService,
+    @Optional() private readonly deliveryService?: DeliveryService
   ) {}
 
   async push(
@@ -98,7 +100,8 @@ export class SyncService {
     });
 
     for (const item of orderedItems) {
-      const idemKey = this.companyScopedKey(companyId, item.idempotency_key);
+      const persistenceIdempotencyKey = this.resolveOutboxIdempotencyKey(item);
+      const idemKey = this.companyScopedKey(companyId, persistenceIdempotencyKey);
       const requestHash = this.hashOutboxItem(item);
       const syncedItem =
         customerIdMap.size > 0
@@ -109,7 +112,7 @@ export class SyncService {
           : item;
       const persistedDecision = await this.lookupPersistedIdempotencyDecision(
         companyId,
-        item.idempotency_key,
+        persistenceIdempotencyKey,
         requestHash,
         syncedItem.payload
       );
@@ -140,7 +143,7 @@ export class SyncService {
           reason,
           review_id: reviewId
         });
-        await this.persistIdempotencyDecision(companyId, item.idempotency_key, requestHash, {
+        await this.persistIdempotencyDecision(companyId, persistenceIdempotencyKey, requestHash, {
           status: 'rejected',
           reason,
           review_id: reviewId
@@ -156,7 +159,7 @@ export class SyncService {
           reason: customerPosting.reason,
           review_id: reviewId
         });
-        await this.persistIdempotencyDecision(companyId, item.idempotency_key, requestHash, {
+        await this.persistIdempotencyDecision(companyId, persistenceIdempotencyKey, requestHash, {
           status: 'rejected',
           reason: customerPosting.reason,
           review_id: reviewId
@@ -178,7 +181,7 @@ export class SyncService {
           reason: salePosting.reason,
           review_id: reviewId
         });
-        await this.persistIdempotencyDecision(companyId, item.idempotency_key, requestHash, {
+        await this.persistIdempotencyDecision(companyId, persistenceIdempotencyKey, requestHash, {
           status: 'rejected',
           reason: salePosting.reason,
           review_id: reviewId
@@ -193,7 +196,7 @@ export class SyncService {
           reason: saleCancelPosting.reason,
           review_id: reviewId
         });
-        await this.persistIdempotencyDecision(companyId, item.idempotency_key, requestHash, {
+        await this.persistIdempotencyDecision(companyId, persistenceIdempotencyKey, requestHash, {
           status: 'rejected',
           reason: saleCancelPosting.reason,
           review_id: reviewId
@@ -208,7 +211,7 @@ export class SyncService {
           reason: saleReturnPosting.reason,
           review_id: reviewId
         });
-        await this.persistIdempotencyDecision(companyId, item.idempotency_key, requestHash, {
+        await this.persistIdempotencyDecision(companyId, persistenceIdempotencyKey, requestHash, {
           status: 'rejected',
           reason: saleReturnPosting.reason,
           review_id: reviewId
@@ -234,7 +237,7 @@ export class SyncService {
           reason: customerPaymentPosting.reason,
           review_id: reviewId
         });
-        await this.persistIdempotencyDecision(companyId, item.idempotency_key, requestHash, {
+        await this.persistIdempotencyDecision(companyId, persistenceIdempotencyKey, requestHash, {
           status: 'rejected',
           reason: customerPaymentPosting.reason,
           review_id: reviewId
@@ -255,9 +258,35 @@ export class SyncService {
           reason: transferPosting.reason,
           review_id: reviewId
         });
-        await this.persistIdempotencyDecision(companyId, item.idempotency_key, requestHash, {
+        await this.persistIdempotencyDecision(companyId, persistenceIdempotencyKey, requestHash, {
           status: 'rejected',
           reason: transferPosting.reason,
+          review_id: reviewId
+        }, item.payload);
+        continue;
+      }
+      const deliveryPosting = await this.tryPostDeliveryOutbox(
+        companyId,
+        syncedItem,
+        actorUserId,
+        request.device_id
+      );
+      if (!deliveryPosting.ok) {
+        const reviewId = this.createReview(
+          companyId,
+          item.id,
+          item.entity,
+          deliveryPosting.reason,
+          item.payload
+        );
+        rejected.push({
+          id: item.id,
+          reason: deliveryPosting.reason,
+          review_id: reviewId
+        });
+        await this.persistIdempotencyDecision(companyId, persistenceIdempotencyKey, requestHash, {
+          status: 'rejected',
+          reason: deliveryPosting.reason,
           review_id: reviewId
         }, item.payload);
         continue;
@@ -280,7 +309,7 @@ export class SyncService {
           reason: purchaseOrderPosting.reason,
           review_id: reviewId
         });
-        await this.persistIdempotencyDecision(companyId, item.idempotency_key, requestHash, {
+        await this.persistIdempotencyDecision(companyId, persistenceIdempotencyKey, requestHash, {
           status: 'rejected',
           reason: purchaseOrderPosting.reason,
           review_id: reviewId
@@ -295,7 +324,7 @@ export class SyncService {
           reason: lendingPosting.reason,
           review_id: reviewId
         });
-        await this.persistIdempotencyDecision(companyId, item.idempotency_key, requestHash, {
+        await this.persistIdempotencyDecision(companyId, persistenceIdempotencyKey, requestHash, {
           status: 'rejected',
           reason: lendingPosting.reason,
           review_id: reviewId
@@ -327,7 +356,7 @@ export class SyncService {
           reason: lendingReturnPosting.reason,
           review_id: reviewId
         });
-        await this.persistIdempotencyDecision(companyId, item.idempotency_key, requestHash, {
+        await this.persistIdempotencyDecision(companyId, persistenceIdempotencyKey, requestHash, {
           status: 'rejected',
           reason: lendingReturnPosting.reason,
           review_id: reviewId
@@ -348,7 +377,7 @@ export class SyncService {
           reason: lpgItemActionPosting.reason,
           review_id: reviewId
         });
-        await this.persistIdempotencyDecision(companyId, item.idempotency_key, requestHash, {
+        await this.persistIdempotencyDecision(companyId, persistenceIdempotencyKey, requestHash, {
           status: 'rejected',
           reason: lpgItemActionPosting.reason,
           review_id: reviewId
@@ -359,7 +388,10 @@ export class SyncService {
         syncedItem.entity === 'transfer' &&
         syncedItem.action === 'create' &&
         Boolean(transferPosting.transfer);
-      if (!transferPostedServerSide) {
+      const deliveryPostedServerSide =
+        (syncedItem.entity === 'delivery_order' || syncedItem.entity === 'sale_dispatch_status') &&
+        Boolean(deliveryPosting.deliveryOrder);
+      if (!transferPostedServerSide && !deliveryPostedServerSide) {
         const validation = await this.validateAndApply(
           companyId,
           syncedItem.entity,
@@ -377,7 +409,7 @@ export class SyncService {
             reason: validation.reason,
             review_id: reviewId
           });
-          await this.persistIdempotencyDecision(companyId, item.idempotency_key, requestHash, {
+          await this.persistIdempotencyDecision(companyId, persistenceIdempotencyKey, requestHash, {
             status: 'rejected',
             reason: validation.reason,
             review_id: reviewId
@@ -388,7 +420,7 @@ export class SyncService {
 
       this.idempotencyKeys.add(idemKey);
       accepted.push(item.id);
-      await this.persistIdempotencyDecision(companyId, item.idempotency_key, requestHash, {
+      await this.persistIdempotencyDecision(companyId, persistenceIdempotencyKey, requestHash, {
         status: 'accepted'
       });
       const saleCancelInventoryChanges = saleCancelPosting.ok
@@ -504,6 +536,18 @@ export class SyncService {
                     sale_id: lendingReturnPosting.lending.sale_id,
                     status: lendingReturnPosting.lending.status,
                     total_quantity_returned: lendingReturnPosting.lending.total_quantity_returned
+                  }
+                }
+              : {}),
+            ...(deliveryPosting.deliveryOrder
+              ? {
+                  server_delivery_order_posted: true,
+                  server_delivery_order_result: {
+                    delivery_order_id: deliveryPosting.deliveryOrder.id,
+                    sale_id: deliveryPosting.deliveryOrder.sale_id ?? null,
+                    status: deliveryPosting.deliveryOrder.status,
+                    order_type: deliveryPosting.deliveryOrder.order_type,
+                    personnel: deliveryPosting.deliveryOrder.personnel
                   }
                 }
               : {})
@@ -704,6 +748,9 @@ export class SyncService {
     }
     if (item.entity === 'delivery_order' && item.action === 'create') {
       return 40;
+    }
+    if (item.entity === 'sale_dispatch_status') {
+      return 41;
     }
     if (item.entity === 'lending' && item.action === 'create') {
       return 50;
@@ -1346,6 +1393,324 @@ export class SyncService {
         cause instanceof Error ? cause.message : 'Customer payment posting failed during sync';
       return { ok: false, reason: message };
     }
+  }
+
+  private async tryPostDeliveryOutbox(
+    companyId: string,
+    item: SyncPushRequest['outbox_items'][number],
+    actorUserId?: string,
+    deviceId?: string
+  ): Promise<{ ok: true; deliveryOrder?: DeliveryOrderRecord } | { ok: false; reason: string }> {
+    if (item.entity !== 'delivery_order' && item.entity !== 'sale_dispatch_status') {
+      return { ok: true };
+    }
+    if (!this.deliveryService) {
+      return { ok: true };
+    }
+    if (!(await this.canMaterializeDeliverySync(companyId))) {
+      return { ok: true };
+    }
+
+    const payload = item.payload ?? {};
+    try {
+      if (item.entity === 'sale_dispatch_status') {
+        const saleId = this.asString(payload.sale_id ?? payload.saleId);
+        if (!saleId) {
+          return { ok: false, reason: 'Dispatch status sync payload is missing sale id' };
+        }
+        const targetStatus = this.normalizeDeliveryStatus(payload.status);
+        if (!targetStatus) {
+          return { ok: false, reason: 'Dispatch status sync payload has an invalid status' };
+        }
+        const order = await this.findSyncedDeliveryOrder(companyId, { saleId });
+        if (!order) {
+          return { ok: false, reason: 'Delivery order not found for dispatch status update' };
+        }
+        const updated = await this.applyDeliveryStatusProgression(companyId, order, {
+          targetStatus,
+          personnel: this.normalizeDeliveryPersonnel(payload),
+          notes: this.asString(payload.notes) ?? null,
+          actorUserId,
+          metadata: {
+            source: 'SYNC',
+            outbox_entity: item.entity,
+            outbox_id: item.id,
+            device_id: deviceId ?? null,
+            local_updated_at: this.asString(payload.updated_at ?? payload.updatedAt) ?? null
+          }
+        });
+        this.rememberSyncedDeliveryOrder(companyId, updated.id, updated);
+        return { ok: true, deliveryOrder: updated };
+      }
+
+      const id = this.asString(payload.id ?? payload.delivery_order_id ?? payload.deliveryOrderId);
+      if (!id) {
+        return { ok: false, reason: 'Delivery order id is required' };
+      }
+      const saleId =
+        payload.sale_id === null || payload.saleId === null
+          ? null
+          : this.asString(payload.sale_id ?? payload.saleId) ?? null;
+      const existing = await this.findSyncedDeliveryOrder(companyId, { id, saleId });
+      const targetStatus = this.normalizeDeliveryStatus(payload.status) ?? 'CREATED';
+      const personnel = this.normalizeDeliveryPersonnel(payload);
+
+      if (item.action === 'create') {
+        const orderType = this.normalizeOrderType(payload.order_type ?? payload.orderType);
+        if (!orderType) {
+          return { ok: false, reason: 'Delivery order type must be PICKUP or DELIVERY' };
+        }
+        if (orderType === 'DELIVERY' && personnel.length === 0) {
+          return { ok: false, reason: 'Delivery order requires assigned personnel for rider dispatch' };
+        }
+
+        const created =
+          existing ??
+          (await this.deliveryService.create(companyId, {
+            id,
+            order_type: orderType,
+            customer_id:
+              payload.customer_id === null || payload.customerId === null
+                ? null
+                : this.asString(payload.customer_id ?? payload.customerId) ?? null,
+            sale_id: saleId,
+            personnel,
+            notes: this.asString(payload.notes) ?? undefined,
+            actor_user_id: actorUserId,
+            metadata: {
+              source: 'SYNC',
+              outbox_entity: item.entity,
+              outbox_id: item.id,
+              device_id: deviceId ?? null,
+              local_created_at: this.asString(payload.created_at ?? payload.createdAt) ?? null
+            }
+          }));
+
+        const createTargetStatus =
+          orderType === 'DELIVERY' && targetStatus === 'CREATED' && personnel.length > 0
+            ? 'ASSIGNED'
+            : targetStatus;
+        const updated = await this.applyDeliveryStatusProgression(companyId, created, {
+          targetStatus: createTargetStatus,
+          personnel,
+          notes: this.asString(payload.notes) ?? null,
+          actorUserId,
+          metadata: {
+            source: 'SYNC',
+            outbox_entity: item.entity,
+            outbox_id: item.id,
+            device_id: deviceId ?? null
+          }
+        });
+        this.rememberSyncedDeliveryOrder(companyId, id, updated);
+        return { ok: true, deliveryOrder: updated };
+      }
+
+      if (item.action === 'status_update' || item.action === 'update') {
+        if (!existing) {
+          return { ok: false, reason: 'Delivery order not found for status update' };
+        }
+        const updated = await this.applyDeliveryStatusProgression(companyId, existing, {
+          targetStatus,
+          personnel,
+          notes: this.asString(payload.notes) ?? null,
+          actorUserId,
+          metadata: {
+            source: 'SYNC',
+            outbox_entity: item.entity,
+            outbox_id: item.id,
+            device_id: deviceId ?? null,
+            local_updated_at: this.asString(payload.updated_at ?? payload.updatedAt) ?? null
+          }
+        });
+        this.rememberSyncedDeliveryOrder(companyId, id, updated);
+        return { ok: true, deliveryOrder: updated };
+      }
+
+      return { ok: true };
+    } catch (cause) {
+      const message = cause instanceof Error ? cause.message : 'Delivery posting failed during sync';
+      return { ok: false, reason: message };
+    }
+  }
+
+  private async findSyncedDeliveryOrder(
+    companyId: string,
+    refs: { id?: string | null; saleId?: string | null }
+  ): Promise<DeliveryOrderRecord | null> {
+    if (!this.deliveryService) {
+      return null;
+    }
+    const id = this.asString(refs.id);
+    if (id) {
+      try {
+        return await this.deliveryService.get(companyId, id);
+      } catch (cause) {
+        if (!(cause instanceof NotFoundException)) {
+          throw cause;
+        }
+      }
+    }
+    const saleId = this.asString(refs.saleId);
+    if (!saleId) {
+      return null;
+    }
+    const matches = await this.deliveryService.list(companyId, { sale_id: saleId, limit: 1 });
+    return Array.isArray(matches) ? matches[0] ?? null : null;
+  }
+
+  private async canMaterializeDeliverySync(companyId: string): Promise<boolean> {
+    if (!this.entitlementsService) {
+      return true;
+    }
+    try {
+      await this.entitlementsService.enforceTenantAddonEnabled(
+        'delivery_dispatch_suite',
+        companyId,
+        'Delivery Dispatch Suite'
+      );
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  private rememberSyncedDeliveryOrder(
+    companyId: string,
+    localId: string | null | undefined,
+    order: DeliveryOrderRecord
+  ): void {
+    const deliveryOrders = this.getCompanyDeliveryOrders(companyId);
+    const snapshot = { status: order.status, orderType: order.order_type };
+    deliveryOrders.set(order.id, snapshot);
+    const normalizedLocalId = this.asString(localId);
+    if (normalizedLocalId && normalizedLocalId !== order.id) {
+      deliveryOrders.set(normalizedLocalId, snapshot);
+    }
+  }
+
+  private async applyDeliveryStatusProgression(
+    companyId: string,
+    order: DeliveryOrderRecord,
+    input: {
+      targetStatus: DeliveryStatus;
+      personnel: Array<{ user_id: string; role: string }>;
+      notes?: string | null;
+      actorUserId?: string;
+      metadata?: Record<string, unknown>;
+    }
+  ): Promise<DeliveryOrderRecord> {
+    let current = order;
+    if (current.status === input.targetStatus) {
+      return current;
+    }
+    const steps = this.deliveryStatusSteps(current.status, input.targetStatus);
+    for (const nextStatus of steps) {
+      if (nextStatus === 'ASSIGNED') {
+        const personnel = input.personnel.length > 0
+          ? input.personnel
+          : current.personnel.map((row) => ({ user_id: row.user_id, role: row.role }));
+        if (personnel.length === 0) {
+          throw new Error('Delivery order requires assigned personnel before dispatch status sync');
+        }
+        current = await this.deliveryService!.assign(
+          companyId,
+          current.id,
+          {
+            personnel,
+            actor_user_id: input.actorUserId,
+            notes: input.notes ?? undefined
+          }
+        );
+        continue;
+      }
+
+      current = await this.deliveryService!.updateStatus(
+        companyId,
+        current.id,
+        {
+          status: nextStatus,
+          actor_user_id: input.actorUserId,
+          notes: input.notes ?? undefined,
+          metadata: input.metadata,
+          ...(nextStatus === 'COMPLETE'
+            ? { cashier_validated_by_user_id: input.actorUserId }
+            : {})
+        }
+      );
+    }
+    return current;
+  }
+
+  private deliveryStatusSteps(fromStatus: DeliveryStatus, targetStatus: DeliveryStatus): DeliveryStatus[] {
+    if (fromStatus === targetStatus || targetStatus === 'CREATED' || fromStatus === 'COMPLETE') {
+      return [];
+    }
+    if (targetStatus === 'FAILED' || targetStatus === 'RETURNED') {
+      if (fromStatus === 'CREATED') {
+        return ['ASSIGNED', 'OUT_FOR_DELIVERY', targetStatus];
+      }
+      if (fromStatus === 'ASSIGNED') {
+        return ['OUT_FOR_DELIVERY', targetStatus];
+      }
+      if (fromStatus === 'OUT_FOR_DELIVERY') {
+        return [targetStatus];
+      }
+      throw new Error(`Invalid delivery status transition: ${fromStatus} -> ${targetStatus}`);
+    }
+
+    const route: Record<DeliveryStatus, DeliveryStatus[]> = {
+      CREATED: ['ASSIGNED', 'OUT_FOR_DELIVERY', 'DELIVERED', 'COMPLETE'],
+      ASSIGNED: ['OUT_FOR_DELIVERY', 'DELIVERED', 'COMPLETE'],
+      OUT_FOR_DELIVERY: ['DELIVERED', 'COMPLETE'],
+      DELIVERED: ['COMPLETE'],
+      FAILED: ['ASSIGNED', 'OUT_FOR_DELIVERY', 'DELIVERED', 'COMPLETE'],
+      RETURNED: ['ASSIGNED', 'OUT_FOR_DELIVERY', 'DELIVERED', 'COMPLETE'],
+      COMPLETE: []
+    };
+    const steps = route[fromStatus] ?? [];
+    const targetIndex = steps.indexOf(targetStatus);
+    if (targetIndex < 0) {
+      throw new Error(`Invalid delivery status transition: ${fromStatus} -> ${targetStatus}`);
+    }
+    return steps.slice(0, targetIndex + 1);
+  }
+
+  private normalizeDeliveryPersonnel(
+    payload: Record<string, unknown>
+  ): Array<{ user_id: string; role: string }> {
+    const normalized: Array<{ user_id: string; role: string }> = [];
+    const seen = new Set<string>();
+    const append = (userRef: unknown, roleRef: unknown, fallbackRole: string): void => {
+      const userId = this.asString(userRef);
+      if (!userId) {
+        return;
+      }
+      const role = (this.asString(roleRef) ?? fallbackRole).toUpperCase();
+      const key = `${userId}::${role}`;
+      if (seen.has(key)) {
+        return;
+      }
+      seen.add(key);
+      normalized.push({ user_id: userId, role });
+    };
+
+    if (Array.isArray(payload.personnel)) {
+      for (const entry of payload.personnel) {
+        const row = (entry as Record<string, unknown>) ?? {};
+        append(
+          row.user_id ?? row.userId ?? row.personnel_id ?? row.personnelId ?? row.id,
+          row.role,
+          'DRIVER'
+        );
+      }
+    }
+
+    append(payload.driver_id ?? payload.driverId ?? payload.rider_user_id ?? payload.riderUserId, 'DRIVER', 'DRIVER');
+    append(payload.helper_id ?? payload.helperId, 'HELPER', 'HELPER');
+    append(payload.personnel_id ?? payload.personnelId, 'PERSONNEL', 'PERSONNEL');
+
+    return normalized;
   }
 
   private async tryPostLendingOutbox(
@@ -2248,13 +2613,18 @@ export class SyncService {
       if (!orderType) {
         return { ok: false, reason: 'Delivery order type must be PICKUP or DELIVERY' };
       }
-
-      const status = this.normalizeDeliveryStatus(payload.status) ?? 'CREATED';
-      if (status !== 'CREATED') {
-        return { ok: false, reason: 'Delivery order create must start with status CREATED' };
+      const personnel = this.normalizeDeliveryPersonnel(payload);
+      if (orderType === 'DELIVERY' && personnel.length === 0) {
+        return { ok: false, reason: 'Delivery order requires assigned personnel for rider dispatch' };
       }
 
-      deliveryOrders.set(id, { status, orderType });
+      const status = this.normalizeDeliveryStatus(payload.status) ?? 'CREATED';
+      const createdStatus =
+        orderType === 'DELIVERY' && status === 'CREATED' && personnel.length > 0
+          ? 'ASSIGNED'
+          : status;
+
+      deliveryOrders.set(id, { status: createdStatus, orderType });
       return { ok: true };
     }
 
@@ -3932,6 +4302,15 @@ export class SyncService {
       return undefined;
     }
     const normalized = asString.toUpperCase().replace(/[\s-]+/g, '_');
+    if (normalized === 'PENDING') {
+      return 'ASSIGNED';
+    }
+    if (normalized === 'TRANSIT' || normalized === 'IN_TRANSIT') {
+      return 'OUT_FOR_DELIVERY';
+    }
+    if (normalized === 'COMPLETED') {
+      return 'COMPLETE';
+    }
     const known: DeliveryStatus[] = [
       'CREATED',
       'ASSIGNED',
@@ -4043,6 +4422,17 @@ export class SyncService {
     seeded.set('CYL22-0001', { status: 'FULL', locationId: 'loc-wh1' });
     this.cylindersByCompany.set(companyId, seeded);
     return seeded;
+  }
+
+  private resolveOutboxIdempotencyKey(item: SyncPushRequest['outbox_items'][number]): string {
+    if (item.entity !== 'sale_dispatch_status') {
+      return item.idempotency_key;
+    }
+    const payload = item.payload ?? {};
+    const saleId = this.asString(payload.sale_id ?? payload.saleId) ?? item.id;
+    const status = this.asString(payload.status) ?? item.action;
+    const updatedAt = this.asString(payload.updated_at ?? payload.updatedAt) ?? item.created_at;
+    return `${item.idempotency_key}:${saleId}:${status}:${updatedAt}`;
   }
 
   private hashOutboxItem(item: SyncPushRequest['outbox_items'][number]): string {

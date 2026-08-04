@@ -7,6 +7,7 @@ import { PrismaModule } from '../../common/prisma.module';
 @Module({
   imports: [EntitlementsModule, PrismaModule],
   controllers: [DeliveryController],
-  providers: [DeliveryService]
+  providers: [DeliveryService],
+  exports: [DeliveryService]
 })
 export class DeliveryModule {}

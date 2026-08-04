@@ -12,6 +12,7 @@ import { PrismaModule } from '../../common/prisma.module';
 import { MasterDataModule } from '../master-data/master-data.module';
 import { PurchaseOrdersModule } from '../purchase-orders/purchase-orders.module';
 import { VcardModule } from '../vcard/vcard.module';
+import { DeliveryModule } from '../delivery/delivery.module';
 
 @Module({
   imports: [
@@ -25,6 +26,7 @@ import { VcardModule } from '../vcard/vcard.module';
     LendingModule,
     LpgItemActionsModule,
     TransfersModule,
+    DeliveryModule,
     CylindersModule
   ],
   controllers: [SyncController],
