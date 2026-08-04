@@ -1667,27 +1667,44 @@ export class DeliveryService {
     userRef: string
   ): Promise<string> {
     const normalized = userRef.trim();
+    if (!normalized) {
+      throw new BadRequestException('Delivery assignment user or personnel reference is required.');
+    }
     const mappedEmail = this.mapUserEmail(normalized);
+    const personnel = await db.personnel.findFirst({
+      where: {
+        companyId,
+        isActive: true,
+        OR: [
+          { id: normalized },
+          { code: { equals: normalized, mode: 'insensitive' } }
+        ]
+      },
+      select: { id: true }
+    });
+    const personnelId = personnel?.id;
+    const userFilters: Prisma.UserWhereInput[] = [
+      { id: normalized },
+      { personnelId: normalized },
+      { email: { equals: mappedEmail, mode: 'insensitive' } }
+    ];
+    if (personnelId && personnelId !== normalized) {
+      userFilters.push({ personnelId });
+    }
     const user = await db.user.findFirst({
       where: {
         companyId,
         isActive: true,
-        OR: [{ id: normalized }, { email: { equals: mappedEmail, mode: 'insensitive' } }]
+        OR: userFilters
       },
       select: { id: true }
     });
     if (user) {
       return user.id;
     }
-    const fallback = await db.user.findFirst({
-      where: { companyId, isActive: true },
-      orderBy: { createdAt: 'asc' },
-      select: { id: true }
-    });
-    if (!fallback) {
-      throw new BadRequestException('No active user found for delivery assignment');
-    }
-    return fallback.id;
+    throw new BadRequestException(
+      `Delivery assignment user was not found for rider/personnel reference: ${normalized}`
+    );
   }
 
   private mapUserEmail(value: string): string {
