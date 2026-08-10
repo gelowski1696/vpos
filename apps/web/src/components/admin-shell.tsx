@@ -25,6 +25,7 @@ import {
   type InventoryCountDiscrepancyStatus,
   type InventorySyncAuditRow
 } from '../lib/inventory-sync-notification';
+import { canManagePosSettings } from '../lib/pos-settings-policy';
 
 type ThemeMode = 'light' | 'dark';
 
@@ -1187,7 +1188,7 @@ export function AdminShell({ children }: { children: React.ReactNode }): JSX.Ele
             }
 
             if (String(item.href) === '/pos-settings') {
-              return false;
+              return canManagePosSettings(roles);
             }
 
             if (item.href === '/audit-logs' && !canViewAuditLogs) {
@@ -1271,7 +1272,7 @@ export function AdminShell({ children }: { children: React.ReactNode }): JSX.Ele
         }
       ];
     },
-    [canViewOrgStructure, canViewAuditLogs, isPlatformOwner, tenantAddons]
+    [canViewOrgStructure, canViewAuditLogs, isPlatformOwner, roles, tenantAddons]
   );
 
   const visibleNavItems = useMemo(() => visibleNavSections.flatMap((section) => section.items), [visibleNavSections]);

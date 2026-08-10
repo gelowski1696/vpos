@@ -1,6 +1,7 @@
 import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import {
+  canManagePosSettings,
   DEFAULT_TENANT_POS_SETTINGS,
   type TenantPosSettings
 } from '../src/lib/pos-settings-policy';
@@ -48,5 +49,13 @@ describe('PosSettingsPanel', () => {
     expect(html).toContain('Delivery Dispatch');
     expect(html).toContain('Requires add-on');
     expect(html).toContain('Not enabled for this tenant');
+  });
+
+  it('allows POS settings management for admin sessions only', () => {
+    expect(canManagePosSettings(['admin'])).toBe(true);
+    expect(canManagePosSettings(['owner'])).toBe(false);
+    expect(canManagePosSettings(['platform_owner'])).toBe(false);
+    expect(canManagePosSettings(['supervisor'])).toBe(false);
+    expect(canManagePosSettings(['cashier'])).toBe(false);
   });
 });
