@@ -108,6 +108,159 @@ export function clearAuthSession(): void {
   window.localStorage.removeItem(CLIENT_ID_KEY);
 }
 
+type WebAuditOutcome = 'SUCCESS' | 'ERROR';
+
+function pathUrl(path: string): URL {
+  return new URL(path, 'http://vpos.local');
+}
+
+function readTargetCompanyIdFromPath(path: string): string | null {
+  try {
+    const url = pathUrl(path);
+    const fromQuery =
+      url.searchParams.get('companyId') ??
+      url.searchParams.get('company_id') ??
+      url.searchParams.get('tenant_company_id');
+    if (fromQuery?.trim()) {
+      return fromQuery.trim();
+    }
+
+    const segments = url.pathname.split('/').map((segment) => segment.trim()).filter(Boolean);
+    if (
+      segments[0] === 'platform' &&
+      segments[1] === 'owner' &&
+      segments[2] === 'tenants' &&
+      segments[3] &&
+      segments[3] !== 'provision-from-subscription'
+    ) {
+      return decodeURIComponent(segments[3]);
+    }
+  } catch {
+    return null;
+  }
+  return null;
+}
+
+function readEntityIdFromPath(path: string): string | null {
+  try {
+    const segments = pathUrl(path).pathname.split('/').map((segment) => segment.trim()).filter(Boolean);
+    if (segments[0] === 'master-data') {
+      if (segments[1] === 'inventory') {
+        return null;
+      }
+      return segments[2] ? decodeURIComponent(segments[2]) : null;
+    }
+    if (segments[0] === 'platform' && segments[1] === 'owner' && segments[2] === 'tenants' && segments[3]) {
+      return segments[3] === 'provision-from-subscription' ? null : decodeURIComponent(segments[3]);
+    }
+    if (segments[0] === 'delivery' && segments[1] === 'orders') {
+      return segments[2] ? decodeURIComponent(segments[2]) : null;
+    }
+    if (
+      segments[0] === 'purchase-orders' ||
+      segments[0] === 'transfers' ||
+      segments[0] === 'lending' ||
+      segments[0] === 'lpg-item-actions' ||
+      segments[0] === 'customer-payments' ||
+      segments[0] === 'sales' ||
+      segments[0] === 'reviews'
+    ) {
+      return segments[1] ? decodeURIComponent(segments[1]) : null;
+    }
+    if (segments[0] === 'vcard' && segments[1] === 'rewards' && segments[2] === 'redemptions') {
+      return segments[3] ? decodeURIComponent(segments[3]) : null;
+    }
+    if (segments[0] === 'vcard' && (segments[1] === 'cards' || segments[1] === 'rewards')) {
+      return segments[2] ? decodeURIComponent(segments[2]) : null;
+    }
+  } catch {
+    return null;
+  }
+  return null;
+}
+
+function readEntityFromPath(path: string): string {
+  const cleanPath = path.split('?')[0] ?? path;
+  const mappings: Array<[RegExp, string]> = [
+    [/^\/master-data\/branches(?:\/|$)/, 'Branch'],
+    [/^\/master-data\/locations(?:\/|$)/, 'Location'],
+    [/^\/master-data\/users(?:\/|$)/, 'User'],
+    [/^\/master-data\/rider-users(?:\/|$)/, 'User'],
+    [/^\/master-data\/personnel-roles(?:\/|$)/, 'PersonnelRole'],
+    [/^\/master-data\/personnels(?:\/|$)/, 'Personnel'],
+    [/^\/master-data\/customers(?:\/|$)/, 'Customer'],
+    [/^\/master-data\/customer-categories(?:\/|$)/, 'CustomerCategory'],
+    [/^\/master-data\/suppliers(?:\/|$)/, 'Supplier'],
+    [/^\/master-data\/cylinder-types(?:\/|$)/, 'CylinderType'],
+    [/^\/master-data\/products(?:\/|$)/, 'Product'],
+    [/^\/master-data\/product-categories(?:\/|$)/, 'ProductCategory'],
+    [/^\/master-data\/product-brands(?:\/|$)/, 'ProductBrand'],
+    [/^\/master-data\/price-lists(?:\/|$)/, 'PriceList'],
+    [/^\/master-data\/inventory\/opening-stock(?:\/|$)/, 'InventoryOpeningStock'],
+    [/^\/purchase-orders(?:\/|$)/, 'PurchaseOrder'],
+    [/^\/delivery\/orders(?:\/|$)/, 'DeliveryOrder'],
+    [/^\/transfers(?:\/|$)/, 'Transfer'],
+    [/^\/lending(?:\/|$)/, 'Lending'],
+    [/^\/lpg-item-actions(?:\/|$)/, 'LpgItemAction'],
+    [/^\/customer-payments(?:\/|$)/, 'CustomerPayment'],
+    [/^\/sales(?:\/|$)/, 'Sale'],
+    [/^\/vcard(?:\/|$)/, 'VCard'],
+    [/^\/branding(?:\/|$)/, 'Branding'],
+    [/^\/platform\/owner\/tenants(?:\/|$)/, 'Tenant'],
+    [/^\/platform\/pos-settings(?:\/|$)/, 'PosSettings'],
+    [/^\/database-maintenance(?:\/|$)/, 'DatabaseMaintenance'],
+    [/^\/reviews(?:\/|$)/, 'SyncReview'],
+    [/^\/auth(?:\/|$)/, 'Auth']
+  ];
+  return mappings.find(([pattern]) => pattern.test(cleanPath))?.[1] ?? 'WebRequest';
+}
+
+function shouldAuditWebWrite(path: string, method: RequestOptions['method'], authEnabled: boolean): boolean {
+  return authEnabled && method !== 'GET' && !path.startsWith('/audit/web-event');
+}
+
+async function recordWebAuditEvent(input: {
+  path: string;
+  method: RequestOptions['method'];
+  outcome: WebAuditOutcome;
+  statusCode: number;
+  message?: string | null;
+  durationMs: number;
+  clientId?: string | null;
+}): Promise<void> {
+  try {
+    const token = getAccessToken();
+    if (!token) {
+      return;
+    }
+    const clientId = input.clientId?.trim() || getSessionClientId() || API_CLIENT_ID;
+    await fetch(`${API_BASE_URL}/audit/web-event`, {
+      method: 'POST',
+      keepalive: true,
+      headers: {
+        'Content-Type': 'application/json',
+        'X-VPOS-Client': 'web',
+        'X-Client-Channel': 'WEB',
+        'X-Client-Id': clientId,
+        Authorization: `Bearer ${token}`
+      },
+      body: JSON.stringify({
+        method: input.method,
+        path: input.path,
+        outcome: input.outcome,
+        statusCode: input.statusCode,
+        durationMs: input.durationMs,
+        message: input.message ?? null,
+        entity: readEntityFromPath(input.path),
+        entityId: readEntityIdFromPath(input.path),
+        companyId: readTargetCompanyIdFromPath(input.path)
+      })
+    });
+  } catch {
+    // Audit logging must never make the original web action fail.
+  }
+}
+
 function redirectToLoginForSession(reason: 'missing_token' | 'unauthorized'): void {
   if (typeof window === 'undefined') {
     return;
@@ -130,13 +283,16 @@ function redirectToPasswordChange(): void {
 
 export async function apiRequest<T>(path: string, options: RequestOptions = {}): Promise<T> {
   const authEnabled = options.auth ?? true;
+  const method = options.method ?? 'GET';
+  const requestStartedAt = Date.now();
+  const auditWrite = shouldAuditWebWrite(path, method, authEnabled);
+  const clientId = options.clientId?.trim() || getSessionClientId() || API_CLIENT_ID;
   const headers: Record<string, string> = {
     'Content-Type': 'application/json',
     'X-VPOS-Client': 'web',
     'X-Client-Channel': 'WEB'
   };
   if (!options.omitClientId) {
-    const clientId = options.clientId?.trim() || getSessionClientId() || API_CLIENT_ID;
     headers['X-Client-Id'] = clientId;
   }
 
@@ -150,20 +306,14 @@ export async function apiRequest<T>(path: string, options: RequestOptions = {}):
   }
 
   const response = await fetch(`${API_BASE_URL}${path}`, {
-    method: options.method ?? 'GET',
+    method,
     headers,
     body: options.body ? JSON.stringify(options.body) : undefined
   });
 
   if (!response.ok) {
-    if (authEnabled && response.status === 401) {
-      redirectToLoginForSession('unauthorized');
-      throw new Error('Session expired or unauthorized. Redirecting to login.');
-    }
     const text = await response.text();
-    if (!text) {
-      throw new Error(`API error (${response.status})`);
-    }
+    let errorMessage = text || `API error (${response.status})`;
 
     let parsed: {
       message?: string | string[];
@@ -194,17 +344,45 @@ export async function apiRequest<T>(path: string, options: RequestOptions = {}):
       if (Array.isArray(message)) {
         const joined = message.map((entry) => String(entry).trim()).filter(Boolean).join('; ');
         if (joined) {
-          throw new Error(joined);
+          errorMessage = joined;
         }
       } else if (typeof message === 'string' && message.trim()) {
-        throw new Error(message.trim());
+        errorMessage = message.trim();
       }
-      if (typeof parsed.error === 'string' && parsed.error.trim()) {
-        throw new Error(parsed.error.trim());
+      if (errorMessage === (text || `API error (${response.status})`) && typeof parsed.error === 'string' && parsed.error.trim()) {
+        errorMessage = parsed.error.trim();
       }
     }
 
-    throw new Error(text || `API error (${response.status})`);
+    if (auditWrite) {
+      void recordWebAuditEvent({
+        path,
+        method,
+        outcome: 'ERROR',
+        statusCode: response.status,
+        message: errorMessage,
+        durationMs: Date.now() - requestStartedAt,
+        clientId
+      });
+    }
+
+    if (authEnabled && response.status === 401) {
+      redirectToLoginForSession('unauthorized');
+      throw new Error('Session expired or unauthorized. Redirecting to login.');
+    }
+
+    throw new Error(errorMessage);
+  }
+
+  if (auditWrite) {
+    void recordWebAuditEvent({
+      path,
+      method,
+      outcome: 'SUCCESS',
+      statusCode: response.status,
+      durationMs: Date.now() - requestStartedAt,
+      clientId
+    });
   }
 
   return (await response.json()) as T;

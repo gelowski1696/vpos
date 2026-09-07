@@ -1,8 +1,8 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { TablePaginationControls } from '../../../components/table-pagination-controls';
-import { apiRequest } from '../../../lib/api-client';
+import { apiRequest, getSessionCompanyId, getSessionRoles } from '../../../lib/api-client';
 import { useTablePagination } from '../../../lib/table-pagination';
 
 type AuditLogRow = {
@@ -22,6 +22,12 @@ type BranchRow = {
   id: string;
   code: string;
   name: string;
+};
+
+type TenantSummary = {
+  company_id: string;
+  company_code: string;
+  company_name: string;
 };
 
 function formatWhen(value: string): string {
@@ -54,11 +60,64 @@ function branchIdFromMetadata(metadata: unknown): string | null {
 }
 
 export default function AuditLogsPage(): JSX.Element {
+  const sessionRoles = useMemo(() => getSessionRoles(), []);
+  const sessionCompanyId = useMemo(() => getSessionCompanyId(), []);
+  const isPlatformOwner = sessionRoles.includes('platform_owner');
   const [rows, setRows] = useState<AuditLogRow[]>([]);
   const [branches, setBranches] = useState<BranchRow[]>([]);
+  const [tenantOptions, setTenantOptions] = useState<TenantSummary[]>([]);
+  const [selectedTenantCompanyId, setSelectedTenantCompanyId] = useState(sessionCompanyId ?? '');
   const [branchId, setBranchId] = useState('');
   const [loading, setLoading] = useState(true);
+  const [tenantLoading, setTenantLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [tenantLoadError, setTenantLoadError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!isPlatformOwner) {
+      return;
+    }
+
+    let active = true;
+    const loadTenants = async (): Promise<void> => {
+      setTenantLoading(true);
+      setTenantLoadError(null);
+      try {
+        const tenantRows = await apiRequest<TenantSummary[]>('/platform/owner/tenants');
+        if (!active) {
+          return;
+        }
+        setTenantOptions(tenantRows);
+        if (!selectedTenantCompanyId) {
+          const preferred =
+            sessionCompanyId && tenantRows.some((tenant) => tenant.company_id === sessionCompanyId)
+              ? sessionCompanyId
+              : tenantRows[0]?.company_id ?? '';
+          setSelectedTenantCompanyId(preferred);
+        }
+      } catch (loadError) {
+        if (!active) {
+          return;
+        }
+        setTenantLoadError(loadError instanceof Error ? loadError.message : 'Failed to load tenant list');
+      } finally {
+        if (active) {
+          setTenantLoading(false);
+        }
+      }
+    };
+
+    void loadTenants();
+    return () => {
+      active = false;
+    };
+  }, [isPlatformOwner, selectedTenantCompanyId, sessionCompanyId]);
+
+  const selectedTenantQuery = useMemo(() => {
+    return isPlatformOwner && selectedTenantCompanyId
+      ? `companyId=${encodeURIComponent(selectedTenantCompanyId)}`
+      : '';
+  }, [isPlatformOwner, selectedTenantCompanyId]);
 
   useEffect(() => {
     (async () => {
@@ -67,12 +126,18 @@ export default function AuditLogsPage(): JSX.Element {
       try {
         const query = new URLSearchParams();
         query.set('limit', '200');
+        if (isPlatformOwner && selectedTenantCompanyId) {
+          query.set('companyId', selectedTenantCompanyId);
+        }
         if (branchId) {
           query.set('branch_id', branchId);
         }
+        const branchesEndpoint = selectedTenantQuery
+          ? `/master-data/branches?${selectedTenantQuery}`
+          : '/master-data/branches';
         const [data, branchRows] = await Promise.all([
           apiRequest<{ rows: AuditLogRow[] }>(`/reports/audit-logs?${query.toString()}`),
-          apiRequest<BranchRow[]>('/master-data/branches')
+          apiRequest<BranchRow[]>(branchesEndpoint)
         ]);
         setRows(data.rows ?? []);
         setBranches(branchRows ?? []);
@@ -82,19 +147,40 @@ export default function AuditLogsPage(): JSX.Element {
         setLoading(false);
       }
     })();
-  }, [branchId]);
+  }, [branchId, isPlatformOwner, selectedTenantCompanyId, selectedTenantQuery]);
 
   const paginatedRows = useTablePagination(rows, {
     initialPageSize: 25,
     pageSizeOptions: [10, 25, 50, 100],
-    resetKey: `${branchId}|${rows.length}`
+    resetKey: `${selectedTenantCompanyId}|${branchId}|${rows.length}`
   });
 
   return (
     <main>
       <h1 className="text-2xl font-bold text-brandPrimary">Audit Logs</h1>
       <p className="mt-2 text-sm text-slate-600 dark:text-slate-300">Read-only timeline of sensitive actions from tenant-scoped operations.</p>
-      <div className="mt-3 max-w-sm">
+      <div className="mt-3 grid gap-3 md:max-w-3xl md:grid-cols-2">
+        {isPlatformOwner ? (
+          <label className="flex flex-col gap-1 text-sm">
+            <span className="font-medium text-slate-700 dark:text-slate-200">Tenant Scope</span>
+            <select
+              className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-slate-900 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-100"
+              disabled={tenantLoading}
+              onChange={(event) => {
+                setSelectedTenantCompanyId(event.target.value);
+                setBranchId('');
+              }}
+              value={selectedTenantCompanyId}
+            >
+              {tenantOptions.length === 0 ? <option value={selectedTenantCompanyId}>Current Tenant</option> : null}
+              {tenantOptions.map((tenant) => (
+                <option key={tenant.company_id} value={tenant.company_id}>
+                  {tenant.company_name} ({tenant.company_code})
+                </option>
+              ))}
+            </select>
+          </label>
+        ) : null}
         <label className="flex flex-col gap-1 text-sm">
           <span className="font-medium text-slate-700 dark:text-slate-200">Branch Filter</span>
           <select
@@ -112,6 +198,7 @@ export default function AuditLogsPage(): JSX.Element {
         </label>
       </div>
 
+      {tenantLoadError ? <p className="mt-3 text-sm text-rose-700">{tenantLoadError}</p> : null}
       {loading ? <p className="mt-4 text-sm text-slate-500 dark:text-slate-400">Loading audit logs...</p> : null}
       {error ? <p className="mt-4 text-sm text-rose-700">{error}</p> : null}
 

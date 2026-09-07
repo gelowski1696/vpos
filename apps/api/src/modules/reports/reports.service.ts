@@ -18,6 +18,14 @@ import { SyncService } from '../sync/sync.service';
 
 type DbClient = PrismaService | PrismaClient;
 
+function readMetadataString(metadata: unknown, key: string): string | null {
+  if (!metadata || typeof metadata !== 'object' || Array.isArray(metadata)) {
+    return null;
+  }
+  const value = (metadata as Record<string, unknown>)[key];
+  return typeof value === 'string' && value.trim() ? value.trim() : null;
+}
+
 type ReportRangeQuery = {
   since?: string;
   until?: string;
@@ -4023,19 +4031,22 @@ export class ReportsService {
         since: range.since?.toISOString() ?? null,
         until: range.until?.toISOString() ?? null
       },
-      rows: rows.map((row) => ({
-        id: row.id,
-        created_at: row.createdAt.toISOString(),
-        level: row.level,
-        action: row.action,
-        entity: row.entity,
-        entity_id: row.entityId ?? null,
-        user_id: row.user?.id ?? row.userId ?? null,
-        user_name: row.user?.fullName ?? null,
-        user_email: row.user?.email ?? null,
-        user_branch_id: row.user?.branchId ?? null,
-        metadata: row.metadata ?? null
-      }))
+      rows: rows.map((row) => {
+        const metadata = row.metadata ?? null;
+        return {
+          id: row.id,
+          created_at: row.createdAt.toISOString(),
+          level: row.level,
+          action: row.action,
+          entity: row.entity,
+          entity_id: row.entityId ?? null,
+          user_id: row.user?.id ?? row.userId ?? readMetadataString(metadata, 'actorUserId') ?? null,
+          user_name: row.user?.fullName ?? readMetadataString(metadata, 'actorName'),
+          user_email: row.user?.email ?? readMetadataString(metadata, 'actorEmail'),
+          user_branch_id: row.user?.branchId ?? null,
+          metadata
+        };
+      })
     };
   }
 

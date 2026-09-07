@@ -1,4 +1,4 @@
-import { Controller, Get, Param, Query, Req, Res, StreamableFile, UnauthorizedException } from '@nestjs/common';
+import { Controller, ForbiddenException, Get, Param, Query, Req, Res, StreamableFile, UnauthorizedException } from '@nestjs/common';
 import { Request, Response } from 'express';
 import { ReportsService } from './reports.service';
 import { TenantRoutingPolicyService } from '../entitlements/tenant-routing-policy.service';
@@ -311,9 +311,12 @@ export class ReportsController {
       action?: string;
       entity?: string;
       branch_id?: string;
+      companyId?: string;
+      company_id?: string;
+      tenant_company_id?: string;
     }
   ): Promise<ReturnType<ReportsService['auditLogs']>> {
-    const companyId = this.requireCompanyId(req);
+    const companyId = this.resolveAuditLogCompanyId(req, query.companyId ?? query.company_id ?? query.tenant_company_id);
     await this.tenantRoutingPolicy.assertRoutable(companyId);
     return this.reportsService.auditLogs(companyId, {
       ...query,
@@ -328,5 +331,28 @@ export class ReportsController {
       throw new UnauthorizedException('Tenant context missing');
     }
     return companyId;
+  }
+
+  private resolveAuditLogCompanyId(
+    req: Request & { user?: { company_id?: string; roles?: string[] } },
+    requestedCompanyId: unknown
+  ): string {
+    const actorCompanyId = this.requireCompanyId(req);
+    const requested =
+      typeof requestedCompanyId === 'string'
+        ? requestedCompanyId.trim()
+        : typeof requestedCompanyId === 'number'
+          ? String(requestedCompanyId)
+          : '';
+
+    if (!requested || requested === actorCompanyId) {
+      return actorCompanyId;
+    }
+
+    const roles = req.user?.roles ?? [];
+    if (!roles.includes('platform_owner')) {
+      throw new ForbiddenException('Cross-tenant audit logs require platform_owner role');
+    }
+    return requested;
   }
 }
