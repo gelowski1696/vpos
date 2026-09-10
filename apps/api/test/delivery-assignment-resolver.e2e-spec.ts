@@ -7,7 +7,7 @@ describe('delivery assignment resolver', () => {
       resolveUserId: (
         db: {
           personnel: { findFirst: jest.Mock };
-          user: { findFirst: jest.Mock };
+          user: { findFirst: jest.Mock; create?: jest.Mock; update?: jest.Mock };
         },
         companyId: string,
         userRef: string
@@ -47,6 +47,48 @@ describe('delivery assignment resolver', () => {
             { personnelId: 'EMP2' }
           ])
         })
+      })
+    );
+  });
+
+  it('creates an assignment-only user when sync references an active personnel without a rider login', async () => {
+    const service = new DeliveryService();
+    const db = {
+      personnel: {
+        findFirst: jest.fn(async () => ({
+          id: 'personnel-driver-1',
+          branchId: 'branch-1',
+          code: 'PDR1',
+          fullName: 'Driver One',
+          email: null
+        }))
+      },
+      user: {
+        findFirst: jest
+          .fn()
+          .mockResolvedValueOnce(null)
+          .mockResolvedValueOnce(null),
+        create: jest.fn(async () => ({ id: 'assignment-user-1' })),
+        update: jest.fn()
+      }
+    };
+
+    await expect(resolveUserId(service)(db, 'company-1', 'personnel-driver-1')).resolves.toBe(
+      'assignment-user-1'
+    );
+    expect(db.user.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          companyId: 'company-1',
+          branchId: 'branch-1',
+          personnelId: 'personnel-driver-1',
+          username: null,
+          email: 'delivery-assignment+personnel-driver-1@vpos.local',
+          fullName: 'Driver One',
+          mustChangePassword: true,
+          isActive: true
+        }),
+        select: { id: true }
       })
     );
   });

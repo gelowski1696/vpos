@@ -1752,7 +1752,7 @@ export class SyncService {
             const row = (entry as Record<string, unknown>) ?? {};
             return {
               product_id: this.asString(row.product_id ?? row.productId) ?? '',
-              source_sale_line_id: this.asString(
+              source_sale_line_id: this.normalizeSourceSaleLineIdForSync(
                 row.source_sale_line_id ?? row.sourceSaleLineId
               ),
               source_sale_line_index: this.asInteger(
@@ -1796,16 +1796,27 @@ export class SyncService {
     if (linesRaw.length === 0) {
       return { ok: false, reason: 'Lending return sync payload is missing return lines' };
     }
+    const saleId =
+      payload.sale_id === null || payload.saleId === null
+        ? null
+        : this.asString(payload.sale_id ?? payload.saleId) ?? null;
 
     try {
-      const detail = await this.lendingService.getDetail(companyId, lendingId);
+      const detail = await this.findSyncedLendingDetail(
+        companyId,
+        { lendingId, saleId },
+        linesRaw
+      );
+      if (!detail) {
+        return { ok: false, reason: 'Lending record not found' };
+      }
       const resolved = this.resolveLendingReturnLines(detail, linesRaw);
       if ('error' in resolved) {
         return { ok: false, reason: resolved.error };
       }
       const lending = await this.lendingService.returnLending(
         companyId,
-        lendingId,
+        detail.lending_id,
         {
           remarks: this.asString(payload.remarks) ?? null,
           lines: resolved.lines
@@ -1818,6 +1829,60 @@ export class SyncService {
         cause instanceof Error ? cause.message : 'Lending return posting failed during sync';
       return { ok: false, reason: message };
     }
+  }
+
+  private normalizeSourceSaleLineIdForSync(value: unknown): string | null {
+    const id = this.asString(value)?.trim() ?? '';
+    if (!id) {
+      return null;
+    }
+    if (/^(cart-line-|local:|local-|pending-|tmp-|temp-)/i.test(id)) {
+      return null;
+    }
+    return id;
+  }
+
+  private async findSyncedLendingDetail(
+    companyId: string,
+    refs: { lendingId?: string | null; saleId?: string | null },
+    linesRaw: unknown[]
+  ): Promise<LendingDetailRecord | null> {
+    if (!this.lendingService) {
+      return null;
+    }
+    const lendingId = this.asString(refs.lendingId);
+    if (lendingId) {
+      try {
+        return await this.lendingService.getDetail(companyId, lendingId);
+      } catch (cause) {
+        if (!(cause instanceof NotFoundException)) {
+          throw cause;
+        }
+      }
+    }
+
+    const saleId = this.asString(refs.saleId);
+    if (!saleId) {
+      return null;
+    }
+    const matches = await this.lendingService.list(companyId, { sale_id: saleId, limit: 10 });
+    let fallback: LendingDetailRecord | null = null;
+    for (const match of matches) {
+      try {
+        const detail = await this.lendingService.getDetail(companyId, match.lending_id);
+        fallback ??= detail;
+        const resolved = this.resolveLendingReturnLines(detail, linesRaw);
+        if (!('error' in resolved)) {
+          return detail;
+        }
+      } catch (cause) {
+        if (!(cause instanceof NotFoundException)) {
+          throw cause;
+        }
+      }
+    }
+
+    return fallback;
   }
 
   private resolveLendingReturnLines(
@@ -4467,7 +4532,7 @@ export class SyncService {
     const storedResponse = row.response as Record<string, unknown>;
     const status = String(storedResponse.status ?? '').toLowerCase();
     if (status === 'rejected') {
-      if (itemPayload && this.shouldBypassStaleSaleRewardRejection(itemPayload, row.response)) {
+      if (itemPayload && this.shouldBypassStaleSyncRejection(itemPayload, row.response)) {
         return null;
       }
       return {
@@ -4518,7 +4583,7 @@ export class SyncService {
       if (
         decision.status === 'accepted' &&
         payload &&
-        this.shouldBypassStaleSaleRewardRejection(payload, existing.response)
+        this.shouldBypassStaleSyncRejection(payload, existing.response)
       ) {
         await client.idempotencyKey.update({
           where: {
@@ -4656,6 +4721,28 @@ export class SyncService {
     return (
       String(record.status ?? '').toLowerCase() === 'rejected' &&
       String(record.reason ?? '') === 'Sale reward sync payload is missing reward id'
+    );
+  }
+
+  private shouldBypassStaleSyncRejection(
+    payload: Record<string, unknown>,
+    response: unknown
+  ): boolean {
+    if (this.shouldBypassStaleSaleRewardRejection(payload, response)) {
+      return true;
+    }
+    if (!response || typeof response !== 'object') {
+      return false;
+    }
+    const record = response as Record<string, unknown>;
+    if (String(record.status ?? '').toLowerCase() !== 'rejected') {
+      return false;
+    }
+    const reason = String(record.reason ?? '');
+    return (
+      reason === 'Lending record not found' ||
+      /^Sale line .+ does not belong to this sale$/.test(reason) ||
+      reason.startsWith('Delivery assignment user was not found for rider/personnel reference:')
     );
   }
 

@@ -1,5 +1,6 @@
 import { BadRequestException, ForbiddenException, Injectable, NotFoundException, Optional } from '@nestjs/common';
 import { Prisma, type PrismaClient } from '@prisma/client';
+import * as argon2 from 'argon2';
 import { PrismaService } from '../../common/prisma.service';
 import { AiEventBufferService } from '../../common/ai-event-buffer.service';
 import {
@@ -1674,7 +1675,7 @@ export class DeliveryService {
           { code: { equals: normalized, mode: 'insensitive' } }
         ]
       },
-      select: { id: true }
+      select: { id: true, branchId: true, code: true, fullName: true, email: true }
     });
     const personnelId = personnel?.id;
     const userFilters: Prisma.UserWhereInput[] = [
@@ -1696,8 +1697,88 @@ export class DeliveryService {
     if (user) {
       return user.id;
     }
+    if (personnel) {
+      const assignmentUser = await this.ensureAssignmentUserForPersonnel(db, companyId, personnel);
+      return assignmentUser.id;
+    }
     throw new BadRequestException(
       `Delivery assignment user was not found for rider/personnel reference: ${normalized}`
+    );
+  }
+
+  private async ensureAssignmentUserForPersonnel(
+    db: DbClient | DbTransaction,
+    companyId: string,
+    personnel: {
+      id: string;
+      branchId?: string | null;
+      code?: string | null;
+      fullName?: string | null;
+      email?: string | null;
+    }
+  ): Promise<{ id: string }> {
+    const existing = await db.user.findFirst({
+      where: {
+        companyId,
+        personnelId: personnel.id
+      },
+      select: { id: true, isActive: true }
+    });
+    if (existing?.isActive) {
+      return { id: existing.id };
+    }
+
+    const data = {
+      companyId,
+      branchId: personnel.branchId ?? null,
+      personnelId: personnel.id,
+      username: null,
+      email: `delivery-assignment+${personnel.id.toLowerCase()}@vpos.local`,
+      fullName: personnel.fullName?.trim() || personnel.code?.trim() || 'Delivery Personnel',
+      passwordHash: await argon2.hash(`assignment:${companyId}:${personnel.id}:${Date.now()}`),
+      mustChangePassword: true,
+      isActive: true
+    };
+
+    if (existing) {
+      const updated = await db.user.update({
+        where: { id: existing.id },
+        data,
+        select: { id: true }
+      });
+      return { id: updated.id };
+    }
+
+    try {
+      const created = await db.user.create({
+        data,
+        select: { id: true }
+      });
+      return { id: created.id };
+    } catch (cause) {
+      if (!this.isUniqueConstraintError(cause)) {
+        throw cause;
+      }
+      const row = await db.user.findFirst({
+        where: {
+          companyId,
+          personnelId: personnel.id
+        },
+        select: { id: true }
+      });
+      if (!row) {
+        throw cause;
+      }
+      return { id: row.id };
+    }
+  }
+
+  private isUniqueConstraintError(error: unknown): boolean {
+    return (
+      typeof error === 'object' &&
+      error !== null &&
+      'code' in error &&
+      (error as { code?: string }).code === 'P2002'
     );
   }
 
