@@ -2573,7 +2573,7 @@ export class SyncService {
         }
         continue;
       }
-      if (isConvert && sourceBucket.qty_empty < line.qtyEmpty) {
+      if ((isCreate || isConvert) && sourceBucket.qty_empty < line.qtyEmpty) {
         return {
           ok: false,
           reason: `Insufficient EMPTY stock for ${line.productId} at ${source}: empty=${sourceBucket.qty_empty}`
@@ -2609,23 +2609,21 @@ export class SyncService {
       }
 
       if (isCreate) {
-        const movedQty = line.qtyFull > 0 ? line.qtyFull : line.qtyEmpty;
         const key = this.inventoryKey(destination, line.productId);
         const current = this.getInventory(companyId, destination, line.productId);
         inventory.set(key, {
-          qty_full: Number((current.qty_full + movedQty).toFixed(4)),
-          qty_empty: current.qty_empty
+          qty_full: Number((current.qty_full + line.qtyFull).toFixed(4)),
+          qty_empty: Number((current.qty_empty - line.qtyEmpty).toFixed(4))
         });
         continue;
       }
 
       if (isUsed) {
-        const movedQty = line.qtyFull;
         const key = this.inventoryKey(destination, line.productId);
         const current = this.getInventory(companyId, destination, line.productId);
         inventory.set(key, {
-          qty_full: Number((current.qty_full - movedQty).toFixed(4)),
-          qty_empty: current.qty_empty
+          qty_full: Number((current.qty_full - line.qtyFull).toFixed(4)),
+          qty_empty: Number((current.qty_empty + line.qtyEmpty).toFixed(4))
         });
         continue;
       }

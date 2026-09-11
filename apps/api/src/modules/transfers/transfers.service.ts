@@ -330,17 +330,16 @@ export class TransfersService {
     }
     if (this.isUsedMode(mode)) {
       return {
-        qtyDelta: this.roundQty(-qtyFull),
+        qtyDelta: this.roundQty(-qtyFull + qtyEmpty),
         fullDelta: this.roundQty(-qtyFull),
-        emptyDelta: 0
+        emptyDelta: this.roundQty(qtyEmpty)
       };
     }
     if (this.isCreateMode(mode)) {
-      const movedQty = qtyFull > 0 ? qtyFull : qtyEmpty;
       return {
-        qtyDelta: this.roundQty(movedQty),
-        fullDelta: this.roundQty(movedQty),
-        emptyDelta: 0
+        qtyDelta: this.roundQty(qtyFull - qtyEmpty),
+        fullDelta: this.roundQty(qtyFull),
+        emptyDelta: this.roundQty(-qtyEmpty)
       };
     }
     if (this.isConvertMode(mode)) {
@@ -460,7 +459,7 @@ export class TransfersService {
       } else if (isCreate || isConvert || isUsed) {
         const locationKey = this.inventoryKey(row.destination_location_id, line.product_id);
         const current = inventory.get(locationKey) ?? { qty_full: 0, qty_empty: 0 };
-        if (isConvert && current.qty_empty < line.qty_empty) {
+        if ((isCreate || isConvert) && current.qty_empty < line.qty_empty) {
           throw new BadRequestException(
             `Insufficient EMPTY stock for ${line.product_id} at ${row.destination_location_id}`
           );
@@ -551,8 +550,7 @@ export class TransfersService {
             `Cannot reverse transfer: destination stock is insufficient for ${line.product_id}`
           );
         }
-        const createMovedQty = isCreate && line.qty_empty <= 0 ? line.qty_full : line.qty_empty;
-        if (isCreate && current.qty_full < createMovedQty) {
+        if (isCreate && current.qty_full < line.qty_full) {
           throw new BadRequestException(
             `Cannot reverse transfer: FULL stock is insufficient for ${line.product_id}`
           );
@@ -977,7 +975,7 @@ export class TransfersService {
                   `Insufficient stock for ${line.product.sku} at ${adjustmentLocationId}`
                 );
               }
-            } else if (this.isConvertMode(transfer.transferMode)) {
+            } else if (this.isCreateMode(transfer.transferMode) || this.isConvertMode(transfer.transferMode)) {
               if (currentEmpty < qtyEmpty) {
                 throw new BadRequestException(
                   `Insufficient EMPTY stock for ${line.product.sku} at ${adjustmentLocationId}`
