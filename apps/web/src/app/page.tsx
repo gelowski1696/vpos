@@ -1,5 +1,6 @@
 import type { Metadata } from 'next';
 import { HomeLandingShowcase } from '../components/home-landing-showcase';
+import { SystemAccessRestricted, WEB_PORTAL_ACCESS_RESTRICTED } from '../components/system-access-restricted';
 
 const siteUrl = process.env.NEXT_PUBLIC_SITE_URL?.trim() || 'https://vmjamtech.com';
 
@@ -25,6 +26,8 @@ export const metadata: Metadata = {
 };
 
 export default function HomePage(): JSX.Element {
+  const restrictedContentProps = WEB_PORTAL_ACCESS_RESTRICTED ? { 'aria-hidden': true, inert: true } : {};
+
   const softwareStructuredData = {
     '@context': 'https://schema.org',
     '@type': 'SoftwareApplication',
@@ -70,7 +73,13 @@ export default function HomePage(): JSX.Element {
         type="application/ld+json"
         dangerouslySetInnerHTML={{ __html: JSON.stringify(websiteStructuredData) }}
       />
-      <HomeLandingShowcase />
+      <div
+        {...restrictedContentProps}
+        className={WEB_PORTAL_ACCESS_RESTRICTED ? 'pointer-events-none select-none' : undefined}
+      >
+        <HomeLandingShowcase />
+      </div>
+      {WEB_PORTAL_ACCESS_RESTRICTED ? <SystemAccessRestricted /> : null}
     </>
   );
 }
