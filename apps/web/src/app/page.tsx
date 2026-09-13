@@ -26,9 +26,10 @@ export const metadata: Metadata = {
 };
 
 export default function HomePage(): JSX.Element {
-  const restrictedContentProps = WEB_PORTAL_ACCESS_RESTRICTED
-    ? { 'aria-hidden': true, inert: 'true' as unknown as boolean }
-    : {};
+  // Comment out this guard, or set WEB_PORTAL_ACCESS_RESTRICTED to false, to restore the homepage.
+  if (WEB_PORTAL_ACCESS_RESTRICTED) {
+    return <SystemAccessRestricted />;
+  }
 
   const softwareStructuredData = {
     '@context': 'https://schema.org',
@@ -75,13 +76,7 @@ export default function HomePage(): JSX.Element {
         type="application/ld+json"
         dangerouslySetInnerHTML={{ __html: JSON.stringify(websiteStructuredData) }}
       />
-      <div
-        {...restrictedContentProps}
-        className={WEB_PORTAL_ACCESS_RESTRICTED ? 'pointer-events-none select-none' : undefined}
-      >
-        <HomeLandingShowcase />
-      </div>
-      {WEB_PORTAL_ACCESS_RESTRICTED ? <SystemAccessRestricted /> : null}
+      <HomeLandingShowcase />
     </>
   );
 }
