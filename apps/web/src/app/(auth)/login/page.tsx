@@ -20,7 +20,9 @@ export default function LoginPage(): JSX.Element {
   const [showPassword, setShowPassword] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const restrictedContentProps = WEB_PORTAL_ACCESS_RESTRICTED ? { 'aria-hidden': true, inert: true } : {};
+  const restrictedContentProps = WEB_PORTAL_ACCESS_RESTRICTED
+    ? { 'aria-hidden': true, inert: 'true' as unknown as boolean }
+    : {};
 
   async function onSubmit(event: FormEvent<HTMLFormElement>): Promise<void> {
     event.preventDefault();

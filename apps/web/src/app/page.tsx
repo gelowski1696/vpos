@@ -26,7 +26,9 @@ export const metadata: Metadata = {
 };
 
 export default function HomePage(): JSX.Element {
-  const restrictedContentProps = WEB_PORTAL_ACCESS_RESTRICTED ? { 'aria-hidden': true, inert: true } : {};
+  const restrictedContentProps = WEB_PORTAL_ACCESS_RESTRICTED
+    ? { 'aria-hidden': true, inert: 'true' as unknown as boolean }
+    : {};
 
   const softwareStructuredData = {
     '@context': 'https://schema.org',
