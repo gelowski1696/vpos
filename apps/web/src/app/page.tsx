@@ -2,6 +2,7 @@ import type { Metadata } from 'next';
 import { HomeLandingShowcase } from '../components/home-landing-showcase';
 
 const siteUrl = process.env.NEXT_PUBLIC_SITE_URL?.trim() || 'https://vmjamtech.com';
+const WHITE_PAGE_ONLY = true;
 
 export const metadata: Metadata = {
   title: 'VMJAMTECH VPOS | LPG Operations Platform Philippines',
@@ -25,6 +26,11 @@ export const metadata: Metadata = {
 };
 
 export default function HomePage(): JSX.Element {
+  // Comment out this guard, or set WHITE_PAGE_ONLY to false, to restore the homepage.
+  if (WHITE_PAGE_ONLY) {
+    return <main className="min-h-screen bg-white" />;
+  }
+
   const softwareStructuredData = {
     '@context': 'https://schema.org',
     '@type': 'SoftwareApplication',
