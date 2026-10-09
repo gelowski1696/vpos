@@ -12,8 +12,6 @@ import {
   saveAuthSession
 } from '../../../lib/api-client';
 
-const WHITE_PAGE_ONLY = true;
-
 export default function LoginPage(): JSX.Element {
   const router = useRouter();
   const [email, setEmail] = useState('');
@@ -21,11 +19,6 @@ export default function LoginPage(): JSX.Element {
   const [showPassword, setShowPassword] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-
-  // Comment out this guard, or set WHITE_PAGE_ONLY to false, to restore the login form.
-  if (WHITE_PAGE_ONLY) {
-    return <main className="min-h-screen bg-white" />;
-  }
 
   async function onSubmit(event: FormEvent<HTMLFormElement>): Promise<void> {
     event.preventDefault();
