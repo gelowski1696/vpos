@@ -1,13 +1,15 @@
 import { CanActivate, ExecutionContext, ForbiddenException, Injectable, UnauthorizedException } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
 import { Reflector } from '@nestjs/core';
+import { RequestContextService } from '../../../common/request-context.service';
 import { IS_PUBLIC_KEY } from '../decorators/public.decorator';
 
 @Injectable()
 export class JwtAuthGuard implements CanActivate {
   constructor(
     private readonly jwtService: JwtService,
-    private readonly reflector: Reflector
+    private readonly reflector: Reflector,
+    private readonly requestContext: RequestContextService
   ) {}
 
   canActivate(context: ExecutionContext): boolean {
@@ -62,6 +64,7 @@ export class JwtAuthGuard implements CanActivate {
       if (!request.companyId) {
         throw new UnauthorizedException('Tenant context missing');
       }
+      this.requestContext.update({ companyId: payload.company_id });
 
       request.user = {
         sub: payload.sub,

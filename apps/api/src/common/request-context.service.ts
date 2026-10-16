@@ -19,4 +19,12 @@ export class RequestContextService {
   get(): TenantRequestContext | undefined {
     return this.storage.getStore();
   }
+
+  update(context: Partial<TenantRequestContext>): void {
+    const current = this.storage.getStore();
+    if (!current) {
+      return;
+    }
+    Object.assign(current, context);
+  }
 }

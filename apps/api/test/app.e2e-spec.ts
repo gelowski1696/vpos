@@ -290,6 +290,17 @@ describe('VPOS API (integration)', () => {
     expect(response.body.length).toBeGreaterThan(0);
   });
 
+  it('5b) resolves tenant add-ons from the access token when X-Client-Id is omitted', async () => {
+    const cashier = await loginAs('cashier@vpos.local', 'Cashier@123', '');
+
+    const response = await request(app.getHttpServer())
+      .get('/api/master-data/price-lists')
+      .set('Authorization', `Bearer ${cashier.access}`)
+      .expect(200);
+
+    expect(Array.isArray(response.body)).toBe(true);
+  });
+
   it('6) handles sync push idempotency', async () => {
     const admin = await loginAs('admin@vpos.local', 'Admin@123');
     const payload = {
