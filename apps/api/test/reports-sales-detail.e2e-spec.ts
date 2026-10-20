@@ -117,4 +117,60 @@ describe('ReportsService.salesDetail', () => {
     expect(result.sale.status).toBe('CANCELLED');
     expect(result.lines[0].cylinder_flow).toBe('REFILL_EXCHANGE');
   });
+
+  it('excludes cancelled and voided sales from dashboard summary totals', async () => {
+    const aggregate = jest.fn().mockResolvedValue({
+      _count: { id: 0 },
+      _sum: { subtotal: null, discountAmount: null, totalAmount: null, cogsAmount: null }
+    });
+    const paymentGroupBy = jest.fn().mockResolvedValue([]);
+    const saleGroupBy = jest.fn().mockResolvedValue([]);
+    const db = {
+      sale: { aggregate, groupBy: saleGroupBy },
+      payment: { groupBy: paymentGroupBy }
+    } as never;
+    const tenantRouter = {
+      forCompany: jest.fn().mockResolvedValue({
+        client: db,
+        companyId: 'company-1',
+        mode: TenancyDatastoreMode.SHARED_DB,
+        datastoreRef: null
+      })
+    } as never;
+    const service = new ReportsService({} as never, {} as never, tenantRouter, undefined);
+
+    await service.salesSummary('company-1', {});
+
+    expect(aggregate).toHaveBeenCalledWith(
+      expect.objectContaining({ where: expect.objectContaining({ status: 'ACTIVE' }) })
+    );
+    expect(paymentGroupBy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { sale: { is: expect.objectContaining({ status: 'ACTIVE' }) } }
+      })
+    );
+    expect(saleGroupBy).toHaveBeenCalledWith(
+      expect.objectContaining({ where: expect.objectContaining({ status: 'ACTIVE' }) })
+    );
+  });
+
+  it('keeps cancelled sales visible in the sales history list', async () => {
+    const findMany = jest.fn().mockResolvedValue([]);
+    const db = { sale: { findMany } } as never;
+    const tenantRouter = {
+      forCompany: jest.fn().mockResolvedValue({
+        client: db,
+        companyId: 'company-1',
+        mode: TenancyDatastoreMode.SHARED_DB,
+        datastoreRef: null
+      })
+    } as never;
+    const service = new ReportsService({} as never, {} as never, tenantRouter, undefined);
+
+    await service.salesList('company-1', {});
+
+    const where = findMany.mock.calls[0]?.[0]?.where;
+    expect(where?.status).toBeUndefined();
+    expect(where?.postedAt).toEqual(expect.objectContaining({ not: null }));
+  });
 });

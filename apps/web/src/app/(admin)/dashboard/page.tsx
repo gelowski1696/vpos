@@ -20,7 +20,7 @@ type WidgetKey =
 type Branch = { id: string; code: string; name: string; isActive: boolean };
 type Location = { id: string; branchId?: string | null; name: string };
 type SalesSummary = { sale_count: number; total_sales: number; cogs_total: number; gross_profit: number; gross_margin_pct: number };
-type SalesRow = { sale_id: string; branch_id: string; branch_name: string; location_id: string; customer_name: string | null; sale_type: string; total_amount: number; payment_total: number; posted_at: string | null; created_at: string };
+type SalesRow = { sale_id: string; status: 'ACTIVE' | 'CANCELLED' | 'VOIDED'; branch_id: string; branch_name: string; location_id: string; customer_name: string | null; sale_type: string; total_amount: number; payment_total: number; posted_at: string | null; created_at: string };
 type SalesList = { rows: SalesRow[] };
 type GrossMargin = { by_branch: Array<{ branch_id: string; branch_name: string; revenue: number; gross_profit: number }> };
 type FullEmpty = { rows: Array<{ location_id: string; item_code: string; product_name: string; qty_full: number; qty_empty: number }> };
@@ -371,20 +371,25 @@ export default function DashboardPage(): JSX.Element {
       .sort((a, b) => a.current - b.current);
   }, [openRows, productById]);
 
+  const activeSales = useMemo(
+    () => sales.filter((row) => row.status === 'ACTIVE'),
+    [sales]
+  );
+
   const salesTrend = useMemo(() => {
     const map = new Map<string, number>();
-    for (const row of sales) {
+    for (const row of activeSales) {
       const key = dayKey(row.posted_at ?? row.created_at);
       map.set(key, (map.get(key) ?? 0) + row.total_amount);
     }
     return Array.from(map.entries()).sort((a, b) => a[0].localeCompare(b[0])).slice(-14).map(([date, amount]) => ({ date, amount }));
-  }, [sales]);
+  }, [activeSales]);
 
   const dueSales = useMemo(() => {
-    return sales
+    return activeSales
       .map((row) => ({ ...row, due: Math.max(0, Number((row.total_amount - row.payment_total).toFixed(2))), age: Math.floor((Date.now() - (parseDate(row.posted_at ?? row.created_at)?.getTime() ?? Date.now())) / 86400000) }))
       .filter((row) => row.due > 0 && row.customer_name);
-  }, [sales]);
+  }, [activeSales]);
 
   const creditBuckets = useMemo(() => {
     const b = { d0_7: 0, d8_15: 0, d16_30: 0, d31p: 0 };

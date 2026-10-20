@@ -925,6 +925,7 @@ export class ReportsService {
             where: {
               companyId,
               shiftId: { in: openShiftIds },
+              status: 'ACTIVE',
               postedAt: { not: null }
             },
             _count: { id: true },
@@ -1229,7 +1230,7 @@ export class ReportsService {
     }
 
     const db = binding.client as DbClient;
-    const saleWhere = this.buildSaleWhere(companyId, query);
+    const saleWhere = this.buildSaleWhere(companyId, query, { includeCancelled: true });
     const limit = this.parseLimit(query.limit, 200, 1000);
 
     const rows = await db.sale.findMany({
@@ -4230,10 +4231,15 @@ export class ReportsService {
     };
   }
 
-  private buildSaleWhere(companyId: string, query: SalesReportQuery): Prisma.SaleWhereInput {
+  private buildSaleWhere(
+    companyId: string,
+    query: SalesReportQuery,
+    options: { includeCancelled?: boolean } = {}
+  ): Prisma.SaleWhereInput {
     const range = this.parseRange(query);
     return {
       ...this.buildSaleScopeWhere(companyId, query),
+      ...(options.includeCancelled ? {} : { status: 'ACTIVE' }),
       postedAt: {
         not: null,
         ...(range.since ? { gte: range.since } : {}),

@@ -120,12 +120,8 @@ export default function SyncReviewsPage(): JSX.Element {
     setLoading(true);
     setError(null);
     try {
-      const query =
-        statusFilter === 'ALL'
-          ? '/reviews?limit=300'
-          : `/reviews?status=${statusFilter}&limit=300`;
       const [data] = await Promise.all([
-        apiRequest<{ rows: SyncReviewRow[] }>(query),
+        apiRequest<{ rows: SyncReviewRow[] }>('/reviews?limit=300'),
         loadStaleTransferRows()
       ]);
       setRows(data.rows ?? []);
@@ -140,7 +136,7 @@ export default function SyncReviewsPage(): JSX.Element {
 
   useEffect(() => {
     void refresh();
-  }, [statusFilter]);
+  }, []);
 
   const openCount = useMemo(
     () => rows.filter((row) => row.status === 'OPEN').length,
@@ -163,11 +159,14 @@ export default function SyncReviewsPage(): JSX.Element {
   );
 
   const filteredRows = useMemo(() => {
+    const statusRows = statusFilter === 'ALL'
+      ? rows
+      : rows.filter((row) => row.status === statusFilter);
     if (quickFilter === 'TRANSFER_OPEN') {
-      return rows.filter((row) => row.status === 'OPEN' && isTransferReview(row));
+      return statusRows.filter((row) => row.status === 'OPEN' && isTransferReview(row));
     }
-    return rows;
-  }, [quickFilter, rows]);
+    return statusRows;
+  }, [quickFilter, rows, statusFilter]);
 
   const drilledTransferRows = useMemo(() => {
     if (transferDrillFilter === 'STALE_CREATED') {
@@ -489,7 +488,7 @@ export default function SyncReviewsPage(): JSX.Element {
               {filteredRows.length === 0 ? (
                 <tr>
                   <td className="py-3 text-slate-500 dark:text-slate-400" colSpan={7}>
-                    No sync review rows for this filter.
+                    No rejected sync records for this filter. Successful syncs do not create review rows.
                   </td>
                 </tr>
               ) : null}
@@ -558,7 +557,7 @@ export default function SyncReviewsPage(): JSX.Element {
               </div>
             </article>
           ))}
-          {filteredRows.length === 0 ? <p className="text-sm text-slate-500 dark:text-slate-400">No sync review rows for this filter.</p> : null}
+          {filteredRows.length === 0 ? <p className="text-sm text-slate-500 dark:text-slate-400">No rejected sync records for this filter. Successful syncs do not create review rows.</p> : null}
         </div>
       </section>
 
