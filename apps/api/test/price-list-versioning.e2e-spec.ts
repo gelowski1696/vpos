@@ -116,6 +116,38 @@ describe('Price List Versioning (focused e2e)', () => {
     const priceListId = createdPriceList.body.id as string;
     expect(priceListId).toBeTruthy();
 
+    // The web editor includes null optional targets when editing a regular
+    // price list. This must not be treated as a Custom Pricing request.
+    const editedPriceList = await request(app.getHttpServer())
+      .put(`/api/master-data/price-lists/${priceListId}`)
+      .set('Authorization', `Bearer ${session.access}`)
+      .set('X-Client-Id', session.clientId)
+      .send({
+        code: `E2E-PL-${unique}`,
+        name: `E2E Price List ${unique}`,
+        scope: 'GLOBAL',
+        branchId: null,
+        customerTier: null,
+        customerCategoryId: null,
+        customerId: null,
+        startsAt,
+        endsAt: null,
+        isActive: true,
+        rules: [
+          {
+            productId,
+            flowMode: 'ANY',
+            unitPrice: 101,
+            unitCost: 71,
+            discountCapPct: 0,
+            priority: 4
+          }
+        ]
+      })
+      .expect(200);
+    expect(Number(editedPriceList.body.rules?.[0]?.unitPrice)).toBe(101);
+    expect(Number(editedPriceList.body.rules?.[0]?.unitCost)).toBe(71);
+
     const versionsInitial = await request(app.getHttpServer())
       .get(`/api/master-data/price-lists/${priceListId}/versions`)
       .set('Authorization', `Bearer ${session.access}`)

@@ -6411,7 +6411,15 @@ export class MasterDataService {
   async updatePriceList(id: string, input: Partial<CreatePriceList>): Promise<PriceListRecord> {
     const companyId = await this.getCompanyIdOrNull();
     await this.enforceMasterDataWritePolicy(companyId ?? undefined);
-    if (input.scope === 'CUSTOMER_GROUP' || input.customerCategoryId !== undefined) {
+    // The web editor sends `customerCategoryId: null` for non-customer-group
+    // lists.  A null value clears the optional target; it does not opt the
+    // list into Custom Pricing.  Only enforce the add-on when the list is
+    // actually being assigned to a customer group (or a non-null category is
+    // supplied in a partial update).
+    if (
+      input.scope === 'CUSTOMER_GROUP' ||
+      (input.customerCategoryId !== undefined && input.customerCategoryId !== null)
+    ) {
       await this.enforceAddonPolicy('custom_pricing', companyId ?? undefined);
     }
     const binding = await this.getTenantBinding(companyId);
