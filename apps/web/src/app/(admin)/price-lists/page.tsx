@@ -372,17 +372,21 @@ export default function PriceListsPage(): JSX.Element {
   const [rollbackReason, setRollbackReason] = useState('');
   const [rollbackEffectiveFrom, setRollbackEffectiveFrom] = useState(() => toInputDateTime(new Date().toISOString()));
 
+  const activeProducts = useMemo(
+    () => products.filter((item) => item.isActive),
+    [products]
+  );
   const productOptions = useMemo(
     () =>
-      products.map((item) => ({
+      activeProducts.map((item) => ({
         id: item.id,
         label: `${item.name} (${item.sku})${item.category ? ` - ${item.category}` : ''}`
       })),
-    [products]
+    [activeProducts]
   );
 
-  const productNameById = useMemo(
-    () => new Map(products.map((item) => [item.id, `${item.name} (${item.sku})`])),
+  const productLabelById = useMemo(
+    () => new Map(products.map((item) => [item.id, `${item.sku} — ${item.name}`])),
     [products]
   );
   const productById = useMemo(
@@ -432,20 +436,20 @@ export default function PriceListsPage(): JSX.Element {
     [priceLists, tenantAddons.custom_pricing]
   );
 
-  const defaultProductId = useMemo(() => products[0]?.id ?? '', [products]);
+  const defaultProductId = useMemo(() => activeProducts[0]?.id ?? '', [activeProducts]);
   const productCategoryOptions = useMemo(() => {
     const categories = new Set<string>();
-    for (const product of products) {
+    for (const product of activeProducts) {
       const category = String(product.category ?? '').trim();
       if (category) {
         categories.add(category);
       }
     }
     return ['ALL', ...Array.from(categories).sort((a, b) => a.localeCompare(b))];
-  }, [products]);
+  }, [activeProducts]);
   const productPickerRows = useMemo(() => {
     const searchTerm = productPickerSearch.trim().toLowerCase();
-    return products.filter((product) => {
+    return activeProducts.filter((product) => {
       const category = String(product.category ?? '').trim() || 'Uncategorized';
       const categoryMatch = productPickerCategory === 'ALL' || category === productPickerCategory;
       if (!categoryMatch) {
@@ -460,7 +464,7 @@ export default function PriceListsPage(): JSX.Element {
         category.toLowerCase().includes(searchTerm)
       );
     });
-  }, [productPickerCategory, productPickerSearch, products]);
+  }, [activeProducts, productPickerCategory, productPickerSearch]);
 
   const filteredRows = useMemo(() => {
     const term = search.trim().toLowerCase();
@@ -570,7 +574,7 @@ export default function PriceListsPage(): JSX.Element {
           apiRequest<CurrentEntitlement>('/platform/entitlements/current')
         ]);
         setPriceLists(listRows);
-      setProducts(productRows.filter((item) => item.isActive));
+      setProducts(productRows);
       setBranches(branchRows.filter((item) => item.isActive));
       setCustomers(customerRows.filter((item) => item.isActive));
       setCustomerCategories(customerCategoryRows.filter((item) => item.isActive));
@@ -1413,7 +1417,7 @@ export default function PriceListsPage(): JSX.Element {
                           <p>{row.rules.length} product(s)</p>
                           <p className="text-xs text-slate-500 dark:text-slate-400">
                             {row.rules[0]
-                              ? `${productNameById.get(row.rules[0].productId) ?? row.rules[0].productId} (${flowLabel(row.rules[0].flowMode)}) @ ${formatMoney(row.rules[0].unitPrice)}`
+                              ? `${productLabelById.get(row.rules[0].productId) ?? 'Unavailable item'} (${flowLabel(row.rules[0].flowMode)}) @ ${formatMoney(row.rules[0].unitPrice)}`
                               : 'No rule'}
                           </p>
                         </td>
@@ -1658,7 +1662,7 @@ export default function PriceListsPage(): JSX.Element {
                           <table className="w-full min-w-[980px] border-collapse text-xs">
                             <thead>
                               <tr className="border-b border-slate-200 text-left uppercase tracking-wide text-slate-500 dark:border-slate-700 dark:text-slate-400">
-                                <th className="px-2 py-2">Product</th>
+                                <th className="px-2 py-2">Item Code / Product</th>
                                 <th className="px-2 py-2">Flow</th>
                                 <th className="px-2 py-2">Selling Price</th>
                                 <th className="px-2 py-2">Unit Cost</th>
@@ -1682,7 +1686,7 @@ export default function PriceListsPage(): JSX.Element {
                                           <option key={option.id} value={option.id}>{option.label}</option>
                                         ))}
                                       </select>
-                                    ) : productNameById.get(rule.productId) ?? rule.productId}
+                                    ) : productLabelById.get(rule.productId) ?? 'Unavailable item'}
                                   </td>
                                   <td className="px-2 py-2 text-slate-700 dark:text-slate-200">
                                     {selectedVersionDetail.status === 'DRAFT' ? (
@@ -2350,12 +2354,64 @@ export default function PriceListsPage(): JSX.Element {
                     </p>
                   </div>
                   {editingPriceList ? (
-                    <div className="grid gap-2 rounded-lg border border-slate-200 bg-white p-3 text-xs text-slate-700 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200 md:grid-cols-2">
-                      <p><span className="font-semibold">Target:</span> {scopeLabelWithAddonText(editingPriceList.scope)} - {scopeTarget(editingPriceList, branchById, customerById, customerCategoryById)}</p>
-                      <p><span className="font-semibold">Effective:</span> {formatDateTime(editingPriceList.startsAt)} to {formatDateTime(editingPriceList.endsAt)}</p>
-                      <p><span className="font-semibold">Published rules:</span> {editingPriceList.rules.length}</p>
-                      <p><span className="font-semibold">Current status:</span> {statusLabel(editingPriceList)}</p>
-                    </div>
+                    <>
+                      <div className="grid gap-2 rounded-lg border border-slate-200 bg-white p-3 text-xs text-slate-700 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200 md:grid-cols-2">
+                        <p><span className="font-semibold">Target:</span> {scopeLabelWithAddonText(editingPriceList.scope)} - {scopeTarget(editingPriceList, branchById, customerById, customerCategoryById)}</p>
+                        <p><span className="font-semibold">Effective:</span> {formatDateTime(editingPriceList.startsAt)} to {formatDateTime(editingPriceList.endsAt)}</p>
+                        <p><span className="font-semibold">Published rules:</span> {editingPriceList.rules.length}</p>
+                        <p><span className="font-semibold">Current status:</span> {statusLabel(editingPriceList)}</p>
+                      </div>
+
+                      <div className="rounded-lg border border-slate-200 bg-white dark:border-slate-700 dark:bg-slate-800">
+                        <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-200 px-3 py-2 dark:border-slate-700">
+                          <div>
+                            <h4 className="text-sm font-semibold text-slate-900 dark:text-slate-100">Active Published Pricing</h4>
+                            <p className="text-xs text-slate-500 dark:text-slate-400">
+                              Read-only. Open Versions to create a draft and change these values.
+                            </p>
+                          </div>
+                          <span className="rounded-full bg-emerald-100 px-2 py-1 text-xs font-semibold text-emerald-700 dark:bg-emerald-950/50 dark:text-emerald-300">
+                            {editingPriceList.rules.length} active rule(s)
+                          </span>
+                        </div>
+                        {editingPriceList.rules.length > 0 ? (
+                          <div className="max-h-72 overflow-auto">
+                            <table className="w-full min-w-[760px] border-collapse text-xs">
+                              <thead className="sticky top-0 bg-slate-50 dark:bg-slate-900">
+                                <tr className="border-b border-slate-200 text-left uppercase tracking-wide text-slate-500 dark:border-slate-700 dark:text-slate-400">
+                                  <th className="px-3 py-2">Item Code / Product</th>
+                                  <th className="px-3 py-2">Flow</th>
+                                  <th className="px-3 py-2">Selling Price</th>
+                                  <th className="px-3 py-2">Unit Cost</th>
+                                  <th className="px-3 py-2">Max Discount</th>
+                                  <th className="px-3 py-2">Priority</th>
+                                </tr>
+                              </thead>
+                              <tbody>
+                                {editingPriceList.rules.map((rule) => (
+                                  <tr className="border-b border-slate-100 last:border-b-0 dark:border-slate-700/70" key={rule.id}>
+                                    <td className="px-3 py-2 font-medium text-slate-900 dark:text-slate-100">
+                                      {productLabelById.get(rule.productId) ?? 'Unavailable item'}
+                                    </td>
+                                    <td className="px-3 py-2 text-slate-700 dark:text-slate-200">{flowLabel(rule.flowMode)}</td>
+                                    <td className="px-3 py-2 font-semibold text-slate-900 dark:text-slate-100">{formatMoney(rule.unitPrice)}</td>
+                                    <td className="px-3 py-2 text-slate-700 dark:text-slate-200">
+                                      {rule.unitCost === null || rule.unitCost === undefined ? '-' : formatMoney(rule.unitCost)}
+                                    </td>
+                                    <td className="px-3 py-2 text-slate-700 dark:text-slate-200">{rule.discountCapPct}%</td>
+                                    <td className="px-3 py-2 text-slate-700 dark:text-slate-200">{rule.priority}</td>
+                                  </tr>
+                                ))}
+                              </tbody>
+                            </table>
+                          </div>
+                        ) : (
+                          <p className="px-3 py-4 text-xs text-slate-500 dark:text-slate-400">
+                            No active published pricing rules are available for this price list.
+                          </p>
+                        )}
+                      </div>
+                    </>
                   ) : null}
                   <div className="flex flex-wrap items-end justify-between gap-3">
                     <label className="text-sm">

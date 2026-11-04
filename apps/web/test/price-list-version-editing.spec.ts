@@ -15,4 +15,17 @@ describe('price-list version editing', () => {
     expect(source).toContain('Only the name, reference code, and operational status will be updated.');
     expect(source).toContain('Version-controlled pricing');
   });
+
+  it('shows the active published prices as read-only in the regular edit dialog', () => {
+    expect(source).toContain('Active Published Pricing');
+    expect(source).toContain('Read-only. Open Versions to create a draft and change these values.');
+    expect(source).toContain('editingPriceList.rules.map((rule)');
+  });
+
+  it('shows item codes instead of raw product ids in historical rule snapshots', () => {
+    expect(source).toContain('`${item.sku} — ${item.name}`');
+    expect(source).toContain('Item Code / Product');
+    expect(source).toContain("productLabelById.get(rule.productId) ?? 'Unavailable item'");
+    expect(source).toContain('setProducts(productRows);');
+  });
 });
