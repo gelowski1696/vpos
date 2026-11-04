@@ -12,6 +12,8 @@ import type {
   DesktopTransferRecord
 } from '../db/schema';
 import { desktopAuthService } from './desktop-auth.service';
+import { desktopSubscriptionPolicyService } from './desktop-subscription-policy.service';
+import { parseDesktopPosReward, type DesktopPosRewardRecord } from '@vpos/desktop-core';
 
 type BranchRecord = {
   id: string;
@@ -625,6 +627,28 @@ function toRows(entity: string, records: Record<string, unknown>[]): DesktopMast
   const updatedAt = new Date().toISOString();
   return records
     .map((record) => {
+      // Keep inventory_balance keyed the same way the incremental sync pull keys it
+      // (`${locationId}:${productId}`). Otherwise the snapshot writes a bare-productId
+      // row while sync writes a `${locationId}:${productId}` row, leaving two cache
+      // rows per product and making projected fill/empty revert after a sale sync.
+      if (entity === 'inventory_balance') {
+        const locationId = asString(record.locationId) ?? asString(record.location_id);
+        const productId = asString(record.productId) ?? asString(record.product_id);
+        const recordId =
+          locationId && productId
+            ? `${locationId}:${productId}`
+            : asString(record.id) ?? productId ?? locationId;
+        if (!recordId) {
+          return null;
+        }
+        return {
+          entity,
+          recordId,
+          payload: JSON.stringify(record),
+          updatedAt
+        };
+      }
+
       const recordId =
         asString(record.id) ??
         asString(record.code) ??
@@ -795,6 +819,7 @@ export class DesktopMasterDataService {
     lendingCount: number;
     salesCount: number;
     transferCount: number;
+    warnings: string[];
     syncedAt: string;
     state: DesktopAppState;
   }> {
@@ -868,7 +893,6 @@ export class DesktopMasterDataService {
       { path: '/master-data/products', response: productsResult.response },
       { path: '/master-data/cylinder-types', response: cylinderTypesResult.response },
       { path: '/master-data/inventory/opening-stock', response: inventoryOpeningResult.response },
-      { path: '/master-data/price-lists', response: priceListsResult.response },
       { path: '/master-data/expense-categories', response: expenseCategoriesResult.response },
       { path: '/master-data/suppliers', response: suppliersResult.response },
       { path: '/master-data/personnels', response: personnelsResult.response },
@@ -891,8 +915,29 @@ export class DesktopMasterDataService {
       throw new Error(`Unable to refresh desktop branch data from the server. ${preview}${remainder}`);
     }
 
+    const warnings: string[] = [];
+    let priceListRows: PriceListRecord[] | null = null;
+    if (priceListsResult.response.ok) {
+      try {
+        const payload = (await priceListsResult.response.json()) as unknown;
+        if (!Array.isArray(payload)) {
+          throw new Error('response was not a list');
+        }
+        priceListRows = payload as PriceListRecord[];
+      } catch (error) {
+        const detail = error instanceof Error ? error.message : 'invalid response';
+        warnings.push(`Price lists were not refreshed (${detail}); the existing local price cache was retained.`);
+      }
+    } else {
+      const detail = await readFetchErrorDetail(priceListsResult.response);
+      warnings.push(
+        `Price lists were not refreshed (${priceListsResult.response.status}${detail ? `: ${detail}` : ''}); the existing local price cache was retained.`
+      );
+    }
+
     let finalState = nextState;
     let tenantAddonsRecord: Record<string, unknown> | null = null;
+    let subscriptionPolicyCached = false;
     try {
       const entitlementResult = await desktopAuthService.authorizedFetch(
         nextState,
@@ -901,6 +946,12 @@ export class DesktopMasterDataService {
       finalState = entitlementResult.state ?? finalState;
       if (entitlementResult.response.ok) {
         const payload = (await entitlementResult.response.json()) as Record<string, unknown>;
+        const policy = await desktopSubscriptionPolicyService.applyRemotePayload(
+          payload,
+          asString(payload.updated_at) ?? asString(payload.updatedAt) ?? asString(payload.lastSyncedAt) ?? undefined,
+          'branch_data_download'
+        );
+        subscriptionPolicyCached = Boolean(policy);
         tenantAddonsRecord = {
           id: 'current',
           ...(payload.addons && typeof payload.addons === 'object' ? (payload.addons as Record<string, unknown>) : {})
@@ -928,12 +979,26 @@ export class DesktopMasterDataService {
       // Non-blocking: branch data refresh should still continue even if POS settings are unavailable.
     }
 
+    let rewardRows: Record<string, unknown>[] | null = null;
+    try {
+      const rewardsResult = await desktopAuthService.authorizedFetch(
+        finalState,
+        `${apiBase}/vcard/rewards?status=ACTIVE&branch_id=${encodeURIComponent(branchId)}&location_id=${encodeURIComponent(state.setup.locationId)}&limit=100`
+      );
+      finalState = rewardsResult.state ?? finalState;
+      if (rewardsResult.response.ok) {
+        const payload = (await rewardsResult.response.json()) as unknown;
+        if (Array.isArray(payload)) rewardRows = payload as Record<string, unknown>[];
+      }
+    } catch {
+      // Non-blocking: retain cached rewards so offline checkout remains usable.
+    }
+
     const branchRows = (await branchesResult.response.json()) as BranchRecord[];
     const locationRows = (await locationsResult.response.json()) as LocationRecord[];
     const productRows = (await productsResult.response.json()) as ProductRecord[];
     const cylinderTypeRows = (await cylinderTypesResult.response.json()) as Record<string, unknown>[];
     const inventorySnapshot = (await inventoryOpeningResult.response.json()) as InventoryOpeningSnapshot;
-    const priceListRows = (await priceListsResult.response.json()) as PriceListRecord[];
     const expenseCategoryRows = (await expenseCategoriesResult.response.json()) as Record<string, unknown>[];
     const supplierRows = (await suppliersResult.response.json()) as SupplierRecord[];
     const personnelRows = (await personnelsResult.response.json()) as PersonnelRecord[];
@@ -961,13 +1026,17 @@ export class DesktopMasterDataService {
     const lendingDetailCache = await this.cacheLendingDetails(finalState, lendingRows);
     finalState = lendingDetailCache.state;
 
-    const scopedLocations = locationRows.filter((row) => !row.branchId || row.branchId === branchId);
-    const locationIdSet = new Set(scopedLocations.map((row) => row.id));
+    const activeLocations = locationRows.filter((row) => row.isActive !== false);
+    const localInventoryLocations = activeLocations.filter((row) => !row.branchId || row.branchId === branchId);
+    const locationIdSet = new Set(localInventoryLocations.map((row) => row.id));
     const scopedInventoryRows = (inventorySnapshot.rows ?? []).filter((row) => {
       const locationId = asString(row.locationId);
       return Boolean(locationId && locationIdSet.has(locationId));
     });
-    const scopedPriceLists = priceListRows.filter((row) => {
+    const scopedPriceLists = priceListRows?.filter((row) => {
+      if (row.isActive === false) {
+        return false;
+      }
       const scope = (row.scope ?? '').toUpperCase();
       if (!scope || scope === 'GLOBAL') {
         return true;
@@ -979,7 +1048,7 @@ export class DesktopMasterDataService {
     });
 
     await desktopDb.replaceMasterDataEntity('branch', toRows('branch', branchRows as Record<string, unknown>[]));
-    await desktopDb.replaceMasterDataEntity('location', toRows('location', scopedLocations as Record<string, unknown>[]));
+    await desktopDb.replaceMasterDataEntity('location', toRows('location', activeLocations as Record<string, unknown>[]));
     await desktopDb.replaceMasterDataEntity('product', toRows('product', productRows as Record<string, unknown>[]));
     await desktopDb.replaceMasterDataEntity(
       'cylinder_type',
@@ -989,10 +1058,12 @@ export class DesktopMasterDataService {
       'inventory_balance',
       toRows('inventory_balance', scopedInventoryRows as Record<string, unknown>[])
     );
-    await desktopDb.replaceMasterDataEntity(
-      'price_list',
-      toRows('price_list', scopedPriceLists as Record<string, unknown>[])
-    );
+    if (scopedPriceLists) {
+      await desktopDb.replaceMasterDataEntity(
+        'price_list',
+        toRows('price_list', scopedPriceLists as Record<string, unknown>[])
+      );
+    }
     if (tenantAddonsRecord) {
       await desktopDb.replaceMasterDataEntity('tenant_addons', toRows('tenant_addons', [tenantAddonsRecord]));
     }
@@ -1001,6 +1072,9 @@ export class DesktopMasterDataService {
         'pos_control_policy',
         toRows('pos_control_policy', [posControlPolicyRecord])
       );
+    }
+    if (rewardRows) {
+      await desktopDb.replaceMasterDataEntity('vcard_reward', toRows('vcard_reward', rewardRows));
     }
     await desktopDb.replaceMasterDataEntity(
       'expense_category',
@@ -1041,12 +1115,13 @@ export class DesktopMasterDataService {
 
     const downloadCounts = {
       branches: branchRows.length,
-      locations: scopedLocations.length,
+      locations: activeLocations.length,
       products: productRows.length,
       cylinder_types: cylinderTypeRows.length,
       customers: customerRows.length,
       suppliers: supplierRows.length,
       personnels: personnelRows.length,
+      subscription_policy: subscriptionPolicyCached ? 1 : 0,
       tenant_addons: tenantAddonsRecord ? 1 : 0,
       pos_control_policy: posControlPolicyRecord ? 1 : 0,
       lending: lendingRows.length,
@@ -1063,6 +1138,7 @@ export class DesktopMasterDataService {
       lendingCount: lendingRows.length,
       salesCount: salesRecords.length,
       transferCount: transferRecords.length,
+      warnings,
       syncedAt: new Date().toISOString(),
       state: finalState
     };
@@ -1265,6 +1341,7 @@ export class DesktopMasterDataService {
     if (!name) {
       throw new Error('Customer name is required.');
     }
+    await desktopSubscriptionPolicyService.assertCanCreateTransactions('customer');
 
     const now = new Date().toISOString();
     const id = `customer-local-${Date.now()}-${Math.floor(Math.random() * 1_000_000)}`;
@@ -1391,6 +1468,27 @@ export class DesktopMasterDataService {
       .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
   }
 
+  async refreshLpgItemActions(
+    state: DesktopAppState,
+    branchId: string,
+    locationId: string
+  ): Promise<{ count: number; state: DesktopAppState }> {
+    const params = new URLSearchParams({ branch_id: branchId, location_id: locationId, limit: '500' });
+    const { response, state: nextState } = await desktopAuthService.authorizedFetch(
+      state,
+      `${normalizeBaseUrl(state.setup.apiBaseUrl)}/lpg-item-actions?${params.toString()}`
+    );
+    if (!response.ok) {
+      throw new Error(`Unable to load LPG service actions (${response.status})`);
+    }
+    const rows = (await response.json()) as DesktopLpgItemActionRecord[];
+    await desktopDb.replaceMasterDataEntity(
+      'lpg_item_action',
+      await mergeLocalOnlyRows('lpg_item_action', toRows('lpg_item_action', rows as unknown as Record<string, unknown>[]))
+    );
+    return { count: rows.length, state: nextState };
+  }
+
   async loadCatalog(locationId: string): Promise<DesktopCatalogProduct[]> {
     const [productRows, inventoryRows, priceListRows, cylinderRows] = await Promise.all([
       desktopDb.listMasterData('product'),
@@ -1513,6 +1611,14 @@ export class DesktopMasterDataService {
       .sort((a, b) => a.name.localeCompare(b.name));
   }
 
+  async loadPosRewards(): Promise<DesktopPosRewardRecord[]> {
+    const rows = await desktopDb.listMasterData('vcard_reward');
+    return rows
+      .map((row) => parseDesktopPosReward(row.payload))
+      .filter((row): row is DesktopPosRewardRecord => Boolean(row))
+      .sort((a, b) => a.name.localeCompare(b.name));
+  }
+
   async loadLendingRecords(branchId?: string, locationId?: string): Promise<DesktopLendingRecord[]> {
     const rows = await desktopDb.listMasterData('lending');
     return rows
@@ -1628,4 +1734,3 @@ export class DesktopMasterDataService {
 }
 
 export const desktopMasterDataService = new DesktopMasterDataService();
-

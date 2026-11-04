@@ -1,4 +1,9 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useState, type ReactNode } from 'react';
+import {
+  parseDesktopPosPriceLists,
+  resolveDesktopUnitPrice,
+  type DesktopMasterDataRow
+} from '@vpos/desktop-core';
 import type { OutboxItem } from '@vpos/shared-types';
 import type {
   DesktopAppState,
@@ -9,14 +14,15 @@ import type {
   DesktopLpgItemActionRecord
 } from '../db/schema';
 import { SearchField } from '../components/inputs/SearchField';
-import { ScreenHeader } from '../components/layout/ScreenHeader';
 import { desktopDb } from '../db/sqlite';
 import { desktopAuthService } from '../services/desktop-auth.service';
-import { desktopMasterDataService } from '../services/desktop-master-data.service';
+import { desktopMasterDataService, type TenantAddonFlags } from '../services/desktop-master-data.service';
+import { desktopPurchaseOrderService } from '../services/desktop-purchase-order.service';
 import { desktopStockProjectionService } from '../services/desktop-stock-projection.service';
 
 type Props = {
   appState: DesktopAppState;
+  tenantAddons?: TenantAddonFlags;
   onOpenLpgService?: (productId: string) => void;
 };
 
@@ -99,27 +105,121 @@ type LpgItemActionLike = {
   referenceActionId: string | null;
 };
 
+type ItemCatalogRecordBadgeTone = 'full' | 'empty' | 'qoh' | 'neutral';
+
+type ItemCatalogRecordBadge = {
+  label: string;
+  tone: ItemCatalogRecordBadgeTone;
+};
+
+type ItemCatalogRecordRowProps = {
+  title: string;
+  meta: string;
+  detail?: string | null;
+  badges: ItemCatalogRecordBadge[];
+  refillPriceLabel?: string | null;
+  nonRefillPriceLabel?: string | null;
+  statusLabel: string;
+  statusTone: 'out' | 'low' | 'good';
+  typeLabel: string;
+  typeTone: 'lpg' | 'regular';
+  priceLabel: string;
+  selected?: boolean;
+  sizeError?: string | null;
+  onClick: () => void;
+};
+
+type ItemCatalogHeaderProps = {
+  branchLabel: string;
+  locationLabel: string;
+  categoryLabel: string;
+  countLabel: string;
+};
+
+type ItemCatalogCategoryChipProps = {
+  label: string;
+  count: string;
+  active: boolean;
+  onClick: () => void;
+};
+
+type ItemCatalogOverviewMetricTone = 'out' | 'good' | 'warn' | 'pending';
+type ItemCatalogOverviewMetricIcon = 'total' | 'ready' | 'low' | 'out';
+
+type ItemCatalogOverviewMetric = {
+  key: string;
+  label: string;
+  value: string;
+  icon: ItemCatalogOverviewMetricIcon;
+  tone: ItemCatalogOverviewMetricTone;
+};
+
+type ItemCatalogOverviewPanelProps = {
+  title: string;
+  subtitle: string;
+  metrics: ItemCatalogOverviewMetric[];
+  onRefresh: () => void;
+  refreshDisabled: boolean;
+};
+
+type ItemDetailTab = 'OVERVIEW' | 'CYLINDER' | 'PRICING';
+
+type ItemDetailModalProps = {
+  selected: DesktopCatalogProduct;
+  selectedDetail: ItemDetailRecord | null;
+  selectedCylinder: CylinderTypeDetail | null;
+  selectedRules: ItemPriceRule[];
+  selectedLendedQty: number;
+  selectedDisposedQty: number;
+  selectedCylinderSizeError: string | null;
+  selectedSizeLabel: string | null;
+  locationLabel: string;
+  onClose: () => void;
+  onOpenItemHistory: () => void;
+  hideItemHistoryAction?: boolean;
+  onOpenLpgService?: (productId: string) => void;
+};
+
+type ItemDetailCylinderActionInput = {
+  isLpg: boolean;
+  hasCylinderType: boolean;
+  hasCylinder: boolean;
+  onOpenLpgService?: (productId: string) => void;
+};
+
+type ItemDetailFactTone = 'good' | 'neutral' | 'accent' | 'danger' | 'warn';
+
+type ItemDetailFactRowProps = {
+  label: string;
+  value: string;
+  icon: 'inventory' | 'ready' | 'empty' | 'link' | 'disposed' | 'low' | 'scope' | 'rules';
+  tone: ItemDetailFactTone;
+  detail?: string | null;
+};
+
+const DEFAULT_ITEM_LIST_PAGE_SIZE = 10;
+
+export function getItemDetailCylinderActions(_input: ItemDetailCylinderActionInput): [] {
+  return [];
+}
+
 const screenStackClass = 'flex flex-col gap-5';
 const summaryStripClass = 'desktop-summary-strip grid gap-3 sm:grid-cols-2 xl:grid-cols-6';
 const summaryTileClass =
-  'rounded-[20px] border border-[var(--border-soft)] bg-[rgba(255,255,255,0.94)] px-4 py-3 shadow-[0_10px_24px_rgba(17,40,58,0.05)]';
-const summaryLabelClass = 'block text-[0.78rem] font-semibold uppercase tracking-[0.08em] text-[var(--muted)]';
-const summaryValueClass = 'mt-1 block text-[1rem] font-extrabold text-[var(--text-strong)]';
+  'rounded-[18px] border border-[var(--border-soft)] bg-[rgba(255,255,255,0.94)] px-4 py-2.5 shadow-[0_8px_18px_rgba(17,40,58,0.04)]';
+const summaryLabelClass = 'block text-[0.72rem] font-semibold uppercase tracking-[0.08em] text-[var(--muted)]';
+const summaryValueClass = 'mt-1 block text-[0.96rem] font-extrabold text-[var(--text-strong)]';
 const shellCardClass =
-  'rounded-[28px] border border-[var(--border-soft)] bg-[rgba(255,255,255,0.95)] p-5 shadow-[0_18px_44px_rgba(17,40,58,0.08)] backdrop-blur';
+  'rounded-[28px] border border-[var(--border-soft)] bg-[rgba(255,255,255,0.95)] p-4 shadow-[0_18px_44px_rgba(17,40,58,0.08)] backdrop-blur';
 const toolbarGridClass = 'items-toolbar-grid';
-const listRowClass =
-  'flex w-full items-center justify-between gap-4 rounded-[22px] border border-[var(--border-soft)] bg-[rgba(255,255,255,0.92)] px-4 py-4 text-left shadow-[0_10px_24px_rgba(17,40,58,0.04)] transition hover:-translate-y-[1px] hover:border-[rgba(25,118,210,0.24)] hover:shadow-[0_14px_28px_rgba(17,40,58,0.08)]';
-const listRowSelectedClass =
-  'border-[rgba(25,118,210,0.3)] bg-[rgba(236,244,255,0.96)] shadow-[0_14px_30px_rgba(25,118,210,0.12)]';
+const listRowClass = 'items-catalog-row';
+const listRowSelectedClass = 'is-selected';
 const listMetaClass = 'text-[0.9rem] text-[var(--muted)]';
-const listStockClass = 'text-[0.92rem] font-semibold text-[var(--muted-strong)]';
 const modalBackdropClass = 'desktop-modal-backdrop';
 const modalCardClass =
   'desktop-modal-card desktop-modal-card--detail';
 const modalToolbarClass = 'desktop-modal-header flex shrink-0 flex-col gap-4';
 const detailSheetClass = 'grid gap-3 overflow-auto px-5 pb-5 pt-4';
-const detailPillRowClass = 'flex flex-wrap gap-2';
 const detailNeutralPillClass =
   'inline-flex min-h-[30px] items-center justify-center rounded-full bg-[rgba(236,242,248,0.96)] px-3 text-[0.8rem] font-bold text-[var(--muted-strong)]';
 const detailStatsGridClass = 'grid gap-3 sm:grid-cols-2 xl:grid-cols-4';
@@ -138,13 +238,758 @@ const detailKvTermClass = 'm-0 text-[0.88rem] font-medium text-[var(--muted)]';
 const detailKvValueClass = 'm-0 text-[0.92rem] font-semibold leading-6 text-[var(--text-strong)]';
 const detailEmptyClass =
   'rounded-[16px] border border-dashed border-[var(--border)] bg-[rgba(242,246,250,0.88)] px-4 py-4 text-[0.92rem] text-[var(--muted)]';
-const detailRuleListClass = 'grid gap-2';
 const detailRuleCardClass =
   'grid gap-1 rounded-[16px] border border-[var(--border)] bg-[rgba(242,246,250,0.9)] px-4 py-3';
 const detailRuleTitleClass = 'text-[0.92rem] font-bold leading-5 text-[var(--text-strong)]';
 const detailRuleCopyClass = 'text-[0.82rem] leading-5 text-[var(--muted)]';
-const detailActionRowClass = 'mt-0 flex flex-wrap items-center justify-start gap-3';
 const historyRowClass = 'desktop-line-item-row desktop-line-item-row--compact';
+const SHIFT_SECURITY_ITEM_HISTORY_MANAGER_ROLES = new Set([
+  'admin',
+  'owner',
+  'platform_owner',
+  'supervisor'
+]);
+
+function base64UrlToBase64(value: string): string {
+  const normalized = value.replace(/-/g, '+').replace(/_/g, '/');
+  const padding = normalized.length % 4;
+  if (padding === 2) {
+    return `${normalized}==`;
+  }
+  if (padding === 3) {
+    return `${normalized}=`;
+  }
+  if (padding === 0) {
+    return normalized;
+  }
+  return '';
+}
+
+function decodeBase64(value: string): string | null {
+  if (!value) {
+    return null;
+  }
+  try {
+    if (typeof window !== 'undefined' && typeof window.atob === 'function') {
+      return window.atob(value);
+    }
+    if (typeof globalThis.atob === 'function') {
+      return globalThis.atob(value);
+    }
+  } catch {
+    return null;
+  }
+  return null;
+}
+
+function parseAccessTokenRoles(accessToken?: string | null): string[] {
+  const token = accessToken?.trim() ?? '';
+  if (!token) {
+    return [];
+  }
+  const parts = token.split('.');
+  if (parts.length < 2) {
+    return [];
+  }
+  const decoded = decodeBase64(base64UrlToBase64(parts[1] ?? ''));
+  if (!decoded) {
+    return [];
+  }
+  try {
+    const payload = JSON.parse(decoded) as Record<string, unknown>;
+    const rolesRaw = payload.roles;
+    return Array.isArray(rolesRaw)
+      ? rolesRaw.map((value) => String(value).trim().toLowerCase()).filter(Boolean)
+      : [];
+  } catch {
+    return [];
+  }
+}
+
+function isCashierOnlyAccessToken(accessToken?: string | null): boolean {
+  const roles = parseAccessTokenRoles(accessToken);
+  return roles.includes('cashier') && !roles.some((role) => SHIFT_SECURITY_ITEM_HISTORY_MANAGER_ROLES.has(role));
+}
+
+function shouldHideItemHistoryForShiftSecurity(input: {
+  tenantAddons?: TenantAddonFlags;
+  accessToken?: string | null;
+}): boolean {
+  return input.tenantAddons?.shift_security_controls === true && isCashierOnlyAccessToken(input.accessToken);
+}
+
+function ItemCatalogIcon({
+  path,
+  className = ''
+}: {
+  path: ReactNode;
+  className?: string;
+}): JSX.Element {
+  return (
+    <svg
+      viewBox="0 0 24 24"
+      className={`h-[20px] w-[20px] ${className}`.trim()}
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.8"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+    >
+      {path}
+    </svg>
+  );
+}
+
+function ItemCatalogSymbol({
+  kind,
+  className = ''
+}: {
+  kind: ItemCatalogOverviewMetricIcon | 'inventory' | 'scope' | 'refresh' | 'link' | 'rules' | 'history' | 'empty' | 'disposed';
+  className?: string;
+}): JSX.Element {
+  let path: ReactNode;
+  if (kind === 'total' || kind === 'inventory') {
+    path = (
+      <>
+        <path d="M4 7.5h16" />
+        <path d="M6 7.5V6a2 2 0 0 1 2-2h8a2 2 0 0 1 2 2v11a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2V7.5Z" />
+        <path d="M10 11h4" />
+      </>
+    );
+  } else if (kind === 'ready') {
+    path = (
+      <>
+        <circle cx="12" cy="12" r="8" />
+        <path d="m8.5 12 2.2 2.2L15.5 9.5" />
+      </>
+    );
+  } else if (kind === 'low') {
+    path = (
+      <>
+        <path d="M12 7v5" />
+        <path d="M12 16h.01" />
+        <path d="M10.3 4.5 3.5 17a1.7 1.7 0 0 0 1.5 2.5h14a1.7 1.7 0 0 0 1.5-2.5l-6.8-12.5a1.7 1.7 0 0 0-3.4 0Z" />
+      </>
+    );
+  } else if (kind === 'out') {
+    path = (
+      <>
+        <circle cx="12" cy="12" r="8" />
+        <path d="M8.5 12h7" />
+      </>
+    );
+  } else if (kind === 'scope') {
+    path = (
+      <>
+        <path d="M12 20s6-4.4 6-10a6 6 0 1 0-12 0c0 5.6 6 10 6 10Z" />
+        <circle cx="12" cy="10" r="2.2" />
+      </>
+    );
+  } else if (kind === 'link') {
+    path = (
+      <>
+        <path d="M10 13a5 5 0 0 1 0-7l1.5-1.5a5 5 0 0 1 7 7L17 13" />
+        <path d="M14 11a5 5 0 0 1 0 7l-1.5 1.5a5 5 0 0 1-7-7L7 11" />
+      </>
+    );
+  } else if (kind === 'rules') {
+    path = (
+      <>
+        <path d="M5 6h14" />
+        <path d="M5 10h14" />
+        <path d="M5 14h14" />
+        <path d="M5 18h9" />
+      </>
+    );
+  } else if (kind === 'history') {
+    path = (
+      <>
+        <path d="M4 12a8 8 0 1 0 3-6.2" />
+        <path d="M4 4v5h5" />
+        <path d="M12 8v4l2.5 2.5" />
+      </>
+    );
+  } else if (kind === 'empty') {
+    path = (
+      <>
+        <circle cx="12" cy="12" r="7.5" />
+        <path d="M15 9 9 15" />
+      </>
+    );
+  } else if (kind === 'disposed') {
+    path = (
+      <>
+        <path d="M9 6h6" />
+        <path d="M5.5 8h13" />
+        <path d="M8 8v9a1.5 1.5 0 0 0 1.5 1.5h5A1.5 1.5 0 0 0 16 17V8" />
+        <path d="M10 11v4" />
+        <path d="M14 11v4" />
+      </>
+    );
+  } else {
+    path = (
+      <>
+        <path d="M12 5v14" />
+        <path d="M5 12h14" />
+      </>
+    );
+  }
+  return <ItemCatalogIcon path={path} className={className} />;
+}
+
+export function ItemCatalogRecordRow({
+  title,
+  meta,
+  detail,
+  badges,
+  refillPriceLabel = null,
+  nonRefillPriceLabel = null,
+  statusLabel,
+  statusTone,
+  typeLabel,
+  typeTone,
+  priceLabel,
+  selected = false,
+  sizeError = null,
+  onClick
+}: ItemCatalogRecordRowProps): JSX.Element {
+  return (
+    <button
+      type="button"
+      className={`${listRowClass} items-catalog-row--compact ${selected ? listRowSelectedClass : ''}`}
+      onClick={onClick}
+    >
+      <div className="items-list-main items-catalog-row-main">
+        <div className="items-list-title-row items-catalog-row-title-line">
+          <strong>{title}</strong>
+          <div className={`item-type-pill ${typeTone}`}>{typeLabel}</div>
+        </div>
+        <span className={`${listMetaClass} items-catalog-row-meta`}>{meta}</span>
+        {detail ? <span className="items-catalog-row-detail">{detail}</span> : null}
+        {sizeError ? <span className="items-catalog-row-error">Size Error: {sizeError}</span> : null}
+        <div className="items-catalog-metrics items-catalog-metrics--compact">
+          {badges.map((badge) => (
+            <span key={badge.label} className={`items-catalog-metric-chip ${badge.tone}`}>
+              {badge.label}
+            </span>
+          ))}
+        </div>
+      </div>
+      <div className="items-list-right items-catalog-row-side">
+        <div className="items-catalog-status-row">
+          <div className={`stock-pill ${statusTone}`}>{statusLabel}</div>
+        </div>
+        <div className="items-catalog-flow-price-row items-catalog-flow-price-row--right">
+          <span className="items-catalog-flow-price-chip">
+            <span className="items-catalog-flow-price-chip-label">Refill</span>
+            <strong className="items-catalog-flow-price-chip-value">{refillPriceLabel || '-'}</strong>
+          </span>
+          <span className="items-catalog-flow-price-chip">
+            <span className="items-catalog-flow-price-chip-label">Non-Refill</span>
+            <strong className="items-catalog-flow-price-chip-value">{nonRefillPriceLabel || '-'}</strong>
+          </span>
+        </div>
+      </div>
+    </button>
+  );
+}
+
+export function ItemCatalogHeader({
+  branchLabel,
+  locationLabel,
+  categoryLabel,
+  countLabel
+}: ItemCatalogHeaderProps): JSX.Element {
+  return (
+    <div className="items-catalog-header items-catalog-header--compact">
+      <div className="items-catalog-header-copy">
+        <div className="items-catalog-header-tile" aria-hidden="true">
+          <ItemCatalogIcon
+            className="items-catalog-header-icon"
+            path={
+              <>
+                <path d="M4 8.5 12 4l8 4.5-8 4.5-8-4.5Z" />
+                <path d="M4 15.5 12 20l8-4.5" />
+                <path d="M4 12 12 16.5 20 12" />
+              </>
+            }
+          />
+        </div>
+        <div className="items-catalog-header-text">
+          <div className="eyebrow">Item Catalog</div>
+          <h3 className="m-0 text-[1.05rem] font-extrabold text-[var(--text-strong)]">Branch Inventory Items</h3>
+          <p className="mt-2 text-[0.9rem] leading-6 text-[var(--muted)]">
+            {branchLabel} {'\u2022'} {locationLabel} {'\u2022'} {categoryLabel}
+          </p>
+        </div>
+      </div>
+      <div className="items-catalog-count-pill">{countLabel}</div>
+    </div>
+  );
+}
+
+export function ItemCatalogCategoryChip({
+  label,
+  count,
+  active,
+  onClick
+}: ItemCatalogCategoryChipProps): JSX.Element {
+  return (
+    <button
+      type="button"
+      className={`items-catalog-filter-chip ${active ? 'active' : ''}`}
+      onClick={onClick}
+    >
+      <span className="items-catalog-filter-chip-label">{label}</span>
+      <span className="items-catalog-filter-count">{count}</span>
+    </button>
+  );
+}
+
+function ItemDetailFactRow({
+  label,
+  value,
+  icon,
+  tone,
+  detail = null
+}: ItemDetailFactRowProps): JSX.Element {
+  return (
+    <div className="items-detail-fact-row">
+      <div className={`items-detail-fact-icon ${tone}`}>
+        <ItemCatalogSymbol kind={icon} className="h-[16px] w-[16px]" />
+      </div>
+      <div className="items-detail-fact-copy">
+        <span className="items-detail-fact-label">{label}</span>
+        {detail ? <span className="items-detail-fact-detail">{detail}</span> : null}
+      </div>
+      <strong className="items-detail-fact-value">{value}</strong>
+    </div>
+  );
+}
+
+function resolveFlowPriceLabel(rules: ItemPriceRule[], flowMode: 'REFILL_EXCHANGE' | 'NON_REFILL'): string | null {
+  const exactRule = rules.find((rule) => rule.flowMode === flowMode);
+  const fallbackRule = rules.find((rule) => rule.flowMode === 'ANY');
+  const resolvedRule = exactRule ?? fallbackRule ?? null;
+  return resolvedRule ? fmtMoney(resolvedRule.unitPrice) : null;
+}
+
+export function applyInventoryCatalogPricing(input: {
+  catalog: DesktopCatalogProduct[];
+  priceListRows: DesktopMasterDataRow[];
+  branchId: string;
+  defaultLpgFlow: 'NONE' | 'REFILL_EXCHANGE' | 'NON_REFILL';
+  atIso?: string;
+}): DesktopCatalogProduct[] {
+  const branchId = input.branchId.trim();
+  if (!branchId) {
+    return input.catalog;
+  }
+  const priceLists = parseDesktopPosPriceLists(input.priceListRows);
+  return input.catalog.map((product) => {
+    const activeUnitPrice = resolveDesktopUnitPrice({
+      productId: product.id,
+      branchId,
+      customer: null,
+      priceLists,
+      allowCustomPricing: false,
+      atIso: input.atIso,
+      flowMode:
+        product.isLpg && input.defaultLpgFlow !== 'NONE'
+          ? input.defaultLpgFlow
+          : null
+    });
+    return activeUnitPrice === null ? product : { ...product, unitPrice: activeUnitPrice };
+  });
+}
+
+export function ItemDetailModal({
+  selected,
+  selectedDetail,
+  selectedCylinder,
+  selectedRules,
+  selectedLendedQty,
+  selectedDisposedQty,
+  selectedCylinderSizeError,
+  selectedSizeLabel,
+  locationLabel,
+  onClose,
+  onOpenItemHistory,
+  hideItemHistoryAction = false,
+  onOpenLpgService
+}: ItemDetailModalProps): JSX.Element {
+  const [activeTab, setActiveTab] = useState<ItemDetailTab>('OVERVIEW');
+  const itemCode = selectedDetail?.itemCode || selected.sku;
+  const itemName = selectedDetail?.name || selected.name;
+  const itemCategory = selectedDetail?.category || selected.category || 'Uncategorized';
+  const sizeLabel =
+    selectedSizeLabel?.trim() ||
+    selected.cylinderSizeLabel?.trim() ||
+    (selectedCylinder?.sizeKg !== null && selectedCylinder?.sizeKg !== undefined ? `${selectedCylinder.sizeKg} kg` : null);
+  const stockTone = resolveStockTone(selected);
+  const stockLabel = resolveStockLabel(selected);
+  const isLpg = selected.isLpg;
+  const stockFacts: ItemDetailFactRowProps[] = isLpg
+    ? [
+        { label: 'Opening FULL', value: formatCylinderQty(selected.qtyFull), icon: 'ready', tone: 'good' },
+        { label: 'Opening EMPTY', value: formatCylinderQty(selected.qtyEmpty), icon: 'empty', tone: 'neutral' },
+        { label: 'Qty On Hand', value: formatQty(selected.qtyOnHand), icon: 'inventory', tone: 'accent' },
+        { label: 'Disposed Qty', value: formatQty(selectedDisposedQty), icon: 'disposed', tone: 'danger' },
+        { label: 'Lended Qty', value: formatQty(selectedLendedQty), icon: 'link', tone: 'neutral' },
+        { label: 'Low-stock rule', value: 'Compare FULL qty only', icon: 'low', tone: 'warn' }
+      ]
+    : [
+        { label: 'Qty On Hand', value: formatQty(selected.qtyOnHand), icon: 'inventory', tone: 'accent' },
+        { label: 'Low-stock rule', value: 'Compare Qty On Hand', icon: 'low', tone: 'warn' },
+        { label: 'Stock source', value: 'Inventory balances', icon: 'rules', tone: 'neutral' },
+        { label: 'Location scope', value: locationLabel || 'Not set', icon: 'scope', tone: 'accent' }
+      ];
+  const catalogFactsLeft = [
+    { label: 'Item Code', value: itemCode },
+    { label: 'Product Name', value: itemName },
+    { label: 'Category', value: itemCategory },
+    { label: 'Brand', value: selectedDetail?.brand || '-' },
+    { label: 'Type', value: isLpg ? 'LPG' : 'Non-LPG' },
+    { label: 'Lendable', value: selectedDetail ? (selectedDetail.isLendable ? 'Yes' : 'No') : '-' },
+    { label: 'Requires Return', value: selectedDetail ? (selectedDetail.requiresReturn ? 'Yes' : 'No') : '-' }
+  ];
+  const catalogFactsRight = [
+    { label: 'Requires Deposit', value: selectedDetail ? (selectedDetail.requiresDeposit ? 'Yes' : 'No') : '-' },
+    {
+      label: 'Default Deposit',
+      value:
+        selectedDetail?.defaultDepositAmount !== null && selectedDetail?.defaultDepositAmount !== undefined
+          ? fmtMoney(selectedDetail.defaultDepositAmount)
+          : '-'
+    },
+    { label: 'Lending Unit', value: selectedDetail?.lendingUnitType || selected.unit },
+    { label: 'Cylinder Size', value: sizeLabel ?? '-' },
+    {
+      label: 'Low Stock Alert Qty',
+      value:
+        selectedDetail?.lowStockAlertQty !== null && selectedDetail?.lowStockAlertQty !== undefined
+          ? formatQty(selectedDetail.lowStockAlertQty)
+          : '-'
+    },
+    { label: 'Updated', value: fmtDate(selectedDetail?.updatedAt ?? null) }
+  ];
+
+  const tabItems: Array<{ key: ItemDetailTab; label: string; icon: ItemCatalogOverviewMetricIcon | 'inventory' | 'link' | 'rules' }> = [
+    { key: 'OVERVIEW', label: 'Overview', icon: 'inventory' },
+    { key: 'CYLINDER', label: 'Linked Cylinder', icon: 'link' },
+    { key: 'PRICING', label: 'Pricing Rules', icon: 'rules' }
+  ];
+
+  return (
+    <div className={modalBackdropClass} role="presentation">
+      <div className={modalCardClass}>
+        <div className={`${modalToolbarClass} items-detail-modal-head panel-head`}>
+          <div className="grid min-w-0 gap-3 sm:grid-cols-[auto_minmax(0,1fr)] sm:items-start">
+            <div className={`grid h-[84px] w-[84px] shrink-0 place-items-center rounded-[26px] border ${isLpg ? 'border-[rgba(196,220,255,0.82)] bg-[rgba(240,246,255,0.98)] text-[var(--accent-strong)]' : 'border-[rgba(188,210,234,0.7)] bg-[rgba(248,251,255,0.98)] text-[var(--muted-strong)]'} shadow-[0_12px_26px_rgba(17,40,58,0.06)]`}>
+              <ItemCatalogSymbol kind={isLpg ? 'inventory' : 'total'} className="h-[30px] w-[30px]" />
+            </div>
+
+            <div className="min-w-0">
+              <div className="eyebrow">Item Detail</div>
+              <h3 className="m-0 text-[1.8rem] font-extrabold tracking-[-0.03em] text-[var(--text-strong)] sm:text-[2.05rem]">
+                {itemName}
+              </h3>
+              <p className="mt-2 text-[0.92rem] leading-6 text-[var(--muted)]">
+                {itemCode} {'\u00b7'} {itemCategory} {'\u00b7'} {selected.unit}
+              </p>
+              <div className="mt-3 flex flex-wrap items-center gap-2.5">
+                <div className="item-type-pill lpg">{isLpg ? 'LPG Cylinder' : 'Regular Item'}</div>
+                {sizeLabel ? <div className={detailNeutralPillClass}>{sizeLabel}</div> : null}
+                <div className={`stock-pill ${stockTone}`}>{stockLabel}</div>
+              </div>
+              {selectedCylinderSizeError ? (
+                <p className="mt-3 text-[0.84rem] font-semibold leading-5 text-rose-600">Size Error: {selectedCylinderSizeError}</p>
+              ) : null}
+            </div>
+          </div>
+
+          <button
+            className="secondary-btn mini-btn modal-close-icon-btn"
+            type="button"
+            onClick={onClose}
+            aria-label="Close modal"
+            title="Close"
+          >
+            <span aria-hidden="true">X</span>
+          </button>
+        </div>
+
+        <div className="desktop-modal-body items-detail-modal-body">
+          <div className={detailStatsGridClass}>
+            <div className={detailStatCardClass}>
+              <span className={detailStatLabelClass}>Price</span>
+              <strong className={detailStatValueClass}>{fmtMoney(selected.unitPrice)}</strong>
+            </div>
+            <div className={detailStatCardClass}>
+              <span className={detailStatLabelClass}>Unit</span>
+              <strong className={detailStatValueClass}>{selected.unit}</strong>
+            </div>
+            <div className={detailStatCardClass}>
+              <span className={detailStatLabelClass}>Qty On Hand</span>
+              <strong className={detailStatValueClass}>{formatQty(selected.qtyOnHand)}</strong>
+            </div>
+            <div className={detailStatCardClass}>
+              <span className={detailStatLabelClass}>{isLpg ? 'Full / Empty' : 'Stock source'}</span>
+              <strong className={detailStatValueClass}>{isLpg ? `${formatCylinderQty(selected.qtyFull)} / ${formatCylinderQty(selected.qtyEmpty)}` : 'Inventory'}</strong>
+            </div>
+          </div>
+
+          <div className="items-detail-tab-strip">
+            {tabItems.map((tab) => (
+              <button
+                key={tab.key}
+                type="button"
+                className={`items-detail-tab-chip ${activeTab === tab.key ? 'active' : ''}`}
+                onClick={() => setActiveTab(tab.key)}
+              >
+                <span className="items-detail-tab-icon">
+                  <ItemCatalogSymbol kind={tab.icon} className="h-[16px] w-[16px]" />
+                </span>
+                <span>{tab.label}</span>
+              </button>
+            ))}
+            {!hideItemHistoryAction ? (
+              <button
+                type="button"
+                className="items-detail-tab-action"
+                onClick={onOpenItemHistory}
+              >
+                <span className="items-detail-tab-icon">
+                  <ItemCatalogSymbol kind="history" className="h-[16px] w-[16px]" />
+                </span>
+                <span>Open Item History</span>
+              </button>
+            ) : null}
+          </div>
+
+          {activeTab === 'OVERVIEW' ? (
+            <div className="desktop-detail-grid">
+              <section className={`${detailSectionClass} items-detail-overview-card`}>
+                <div className={detailSectionHeadClass}>
+                  <div>
+                    <div className="eyebrow">Stock Snapshot</div>
+                    <h4>Current stock view</h4>
+                  </div>
+                  <p className={detailSectionCopyClass}>
+                    {isLpg
+                      ? 'LPG items use full and empty counts together with qty on hand.'
+                      : 'Regular items use quantity on hand from local inventory balances.'}
+                  </p>
+                </div>
+                <div className="items-detail-fact-grid">
+                  {stockFacts.map((fact) => (
+                    <ItemDetailFactRow key={fact.label} {...fact} />
+                  ))}
+                </div>
+              </section>
+
+              <section className={`${detailSectionClass} items-detail-overview-card`}>
+                <div className={detailSectionHeadClass}>
+                  <div>
+                    <div className="eyebrow">Catalog Information</div>
+                    <h4>Item master data</h4>
+                  </div>
+                  <p className={detailSectionCopyClass}>Reference details for pricing, lending rules, and category setup.</p>
+                </div>
+                <div className="items-detail-catalog-grid">
+                  <div className="items-detail-catalog-column">
+                    {catalogFactsLeft.map((fact) => (
+                      <div key={fact.label} className="items-detail-catalog-row">
+                        <dt className="items-detail-catalog-term">{fact.label}</dt>
+                        <dd className="items-detail-catalog-value">{fact.value}</dd>
+                      </div>
+                    ))}
+                  </div>
+                  <div className="items-detail-catalog-column">
+                    {catalogFactsRight.map((fact) => (
+                      <div key={fact.label} className="items-detail-catalog-row">
+                        <dt className="items-detail-catalog-term">{fact.label}</dt>
+                        <dd className="items-detail-catalog-value">{fact.value}</dd>
+                      </div>
+                    ))}
+                    {selectedCylinderSizeError ? (
+                      <div className="items-detail-catalog-row">
+                        <dt className="items-detail-catalog-term">Size Error</dt>
+                        <dd className="items-detail-catalog-value items-detail-catalog-value--error">
+                          {selectedCylinderSizeError}
+                        </dd>
+                      </div>
+                    ) : null}
+                  </div>
+                </div>
+              </section>
+            </div>
+          ) : null}
+
+          {activeTab === 'CYLINDER' ? (
+            <section className={detailSectionClass}>
+              <div className={detailSectionHeadClass}>
+                <div>
+                  <div className="eyebrow">Linked Cylinder</div>
+                  <h4>Cylinder reference</h4>
+                </div>
+                <p className={detailSectionCopyClass}>Used only for LPG items with linked cylinder setup.</p>
+              </div>
+              {!isLpg ? (
+                <div className={detailEmptyClass}>This item is not an LPG item.</div>
+              ) : !selectedDetail?.cylinderTypeId ? (
+                <div className={detailEmptyClass}>No cylinder type is linked yet.</div>
+              ) : selectedCylinder ? (
+                <div className="grid gap-4 lg:grid-cols-[minmax(0,1.1fr)_minmax(280px,0.9fr)]">
+                  <div className="grid gap-3 rounded-[20px] border border-[rgba(188,210,234,0.55)] bg-[rgba(248,251,255,0.96)] px-4 py-4 shadow-[0_10px_22px_rgba(17,40,58,0.04)]">
+                    <strong className="text-[1rem] font-extrabold text-[var(--text-strong)]">{selectedCylinder.code}</strong>
+                    <span className="text-[0.92rem] leading-6 text-[var(--muted-strong)]">{selectedCylinder.name}</span>
+                    <div className="flex flex-wrap gap-2">
+                      <span className={detailNeutralPillClass}>Size {selectedCylinder.sizeKg === null ? 'Missing' : `${selectedCylinder.sizeKg} kg`}</span>
+                      <span className={detailNeutralPillClass}>Deposit {selectedCylinder.depositAmount === null ? '-' : fmtMoney(selectedCylinder.depositAmount)}</span>
+                    </div>
+                    <div className="text-[0.86rem] font-medium text-[var(--success)]">Linked to LPG flow</div>
+                  </div>
+                  <div className={detailKvGridClass}>
+                    <div className={detailKvRowClass}><dt className={detailKvTermClass}>Code</dt><dd className={detailKvValueClass}>{selectedCylinder.code}</dd></div>
+                    <div className={detailKvRowClass}><dt className={detailKvTermClass}>Name</dt><dd className={detailKvValueClass}>{selectedCylinder.name}</dd></div>
+                    <div className={detailKvRowClass}>
+                      <dt className={detailKvTermClass}>Size</dt>
+                      <dd className={selectedCylinder.sizeKg === null ? 'm-0 text-[0.92rem] font-semibold leading-6 text-rose-600' : detailKvValueClass}>
+                        {selectedCylinder.sizeKg === null ? 'Missing size value' : `${selectedCylinder.sizeKg} kg`}
+                      </dd>
+                    </div>
+                    <div className={detailKvRowClass}><dt className={detailKvTermClass}>Deposit</dt><dd className={detailKvValueClass}>{selectedCylinder.depositAmount === null ? '-' : fmtMoney(selectedCylinder.depositAmount)}</dd></div>
+                  </div>
+                </div>
+              ) : (
+                <div className={detailEmptyClass}>
+                  Linked cylinder type ID: {selectedDetail.cylinderTypeId}. Cylinder type master data is not available on this device yet. Use Sync Now or Download Branch Data to refresh.
+                </div>
+              )}
+            </section>
+          ) : null}
+
+          {activeTab === 'PRICING' ? (
+            <section className={detailSectionClass}>
+              <div className={detailSectionHeadClass}>
+                <div>
+                  <div className="eyebrow">Pricing Rules</div>
+                  <h4>Price list coverage</h4>
+                </div>
+                <p className={detailSectionCopyClass}>Read-only rules currently downloaded to this desktop device.</p>
+              </div>
+              {selectedRules.length === 0 ? (
+                <div className={detailEmptyClass}>No linked pricing rules.</div>
+              ) : (
+                <div className="grid gap-3">
+                  {selectedRules.map((rule) => (
+                    <div key={`${rule.priceListId}-${rule.priority ?? 'na'}-${rule.flowMode}-${rule.unitPrice}`} className={detailRuleCardClass}>
+                      <strong className={detailRuleTitleClass}>{rule.priceListName}</strong>
+                      <span className={detailRuleCopyClass}>{rule.scope} {'\u00b7'} {rule.appliesTo}</span>
+                      <span className={detailRuleCopyClass}>Flow {flowLabel(rule.flowMode)}</span>
+                      <span className={detailRuleCopyClass}>Unit Price {fmtMoney(rule.unitPrice)}</span>
+                      <span className={detailRuleCopyClass}>
+                        Discount Cap {rule.discountCapPct === null ? '-' : `${rule.discountCapPct}%`} {'\u00b7'} Priority {rule.priority === null ? '-' : rule.priority}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </section>
+          ) : null}
+
+        </div>
+      </div>
+    </div>
+  );
+}
+
+export function ItemCatalogOverviewPanel({
+  title,
+  subtitle,
+  metrics,
+  onRefresh,
+  refreshDisabled
+}: ItemCatalogOverviewPanelProps): JSX.Element {
+  return (
+    <>
+      <section className="grid gap-3 rounded-[24px] border border-[rgba(188,210,234,0.58)] bg-[linear-gradient(180deg,rgba(255,255,255,0.99),rgba(246,250,255,0.97))] px-4 py-3.5 shadow-[0_14px_30px_rgba(17,40,58,0.07)] sm:px-5 sm:py-4 xl:grid-cols-[minmax(0,1fr)_auto] xl:items-center">
+        <div className="flex min-w-0 items-start gap-3">
+          <div className="grid h-[54px] w-[54px] shrink-0 place-items-center rounded-[18px] border border-[rgba(196,220,255,0.78)] bg-[rgba(240,246,255,0.98)] text-[var(--accent-strong)] shadow-[0_8px_18px_rgba(17,40,58,0.05)]">
+            <ItemCatalogSymbol kind="inventory" className="h-[22px] w-[22px]" />
+          </div>
+          <div className="min-w-0">
+            <div className="text-[0.78rem] font-semibold uppercase tracking-[0.08em] text-[var(--accent-strong)]">Item inventory</div>
+            <h2 className="m-0 text-[1.12rem] font-extrabold tracking-[-0.02em] text-[var(--text-strong)] sm:text-[1.36rem]">
+              {title}
+            </h2>
+            <p className="mt-1 text-[0.8rem] leading-5 text-[var(--muted)]">{subtitle}</p>
+          </div>
+        </div>
+        <div className="flex flex-wrap items-center justify-start gap-2.5 xl:justify-end">
+          <button className="secondary-btn min-h-[46px] px-4 text-[0.86rem]" type="button" onClick={onRefresh} disabled={refreshDisabled}>
+            Refresh
+          </button>
+        </div>
+      </section>
+
+      <section className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+        {metrics.map((metric) => {
+          const tone =
+            metric.tone === 'good'
+              ? {
+                  shell: 'border-[rgba(37,166,91,0.28)] bg-[rgba(248,255,250,0.98)]',
+                  icon: 'border-[rgba(37,166,91,0.24)] bg-[rgba(220,245,232,0.94)] text-[var(--success)]',
+                  label: 'text-[var(--success)]',
+                  line: 'from-[rgba(37,166,91,0.42)] to-[rgba(37,166,91,0.18)]'
+                }
+              : metric.tone === 'warn'
+                ? {
+                    shell: 'border-[rgba(205,138,26,0.28)] bg-[rgba(255,251,244,0.98)]',
+                    icon: 'border-[rgba(205,138,26,0.24)] bg-[rgba(250,239,206,0.94)] text-[var(--warning)]',
+                    label: 'text-[var(--warning)]',
+                    line: 'from-[rgba(205,138,26,0.42)] to-[rgba(205,138,26,0.18)]'
+                  }
+                : metric.tone === 'out'
+                  ? {
+                      shell: 'border-[rgba(239,68,68,0.22)] bg-[rgba(255,248,248,0.98)]',
+                      icon: 'border-[rgba(239,68,68,0.22)] bg-[rgba(252,228,228,0.94)] text-[var(--danger)]',
+                      label: 'text-[var(--danger)]',
+                      line: 'from-[rgba(239,68,68,0.42)] to-[rgba(239,68,68,0.18)]'
+                    }
+                  : {
+                      shell: 'border-[rgba(245,158,11,0.2)] bg-[rgba(255,252,246,0.98)]',
+                      icon: 'border-[rgba(245,158,11,0.24)] bg-[rgba(253,244,216,0.94)] text-[var(--warning)]',
+                      label: 'text-[var(--warning)]',
+                      line: 'from-[rgba(245,158,11,0.4)] to-[rgba(245,158,11,0.16)]'
+                    };
+
+          return (
+            <article
+              key={metric.key}
+              className={`grid gap-3 overflow-hidden rounded-[20px] border px-4 py-3.5 shadow-[0_10px_22px_rgba(17,40,58,0.05)] ${tone.shell}`}
+            >
+              <div className="flex items-start gap-3">
+                <div className={`grid h-[50px] w-[50px] shrink-0 place-items-center rounded-full border ${tone.icon}`}>
+                  <ItemCatalogSymbol kind={metric.icon} className="h-[21px] w-[21px]" />
+                </div>
+                <div className="min-w-0">
+                  <div className={`text-[0.82rem] font-semibold ${tone.label}`}>{metric.label}</div>
+                  <strong className="mt-1.5 block text-[0.98rem] font-extrabold tracking-[-0.01em] text-[var(--text-strong)] sm:text-[1.08rem]">
+                    {metric.value}
+                  </strong>
+                </div>
+              </div>
+              <div className={`h-[4px] rounded-full bg-gradient-to-r ${tone.line}`} />
+            </article>
+          );
+        })}
+      </section>
+    </>
+  );
+}
 
 function fmtMoney(value: number): string {
   return `PHP ${value.toFixed(2)}`;
@@ -159,13 +1004,6 @@ function fmtDate(value: string | null): string {
     return value;
   }
   return parsed.toLocaleString();
-}
-
-function toDateInput(value: Date): string {
-  const year = value.getFullYear();
-  const month = String(value.getMonth() + 1).padStart(2, '0');
-  const day = String(value.getDate()).padStart(2, '0');
-  return `${year}-${month}-${day}`;
 }
 
 function resolveAvailableQty(product: DesktopCatalogProduct): number {
@@ -204,6 +1042,12 @@ function formatQty(value: number): string {
   return value.toLocaleString(undefined, {
     minimumFractionDigits: 0,
     maximumFractionDigits: 2
+  });
+}
+
+function formatCylinderQty(value: number): string {
+  return value.toLocaleString(undefined, {
+    maximumFractionDigits: 0
   });
 }
 
@@ -284,6 +1128,9 @@ function formatMovementTitle(row: ItemMovementRow): string {
   if (row.reference_type.startsWith('LPG_ITEM_') && row.movement_detail) {
     return row.movement_detail;
   }
+  if (row.reference_type === 'PURCHASE_ORDER_LOCAL') {
+    return row.movement_detail || (row.movement_type === 'PURCHASE_ORDER_PULLOUT' ? 'PO Pull-out (Empties)' : 'PO Receive');
+  }
   return row.movement_type.replace(/_/g, ' ');
 }
 
@@ -314,6 +1161,9 @@ function formatMovementReference(row: ItemMovementRow): string {
   }
   if (row.reference_type === 'LENDING_RETURN_LOCAL') {
     return `Lending Return ${row.reference_id}`;
+  }
+  if (row.reference_type === 'PURCHASE_ORDER_LOCAL') {
+    return `PO ${row.reference_id}`;
   }
   return `Ref ${row.reference_type}:${row.reference_id}`;
 }
@@ -584,12 +1434,15 @@ function decoratePendingMovementAfterValues(
   });
 }
 
+type PoLineInfo = { productId: string; isLpg: boolean; locationId: string };
+
 function buildLocalPendingMovementRows(
   productId: string,
   locationId: string | null,
   currentStock: Pick<DesktopCatalogProduct, 'qtyOnHand' | 'qtyFull' | 'qtyEmpty'>,
   outboxRows: OutboxItem[],
-  salesById: Map<string, { payload: { lines: DesktopSaleLine[]; locationId?: string | null } }>
+  salesById: Map<string, { payload: { lines: DesktopSaleLine[]; locationId?: string | null } }>,
+  poLineById: Map<string, PoLineInfo>
 ): ItemMovementRow[] {
   const normalizedLocationId = locationId?.trim() || null;
   const rows: ItemMovementRow[] = [];
@@ -900,6 +1753,72 @@ function buildLocalPendingMovementRows(
       continue;
     }
 
+    if (row.entity === 'purchase_order_delivery' && row.action === 'delivery') {
+      const poId = asString(payload.purchase_order_id ?? payload.purchaseOrderId);
+      const receiveLines: Array<Record<string, unknown>> = Array.isArray(payload.receive_lines)
+        ? (payload.receive_lines as Array<Record<string, unknown>>)
+        : [];
+      const pulloutLines: Array<Record<string, unknown>> = Array.isArray(payload.pullout_lines)
+        ? (payload.pullout_lines as Array<Record<string, unknown>>)
+        : [];
+
+      // Accumulate receive + pullout into one net row per product per delivery
+      let receiveQty = 0;
+      let pulloutQty = 0;
+      let matchedPoLine: PoLineInfo | null = null;
+
+      for (const line of receiveLines) {
+        const poLineId = asString(line.purchase_order_line_id ?? line.purchaseOrderLineId);
+        const quantity = asNumber(line.quantity) ?? 0;
+        if (!poLineId || quantity <= 0) continue;
+        const poLine = poLineById.get(poLineId);
+        if (!poLine || poLine.productId !== productId) continue;
+        if (normalizedLocationId && poLine.locationId && poLine.locationId !== normalizedLocationId) continue;
+        receiveQty += quantity;
+        matchedPoLine = poLine;
+      }
+
+      for (const line of pulloutLines) {
+        const poLineId = asString(line.purchase_order_line_id ?? line.purchaseOrderLineId);
+        const quantity = asNumber(line.quantity) ?? 0;
+        if (!poLineId || quantity <= 0) continue;
+        const poLine = poLineById.get(poLineId);
+        if (!poLine || poLine.productId !== productId || !poLine.isLpg) continue;
+        if (normalizedLocationId && poLine.locationId && poLine.locationId !== normalizedLocationId) continue;
+        pulloutQty += quantity;
+        matchedPoLine = matchedPoLine ?? poLine;
+      }
+
+      if (matchedPoLine && (receiveQty > 0 || pulloutQty > 0)) {
+        const isLpg = matchedPoLine.isLpg;
+        const qtyDelta = receiveQty - pulloutQty;
+        const detail = receiveQty > 0 && pulloutQty > 0
+          ? `PO Receive +${receiveQty} / Pull-out -${pulloutQty}`
+          : receiveQty > 0
+            ? 'PO Receive'
+            : 'PO Pull-out (Empties)';
+        rows.push({
+          id: `local-po-delivery:${row.id}`,
+          created_at: row.created_at,
+          movement_type: receiveQty > 0 ? 'PURCHASE_ORDER_RECEIVE' : 'PURCHASE_ORDER_PULLOUT',
+          movement_detail: detail,
+          reference_type: 'PURCHASE_ORDER_LOCAL',
+          reference_id: poId ?? row.id,
+          location_name: matchedPoLine.locationId ?? normalizedLocationId ?? 'Desktop device',
+          qty_delta: qtyDelta,
+          qty_full_delta: isLpg ? receiveQty : 0,
+          qty_empty_delta: isLpg ? -pulloutQty : 0,
+          qty_after: 0,
+          qty_after_known: false,
+          qty_full_after: 0,
+          qty_full_after_known: false,
+          qty_empty_after: 0,
+          qty_empty_after_known: false
+        });
+      }
+      continue;
+    }
+
     if (row.entity === 'lpg_item_action') {
       const actionType = String(asString(payload.action_type ?? payload.actionType ?? row.action) ?? '').trim().toUpperCase();
       const actionLocationId = asString(payload.location_id ?? payload.locationId);
@@ -937,13 +1856,15 @@ function buildLocalPendingMovementRows(
   return decoratePendingMovementAfterValues(rows, currentStock);
 }
 
-export function ItemsScreen({ appState, onOpenLpgService }: Props): JSX.Element {
+export function ItemsScreen({ appState, tenantAddons, onOpenLpgService }: Props): JSX.Element {
   const [catalog, setCatalog] = useState<DesktopCatalogProduct[]>([]);
   const [detailByProduct, setDetailByProduct] = useState<Record<string, ItemDetailRecord>>({});
   const [cylinderById, setCylinderById] = useState<Record<string, CylinderTypeDetail>>({});
   const [priceRulesByProduct, setPriceRulesByProduct] = useState<Record<string, ItemPriceRule[]>>({});
   const [search, setSearch] = useState('');
   const [category, setCategory] = useState('ALL');
+  const [pageSize, setPageSize] = useState(DEFAULT_ITEM_LIST_PAGE_SIZE);
+  const [currentPage, setCurrentPage] = useState(1);
   const [selectedId, setSelectedId] = useState('');
   const [loading, setLoading] = useState(false);
   const [message, setMessage] = useState('Use this screen to review branch items, check stock, and send one straight into POS.');
@@ -952,8 +1873,8 @@ export function ItemsScreen({ appState, onOpenLpgService }: Props): JSX.Element 
   const [movementError, setMovementError] = useState<string | null>(null);
   const [lendedQtyByProduct, setLendedQtyByProduct] = useState<Record<string, number>>({});
   const [disposedQtyByProduct, setDisposedQtyByProduct] = useState<Record<string, number>>({});
-  const [movementFromDate, setMovementFromDate] = useState(() => toDateInput(new Date()));
-  const [movementToDate, setMovementToDate] = useState(() => toDateInput(new Date()));
+  const [movementFromDate, setMovementFromDate] = useState('');
+  const [movementToDate, setMovementToDate] = useState('');
   const [itemHistoryOpen, setItemHistoryOpen] = useState(false);
 
   const refresh = async (): Promise<void> => {
@@ -972,19 +1893,25 @@ export function ItemsScreen({ appState, onOpenLpgService }: Props): JSX.Element 
         desktopDb.listMasterData('cylinder_type'),
         desktopDb.listMasterData('price_list')
       ]);
-      setCatalog(
-        rows.map((product) => {
+      const projectedRows = rows.map((product) => {
           const projected = projectedInventory.get(product.id);
           return projected
             ? {
                 ...product,
-                qtyOnHand: projected.qtyOnHand,
+                qtyOnHand: product.isLpg
+                  ? Number((projected.qtyFull + projected.qtyEmpty).toFixed(4))
+                  : projected.qtyOnHand,
                 qtyFull: projected.qtyFull,
                 qtyEmpty: projected.qtyEmpty
               }
             : product;
-        })
-      );
+        });
+      setCatalog(applyInventoryCatalogPricing({
+        catalog: projectedRows,
+        priceListRows: priceListRows as DesktopMasterDataRow[],
+        branchId: appState.setup.branchId,
+        defaultLpgFlow: appState.setup.posDefaultLpgFlow
+      }));
 
       const nextDetails: Record<string, ItemDetailRecord> = {};
       for (const row of productRows) {
@@ -1300,16 +2227,24 @@ export function ItemsScreen({ appState, onOpenLpgService }: Props): JSX.Element 
         catalog.find((entry) => entry.id === productId) ??
         filtered.find((entry) => entry.id === productId) ??
         null;
-      const [outboxRows, sales] = await Promise.all([
+      const [outboxRows, sales, poRecords] = await Promise.all([
         desktopDb.listOutboxItems(),
-        desktopDb.listSales()
+        desktopDb.listSales(),
+        desktopPurchaseOrderService.listPurchaseOrders()
       ]);
+      const poLineById = new Map<string, PoLineInfo>();
+      for (const po of poRecords) {
+        for (const line of po.lines) {
+          poLineById.set(line.id, { productId: line.productId, isLpg: line.isLpg, locationId: po.locationId });
+        }
+      }
       const localRows = buildLocalPendingMovementRows(
         productId,
         appState.setup.locationId,
         selectedProduct ?? { qtyOnHand: 0, qtyFull: 0, qtyEmpty: 0 },
         outboxRows,
-        new Map(sales.map((sale) => [sale.id, sale] as const))
+        new Map(sales.map((sale) => [sale.id, sale] as const)),
+        poLineById
       );
 
       let remoteRows: ItemMovementRow[] = [];
@@ -1344,16 +2279,27 @@ export function ItemsScreen({ appState, onOpenLpgService }: Props): JSX.Element 
         catalog.find((entry) => entry.id === productId) ??
         filtered.find((entry) => entry.id === productId) ??
         null;
-      const fallbackRows = await Promise.all([desktopDb.listOutboxItems(), desktopDb.listSales()])
-        .then(([outboxRows, sales]) =>
-          buildLocalPendingMovementRows(
+      const fallbackRows = await Promise.all([
+        desktopDb.listOutboxItems(),
+        desktopDb.listSales(),
+        desktopPurchaseOrderService.listPurchaseOrders()
+      ])
+        .then(([outboxRows, sales, poRecords]) => {
+          const fallbackPoLineById = new Map<string, PoLineInfo>();
+          for (const po of poRecords) {
+            for (const line of po.lines) {
+              fallbackPoLineById.set(line.id, { productId: line.productId, isLpg: line.isLpg, locationId: po.locationId });
+            }
+          }
+          return buildLocalPendingMovementRows(
             productId,
             appState.setup.locationId,
             fallbackProduct ?? { qtyOnHand: 0, qtyFull: 0, qtyEmpty: 0 },
             outboxRows,
-            new Map(sales.map((sale) => [sale.id, sale] as const))
-          )
-        )
+            new Map(sales.map((sale) => [sale.id, sale] as const)),
+            fallbackPoLineById
+          );
+        })
         .catch(() => []);
       setMovementRows(fallbackRows);
       const baseMessage =
@@ -1379,6 +2325,22 @@ export function ItemsScreen({ appState, onOpenLpgService }: Props): JSX.Element 
     [catalog]
   );
 
+  const categoryScopedCounts = useMemo(() => {
+    const term = search.trim().toLowerCase();
+    const scopedRows = !term
+      ? catalog
+      : catalog.filter((product) =>
+          [product.name, product.sku, product.category, product.unit].join(' ').toLowerCase().includes(term)
+        );
+    const counts = new Map<string, number>();
+    for (const product of scopedRows) {
+      const key = product.category;
+      counts.set(key, (counts.get(key) ?? 0) + 1);
+    }
+    counts.set('ALL', scopedRows.length);
+    return counts;
+  }, [catalog, search]);
+
   const filtered = useMemo(() => {
     const term = search.trim().toLowerCase();
     return catalog.filter((product) => {
@@ -1391,6 +2353,33 @@ export function ItemsScreen({ appState, onOpenLpgService }: Props): JSX.Element 
       return [product.name, product.sku, product.category, product.unit].join(' ').toLowerCase().includes(term);
     });
   }, [catalog, category, search]);
+
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [category, pageSize, search]);
+
+  const totalPages = useMemo(
+    () => Math.max(1, Math.ceil(filtered.length / pageSize)),
+    [filtered.length, pageSize]
+  );
+
+  useEffect(() => {
+    setCurrentPage((page) => Math.min(page, totalPages));
+  }, [totalPages]);
+
+  const pagedItems = useMemo(() => {
+    const start = (currentPage - 1) * pageSize;
+    return filtered.slice(start, start + pageSize);
+  }, [currentPage, filtered, pageSize]);
+
+  const visiblePageButtons = useMemo(() => {
+    if (totalPages <= 5) {
+      return Array.from({ length: totalPages }, (_, index) => index + 1);
+    }
+    return Array.from(
+      new Set([1, currentPage - 1, currentPage, currentPage + 1, totalPages].filter((page) => page >= 1 && page <= totalPages))
+    ).sort((a, b) => a - b);
+  }, [currentPage, totalPages]);
 
   const selected = filtered.find((product) => product.id === selectedId) ?? catalog.find((product) => product.id === selectedId) ?? null;
   const selectedDetail = selected ? detailByProduct[selected.id] ?? null : null;
@@ -1448,6 +2437,10 @@ export function ItemsScreen({ appState, onOpenLpgService }: Props): JSX.Element 
   const selectedCylinderSizeError = selected ? resolveCylinderSizeError(selected.id) : null;
   const selectedLendedQty = selected ? lendedQtyByProduct[selected.id] ?? 0 : 0;
   const selectedDisposedQty = selected ? disposedQtyByProduct[selected.id] ?? 0 : 0;
+  const hideItemHistoryAction = shouldHideItemHistoryForShiftSecurity({
+    tenantAddons,
+    accessToken: appState.auth.accessToken
+  });
 
   useEffect(() => {
     if (!selected?.id) {
@@ -1457,8 +2450,15 @@ export function ItemsScreen({ appState, onOpenLpgService }: Props): JSX.Element 
       setItemHistoryOpen(false);
       return;
     }
+    if (hideItemHistoryAction) {
+      setMovementRows([]);
+      setMovementError(null);
+      setMovementLoading(false);
+      setItemHistoryOpen(false);
+      return;
+    }
     void loadItemMovements(selected.id);
-  }, [selected?.id, appState.setup.locationId, movementFromDate, movementToDate]);
+  }, [selected?.id, appState.setup.locationId, movementFromDate, movementToDate, hideItemHistoryAction]);
 
   const stockCounts = useMemo(
     () => ({
@@ -1474,61 +2474,32 @@ export function ItemsScreen({ appState, onOpenLpgService }: Props): JSX.Element 
 
   return (
     <div className={screenStackClass}>
-      <ScreenHeader
-        routeId="items"
-        variant="module"
-        title="Items"
-        description="Review branch inventory, stock buckets, and item movement from one desktop workspace."
-        actions={(
-          <button className="secondary-btn" type="button" onClick={() => void refresh()} disabled={loading}>
-            {loading ? 'Refreshing...' : 'Refresh'}
-          </button>
-        )}
+      <ItemCatalogOverviewPanel
+        title="Item Management"
+        subtitle="Track branch inventory, stock buckets, and item movement from one desktop workspace."
+        metrics={[
+          { key: 'all', label: 'All Items', value: String(stockCounts.total), icon: 'total', tone: 'good' },
+          { key: 'ready', label: 'Ready', value: String(stockCounts.ready), icon: 'ready', tone: 'good' },
+          { key: 'low', label: 'Low Stock', value: String(stockCounts.low), icon: 'low', tone: 'warn' },
+          { key: 'out', label: 'Out Of Stock', value: String(stockCounts.out), icon: 'out', tone: 'out' }
+        ]}
+        onRefresh={() => void refresh()}
+        refreshDisabled={loading}
       />
 
-      <section className={summaryStripClass}>
-        <div className={summaryTileClass}>
-          <span className={summaryLabelClass}>All Items</span>
-          <strong className={summaryValueClass}>{stockCounts.total}</strong>
-        </div>
-        <div className={summaryTileClass}>
-          <span className={summaryLabelClass}>Ready</span>
-          <strong className={summaryValueClass}>{stockCounts.ready}</strong>
-        </div>
-        <div className={summaryTileClass}>
-          <span className={summaryLabelClass}>Low Stock</span>
-          <strong className={summaryValueClass}>{stockCounts.low}</strong>
-        </div>
-        <div className={summaryTileClass}>
-          <span className={summaryLabelClass}>Out Of Stock</span>
-          <strong className={summaryValueClass}>{stockCounts.out}</strong>
-        </div>
-        <div className={summaryTileClass}>
-          <span className={summaryLabelClass}>Lended</span>
-          <strong className={summaryValueClass}>{formatQty(stockCounts.lended)}</strong>
-        </div>
-        <div className={summaryTileClass}>
-          <span className={summaryLabelClass}>Disposed</span>
-          <strong className={summaryValueClass}>{formatQty(stockCounts.disposed)}</strong>
-        </div>
-      </section>
+      <section className={`${shellCardClass} desktop-module-section items-catalog-shell`}>
+        <ItemCatalogHeader
+          branchLabel={appState.setup.branchLabel || 'Branch not set'}
+          locationLabel={appState.setup.locationLabel || 'Location not set'}
+          categoryLabel={category === 'ALL' ? 'All categories' : `${category} category`}
+          countLabel={`${filtered.length} item${filtered.length === 1 ? '' : 's'}`}
+        />
 
-      <section className={`${shellCardClass} desktop-module-section`}>
-        <div className="panel-head items-center !mb-0">
-          <div>
-            <div className="eyebrow">Catalog review</div>
-            <h3 className="m-0 text-[1.08rem] font-extrabold text-[var(--text-strong)]">Cached branch catalog</h3>
-            <p className="mt-2 text-[0.94rem] leading-6 text-[var(--muted)]">
-              Branch {appState.setup.branchLabel || 'Not set'} {'\u2022'} Location {appState.setup.locationLabel || 'Not set'} {'\u2022'} Category {category === 'ALL' ? 'All categories' : category}
-            </p>
-          </div>
-        </div>
-
-        <div className={toolbarGridClass}>
+        <div className={`${toolbarGridClass} items-catalog-toolbar`}>
           <SearchField className="w-full" value={search} onChange={setSearch} placeholder="Search item, SKU, category, or unit" />
-          <label className="full-width-field">
+          <label className="full-width-field items-catalog-category-field">
             <span>Category</span>
-            <select value={category} onChange={(event) => setCategory(event.target.value)}>
+            <select value={category} onChange={(event) => setCategory(event.target.value)} aria-label="Category">
               {categories.map((value) => (
                 <option key={value} value={value}>
                   {value === 'ALL' ? 'All categories' : value}
@@ -1538,11 +2509,15 @@ export function ItemsScreen({ appState, onOpenLpgService }: Props): JSX.Element 
           </label>
         </div>
 
-        <div className="flex flex-wrap gap-2">
+        <div className="items-catalog-filter-row">
           {categories.map((value) => (
-            <button key={value} type="button" className={`filter-chip ${category === value ? 'active' : ''}`} onClick={() => setCategory(value)}>
-              {value === 'ALL' ? 'All' : value}
-            </button>
+            <ItemCatalogCategoryChip
+              key={value}
+              label={value === 'ALL' ? 'All' : value}
+              count={String(categoryScopedCounts.get(value) ?? 0)}
+              active={category === value}
+              onClick={() => setCategory(value)}
+            />
           ))}
         </div>
 
@@ -1550,279 +2525,136 @@ export function ItemsScreen({ appState, onOpenLpgService }: Props): JSX.Element 
           {filtered.length === 0 ? (
             <div className="empty-state">No items match this filter yet.</div>
           ) : (
-            filtered.map((product) => (
-              <button
-                key={product.id}
-                type="button"
-                className={`${listRowClass} ${selected?.id === product.id ? listRowSelectedClass : ''}`}
-                onClick={() => setSelectedId(product.id)}
-              >
-                <div className="items-list-main">
-                  <div className="items-list-title-row">
-                    <strong>{product.name}</strong>
-                    <div className={`stock-pill ${resolveStockTone(product)}`}>{resolveStockLabel(product)}</div>
-                  </div>
-                  <span className={listMetaClass}>
-                    {product.sku} {'\u00b7'} {product.unit} {'\u00b7'} {product.category || 'Uncategorized'}
-                  </span>
-                  {product.isLpg ? (
-                    <>
-                      <span className={listMetaClass}>Cylinder Size {resolveCylinderSizeLabel(product.id) ?? '-'}</span>
-                      {resolveCylinderSizeError(product.id) ? (
-                        <span className="text-[0.82rem] font-semibold text-rose-600">
-                          Size Error: {resolveCylinderSizeError(product.id)}
-                        </span>
-                      ) : null}
-                    </>
-                  ) : null}
-                  <span className={listStockClass}>
-                    {product.isLpg
-                      ? `Full ${formatQty(product.qtyFull)} � Empty ${formatQty(product.qtyEmpty)} � QOH ${formatQty(product.qtyOnHand)}`
-                      : `Qty On Hand ${formatQty(product.qtyOnHand)}`}
-                  </span>
-                  <span className={listMetaClass}>
-                    Lended {formatQty(lendedQtyByProduct[product.id] ?? 0)} � Disposed {formatQty(disposedQtyByProduct[product.id] ?? 0)}
-                  </span>
-                </div>
-                <div className="items-list-right">
-                  <div className={`item-type-pill ${product.isLpg ? 'lpg' : 'regular'}`}>
-                    {product.isLpg ? 'LPG' : 'Regular'}
-                  </div>
-                  <strong>{fmtMoney(product.unitPrice)}</strong>
-                  <span className={listMetaClass}>Open detail</span>
-                </div>
-              </button>
-            ))
+            pagedItems.map((product) => {
+              const rowRules = priceRulesByProduct[product.id] ?? [];
+              const sizeLabel = product.isLpg ? (resolveCylinderSizeLabel(product.id) ?? 'No size') : 'No size';
+              const sizeError = resolveCylinderSizeError(product.id);
+              const refillPriceLabel = resolveFlowPriceLabel(rowRules, 'REFILL_EXCHANGE');
+              const nonRefillPriceLabel = resolveFlowPriceLabel(rowRules, 'NON_REFILL');
+              const badges: ItemCatalogRecordBadge[] = [];
+
+              if (product.isLpg) {
+                badges.push({ label: `Full ${formatCylinderQty(product.qtyFull)}`, tone: 'full' });
+                badges.push({ label: `Empty ${formatCylinderQty(product.qtyEmpty)}`, tone: 'empty' });
+              }
+
+              badges.push({ label: `QOH ${formatQty(product.qtyOnHand)}`, tone: 'qoh' });
+              if (product.isLpg) {
+                badges.push({ label: `Lended ${formatQty(lendedQtyByProduct[product.id] ?? 0)}`, tone: 'neutral' });
+                badges.push({ label: `Disposed ${formatQty(disposedQtyByProduct[product.id] ?? 0)}`, tone: 'neutral' });
+              }
+
+              return (
+                <ItemCatalogRecordRow
+                  key={product.id}
+                  title={`${product.sku || product.id} | ${product.name}`}
+                  meta={`${product.category || 'Uncategorized'} \u00b7 ${product.unit} \u00b7 ${sizeLabel}`}
+                  detail={sizeError ? 'Size needs review' : null}
+                  badges={badges}
+                  refillPriceLabel={refillPriceLabel}
+                  nonRefillPriceLabel={nonRefillPriceLabel}
+                  statusLabel={resolveStockLabel(product)}
+                  statusTone={resolveStockTone(product)}
+                  typeLabel={product.isLpg ? 'LPG' : 'Regular'}
+                  typeTone={product.isLpg ? 'lpg' : 'regular'}
+                  priceLabel={fmtMoney(product.unitPrice)}
+                  selected={selected?.id === product.id}
+                  sizeError={sizeError}
+                  onClick={() => setSelectedId(product.id)}
+                />
+              );
+            })
           )}
         </div>
+
+        {filtered.length > 0 ? (
+          <div className="lending-records-footer">
+            <div className="lending-records-footer-summary">
+              Showing {(currentPage - 1) * pageSize + 1} to {Math.min(currentPage * pageSize, filtered.length)} of {filtered.length} records
+            </div>
+            <div className="lending-records-pager">
+              <button
+                className="lending-records-page-btn"
+                type="button"
+                onClick={() => setCurrentPage(1)}
+                disabled={currentPage === 1}
+                aria-label="First page"
+              >
+                «
+              </button>
+              <button
+                className="lending-records-page-btn"
+                type="button"
+                onClick={() => setCurrentPage((page) => Math.max(1, page - 1))}
+                disabled={currentPage === 1}
+                aria-label="Previous page"
+              >
+                ‹
+              </button>
+              {visiblePageButtons.map((page) => (
+                <button
+                  key={page}
+                  className={`lending-records-page-btn ${page === currentPage ? 'active' : ''}`}
+                  type="button"
+                  onClick={() => setCurrentPage(page)}
+                  aria-current={page === currentPage ? 'page' : undefined}
+                  aria-label={`Page ${page}`}
+                >
+                  {page}
+                </button>
+              ))}
+              <button
+                className="lending-records-page-btn"
+                type="button"
+                onClick={() => setCurrentPage((page) => Math.min(totalPages, page + 1))}
+                disabled={currentPage === totalPages}
+                aria-label="Next page"
+              >
+                ›
+              </button>
+              <button
+                className="lending-records-page-btn"
+                type="button"
+                onClick={() => setCurrentPage(totalPages)}
+                disabled={currentPage === totalPages}
+                aria-label="Last page"
+              >
+                »
+              </button>
+            </div>
+            <div className="lending-records-page-size">
+              <select value={pageSize} onChange={(event) => setPageSize(Number(event.target.value))}>
+                <option value={10}>10 per page</option>
+                <option value={20}>20 per page</option>
+                <option value={50}>50 per page</option>
+              </select>
+            </div>
+          </div>
+        ) : null}
       </section>
 
       {selected ? (
-        <div className={modalBackdropClass} role="presentation">
-          <div className={modalCardClass}>
-            <div className={`${modalToolbarClass} panel-head`}>
-              <div className="sales-detail-header">
-                <div className="eyebrow">Item detail</div>
-                <h3>{selectedDetail?.itemCode || selected.sku}</h3>
-                <p className={listMetaClass}>{selected.sku} {'\u00b7'} {selected.unit} {'\u00b7'} {selected.category || 'Uncategorized'}</p>
-                <p className={listMetaClass}>{selected.name}</p>
-                {selected.isLpg ? <p className={listMetaClass}>Cylinder Size {resolveCylinderSizeLabel(selected.id) ?? '-'}</p> : null}
-                {selectedCylinderSizeError ? <p className="text-[0.84rem] font-semibold text-rose-600">Size Error: {selectedCylinderSizeError}</p> : null}
-              </div>
-              <div className="sales-detail-actions">
-                <div className="sales-detail-actions-group">
-                  <button
-                    className="secondary-btn mini-btn"
-                    type="button"
-                    onClick={() => setItemHistoryOpen(true)}
-                  >
-                    Item History
-                  </button>
-                </div>
-                <div className="sales-detail-actions-group">
-                  <button
-                    className="secondary-btn mini-btn modal-close-icon-btn"
-                    type="button"
-                    onClick={() => {
-                      setSelectedId('');
-                      setItemHistoryOpen(false);
-                    }}
-                    aria-label="Close modal"
-                    title="Close"
-                  >
-                    <span aria-hidden="true">X</span>
-                  </button>
-                </div>
-              </div>
-            </div>
-
-            <div className={`desktop-modal-body ${detailSheetClass}`}>
-              <div className={detailPillRowClass}>
-                <div className={`item-type-pill ${selected.isLpg ? 'lpg' : 'regular'}`}>
-                  {selected.isLpg ? 'LPG Item' : 'Regular Item'}
-                </div>
-                <div className={`stock-pill ${resolveStockTone(selected)}`}>{resolveStockLabel(selected)}</div>
-                <div className={detailNeutralPillClass}>
-                  {selected.isLpg ? 'Linked to LPG stock' : 'Uses inventory balances'}
-                </div>
-                <div className={detailNeutralPillClass}>
-                  {selected.isLpg ? 'Track full and empty' : 'Track qty on hand'}
-                </div>
-                <div className={detailNeutralPillClass}>
-                  {selected.isLpg ? 'LPG flow aware' : 'Standard sale line'}
-                </div>
-              </div>
-
-              <div className={detailStatsGridClass}>
-                <div className={detailStatCardClass}>
-                  <span className={detailStatLabelClass}>Price</span>
-                  <strong className={detailStatValueClass}>{fmtMoney(selected.unitPrice)}</strong>
-                </div>
-                <div className={detailStatCardClass}>
-                  <span className={detailStatLabelClass}>Unit</span>
-                  <strong className={detailStatValueClass}>{selected.unit}</strong>
-                </div>
-                <div className={detailStatCardClass}>
-                  <span className={detailStatLabelClass}>Qty On Hand</span>
-                  <strong className={detailStatValueClass}>{formatQty(selected.qtyOnHand)}</strong>
-                </div>
-                <div className={detailStatCardClass}>
-                  <span className={detailStatLabelClass}>{selected.isLpg ? 'Full / Empty' : 'Stock source'}</span>
-                  <strong className={detailStatValueClass}>{selected.isLpg ? `${formatQty(selected.qtyFull)} / ${formatQty(selected.qtyEmpty)}` : 'Inventory'}</strong>
-                </div>
-              </div>
-
-              <section className={detailSectionClass}>
-                <div className={detailSectionHeadClass}>
-                  <div>
-                    <div className="eyebrow">Stock Snapshot</div>
-                    <h4>Current stock view</h4>
-                  </div>
-                  <p className={detailSectionCopyClass}>
-                    {selected.isLpg
-                      ? 'LPG items use full and empty counts together with qty on hand.'
-                      : 'Regular items use quantity on hand from local inventory balances.'}
-                  </p>
-                </div>
-                <div className={detailKvGridClass}>
-                  {selected.isLpg ? (
-                    <>
-                      <div className={detailKvRowClass}><dt className={detailKvTermClass}>Opening FULL</dt><dd className={detailKvValueClass}>{formatQty(selected.qtyFull)}</dd></div>
-                      <div className={detailKvRowClass}><dt className={detailKvTermClass}>Opening EMPTY</dt><dd className={detailKvValueClass}>{formatQty(selected.qtyEmpty)}</dd></div>
-                      <div className={detailKvRowClass}><dt className={detailKvTermClass}>Qty On Hand</dt><dd className={detailKvValueClass}>{formatQty(selected.qtyOnHand)}</dd></div>
-                      <div className={detailKvRowClass}><dt className={detailKvTermClass}>Lended Qty</dt><dd className={detailKvValueClass}>{formatQty(selectedLendedQty)}</dd></div>
-                      <div className={detailKvRowClass}><dt className={detailKvTermClass}>Disposed Qty</dt><dd className={detailKvValueClass}>{formatQty(selectedDisposedQty)}</dd></div>
-                      <div className={detailKvRowClass}><dt className={detailKvTermClass}>Low-stock rule</dt><dd className={detailKvValueClass}>Compare FULL qty only</dd></div>
-                    </>
-                  ) : (
-                    <>
-                      <div className={detailKvRowClass}><dt className={detailKvTermClass}>Qty On Hand</dt><dd className={detailKvValueClass}>{formatQty(selected.qtyOnHand)}</dd></div>
-                      <div className={detailKvRowClass}><dt className={detailKvTermClass}>Lended Qty</dt><dd className={detailKvValueClass}>{formatQty(selectedLendedQty)}</dd></div>
-                      <div className={detailKvRowClass}><dt className={detailKvTermClass}>Disposed Qty</dt><dd className={detailKvValueClass}>{formatQty(selectedDisposedQty)}</dd></div>
-                      <div className={detailKvRowClass}><dt className={detailKvTermClass}>Low-stock rule</dt><dd className={detailKvValueClass}>Compare Qty On Hand</dd></div>
-                      <div className={detailKvRowClass}><dt className={detailKvTermClass}>Stock source</dt><dd className={detailKvValueClass}>Inventory balances</dd></div>
-                      <div className={detailKvRowClass}><dt className={detailKvTermClass}>Location scope</dt><dd className={detailKvValueClass}>{appState.setup.locationLabel || 'Not set'}</dd></div>
-                    </>
-                  )}
-                </div>
-              </section>
-
-              <section className={detailSectionClass}>
-                <div className={detailSectionHeadClass}>
-                  <div>
-                    <div className="eyebrow">Item Details</div>
-                    <h4>Catalog information</h4>
-                  </div>
-                  <p className={detailSectionCopyClass}>Reference details for pricing, lending rules, and category setup.</p>
-                </div>
-                <div className={detailKvGridClass}>
-                  <div className={detailKvRowClass}><dt className={detailKvTermClass}>Item Code</dt><dd className={detailKvValueClass}>{selectedDetail?.itemCode || selected.sku}</dd></div>
-                  <div className={detailKvRowClass}><dt className={detailKvTermClass}>Product Name</dt><dd className={detailKvValueClass}>{selectedDetail?.name || selected.name}</dd></div>
-                  <div className={detailKvRowClass}><dt className={detailKvTermClass}>Category</dt><dd className={detailKvValueClass}>{selectedDetail?.category || selected.category || 'Uncategorized'}</dd></div>
-                  <div className={detailKvRowClass}><dt className={detailKvTermClass}>Brand</dt><dd className={detailKvValueClass}>{selectedDetail?.brand || '-'}</dd></div>
-                  <div className={detailKvRowClass}><dt className={detailKvTermClass}>Type</dt><dd className={detailKvValueClass}>{selected.isLpg ? 'LPG' : 'Non-LPG'}</dd></div>
-                  <div className={detailKvRowClass}><dt className={detailKvTermClass}>Lendable</dt><dd className={detailKvValueClass}>{selectedDetail ? (selectedDetail.isLendable ? 'Yes' : 'No') : '-'}</dd></div>
-                  <div className={detailKvRowClass}><dt className={detailKvTermClass}>Requires Return</dt><dd className={detailKvValueClass}>{selectedDetail ? (selectedDetail.requiresReturn ? 'Yes' : 'No') : '-'}</dd></div>
-                  <div className={detailKvRowClass}><dt className={detailKvTermClass}>Requires Deposit</dt><dd className={detailKvValueClass}>{selectedDetail ? (selectedDetail.requiresDeposit ? 'Yes' : 'No') : '-'}</dd></div>
-                  <div className={detailKvRowClass}><dt className={detailKvTermClass}>Default Deposit</dt><dd className={detailKvValueClass}>{selectedDetail?.defaultDepositAmount !== null && selectedDetail?.defaultDepositAmount !== undefined ? fmtMoney(selectedDetail.defaultDepositAmount) : '-'}</dd></div>
-                  <div className={detailKvRowClass}><dt className={detailKvTermClass}>Lending Unit</dt><dd className={detailKvValueClass}>{selectedDetail?.lendingUnitType || selected.unit}</dd></div>
-                  <div className={detailKvRowClass}><dt className={detailKvTermClass}>Cylinder Size</dt><dd className={detailKvValueClass}>{resolveCylinderSizeLabel(selected.id) ?? '-'}</dd></div>
-                  {selectedCylinderSizeError ? (
-                    <div className={detailKvRowClass}>
-                      <dt className={detailKvTermClass}>Size Error</dt>
-                      <dd className="m-0 text-[0.92rem] font-semibold leading-6 text-rose-600">{selectedCylinderSizeError}</dd>
-                    </div>
-                  ) : null}
-                  <div className={detailKvRowClass}><dt className={detailKvTermClass}>Low Stock Alert Qty</dt><dd className={detailKvValueClass}>{selectedDetail?.lowStockAlertQty !== null && selectedDetail?.lowStockAlertQty !== undefined ? formatQty(selectedDetail.lowStockAlertQty) : '-'}</dd></div>
-                  <div className={detailKvRowClass}><dt className={detailKvTermClass}>Updated</dt><dd className={detailKvValueClass}>{fmtDate(selectedDetail?.updatedAt ?? null)}</dd></div>
-                </div>
-              </section>
-
-              <section className={detailSectionClass}>
-                <div className={detailSectionHeadClass}>
-                  <div>
-                    <div className="eyebrow">Linked Cylinder Type</div>
-                    <h4>Cylinder reference</h4>
-                  </div>
-                  <p className={detailSectionCopyClass}>Used only for LPG items with linked cylinder setup.</p>
-                </div>
-                {!selected.isLpg ? (
-                  <div className={detailEmptyClass}>This item is not an LPG item.</div>
-                ) : !selectedDetail?.cylinderTypeId ? (
-                  <div className={detailEmptyClass}>No cylinder type is linked yet.</div>
-                ) : selectedCylinder ? (
-                  <div className={detailKvGridClass}>
-                    <div className={detailKvRowClass}><dt className={detailKvTermClass}>Code</dt><dd className={detailKvValueClass}>{selectedCylinder.code}</dd></div>
-                    <div className={detailKvRowClass}><dt className={detailKvTermClass}>Name</dt><dd className={detailKvValueClass}>{selectedCylinder.name}</dd></div>
-                    <div className={detailKvRowClass}>
-                      <dt className={detailKvTermClass}>Size</dt>
-                      <dd className={selectedCylinder.sizeKg === null ? 'm-0 text-[0.92rem] font-semibold leading-6 text-rose-600' : detailKvValueClass}>
-                        {selectedCylinder.sizeKg === null ? 'Missing size value' : `${selectedCylinder.sizeKg} kg`}
-                      </dd>
-                    </div>
-                    <div className={detailKvRowClass}><dt className={detailKvTermClass}>Deposit</dt><dd className={detailKvValueClass}>{selectedCylinder.depositAmount === null ? '-' : fmtMoney(selectedCylinder.depositAmount)}</dd></div>
-                  </div>
-                ) : (
-                  <div className={detailEmptyClass}>
-                    Linked cylinder type ID: {selectedDetail.cylinderTypeId}. Cylinder type master data is not available on this device yet. Use Sync Now or Download Branch Data to refresh.
-                  </div>
-                )}
-              </section>
-
-              <section className={detailSectionClass}>
-                <div className={detailSectionHeadClass}>
-                  <div>
-                    <div className="eyebrow">Linked Pricing Rules</div>
-                    <h4>Price list coverage</h4>
-                  </div>
-                  <p className={detailSectionCopyClass}>Read-only rules currently downloaded to this desktop device.</p>
-                </div>
-                {selectedRules.length === 0 ? (
-                  <div className={detailEmptyClass}>No linked pricing rules.</div>
-                ) : (
-                  <div className={detailRuleListClass}>
-                    {selectedRules.map((rule) => (
-                      <div key={`${rule.priceListId}-${rule.priority ?? 'na'}-${rule.flowMode}-${rule.unitPrice}`} className={detailRuleCardClass}>
-                        <strong className={detailRuleTitleClass}>{rule.priceListName}</strong>
-                        <span className={detailRuleCopyClass}>{rule.scope} {'\u00b7'} {rule.appliesTo}</span>
-                        <span className={detailRuleCopyClass}>Flow {flowLabel(rule.flowMode)}</span>
-                        <span className={detailRuleCopyClass}>Unit Price {fmtMoney(rule.unitPrice)}</span>
-                        <span className={detailRuleCopyClass}>
-                          Discount Cap {rule.discountCapPct === null ? '-' : `${rule.discountCapPct}%`} {'\u00b7'} Priority {rule.priority === null ? '-' : rule.priority}
-                        </span>
-                      </div>
-                    ))}
-                  </div>
-                )}
-              </section>
-
-              <section className={detailSectionClass}>
-                <div className={detailSectionHeadClass}>
-                  <div>
-                    <div className="eyebrow">Related actions</div>
-                    <h4>Continue from this item</h4>
-                  </div>
-                  <p className={detailSectionCopyClass}>Use LPG Service for LPG items. This screen stays read-only for item review.</p>
-                </div>
-                <div className={detailActionRowClass}>
-                  {selected.isLpg && onOpenLpgService ? (
-                    <button className="primary-btn" type="button" onClick={() => {
-                      onOpenLpgService(selected.id);
-                      setSelectedId('');
-                    }}>
-                      Open LPG Service
-                    </button>
-                  ) : (
-                    <div className={detailEmptyClass}>No additional actions are available from this screen.</div>
-                  )}
-                </div>
-              </section>
-            </div>
-          </div>
-        </div>
+        <ItemDetailModal
+          selected={selected}
+          selectedDetail={selectedDetail}
+          selectedCylinder={selectedCylinder}
+          selectedRules={selectedRules}
+          selectedLendedQty={selectedLendedQty}
+          selectedDisposedQty={selectedDisposedQty}
+          selectedCylinderSizeError={selectedCylinderSizeError}
+          selectedSizeLabel={resolveCylinderSizeLabel(selected.id)}
+          locationLabel={appState.setup.locationLabel || 'Not set'}
+          onClose={() => {
+            setSelectedId('');
+            setItemHistoryOpen(false);
+          }}
+          onOpenItemHistory={() => setItemHistoryOpen(true)}
+          hideItemHistoryAction={hideItemHistoryAction}
+          onOpenLpgService={onOpenLpgService}
+        />
       ) : null}
 
-      {selected && itemHistoryOpen ? (
+      {selected && itemHistoryOpen && !hideItemHistoryAction ? (
         <div className={modalBackdropClass} role="presentation">
           <div className={modalCardClass}>
             <div className={`${modalToolbarClass} panel-head`}>
@@ -1920,10 +2752,10 @@ export function ItemsScreen({ appState, onOpenLpgService }: Props): JSX.Element 
                             </div>
                           <div className="grid gap-1.5 rounded-[16px] border border-[var(--border)] bg-[rgba(242,246,250,0.9)] px-4 py-3">
                             <span className={detailRuleCopyClass}>
-                              Qty: {formatQty(row.qty_delta)} | FULL: {formatQty(row.qty_full_delta)} | EMPTY: {formatQty(row.qty_empty_delta)}
+                              Qty: {formatQty(row.qty_delta)} | FULL: {formatCylinderQty(row.qty_full_delta)} | EMPTY: {formatCylinderQty(row.qty_empty_delta)}
                             </span>
                             <span className={detailRuleCopyClass}>
-                              Qty After: {row.qty_after_known === false ? '-' : formatQty(row.qty_after)} | FULL After: {row.qty_full_after_known === false ? '-' : formatQty(row.qty_full_after)} | EMPTY After: {row.qty_empty_after_known === false ? '-' : formatQty(row.qty_empty_after)}
+                              Qty After: {row.qty_after_known === false ? '-' : formatQty(row.qty_after)} | FULL After: {row.qty_full_after_known === false ? '-' : formatCylinderQty(row.qty_full_after)} | EMPTY After: {row.qty_empty_after_known === false ? '-' : formatCylinderQty(row.qty_empty_after)}
                             </span>
                           </div>
                         </div>
@@ -1941,7 +2773,3 @@ export function ItemsScreen({ appState, onOpenLpgService }: Props): JSX.Element 
     </div>
   );
 }
-
-
-
-

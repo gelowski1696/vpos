@@ -1,5 +1,6 @@
 import { invoke } from '@tauri-apps/api/tauri';
 import type { ReceiptLine } from '@vpos/printing-core';
+import { isDesktopTauriRuntime } from './tauri-runtime';
 
 type PrinterConfig = {
   mode: 'USB' | 'LAN' | 'NONE';
@@ -8,16 +9,8 @@ type PrinterConfig = {
   printerPort?: number | null;
 };
 
-type WindowWithTauri = Window & {
-  __TAURI_INTERNALS__?: unknown;
-};
-
-function isTauriRuntime(): boolean {
-  return typeof window !== 'undefined' && '__TAURI_INTERNALS__' in (window as WindowWithTauri);
-}
-
 export async function printEscPosNative(lines: ReceiptLine[], config: PrinterConfig): Promise<boolean> {
-  if (!isTauriRuntime()) {
+  if (!isDesktopTauriRuntime()) {
     return false;
   }
   await invoke('desktop_print_esc_pos', { lines, config });
@@ -25,7 +18,7 @@ export async function printEscPosNative(lines: ReceiptLine[], config: PrinterCon
 }
 
 export async function listNativePrinters(): Promise<string[]> {
-  if (!isTauriRuntime()) {
+  if (!isDesktopTauriRuntime()) {
     return [];
   }
   return invoke<string[]>('desktop_list_printers');

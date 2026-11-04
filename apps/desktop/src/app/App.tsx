@@ -28,34 +28,52 @@ import { playDesktopStartupCueOnce } from '../components/feedback/desktop-startu
 import { DEFAULT_DESKTOP_APP_STATE, type DesktopAppState, type DesktopSaleRecord } from '../db/schema';
 import { desktopDb } from '../db/sqlite';
 import { desktopAuthService } from '../services/desktop-auth.service';
-import { desktopMasterDataService } from '../services/desktop-master-data.service';
+import {
+  DEFAULT_DESKTOP_POS_CONTROL_POLICY,
+  DEFAULT_TENANT_ADDONS,
+  desktopMasterDataService
+} from '../services/desktop-master-data.service';
 import { desktopSessionService, type DesktopStartupStage } from '../services/desktop-session.service';
 import { desktopSettingsService } from '../services/desktop-settings.service';
+import { desktopShiftService } from '../services/desktop-shift.service';
+import {
+  desktopSubscriptionPolicyService,
+  type DesktopSubscriptionPolicyDecision
+} from '../services/desktop-subscription-policy.service';
 import { desktopSyncService } from '../services/desktop-sync.service';
 import { DesktopTutorialOverlayHost } from '../tutorial/tutorial-overlay-host';
 import { DesktopTutorialProvider, useDesktopTutorialActions, useDesktopTutorialState } from '../tutorial/tutorial-provider';
 import { getRouteForTutorialScreen } from '../tutorial/tutorial-routing';
+import { filterDesktopRoutes, isDesktopRouteAllowed } from './pos-access-policy';
 
 const PRIMARY_ROUTES: DesktopRouteId[] = ['dashboard', 'pos', 'sales', 'transfer', 'transfer-list'];
 const SIDE_MENU_ROUTES: DesktopRouteId[] = ['items', 'customers', 'lending', 'lpg-service', 'expense', 'shift', 'reports', 'settings'];
 const ADDON_ROUTE_IDS = ['purchase-orders', 'delivery-dispatch'] as const;
 const WORKSPACE_ROUTES = new Set<DesktopRouteId>(['pos', 'sales', 'transfer', 'transfer-list']);
 type TenantAddonFlags = Awaited<ReturnType<typeof desktopMasterDataService.loadTenantAddons>>;
+type DesktopPosControlPolicy = Awaited<ReturnType<typeof desktopMasterDataService.loadPosControlPolicy>>;
 type AddonRouteId = (typeof ADDON_ROUTE_IDS)[number];
 
-const ADDON_FLAG_BY_ROUTE: Record<AddonRouteId, keyof TenantAddonFlags> = {
-  'purchase-orders': 'purchase_order_suite',
-  'delivery-dispatch': 'delivery_dispatch_suite'
-};
+function subscriptionPolicyBannerMessage(decision: DesktopSubscriptionPolicyDecision | null): string | null {
+  if (!decision || decision.mode === 'FULL_ACCESS') {
+    return null;
+  }
+  if (decision.status === 'PAST_DUE') {
+    return 'Subscription past due. Offline work can continue, but sync upload is paused until renewal.';
+  }
+  if (decision.status === 'SUSPENDED') {
+    return 'Subscription suspended. Desktop is read-only until the tenant is reactivated.';
+  }
+  if (decision.withinGrace) {
+    return 'Subscription canceled. New offline work is blocked, but queued data can still sync during grace.';
+  }
+  return 'Subscription canceled. Desktop access is locked until the tenant is reactivated.';
+}
 
 function resolveRoutes(routeIds: readonly DesktopRouteId[]): DesktopRoute[] {
   return routeIds
     .map((routeId) => DESKTOP_ROUTES.find((route) => route.id === routeId))
     .filter((route): route is DesktopRoute => Boolean(route));
-}
-
-function isAddonRoute(route: DesktopRouteId): route is AddonRouteId {
-  return ADDON_ROUTE_IDS.includes(route as AddonRouteId);
 }
 
 function moduleConfig(route: DesktopRouteId): { title: string; description: string; bullets: string[] } {
@@ -199,6 +217,45 @@ function unavailableAddonConfig(route: AddonRouteId): { title: string; descripti
   }
 }
 
+function resolveRouteLabel(route: DesktopRouteId): string {
+  return DESKTOP_ROUTES.find((entry) => entry.id === route)?.label ?? 'This module';
+}
+
+function disabledPosSettingsConfig(route: DesktopRouteId): { title: string; description: string; bullets: string[] } {
+  const label = resolveRouteLabel(route);
+  return {
+    title: `${label} Disabled`,
+    description: `${label} is disabled in POS Settings for this tenant on this desktop.`,
+    bullets: [
+      'Ask an admin to re-enable the module in POS Settings.',
+      'Download branch data again after the setting changes.',
+      'Until then, this workstation keeps the module unavailable.'
+    ]
+  };
+}
+
+function blockedRouteMessage(
+  route: DesktopRouteId,
+  policy: DesktopPosControlPolicy,
+  addons: TenantAddonFlags,
+  hasActiveShift: boolean
+): string {
+  if (route === 'purchase-orders' && !addons.purchase_order_suite) {
+    return 'Purchase Orders is unavailable because the Purchase Order Suite add-on is not enabled for this tenant.';
+  }
+  if (route === 'delivery-dispatch' && !addons.delivery_dispatch_suite) {
+    return 'Delivery Dispatch is unavailable because the Delivery Dispatch Suite add-on is not enabled for this tenant.';
+  }
+  if (route === 'shift' && !policy.shift_enabled && !hasActiveShift) {
+    return 'Shift is disabled in POS Settings for this desktop.';
+  }
+  return `${resolveRouteLabel(route)} is disabled in POS Settings for this desktop.`;
+}
+
+function hasBrowserNetworkConnection(): boolean {
+  return typeof navigator === 'undefined' ? true : navigator.onLine;
+}
+
 function DesktopAppShell(): JSX.Element {
   const desktopUi = useDesktopUi();
   const tutorialActions = useDesktopTutorialActions();
@@ -222,6 +279,9 @@ function DesktopAppShell(): JSX.Element {
   const [pendingOutboxCount, setPendingOutboxCount] = useState(0);
   const [shellScrolled, setShellScrolled] = useState(false);
   const [tenantAddonFlags, setTenantAddonFlags] = useState<TenantAddonFlags | null>(null);
+  const [posControlPolicy, setPosControlPolicy] = useState<DesktopPosControlPolicy | null>(null);
+  const [subscriptionPolicyDecision, setSubscriptionPolicyDecision] = useState<DesktopSubscriptionPolicyDecision | null>(null);
+  const [hasActiveShift, setHasActiveShift] = useState(false);
   const [reopenSaleDraft, setReopenSaleDraft] = useState<{ sale: DesktopSaleRecord; mode: 'copy' | 'recreate' } | null>(null);
   const [reopenSaleNonce, setReopenSaleNonce] = useState(0);
   const [pendingSalesDetailId, setPendingSalesDetailId] = useState<string | null>(null);
@@ -233,11 +293,20 @@ function DesktopAppShell(): JSX.Element {
   const autoWalkthroughOpenedRef = useRef(false);
 
   const handleSelectRoute = useCallback((route: DesktopRouteId): void => {
+    const effectivePolicy = posControlPolicy ?? DEFAULT_DESKTOP_POS_CONTROL_POLICY;
+    const effectiveAddons = tenantAddonFlags ?? DEFAULT_TENANT_ADDONS;
+    if (!isDesktopRouteAllowed(route, effectivePolicy, effectiveAddons, { hasActiveShift })) {
+      desktopUi.showToast({
+        tone: 'warning',
+        message: blockedRouteMessage(route, effectivePolicy, effectiveAddons, hasActiveShift)
+      });
+      return;
+    }
     setActiveRoute(route);
     if (PRIMARY_ROUTES.includes(route)) {
       setLastPrimaryRoute(route);
     }
-  }, []);
+  }, [desktopUi, hasActiveShift, posControlPolicy, tenantAddonFlags]);
 
   const handleEscape = useCallback((): void => {
     setDrawerOpen(false);
@@ -268,6 +337,33 @@ function DesktopAppShell(): JSX.Element {
     }
   }, []);
 
+  const reloadPosControlPolicy = useCallback(async (): Promise<void> => {
+    try {
+      const nextPolicy = await desktopMasterDataService.loadPosControlPolicy();
+      setPosControlPolicy(nextPolicy);
+    } catch {
+      setPosControlPolicy(null);
+    }
+  }, []);
+
+  const reloadSubscriptionPolicyDecision = useCallback(async (): Promise<void> => {
+    try {
+      const decision = await desktopSubscriptionPolicyService.evaluate();
+      setSubscriptionPolicyDecision(decision);
+    } catch {
+      setSubscriptionPolicyDecision(null);
+    }
+  }, []);
+
+  const refreshShiftAccessState = useCallback(async (): Promise<void> => {
+    try {
+      const nextShifts = await desktopShiftService.listShifts();
+      setHasActiveShift(nextShifts.some((row) => row.status === 'OPEN'));
+    } catch {
+      setHasActiveShift(false);
+    }
+  }, []);
+
   useEffect(() => {
     void playDesktopStartupCueOnce();
   }, []);
@@ -275,10 +371,13 @@ function DesktopAppShell(): JSX.Element {
   useEffect(() => {
     let active = true;
     void (async () => {
-      const [loadedState, outbox, addonFlags] = await Promise.all([
+      const [loadedState, outbox, addonFlags, cachedPosControlPolicy, cachedSubscriptionPolicy, cachedShifts] = await Promise.all([
         desktopSettingsService.getState(),
         desktopDb.listOutboxItems(),
-        desktopMasterDataService.loadTenantAddons().catch(() => null)
+        desktopMasterDataService.loadTenantAddons().catch(() => null),
+        desktopMasterDataService.loadPosControlPolicy().catch(() => null),
+        desktopSubscriptionPolicyService.evaluate().catch(() => null),
+        desktopShiftService.listShifts().catch(() => [])
       ]);
       const boot = await desktopSessionService.bootstrap(loadedState);
       if (!active) {
@@ -286,6 +385,9 @@ function DesktopAppShell(): JSX.Element {
       }
       setState(boot.state);
       setTenantAddonFlags(addonFlags);
+      setPosControlPolicy(cachedPosControlPolicy);
+      setSubscriptionPolicyDecision(cachedSubscriptionPolicy);
+      setHasActiveShift(cachedShifts.some((row) => row.status === 'OPEN'));
       setPendingOutboxCount(outbox.filter((row) => row.status === 'pending' || row.status === 'failed').length);
       setStartupStage(boot.stage);
       setStartupMessage(
@@ -392,14 +494,62 @@ function DesktopAppShell(): JSX.Element {
   }, []);
 
   const selectedModule = useMemo(() => moduleConfig(activeRoute), [activeRoute]);
-  const enabledAddonRouteIds = useMemo(
-    () => ADDON_ROUTE_IDS.filter((routeId) => tenantAddonFlags?.[ADDON_FLAG_BY_ROUTE[routeId]] === true),
-    [tenantAddonFlags]
+  const effectivePosControlPolicy = posControlPolicy ?? DEFAULT_DESKTOP_POS_CONTROL_POLICY;
+  const effectiveTenantAddons = tenantAddonFlags ?? DEFAULT_TENANT_ADDONS;
+  const routeAccessOptions = useMemo(() => ({ hasActiveShift }), [hasActiveShift]);
+  const primaryRoutes = useMemo(
+    () =>
+      resolveRoutes(filterDesktopRoutes(PRIMARY_ROUTES, effectivePosControlPolicy, effectiveTenantAddons, routeAccessOptions)),
+    [effectivePosControlPolicy, effectiveTenantAddons, routeAccessOptions]
   );
-  const primaryRoutes = useMemo(() => resolveRoutes(PRIMARY_ROUTES), []);
-  const sideRoutes = useMemo(() => resolveRoutes(SIDE_MENU_ROUTES), []);
-  const addonRoutes = useMemo(() => resolveRoutes(enabledAddonRouteIds), [enabledAddonRouteIds]);
-  const enabledAddonRouteSet = useMemo(() => new Set<AddonRouteId>(enabledAddonRouteIds), [enabledAddonRouteIds]);
+  const sideRoutes = useMemo(
+    () =>
+      resolveRoutes(filterDesktopRoutes(SIDE_MENU_ROUTES, effectivePosControlPolicy, effectiveTenantAddons, routeAccessOptions)),
+    [effectivePosControlPolicy, effectiveTenantAddons, routeAccessOptions]
+  );
+  const addonRoutes = useMemo(
+    () =>
+      resolveRoutes(filterDesktopRoutes(ADDON_ROUTE_IDS, effectivePosControlPolicy, effectiveTenantAddons, routeAccessOptions)),
+    [effectivePosControlPolicy, effectiveTenantAddons, routeAccessOptions]
+  );
+  const enabledAddonRouteSet = useMemo(
+    () => new Set<AddonRouteId>(addonRoutes.map((route) => route.id as AddonRouteId)),
+    [addonRoutes]
+  );
+
+  useEffect(() => {
+    if (isDesktopRouteAllowed(activeRoute, effectivePosControlPolicy, effectiveTenantAddons, routeAccessOptions)) {
+      return;
+    }
+
+    const fallbackCandidates: DesktopRouteId[] = [lastPrimaryRoute, 'dashboard', 'pos', 'sales', 'settings'];
+    const nextRoute = fallbackCandidates.find(
+      (route, index) =>
+        fallbackCandidates.indexOf(route) === index &&
+        isDesktopRouteAllowed(route, effectivePosControlPolicy, effectiveTenantAddons, routeAccessOptions)
+    );
+
+    if (!nextRoute || nextRoute === activeRoute) {
+      return;
+    }
+
+    setActiveRoute(nextRoute);
+    if (PRIMARY_ROUTES.includes(nextRoute)) {
+      setLastPrimaryRoute(nextRoute);
+    }
+    desktopUi.showToast({
+      tone: 'info',
+      message: blockedRouteMessage(activeRoute, effectivePosControlPolicy, effectiveTenantAddons, hasActiveShift)
+    });
+  }, [
+    activeRoute,
+    desktopUi,
+    effectivePosControlPolicy,
+    effectiveTenantAddons,
+    hasActiveShift,
+    lastPrimaryRoute,
+    routeAccessOptions
+  ]);
 
   const handleRunSync = async (): Promise<void> => {
     setSyncBusy(true);
@@ -434,10 +584,28 @@ function DesktopAppShell(): JSX.Element {
         }
       }));
       syncStateApplied = true;
-      const nextState = await desktopSettingsService.updateSyncState(nextSync);
-      setState(nextState);
-      await reloadDesktopState();
-      await refreshOutboxCount();
+      void desktopSettingsService.updateSyncState(nextSync)
+        .then((nextState) => {
+          setState(nextState);
+        })
+        .catch((error) => {
+          desktopUi.showToast({
+            tone: 'warning',
+            message: `Sync completed, but saving the latest sync state failed: ${
+              error instanceof Error ? error.message : 'Unknown error'
+            }`
+          });
+        });
+      void reloadDesktopState().catch((error) => {
+        desktopUi.showToast({
+          tone: 'warning',
+          message: `Sync completed, but reloading the sales list failed: ${
+            error instanceof Error ? error.message : 'Unknown error'
+          }`
+        });
+      });
+      void refreshOutboxCount().catch(() => {});
+      void reloadSubscriptionPolicyDecision().catch(() => {});
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Unable to complete desktop sync.';
       if (!syncStateApplied) {
@@ -445,16 +613,34 @@ function DesktopAppShell(): JSX.Element {
           ...prev,
           sync: {
             ...prev.sync,
-            lastSyncedAt: new Date().toISOString(),
             lastSyncStatus: 'error',
             lastSyncMessage: message
           }
         }));
       }
-      desktopUi.showToast({ tone: 'error', message });
+      desktopUi.showToast({
+        tone: 'error',
+        message: syncStateApplied
+          ? `Sync completed, but the desktop refresh failed: ${message}`
+          : message
+      });
     } finally {
       setSyncBusy(false);
     }
+  };
+
+  const handleRunSyncAfterInventoryCount = async (): Promise<void> => {
+    if (syncBusy) {
+      return;
+    }
+    if (!hasBrowserNetworkConnection()) {
+      desktopUi.showToast({
+        tone: 'info',
+        message: 'Inventory count was saved locally. No internet connection was detected, so sync stayed queued.'
+      });
+      return;
+    }
+    await handleRunSync();
   };
 
   const handleRedownloadBranchData = async (): Promise<void> => {
@@ -484,8 +670,13 @@ function DesktopAppShell(): JSX.Element {
       };
       await desktopSettingsService.saveState(nextState);
       setState(nextState);
-      await refreshOutboxCount();
-      await reloadTenantAddonFlags();
+      await Promise.all([
+        refreshOutboxCount(),
+        reloadTenantAddonFlags(),
+        reloadPosControlPolicy(),
+        reloadSubscriptionPolicyDecision(),
+        refreshShiftAccessState()
+      ]);
       desktopUi.showToast({ tone: 'success', message: 'Branch data refreshed for this device.' });
     } catch (error) {
       desktopUi.showToast({
@@ -555,6 +746,9 @@ function DesktopAppShell(): JSX.Element {
     setStartupBusy(false);
     setStartupError(null);
     setTenantAddonFlags(null);
+    setPosControlPolicy(null);
+    setSubscriptionPolicyDecision(null);
+    setHasActiveShift(false);
     setStartupStage('LOGIN');
     setStartupMessage('Local desktop data was cleared. Sign in and download branch data again.');
     setStartupMessageTone('success');
@@ -645,7 +839,15 @@ function DesktopAppShell(): JSX.Element {
         const refreshed = await desktopAuthService.refreshSession(state);
         setState(refreshed);
         unlockedState = refreshed;
-      } catch {
+      } catch (error) {
+        if (desktopSubscriptionPolicyService.isSubscriptionEndedError(error)) {
+          const nextState = await desktopSessionService.clearSession(state);
+          setState(nextState);
+          setStartupStage('LOGIN');
+          setStartupError(error instanceof Error ? error.message : 'This subscription is not active.');
+          await reloadSubscriptionPolicyDecision();
+          return;
+        }
         // Offline unlock should still continue with the cached session.
       }
       setStartupStage(unlockedState.setupCompleted ? 'READY' : 'SETUP');
@@ -697,8 +899,13 @@ function DesktopAppShell(): JSX.Element {
       setStartupStage('READY');
       setStartupMessage('Setup complete. The app is ready.');
       setStartupMessageTone('info');
-      await refreshOutboxCount();
-      await reloadTenantAddonFlags();
+      await Promise.all([
+        refreshOutboxCount(),
+        reloadTenantAddonFlags(),
+        reloadPosControlPolicy(),
+        reloadSubscriptionPolicyDecision(),
+        refreshShiftAccessState()
+      ]);
     } catch (error) {
       setStartupError(error instanceof Error ? error.message : 'Unable to download branch data.');
     } finally {
@@ -773,8 +980,13 @@ function DesktopAppShell(): JSX.Element {
       setStartupStage('READY');
       setStartupMessage(`Quick setup complete. Signed in as ${claimed.user_full_name}.`);
       setStartupMessageTone('info');
-      await refreshOutboxCount();
-      await reloadTenantAddonFlags();
+      await Promise.all([
+        refreshOutboxCount(),
+        reloadTenantAddonFlags(),
+        reloadPosControlPolicy(),
+        reloadSubscriptionPolicyDecision(),
+        refreshShiftAccessState()
+      ]);
     } catch (error) {
       setStartupError(error instanceof Error ? error.message : 'Desktop quick setup failed.');
     } finally {
@@ -798,7 +1010,9 @@ function DesktopAppShell(): JSX.Element {
     content = (
       <PosScreen
         appState={state}
+        tenantAddons={effectiveTenantAddons}
         onOutboxChanged={refreshOutboxCount}
+        onAfterInventoryCountClose={handleRunSyncAfterInventoryCount}
         reopenedSale={reopenSaleDraft?.sale ?? null}
         reopenedSaleMode={reopenSaleDraft?.mode ?? 'copy'}
         reopenedSaleNonce={reopenSaleNonce}
@@ -815,12 +1029,14 @@ function DesktopAppShell(): JSX.Element {
       <CashierReportsScreen
         appState={state}
         onStateUpdate={setState}
+        inventoryReportsEnabled={effectivePosControlPolicy.inventory_reports_enabled}
       />
     );
   } else if (activeRoute === 'items') {
     content = (
       <ItemsScreen
         appState={state}
+        tenantAddons={effectiveTenantAddons}
         onOpenLpgService={(productId) => {
           setLpgFocusProductId(productId);
           setLpgFocusNonce((value) => value + 1);
@@ -871,13 +1087,27 @@ function DesktopAppShell(): JSX.Element {
   } else if (activeRoute === 'transfer') {
     content = <TransferScreen appState={state} onOutboxChanged={refreshOutboxCount} />;
   } else if (activeRoute === 'transfer-list') {
-    content = <TransferHistoryScreen />;
+    content = <TransferHistoryScreen appState={state} />;
   } else if (activeRoute === 'shift') {
-    content = <ShiftScreen appState={state} onOutboxChanged={refreshOutboxCount} />;
+    content = (
+      <ShiftScreen
+        appState={state}
+        tenantAddons={effectiveTenantAddons}
+        onOutboxChanged={async () => {
+          await refreshOutboxCount();
+          await refreshShiftAccessState();
+        }}
+        onAfterInventoryCountClose={handleRunSyncAfterInventoryCount}
+      />
+    );
   } else if (activeRoute === 'settings') {
     content = (
       <SettingsScreen
         state={state}
+        pendingOutboxCount={pendingOutboxCount}
+        hasActiveShift={hasActiveShift}
+        syncBusy={syncBusy}
+        onRunSync={handleRunSync}
         onStateReload={async () => {
           await reloadDesktopState();
         }}
@@ -892,9 +1122,21 @@ function DesktopAppShell(): JSX.Element {
       ) : (
         <ModulePlaceholderScreen
           routeId={activeRoute}
-          title={unavailableAddonConfig('purchase-orders').title}
-          description={unavailableAddonConfig('purchase-orders').description}
-          bullets={unavailableAddonConfig('purchase-orders').bullets}
+          title={
+            effectiveTenantAddons.purchase_order_suite
+              ? disabledPosSettingsConfig('purchase-orders').title
+              : unavailableAddonConfig('purchase-orders').title
+          }
+          description={
+            effectiveTenantAddons.purchase_order_suite
+              ? disabledPosSettingsConfig('purchase-orders').description
+              : unavailableAddonConfig('purchase-orders').description
+          }
+          bullets={
+            effectiveTenantAddons.purchase_order_suite
+              ? disabledPosSettingsConfig('purchase-orders').bullets
+              : unavailableAddonConfig('purchase-orders').bullets
+          }
         />
       );
   } else if (activeRoute === 'delivery-dispatch') {
@@ -904,9 +1146,21 @@ function DesktopAppShell(): JSX.Element {
       ) : (
         <ModulePlaceholderScreen
           routeId={activeRoute}
-          title={unavailableAddonConfig('delivery-dispatch').title}
-          description={unavailableAddonConfig('delivery-dispatch').description}
-          bullets={unavailableAddonConfig('delivery-dispatch').bullets}
+          title={
+            effectiveTenantAddons.delivery_dispatch_suite
+              ? disabledPosSettingsConfig('delivery-dispatch').title
+              : unavailableAddonConfig('delivery-dispatch').title
+          }
+          description={
+            effectiveTenantAddons.delivery_dispatch_suite
+              ? disabledPosSettingsConfig('delivery-dispatch').description
+              : unavailableAddonConfig('delivery-dispatch').description
+          }
+          bullets={
+            effectiveTenantAddons.delivery_dispatch_suite
+              ? disabledPosSettingsConfig('delivery-dispatch').bullets
+              : unavailableAddonConfig('delivery-dispatch').bullets
+          }
         />
       );
   } else {
@@ -970,6 +1224,7 @@ function DesktopAppShell(): JSX.Element {
     ? `${state.setup.branchLabel} / ${state.setup.locationLabel}`
     : 'Setup pending';
   const containerWidth = WORKSPACE_ROUTES.has(activeRoute) ? 'wide' : 'standard';
+  const subscriptionBannerMessage = subscriptionPolicyBannerMessage(subscriptionPolicyDecision);
 
   return (
     <div className="grid min-h-screen grid-cols-1 md:grid-cols-[auto_minmax(0,1fr)]">
@@ -1021,7 +1276,17 @@ function DesktopAppShell(): JSX.Element {
         />
         <div className="flex flex-1 flex-col py-gutter-y pb-[var(--bottomdock-height)] md:pb-gutter-y">
           <DesktopContainer width={containerWidth}>
-            <div className="desktop-shell-stack">{content}</div>
+            <div className="desktop-shell-stack">
+              {subscriptionBannerMessage ? (
+                <div
+                  className="rounded-lg border border-amber-300/60 bg-amber-50 px-4 py-3 text-sm font-semibold text-amber-900 shadow-sm dark:border-amber-500/40 dark:bg-amber-950/40 dark:text-amber-100"
+                  role="status"
+                >
+                  {subscriptionBannerMessage}
+                </div>
+              ) : null}
+              {content}
+            </div>
           </DesktopContainer>
         </div>
         <div className="fixed bottom-[var(--bottomdock-offset)] left-gutter-x right-gutter-x z-rail flex gap-2 overflow-x-auto rounded-xl border border-border-soft bg-surface-strong p-2 shadow-strong backdrop-blur-[14px] md:hidden">

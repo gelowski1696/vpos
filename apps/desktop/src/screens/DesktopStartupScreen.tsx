@@ -1,14 +1,18 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useState, type KeyboardEvent } from 'react';
+import { BrandLogo } from '../components/layout/BrandLogo';
+import { playDesktopStartupCueOnce } from '../components/feedback/desktop-startup-cue';
 import { QuickSetupQrModal } from '../components/setup/QuickSetupQrModal';
 import type { DesktopAppState, DesktopOption, DesktopSetupState } from '../db/schema';
 import type { DesktopStartupStage } from '../services/desktop-session.service';
 import { desktopMasterDataService } from '../services/desktop-master-data.service';
+import { prepareStartupSetup, updateLoginEmail } from './desktop-login-tenant';
 
 type Props = {
   state: DesktopAppState;
   stage: DesktopStartupStage;
   busy: boolean;
   message: string;
+  messageTone?: 'info' | 'success';
   error: string | null;
   hasPinConfigured: boolean;
   onLogin: (input: DesktopSetupState & { password: string; pin: string }) => Promise<void>;
@@ -19,15 +23,12 @@ type Props = {
   onSwitchToPin: () => void;
 };
 
-function copySetup(setup: DesktopSetupState): DesktopSetupState {
-  return { ...setup };
-}
-
 export function DesktopStartupScreen({
   state,
   stage,
   busy,
   message,
+  messageTone = 'info',
   error,
   hasPinConfigured,
   onLogin,
@@ -37,7 +38,7 @@ export function DesktopStartupScreen({
   onSwitchToLogin,
   onSwitchToPin
 }: Props): JSX.Element {
-  const [form, setForm] = useState<DesktopSetupState>(copySetup(state.setup));
+  const [form, setForm] = useState<DesktopSetupState>(prepareStartupSetup(state.setup, stage));
   const [password, setPassword] = useState('');
   const [pin, setPin] = useState('');
   const [showQrModal, setShowQrModal] = useState(false);
@@ -48,8 +49,12 @@ export function DesktopStartupScreen({
   const [optionMessage, setOptionMessage] = useState<string | null>(null);
 
   useEffect(() => {
-    setForm(copySetup(state.setup));
-  }, [state.setup]);
+    setForm(prepareStartupSetup(state.setup, stage));
+  }, [state.setup, stage]);
+
+  useEffect(() => {
+    void playDesktopStartupCueOnce();
+  }, []);
 
   useEffect(() => {
     let active = true;
@@ -132,42 +137,60 @@ export function DesktopStartupScreen({
 
   const stageTitle = useMemo(() => {
     if (stage === 'UNLOCK') {
-      return 'Unlock VPOS Desktop';
+      return 'Unlock';
     }
     if (stage === 'SETUP') {
-      return 'Download Branch Data';
+      return 'Choose Branch';
     }
-    return 'Sign In To This Workstation';
+    return 'Sign In';
   }, [stage]);
 
   const stageHint = useMemo(() => {
     if (stage === 'UNLOCK') {
-      return 'Use your saved device PIN to reopen this cashier station quickly.';
+      return 'Enter your PIN to continue.';
     }
     if (stage === 'SETUP') {
-      return 'Choose the branch and location for this workstation, then download products, customers, and lending data.';
+      return 'Choose branch and location, then continue.';
     }
-    return 'Use password sign-in or a QR quick setup, then finish the same branch download flow the mobile app uses.';
+    return 'Use password or QR quick setup.';
   }, [stage]);
 
   const branchLabel = branchOptions.find((option) => option.id === form.branchId)?.label ?? form.branchLabel;
   const locationLabel = locationOptions.find((option) => option.id === form.locationId)?.label ?? form.locationLabel;
+  const canSubmitLogin =
+    !busy &&
+    form.apiBaseUrl.trim().length > 0 &&
+    form.authEmail.trim().length > 0 &&
+    password.trim().length > 0 &&
+    form.deviceId.trim().length > 0;
+
+  const handleLoginSubmit = (): void => {
+    if (!canSubmitLogin) {
+      return;
+    }
+    void onLogin({ ...form, password, pin });
+  };
+
+  const handleLoginKeyDown = (event: KeyboardEvent<HTMLInputElement>): void => {
+    if (event.key !== 'Enter') {
+      return;
+    }
+    event.preventDefault();
+    handleLoginSubmit();
+  };
 
   return (
     <>
       <div className="desktop-startup-shell">
-        <section className="desktop-startup-card">
-          <div className="brand-block startup-brand-block">
-            <div className="brand-mark">VP</div>
-            <div>
-              <div className="brand-title">VPOS Desktop</div>
-              <div className="brand-hint">Branch workstation setup and cashier access</div>
-            </div>
+        <div className="startup-ambient-orb startup-ambient-orb-a" aria-hidden="true" />
+        <div className="startup-ambient-orb startup-ambient-orb-b" aria-hidden="true" />
+        <section className="desktop-startup-card startup-enter-card">
+          <div className="startup-brand-block startup-enter-brand">
+            <BrandLogo title="VPOS Desktop" subtitle="Branch workstation setup and cashier access" compact />
           </div>
 
-          <div className="panel-head">
+          <div className="startup-head startup-enter-copy">
             <div>
-              <div className="eyebrow">Desktop startup</div>
               <h2>{stageTitle}</h2>
               <p>{stageHint}</p>
             </div>
@@ -178,36 +201,39 @@ export function DesktopStartupScreen({
               <div className="startup-mobile-card">
                 <input
                   value={form.authEmail}
-                  onChange={(event) => setForm((prev) => ({ ...prev, authEmail: event.target.value }))}
+                  onChange={(event) => setForm((prev) => updateLoginEmail(prev, event.target.value))}
+                  onKeyDown={handleLoginKeyDown}
                   placeholder="Email"
                   autoComplete="off"
                   disabled={busy}
                 />
-                <div className="startup-helper-copy">Use your web admin email address.</div>
                 <input
                   type="password"
                   value={password}
                   onChange={(event) => setPassword(event.target.value)}
+                  onKeyDown={handleLoginKeyDown}
                   placeholder="Password"
                   autoComplete="off"
                   disabled={busy}
                 />
-                <div className="startup-helper-copy">PIN is optional here and can be used for quick unlock later.</div>
                 <input
                   type="password"
                   value={pin}
                   onChange={(event) => setPin(event.target.value)}
+                  onKeyDown={handleLoginKeyDown}
                   placeholder="PIN (optional)"
                   inputMode="numeric"
                   disabled={busy}
                 />
+                <div className="startup-helper-copy">PIN is optional.</div>
+                <div className="startup-helper-copy">Your tenant is detected automatically from your cashier account.</div>
               </div>
 
               <div className="desktop-settings-actions startup-auth-actions">
                 <button
                   className="primary-btn"
                   type="button"
-                  onClick={() => void onLogin({ ...form, password, pin })}
+                  onClick={handleLoginSubmit}
                   disabled={busy}
                 >
                   {busy ? 'Signing In...' : 'Sign In'}
@@ -221,36 +247,6 @@ export function DesktopStartupScreen({
                   </button>
                 ) : null}
               </div>
-
-              <details className="startup-advanced-details">
-                <summary>Workstation details</summary>
-                <div className="startup-advanced-grid">
-                  <input
-                    value={form.operatorName}
-                    onChange={(event) => setForm((prev) => ({ ...prev, operatorName: event.target.value }))}
-                    placeholder="Operator name"
-                    disabled={busy}
-                  />
-                  <input
-                    value={form.apiBaseUrl}
-                    onChange={(event) => setForm((prev) => ({ ...prev, apiBaseUrl: event.target.value }))}
-                    placeholder="API base URL"
-                    disabled={busy}
-                  />
-                  <input
-                    value={form.clientId}
-                    onChange={(event) => setForm((prev) => ({ ...prev, clientId: event.target.value }))}
-                    placeholder="Tenant client ID"
-                    disabled={busy}
-                  />
-                  <input
-                    value={form.deviceId}
-                    onChange={(event) => setForm((prev) => ({ ...prev, deviceId: event.target.value }))}
-                    placeholder="Device ID"
-                    disabled={busy}
-                  />
-                </div>
-              </details>
             </div>
           ) : null}
 
@@ -258,7 +254,6 @@ export function DesktopStartupScreen({
             <div className="startup-auth-stack">
               <div className="unlock-card">
                 <strong>{state.auth.userFullName || state.auth.userEmail || 'Saved cashier session'}</strong>
-                <span>Enter your saved PIN to continue.</span>
               </div>
               <div className="startup-mobile-card">
                 <input
@@ -269,7 +264,6 @@ export function DesktopStartupScreen({
                   inputMode="numeric"
                   disabled={busy}
                 />
-                <div className="startup-helper-copy">Ask a supervisor to reset the PIN if it was forgotten.</div>
               </div>
               <div className="desktop-settings-actions startup-auth-actions">
                 <button className="primary-btn" type="button" onClick={() => void onUnlock(pin)} disabled={busy}>
@@ -286,7 +280,7 @@ export function DesktopStartupScreen({
             <div className="screen-stack">
               <div className="sync-banner success">
                 <strong>{state.auth.userFullName || state.auth.userEmail || form.authEmail || 'Cashier signed in'}</strong>
-                <span>Choose branch and location, then download local data.</span>
+                <span>Choose branch and location.</span>
               </div>
 
               <div className="startup-mobile-card">
@@ -329,7 +323,7 @@ export function DesktopStartupScreen({
                   ))}
                 </select>
                 <div className="startup-helper-copy">
-                  Products, customers, price rules, inventory, and lending records for {branchLabel || 'the selected branch'} will be cached locally.
+                  Downloads data for {branchLabel || 'the selected branch'}.
                 </div>
               </div>
 
@@ -338,40 +332,10 @@ export function DesktopStartupScreen({
                   {busy ? 'Downloading Branch Data...' : 'Download And Continue'}
                 </button>
               </div>
-
-              <details className="startup-advanced-details">
-                <summary>Workstation details</summary>
-                <div className="startup-advanced-grid">
-                  <input
-                    value={form.apiBaseUrl}
-                    onChange={(event) => setForm((prev) => ({ ...prev, apiBaseUrl: event.target.value }))}
-                    placeholder="API base URL"
-                    disabled={busy}
-                  />
-                  <input
-                    value={form.operatorName}
-                    onChange={(event) => setForm((prev) => ({ ...prev, operatorName: event.target.value }))}
-                    placeholder="Operator name"
-                    disabled={busy}
-                  />
-                  <input
-                    value={form.clientId}
-                    onChange={(event) => setForm((prev) => ({ ...prev, clientId: event.target.value }))}
-                    placeholder="Tenant client ID"
-                    disabled={busy}
-                  />
-                  <input
-                    value={form.deviceId}
-                    onChange={(event) => setForm((prev) => ({ ...prev, deviceId: event.target.value }))}
-                    placeholder="Device ID"
-                    disabled={busy}
-                  />
-                </div>
-              </details>
             </div>
           ) : null}
 
-          <div className={`message-banner ${error ? 'startup-error-banner' : ''}`}>
+          <div className={`message-banner ${error ? 'startup-error-banner' : messageTone === 'success' ? 'startup-success-banner' : ''}`}>
             {error || optionMessage || message}
           </div>
         </section>

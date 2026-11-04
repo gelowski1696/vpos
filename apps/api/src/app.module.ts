@@ -19,6 +19,7 @@ import { AuditModule } from './modules/audit/audit.module';
 import { CustomerPaymentsModule } from './modules/customer-payments/customer-payments.module';
 import { MobileEnrollmentModule } from './modules/mobile-enrollment/mobile-enrollment.module';
 import { MobileUpdatesModule } from './modules/mobile-updates/mobile-updates.module';
+import { DesktopUpdatesModule } from './modules/desktop-updates/desktop-updates.module';
 import { NfcModule } from './modules/nfc/nfc.module';
 import { LendingModule } from './modules/lending/lending.module';
 import { VcardModule } from './modules/vcard/vcard.module';
@@ -47,6 +48,7 @@ import { DatabaseMaintenanceModule } from './modules/database-maintenance/databa
     LendingModule,
     MobileEnrollmentModule,
     MobileUpdatesModule,
+    DesktopUpdatesModule,
     NfcModule,
     VcardModule,
     LpgItemActionsModule,

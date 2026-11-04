@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useState, type ReactNode } from 'react';
 import { useDesktopUi } from '../components/feedback/DesktopUiFeedback';
 import type {
   DesktopAppState,
@@ -13,8 +13,12 @@ import { listNativePrinters } from '../services/desktop-printer.bridge';
 import { desktopReceiptService } from '../services/desktop-receipt.service';
 import { desktopSessionService } from '../services/desktop-session.service';
 import { desktopSettingsService } from '../services/desktop-settings.service';
-import { desktopUpdaterService, type DesktopUpdateCheckResult } from '../services/desktop-updater.service';
-import { ScreenHeader } from '../components/layout/ScreenHeader';
+import {
+  assessDesktopUpdateSafety,
+  desktopUpdaterService,
+  type DesktopUpdateCheckResult,
+  type DesktopUpdateStatus
+} from '../services/desktop-updater.service';
 import { DesktopPinCodeInput } from '../components/feedback/DesktopPinCodeInput';
 import { useDesktopTutorialTarget } from '../tutorial/tutorial-provider';
 
@@ -23,6 +27,10 @@ type Props = {
   onStateReload: () => Promise<void>;
   onStartWalkthrough?: () => void;
   onResetLocalData?: () => Promise<void>;
+  pendingOutboxCount?: number;
+  hasActiveShift?: boolean;
+  syncBusy?: boolean;
+  onRunSync?: () => Promise<void>;
 };
 
 function copySetup(setup: DesktopSetupState): DesktopSetupState {
@@ -34,6 +42,50 @@ function formatDateTime(value: string | null): string {
     return 'Not tested yet';
   }
   return new Date(value).toLocaleString();
+}
+
+const SETTINGS_SETUP_ACCESS_PASSWORD_B64 = 'Vm1qYW10ZWNoQDIwMjY=';
+
+function decodeBase64(value: string): string {
+  if (typeof globalThis.atob === 'function') {
+    return globalThis.atob(value);
+  }
+  return value;
+}
+
+export function isManageSetupPasswordValid(password: string): boolean {
+  return password === decodeBase64(SETTINGS_SETUP_ACCESS_PASSWORD_B64);
+}
+
+export function resolvePrinterProfileSavedMessage(label: string): string {
+  return `Saved printer profile "${label}" for this desktop station.`;
+}
+
+export function resolvePrinterTestFeedback({
+  success,
+  profileLabel,
+  errorMessage
+}: {
+  success: boolean;
+  profileLabel?: string | null;
+  errorMessage?: string | null;
+}): {
+  message: string;
+  tone: 'success' | 'error';
+} {
+  if (success) {
+    return {
+      message: profileLabel
+        ? `Printer test was sent using "${profileLabel}".`
+        : 'Printer test was sent. If nothing came out, check the selected USB printer name or LAN host and port.',
+      tone: 'success'
+    };
+  }
+
+  return {
+    message: errorMessage?.trim() || 'Unable to run printer test on this desktop station.',
+    tone: 'error'
+  };
 }
 
 function copyProfileToSetup(profile: DesktopPrinterProfile, setup: DesktopSetupState): DesktopSetupState {
@@ -100,26 +152,251 @@ const PRINTER_MODE_OPTIONS = [
   { value: 'NONE', label: 'None Yet' }
 ] as const;
 
+type SettingsIconKind =
+  | 'settings'
+  | 'onboarding'
+  | 'pos'
+  | 'pin'
+  | 'receipt'
+  | 'branch'
+  | 'printer'
+  | 'update'
+  | 'reset'
+  | 'info';
+
+type SettingsIconTone = 'blue' | 'amber' | 'green' | 'violet' | 'orange' | 'rose';
+type SettingsBadgeTone = 'good' | 'warn' | 'danger' | 'neutral' | 'blue';
+
+function SettingsPageIcon({
+  kind,
+  className = ''
+}: {
+  kind: SettingsIconKind;
+  className?: string;
+}): JSX.Element {
+  let path: ReactNode;
+
+  if (kind === 'settings') {
+    path = (
+      <>
+        <path d="M12 3.75 13.36 6a6.93 6.93 0 0 1 1.74.72L17.56 6l1.69 2.94-1.73 1.28c.1.51.15 1.03.15 1.56 0 .53-.05 1.06-.15 1.57l1.73 1.28-1.69 2.94-2.46-.72a6.93 6.93 0 0 1-1.74.72L12 20.25l-1.36-2.25a6.93 6.93 0 0 1-1.74-.72L6.44 18l-1.69-2.94 1.73-1.28A8.1 8.1 0 0 1 6.33 12c0-.53.05-1.05.15-1.56L4.75 9.16 6.44 6.2l2.46.72c.55-.32 1.14-.56 1.74-.72L12 3.75Z" />
+        <circle cx="12" cy="12" r="2.7" />
+      </>
+    );
+  } else if (kind === 'onboarding') {
+    path = (
+      <>
+        <path d="m12 4 1.2 3.05L16 8.25l-2.8 1.2L12 12.5l-1.2-3.05L8 8.25l2.8-1.2L12 4Z" />
+        <path d="m6 12 .8 2.05L9 15l-2.2.95L6 18l-.8-2.05L3 15l2.2-.95L6 12Z" />
+        <path d="m18 12 .8 2.05L21 15l-2.2.95L18 18l-.8-2.05L15 15l2.2-.95L18 12Z" />
+      </>
+    );
+  } else if (kind === 'pos') {
+    path = (
+      <>
+        <path d="M8 4.5h8" />
+        <path d="M7 8h10a2 2 0 0 1 2 2v7a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2v-7a2 2 0 0 1 2-2Z" />
+        <path d="M9 12h6M9 15h4" />
+      </>
+    );
+  } else if (kind === 'pin') {
+    path = (
+      <>
+        <rect x="5" y="10" width="14" height="9" rx="2.5" />
+        <path d="M8 10V8a4 4 0 1 1 8 0v2" />
+        <circle cx="12" cy="14.5" r="1" />
+      </>
+    );
+  } else if (kind === 'receipt') {
+    path = (
+      <>
+        <path d="M7 4h10a2 2 0 0 1 2 2v13l-2-1-2 1-2-1-2 1-2-1-2 1V6a2 2 0 0 1 2-2Z" />
+        <path d="M9 8.5h6M9 12h6M9 15.5h4" />
+      </>
+    );
+  } else if (kind === 'branch') {
+    path = (
+      <>
+        <path d="M5 19V7.5L12 4l7 3.5V19" />
+        <path d="M9 10h.01M15 10h.01M9 13.5h.01M15 13.5h.01" />
+        <path d="M10 19v-3h4v3" />
+      </>
+    );
+  } else if (kind === 'printer') {
+    path = (
+      <>
+        <path d="M8 6V4.5h8V6" />
+        <path d="M7 16H5.5A1.5 1.5 0 0 1 4 14.5v-5A1.5 1.5 0 0 1 5.5 8h13A1.5 1.5 0 0 1 20 9.5v5a1.5 1.5 0 0 1-1.5 1.5H17" />
+        <path d="M7 12h10v7H7z" />
+        <path d="M17 10.5h.01" />
+      </>
+    );
+  } else if (kind === 'update') {
+    path = (
+      <>
+        <path d="M6.5 7.5A6.75 6.75 0 0 1 18 9h1.5" />
+        <path d="M17.5 16.5A6.75 6.75 0 0 1 6 15H4.5" />
+        <path d="m18.5 6.5 1 2.5-2.5 1" />
+        <path d="m5.5 17.5-1-2.5 2.5-1" />
+      </>
+    );
+  } else if (kind === 'reset') {
+    path = (
+      <>
+        <path d="M7 7h10" />
+        <path d="M9 4h6l1 2H8l1-2Z" />
+        <path d="M8 7v10a2 2 0 0 0 2 2h4a2 2 0 0 0 2-2V7" />
+        <path d="M10.5 10.5v5M13.5 10.5v5" />
+      </>
+    );
+  } else {
+    path = (
+      <>
+        <circle cx="12" cy="12" r="9" />
+        <path d="M12 10v4" />
+        <circle cx="12" cy="7.5" r=".9" fill="currentColor" stroke="none" />
+      </>
+    );
+  }
+
+  return (
+    <svg
+      viewBox="0 0 24 24"
+      className={`settings-overview-icon ${className}`.trim()}
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.8"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+    >
+      {path}
+    </svg>
+  );
+}
+
+function SettingsOverviewGlyph({
+  kind,
+  tone
+}: {
+  kind: SettingsIconKind;
+  tone: SettingsIconTone;
+}): JSX.Element {
+  return (
+    <span className={`settings-overview-glyph settings-overview-glyph--${tone}`} aria-hidden="true">
+      <SettingsPageIcon kind={kind} />
+    </span>
+  );
+}
+
+function SettingsStatusBadge({
+  label,
+  tone
+}: {
+  label: string;
+  tone: SettingsBadgeTone;
+}): JSX.Element {
+  return <span className={`settings-overview-badge settings-overview-badge--${tone}`}>{label}</span>;
+}
+
+function SettingsModalCloseIcon(): JSX.Element {
+  return (
+    <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" aria-hidden="true">
+      <path d="M5 5l10 10" />
+      <path d="M15 5 5 15" />
+    </svg>
+  );
+}
+
+function SettingsModalCloseButton({
+  onClick,
+  disabled = false
+}: {
+  onClick: () => void;
+  disabled?: boolean;
+}): JSX.Element {
+  return (
+    <button
+      className="secondary-btn mini-btn modal-close-icon-btn"
+      type="button"
+      onClick={onClick}
+      disabled={disabled}
+      aria-label="Close modal"
+      title="Close"
+    >
+      <SettingsModalCloseIcon />
+    </button>
+  );
+}
+
+function SettingsOverviewCard({
+  icon,
+  tone,
+  eyebrow,
+  title,
+  description,
+  compact = false,
+  children
+}: {
+  icon: SettingsIconKind;
+  tone: SettingsIconTone;
+  eyebrow: string;
+  title: string;
+  description: string;
+  compact?: boolean;
+  children: ReactNode;
+}): JSX.Element {
+  return (
+    <section className={`settings-overview-card ${compact ? 'settings-overview-card--compact' : 'settings-overview-card--feature'}`}>
+      <div className="settings-overview-card-head">
+        <SettingsOverviewGlyph kind={icon} tone={tone} />
+        <div className="settings-overview-card-heading">
+          <div className="eyebrow">{eyebrow}</div>
+          <h3>{title}</h3>
+        </div>
+      </div>
+      <p className="settings-overview-card-copy">{description}</p>
+      {children}
+    </section>
+  );
+}
+
 const screenStackClass = 'flex flex-col gap-5';
-const settingsStackClass = 'flex flex-col gap-5';
-const settingsSectionClass =
-  'rounded-[28px] border border-[var(--border-soft)] bg-[rgba(255,255,255,0.95)] p-5 shadow-[0_18px_44px_rgba(17,40,58,0.08)] backdrop-blur';
 const settingsHeadClass = 'flex flex-col gap-2';
 const settingsHelperClass = 'text-[0.94rem] leading-6 text-[var(--muted)]';
-const settingsCardClass =
-  'grid gap-4 rounded-[24px] border border-[var(--border-soft)] bg-[rgba(248,251,255,0.96)] p-4 shadow-[inset_0_1px_0_rgba(255,255,255,0.8),0_10px_24px_rgba(17,40,58,0.04)]';
+const settingsCardClass = 'settings-screen-card';
 const settingsSubheadClass = 'grid gap-1';
 const settingsStatusRowClass = 'grid gap-3';
 const settingsStatusGridClass = 'grid gap-3 sm:grid-cols-2 xl:grid-cols-4';
 const settingsActionRowClass = 'flex flex-wrap gap-3';
 const settingsChipRowClass = 'flex flex-wrap gap-2';
-const settingsModalBackdropClass = 'fixed inset-0 z-50 flex items-center justify-center bg-slate-950/45 p-4 backdrop-blur-sm';
-const settingsModalCardClass =
-  'flex max-h-[min(90vh,920px)] w-full max-w-6xl flex-col overflow-hidden rounded-[30px] border border-[var(--border-soft)] bg-[rgba(255,255,255,0.97)] shadow-[var(--shadow-strong)]';
-const settingsModalToolbarClass =
-  'flex shrink-0 flex-col gap-4 border-b border-[var(--border-soft)] bg-[rgba(248,251,255,0.98)] px-5 py-4';
+const settingsStatusCardClass =
+  'grid gap-1 rounded-[18px] border border-[rgba(188,210,234,0.45)] bg-[rgba(255,255,255,0.96)] px-4 py-3 shadow-[0_8px_20px_rgba(17,40,58,0.04)]';
+const settingsStatusLabelClass = 'text-[0.75rem] font-semibold uppercase tracking-[0.08em] text-[var(--muted)]';
+const settingsStatusValueClass = 'text-[1rem] font-extrabold text-[var(--text-strong)]';
+const settingsProfileListClass = 'grid gap-3';
+const settingsProfileCardClass =
+  'rounded-[22px] border border-[var(--border-soft)] bg-[linear-gradient(180deg,rgba(255,255,255,0.98),rgba(246,250,254,0.98))] shadow-[0_10px_24px_rgba(17,40,58,0.04)]';
+const settingsProfileSelectedClass =
+  'border-[rgba(25,118,210,0.28)] bg-[rgba(236,244,255,0.96)] shadow-[0_14px_28px_rgba(25,118,210,0.12)]';
+const settingsProfileButtonClass = 'grid w-full gap-3 px-4 py-4 text-left md:grid-cols-[minmax(0,1.2fr)_minmax(180px,0.7fr)_auto] md:items-start';
+const settingsModalBackdropClass = 'desktop-modal-backdrop';
+const settingsModalCardClass = 'desktop-modal-card desktop-modal-card--detail settings-layout-modal';
+const settingsActionModalCardClass = 'desktop-modal-card desktop-modal-card--action settings-pin-modal';
+const settingsSetupModalCardClass = 'desktop-modal-card desktop-modal-card--detail settings-setup-modal';
+const settingsPrinterModalCardClass = 'desktop-modal-card desktop-modal-card--detail settings-printer-modal';
+const settingsModalToolbarClass = 'desktop-modal-header settings-layout-toolbar';
 
-export function SettingsScreen({ state, onStateReload, onStartWalkthrough, onResetLocalData }: Props): JSX.Element {
+export function SettingsScreen({
+  state,
+  onStateReload,
+  onStartWalkthrough,
+  onResetLocalData,
+  pendingOutboxCount = 0,
+  hasActiveShift = false,
+  syncBusy = false,
+  onRunSync
+}: Props): JSX.Element {
   const desktopUi = useDesktopUi();
   const pinTarget = useDesktopTutorialTarget('settings-set-pin');
   const layoutTarget = useDesktopTutorialTarget('settings-open-layout');
@@ -127,6 +404,10 @@ export function SettingsScreen({ state, onStateReload, onStartWalkthrough, onRes
   const printerSaveTarget = useDesktopTutorialTarget('settings-save-printer');
   const [form, setForm] = useState<DesktopSetupState>(copySetup(state.setup));
   const [password, setPassword] = useState('');
+  const [setupAccessPromptOpen, setSetupAccessPromptOpen] = useState(false);
+  const [setupAccessPassword, setSetupAccessPassword] = useState('');
+  const [setupModalOpen, setSetupModalOpen] = useState(false);
+  const [printerModalOpen, setPrinterModalOpen] = useState(false);
   const [pinModalOpen, setPinModalOpen] = useState(false);
   const [layoutModalOpen, setLayoutModalOpen] = useState(false);
   const [resetConfirmOpen, setResetConfirmOpen] = useState(false);
@@ -148,12 +429,14 @@ export function SettingsScreen({ state, onStateReload, onStartWalkthrough, onRes
   const [checkingForUpdate, setCheckingForUpdate] = useState(false);
   const [installingUpdate, setInstallingUpdate] = useState(false);
   const [discoveringPrinters, setDiscoveringPrinters] = useState(false);
+  const [autoPrinterDiscoveryTried, setAutoPrinterDiscoveryTried] = useState(false);
   const [savingProfile, setSavingProfile] = useState(false);
   const [discoveredPrinters, setDiscoveredPrinters] = useState<string[]>([]);
   const [profileLabel, setProfileLabel] = useState('');
   const [selectedProfileId, setSelectedProfileId] = useState('');
   const [appVersion, setAppVersion] = useState(state.version.toString());
-  const [updateResult, setUpdateResult] = useState<DesktopUpdateCheckResult | null>(null);
+  const [updateResult, setUpdateResult] = useState<DesktopUpdateCheckResult | null>(() => desktopUpdaterService.getStoredStatus());
+  const [updateStatus, setUpdateStatus] = useState<DesktopUpdateStatus>(() => desktopUpdaterService.getStoredStatus()?.status ?? 'idle');
   const [message, setMessage] = useState('Sign in once on this device, then refresh the local branch data for desktop POS.');
 
   const announce = (nextMessage: string, tone: 'info' | 'success' | 'warning' | 'error' = 'info'): void => {
@@ -329,6 +612,57 @@ export function SettingsScreen({ state, onStateReload, onStartWalkthrough, onRes
     !form.locationId ||
     !form.deviceId ||
     !form.authEmail;
+  const walkthroughCompleted = Boolean(state.walkthrough.completedAt);
+  const posDefaultFlowLabel = POS_FLOW_OPTIONS.find((option) => option.value === form.posDefaultLpgFlow)?.label ?? 'Require per item';
+  const branchStatusLabel =
+    state.sync.lastSyncStatus === 'success'
+      ? 'Ready'
+      : state.sync.lastSyncStatus === 'error'
+        ? 'Needs Attention'
+        : state.auth.accessToken
+          ? 'Waiting for Download'
+          : 'Sign In Needed';
+  const branchStatusTone: SettingsBadgeTone =
+    state.sync.lastSyncStatus === 'success'
+      ? 'good'
+      : state.sync.lastSyncStatus === 'error'
+        ? 'danger'
+        : 'warn';
+  const printerPathLabel =
+    form.printerMode === 'USB'
+      ? form.printerName.trim() || 'USB printer not selected'
+      : form.printerMode === 'LAN'
+        ? `${form.printerHost.trim() || 'LAN host not set'}:${form.printerPort.trim() || '9100'}`
+        : 'No printer configured';
+  const printerReady =
+    form.printerMode === 'USB'
+      ? Boolean(form.printerName.trim())
+      : form.printerMode === 'LAN'
+        ? Boolean(form.printerHost.trim())
+        : false;
+  const printerStatusLabel = printerReady ? 'Active' : form.printerMode === 'NONE' ? 'Not Set' : 'Needs Setup';
+  const printerStatusTone: SettingsBadgeTone = printerReady ? 'good' : form.printerMode === 'NONE' ? 'neutral' : 'warn';
+  const updateSafety = useMemo(
+    () => assessDesktopUpdateSafety({ pendingOutboxCount, hasActiveShift, syncBusy }),
+    [hasActiveShift, pendingOutboxCount, syncBusy]
+  );
+  const latestCheckLabel =
+    updateStatus === 'failed'
+      ? 'Check Failed'
+      : updateResult?.available && updateResult.manifest
+      ? `Update ${updateResult.manifest.version}`
+      : updateResult
+        ? 'Up to date'
+        : 'Not checked';
+  const latestCheckTone: SettingsBadgeTone =
+    updateStatus === 'failed'
+      ? 'danger'
+      : updateResult?.available && updateResult.manifest
+        ? 'warn'
+        : updateResult
+          ? 'good'
+          : 'neutral';
+  const manifestReleaseNotes = (updateResult?.manifest as unknown as { notes?: string | null } | undefined)?.notes ?? null;
 
   const buildProfile = (existing?: DesktopPrinterProfile | null): DesktopPrinterProfile => ({
     id: existing?.id ?? `printer-profile-${Date.now()}`,
@@ -365,22 +699,23 @@ export function SettingsScreen({ state, onStateReload, onStartWalkthrough, onRes
     await onStateReload();
   };
 
-  const persistProfile = async (): Promise<DesktopPrinterProfile | null> => {
+  const persistProfile = async (options?: { announceSuccess?: boolean }): Promise<DesktopPrinterProfile | null> => {
+    const announceSuccess = options?.announceSuccess ?? true;
     const trimmed = profileLabel.trim();
     if (!trimmed) {
-      setMessage('Enter a printer profile name first.');
+      announce('Enter a printer profile name first.', 'warning');
       return null;
     }
     if (form.printerMode === 'NONE') {
-      setMessage('Choose USB or LAN before saving a printer profile.');
+      announce('Choose USB or LAN before saving a printer profile.', 'warning');
       return null;
     }
     if (form.printerMode === 'USB' && !form.printerName.trim()) {
-      setMessage('Select or enter a USB printer name before saving this profile.');
+      announce('Select or enter a USB printer name before saving this profile.', 'warning');
       return null;
     }
     if (form.printerMode === 'LAN' && !form.printerHost.trim()) {
-      setMessage('Enter the LAN printer host before saving this profile.');
+      announce('Enter the LAN printer host before saving this profile.', 'warning');
       return null;
     }
 
@@ -392,9 +727,14 @@ export function SettingsScreen({ state, onStateReload, onStartWalkthrough, onRes
         null;
       const profile = buildProfile(existing);
       const nextProfiles = [...current.printerProfiles.filter((entry) => entry.id !== profile.id && entry.label.toLowerCase() !== trimmed.toLowerCase()), profile];
-      await saveProfilesState(nextProfiles, `Saved printer profile "${profile.label}" for this desktop station.`);
+      const successMessage = resolvePrinterProfileSavedMessage(profile.label);
+      await saveProfilesState(nextProfiles, successMessage);
       setSelectedProfileId(profile.id);
-      setMessage(`Saved printer profile "${profile.label}" for this desktop station.`);
+      if (announceSuccess) {
+        announce(successMessage, 'success');
+      } else {
+        setMessage(successMessage);
+      }
       return profile;
     } finally {
       setSavingProfile(false);
@@ -439,15 +779,19 @@ export function SettingsScreen({ state, onStateReload, onStartWalkthrough, onRes
     };
     try {
       await desktopReceiptService.testPrinter(draftState);
-      const successMessage = overrideProfile
-        ? `Printer test was sent using "${overrideProfile.label}".`
-        : 'Printer test was sent. If nothing came out, check the selected USB printer name or LAN host and port.';
-      await recordPrinterTestResult(overrideProfile?.id ?? (selectedProfileId || null), true, successMessage);
-      setMessage(successMessage);
+      const feedback = resolvePrinterTestFeedback({
+        success: true,
+        profileLabel: overrideProfile?.label ?? null
+      });
+      await recordPrinterTestResult(overrideProfile?.id ?? (selectedProfileId || null), true, feedback.message);
+      announce(feedback.message, feedback.tone);
     } catch (error) {
-      const errorMessage = error instanceof Error ? error.message : 'Unable to run printer test on this desktop station.';
-      await recordPrinterTestResult(overrideProfile?.id ?? (selectedProfileId || null), false, errorMessage);
-      setMessage(errorMessage);
+      const feedback = resolvePrinterTestFeedback({
+        success: false,
+        errorMessage: error instanceof Error ? error.message : 'Unable to run printer test on this desktop station.'
+      });
+      await recordPrinterTestResult(overrideProfile?.id ?? (selectedProfileId || null), false, feedback.message);
+      announce(feedback.message, feedback.tone);
     } finally {
       setTestingPrinter(false);
     }
@@ -653,6 +997,7 @@ export function SettingsScreen({ state, onStateReload, onStartWalkthrough, onRes
           locationLabel
         },
         sync: {
+          ...result.state.sync,
           lastSyncedAt: result.syncedAt,
           lastSyncStatus: 'success',
             lastSyncMessage: `Desktop branch data refreshed. ${result.productCount} products, ${result.customerCount} customers, ${result.salesCount} sales, and ${result.transferCount} transfers were cached locally.`
@@ -668,6 +1013,7 @@ export function SettingsScreen({ state, onStateReload, onStartWalkthrough, onRes
       const nextState: DesktopAppState = {
         ...state,
         sync: {
+          ...state.sync,
           lastSyncedAt: new Date().toISOString(),
           lastSyncStatus: 'error',
           lastSyncMessage: detail
@@ -682,21 +1028,46 @@ export function SettingsScreen({ state, onStateReload, onStartWalkthrough, onRes
   };
 
   const handleDiscoverPrinters = async (): Promise<void> => {
+    await discoverPrinters(true);
+  };
+
+  const discoverPrinters = async (announceResult: boolean): Promise<void> => {
     setDiscoveringPrinters(true);
     try {
       const printers = await listNativePrinters();
       setDiscoveredPrinters(printers);
-      setMessage(
-        printers.length > 0
-          ? `Found ${printers.length} installed printer${printers.length === 1 ? '' : 's'} on this desktop station.`
-          : 'No installed printers were discovered on this desktop station.'
-      );
+      if (!form.printerName && printers.length === 1) {
+        setForm((prev) => ({ ...prev, printerName: printers[0] }));
+      }
+      if (announceResult) {
+        setMessage(
+          printers.length > 0
+            ? `Found ${printers.length} installed printer${printers.length === 1 ? '' : 's'} on this desktop station.`
+            : 'No installed printers were discovered on this desktop station.'
+        );
+      }
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : 'Unable to discover installed printers on this desktop.');
+      if (announceResult) {
+        setMessage(error instanceof Error ? error.message : 'Unable to discover installed printers on this desktop.');
+      }
     } finally {
       setDiscoveringPrinters(false);
     }
   };
+
+  useEffect(() => {
+    if (form.printerMode !== 'USB') {
+      if (autoPrinterDiscoveryTried) {
+        setAutoPrinterDiscoveryTried(false);
+      }
+      return;
+    }
+    if (discoveredPrinters.length > 0 || discoveringPrinters || autoPrinterDiscoveryTried) {
+      return;
+    }
+    setAutoPrinterDiscoveryTried(true);
+    void discoverPrinters(false);
+  }, [autoPrinterDiscoveryTried, discoveringPrinters, discoveredPrinters.length, form.printerMode]);
 
   const applyProfile = (profile: DesktopPrinterProfile): void => {
     setForm((prev) => copyProfileToSetup(profile, prev));
@@ -724,6 +1095,7 @@ export function SettingsScreen({ state, onStateReload, onStartWalkthrough, onRes
         locationLabel
       });
       await onStateReload();
+      setSetupModalOpen(false);
       setMessage('Desktop setup saved. The POS screen will now use your selected branch and local product/customer cache.');
     } finally {
       setSaving(false);
@@ -751,6 +1123,26 @@ export function SettingsScreen({ state, onStateReload, onStartWalkthrough, onRes
     }
   };
 
+  const closeSetupAccessPrompt = (): void => {
+    setSetupAccessPromptOpen(false);
+    setSetupAccessPassword('');
+  };
+
+  const openSetupAccessPrompt = (): void => {
+    setSetupAccessPassword('');
+    setSetupAccessPromptOpen(true);
+  };
+
+  const handleConfirmSetupAccess = (): void => {
+    if (!isManageSetupPasswordValid(setupAccessPassword)) {
+      announce('Incorrect manage setup password.', 'error');
+      return;
+    }
+    setSetupAccessPassword('');
+    setSetupAccessPromptOpen(false);
+    setSetupModalOpen(true);
+  };
+
   const handleResetLocalData = async (): Promise<void> => {
     if (!onResetLocalData) {
       return;
@@ -766,20 +1158,33 @@ export function SettingsScreen({ state, onStateReload, onStartWalkthrough, onRes
 
   const handleCheckForUpdates = async (): Promise<void> => {
     setCheckingForUpdate(true);
+    setUpdateStatus('checking');
     try {
-      const result = await desktopUpdaterService.checkForUpdate();
+      const result = await desktopUpdaterService.checkForUpdate({
+        apiBaseUrl: state.setup.apiBaseUrl,
+        deviceId: state.setup.deviceId
+      });
       setAppVersion(result.currentVersion);
       setUpdateResult(result);
+      setUpdateStatus(result.status);
       if (!result.supported) {
-        announce('OTA updates are available from the installed desktop build.', 'warning');
+        announce(result.errorMessage ?? 'OTA updates are available from the installed desktop build.', 'warning');
+        return;
+      }
+      if (result.status === 'failed') {
+        announce(result.errorMessage ?? 'Unable to check for updates right now.', 'error');
         return;
       }
       if (result.available && result.manifest) {
-        announce(`Update ${result.manifest.version} is available for this desktop station.`, 'success');
+        announce(
+          `${result.required ? 'Required update' : 'Update'} ${result.manifest.version} is available for this desktop station.`,
+          result.required ? 'warning' : 'success'
+        );
       } else {
         announce(`VPOS Desktop ${result.currentVersion} is already up to date.`, 'info');
       }
     } catch (error) {
+      setUpdateStatus('failed');
       announce(error instanceof Error ? error.message : 'Unable to check for updates right now.', 'error');
     } finally {
       setCheckingForUpdate(false);
@@ -791,19 +1196,36 @@ export function SettingsScreen({ state, onStateReload, onStartWalkthrough, onRes
       announce('Check for updates first before installing a desktop update.', 'warning');
       return;
     }
+    if (!updateSafety.safe) {
+      announce(updateSafety.blockers[0] ?? 'This workstation is not ready to install an update.', 'warning');
+      return;
+    }
+    if (hasActiveShift && !globalThis.confirm('A cashier shift is still open. Install the update now anyway?')) {
+      announce('Update postponed. Close the shift, then install from Settings.', 'info');
+      return;
+    }
 
     setInstallingUpdate(true);
+    setUpdateStatus('downloading');
     try {
       await desktopUpdaterService.installAvailableUpdate((event) => {
         if (event.status === 'PENDING') {
+          setUpdateStatus('downloading');
           setMessage('Downloading and preparing the desktop update...');
         }
+        if (event.status === 'DONE') {
+          setUpdateStatus('restart_required');
+          setMessage('Update downloaded and verified. Restarting VPOS Desktop...');
+        }
         if (event.status === 'ERROR') {
+          setUpdateStatus('failed');
           setMessage(event.error || 'Desktop update failed.');
         }
       });
+      setUpdateStatus('restart_required');
       announce(`Desktop update ${updateResult.manifest.version} was installed. The app may restart to finish applying it.`, 'success');
     } catch (error) {
+      setUpdateStatus('failed');
       announce(error instanceof Error ? error.message : 'Unable to install the desktop update.', 'error');
     } finally {
       setInstallingUpdate(false);
@@ -812,31 +1234,44 @@ export function SettingsScreen({ state, onStateReload, onStartWalkthrough, onRes
 
   return (
     <div className={screenStackClass}>
-      <ScreenHeader
-        routeId="settings"
-        title="Settings"
-        description="Configure printer, receipt format, and device options."
-      />
-      <div className={settingsStackClass}>
-        <section className={settingsSectionClass}>
-          <div className={settingsHeadClass}>
-            <div className="eyebrow">Onboarding</div>
-            <h3>Walkthrough</h3>
+      <section className="grid gap-3 rounded-[24px] border border-[rgba(188,210,234,0.58)] bg-[linear-gradient(180deg,rgba(255,255,255,0.99),rgba(246,250,255,0.97))] px-4 py-3.5 shadow-[0_14px_30px_rgba(17,40,58,0.07)] sm:px-5 sm:py-4">
+        <div className="flex min-w-0 items-start gap-3">
+          <div className="grid h-[54px] w-[54px] shrink-0 place-items-center rounded-[18px] border border-[rgba(196,220,255,0.78)] bg-[rgba(240,246,255,0.98)] text-[var(--accent-strong)] shadow-[0_8px_18px_rgba(17,40,58,0.05)]">
+            <SettingsPageIcon kind="settings" className="h-[22px] w-[22px]" />
           </div>
-          <p className={settingsHelperClass}>Replay walkthrough or reset tutorial progress for this device.</p>
-          <div className={settingsCardClass}>
-            <div className={settingsSubheadClass}>
+          <div className="min-w-0">
+            <h2 className="m-0 text-[1.12rem] font-extrabold tracking-[-0.02em] text-[var(--text-strong)] sm:text-[1.36rem]">
+              Settings Overview
+            </h2>
+            <p className="mt-1 text-[0.8rem] leading-5 text-[var(--muted)]">
+              Manage your workstation setup and preferences.
+            </p>
+          </div>
+        </div>
+      </section>
+
+      <div className="settings-overview-feature-grid">
+        <SettingsOverviewCard
+          icon="onboarding"
+          tone="amber"
+          eyebrow="Onboarding"
+          title="Walkthrough"
+          description="Replay walkthrough or reset tutorial progress for this device."
+        >
+          <div className="settings-overview-surface">
+            <div className="settings-overview-surface-head">
               <strong>Walkthrough Status</strong>
-              <span>Run the guided spotlight tour again if this device needs a quick refresh for staff.</span>
+              <span>Run the guided spotlight tour again if this device needs a quick refresh.</span>
             </div>
-            <div className={settingsStatusRowClass}>
-              <div className="customer-detail-card">
-                <span>Status</span>
-                <strong>{state.walkthrough.completedAt ? 'Completed' : 'Not Completed'}</strong>
+            <div className="settings-overview-status-strip">
+              <div className="settings-overview-status-copy">
+                <span className={settingsStatusLabelClass}>Status</span>
+                <strong className="settings-overview-inline-value">{walkthroughCompleted ? 'Completed' : 'Not Completed'}</strong>
               </div>
+              <SettingsStatusBadge label={walkthroughCompleted ? 'Completed' : 'Not Completed'} tone={walkthroughCompleted ? 'good' : 'warn'} />
             </div>
             <div className={settingsActionRowClass}>
-              <button className="secondary-btn" type="button" onClick={() => onStartWalkthrough?.()}>
+              <button className="primary-btn" type="button" onClick={() => onStartWalkthrough?.()}>
                 Start App Walkthrough
               </button>
               <button className="secondary-btn" type="button" onClick={() => void handleResetWalkthrough()} disabled={tutorialResetBusy}>
@@ -844,16 +1279,17 @@ export function SettingsScreen({ state, onStateReload, onStartWalkthrough, onRes
               </button>
             </div>
           </div>
-        </section>
+        </SettingsOverviewCard>
 
-        <section className={settingsSectionClass}>
-          <div className={settingsHeadClass}>
-            <div className="eyebrow">POS Defaults</div>
-            <h3>Default LPG Flow</h3>
-          </div>
-          <p className={settingsHelperClass}>Default LPG flow for newly added cart lines.</p>
-          <div className={settingsCardClass}>
-            <div className={settingsSubheadClass}>
+        <SettingsOverviewCard
+          icon="pos"
+          tone="blue"
+          eyebrow="POS Defaults"
+          title="Default LPG Flow"
+          description="Set the default LPG flow for newly added cart lines."
+        >
+          <div className="settings-overview-surface">
+            <div className="settings-overview-surface-head">
               <strong>New LPG Cart Lines</strong>
               <span>Choose the default flow that desktop POS should use before the cashier changes it line by line.</span>
             </div>
@@ -869,32 +1305,38 @@ export function SettingsScreen({ state, onStateReload, onStartWalkthrough, onRes
                 </button>
               ))}
             </div>
+            <div className="settings-overview-status-strip">
+              <div className="settings-overview-status-copy">
+                <span className={settingsStatusLabelClass}>Current Default</span>
+                <strong className="settings-overview-inline-value">{posDefaultFlowLabel}</strong>
+              </div>
+            </div>
             <div className={settingsActionRowClass}>
               <button className="secondary-btn" type="button" onClick={() => void handleSavePosDefaults()} disabled={saving}>
                 {saving ? 'Saving...' : 'Save POS Defaults'}
               </button>
             </div>
           </div>
-        </section>
+        </SettingsOverviewCard>
 
-        <section className={settingsSectionClass}>
-          <div className={settingsHeadClass}>
-            <div className="eyebrow">Security PIN</div>
-            <h3>Offline Unlock</h3>
-          </div>
-          <p className={settingsHelperClass}>
-            {pinConfigured ? 'Change your 4-digit offline unlock PIN.' : 'Set your 4-digit offline unlock PIN.'}
-          </p>
-          <div className={settingsCardClass}>
-            <div className={settingsSubheadClass}>
+        <SettingsOverviewCard
+          icon="pin"
+          tone="green"
+          eyebrow="Security PIN"
+          title="Offline Unlock"
+          description={pinConfigured ? 'Change your 4-digit offline unlock PIN.' : 'Set your 4-digit offline unlock PIN.'}
+        >
+          <div className="settings-overview-surface">
+            <div className="settings-overview-surface-head">
               <strong>Offline Unlock PIN</strong>
               <span>Use a 4-digit PIN so the cashier can reopen the desktop app quickly while staying offline.</span>
             </div>
-            <div className={settingsStatusRowClass}>
-              <div className="customer-detail-card">
-                <span>PIN Status</span>
-                <strong>{pinConfigured ? 'Configured' : 'Not Set'}</strong>
+            <div className="settings-overview-status-strip">
+              <div className="settings-overview-status-copy">
+                <span className={settingsStatusLabelClass}>PIN Status</span>
+                <strong className="settings-overview-inline-value">{pinConfigured ? 'Configured' : 'Not Set'}</strong>
               </div>
+              <SettingsStatusBadge label={pinConfigured ? 'Ready' : 'Not Set'} tone={pinConfigured ? 'good' : 'warn'} />
             </div>
             <div className={settingsActionRowClass}>
               <button
@@ -907,20 +1349,26 @@ export function SettingsScreen({ state, onStateReload, onStartWalkthrough, onRes
               </button>
             </div>
           </div>
-        </section>
+        </SettingsOverviewCard>
 
-        <section className={settingsSectionClass}>
-          <div className={settingsHeadClass}>
-            <div className="eyebrow">Receipt Layout</div>
-            <h3>Printed Receipt</h3>
-          </div>
-          <p className={settingsHelperClass}>
-            {state.receiptLayout.headerLogoText || 'Not set'} | Show or hide key receipt details, update header and footer text, then send a test print.
-          </p>
-          <div className={settingsCardClass}>
-            <div className={settingsSubheadClass}>
+        <SettingsOverviewCard
+          icon="receipt"
+          tone="violet"
+          eyebrow="Receipt Layout"
+          title="Printed Receipt"
+          description="Customize the printed receipt layout and run a test print."
+        >
+          <div className="settings-overview-surface">
+            <div className="settings-overview-surface-head">
               <strong>Printed Receipt Layout</strong>
               <span>Open the receipt sheet to adjust branding, printed fields, spacing, and run a quick test print.</span>
+            </div>
+            <div className="settings-overview-status-strip">
+              <div className="settings-overview-status-copy">
+                <span className={settingsStatusLabelClass}>Current Header</span>
+                <strong className="settings-overview-inline-value">{state.receiptLayout.headerLogoText || 'Printed Receipt'}</strong>
+              </div>
+              <SettingsStatusBadge label="Ready" tone="blue" />
             </div>
             <div className={settingsActionRowClass}>
               <button
@@ -929,323 +1377,168 @@ export function SettingsScreen({ state, onStateReload, onStartWalkthrough, onRes
                 type="button"
                 onClick={() => setLayoutModalOpen(true)}
               >
-                Open Receipt Layout Settings
+                Open Layout Settings
               </button>
               <button className="secondary-btn" type="button" onClick={() => void handleTestLayout()} disabled={layoutSaving}>
                 {layoutSaving ? 'Testing...' : 'Test Layout Print'}
               </button>
             </div>
           </div>
-        </section>
+        </SettingsOverviewCard>
+      </div>
 
-        <section className={settingsSectionClass}>
-          <div className={settingsHeadClass}>
-            <div className="eyebrow">Branch Master Data</div>
-            <h3>Download Local Branch Data</h3>
-          </div>
-          <p className={settingsHelperClass}>
-            Sign in this workstation, choose branch and location, then refresh the local branch data before using desktop POS.
-          </p>
-          <div className={settingsStatusGridClass}>
-            <div className="customer-detail-card">
-              <span>Branch</span>
-              <strong>{branchLabel || 'Not selected'}</strong>
-            </div>
-            <div className="customer-detail-card">
-              <span>Location</span>
-              <strong>{locationLabel || 'Not selected'}</strong>
-            </div>
-            <div className="customer-detail-card">
-              <span>Last Download</span>
-              <strong>{state.sync.lastSyncedAt ? formatDateTime(state.sync.lastSyncedAt) : 'Not yet'}</strong>
-            </div>
-            <div className="customer-detail-card">
-              <span>Status</span>
-              <strong>{state.sync.lastSyncStatus === 'success' ? 'Up to date' : state.sync.lastSyncStatus === 'error' ? 'Needs attention' : 'Not downloaded'}</strong>
-            </div>
-          </div>
-          <div className={settingsCardClass}>
-            <div className={settingsSubheadClass}>
-              <strong>Workstation Setup</strong>
-              <span>These details stay on this device so the cashier can keep working locally even after restart.</span>
-            </div>
-            {needsSetupAttention ? (
-              <div className="settings-form-grid">
-                <label>
-                  <span>Operator name</span>
-                  <input value={form.operatorName} onChange={(event) => setForm((prev) => ({ ...prev, operatorName: event.target.value }))} placeholder="Cashier or operator" />
-                </label>
-                <label>
-                  <span>API base URL</span>
-                  <input value={form.apiBaseUrl} onChange={(event) => setForm((prev) => ({ ...prev, apiBaseUrl: event.target.value }))} placeholder="https://vmjamtech.com/api" />
-                </label>
-                <label>
-                  <span>Tenant client ID</span>
-                  <input value={form.clientId} onChange={(event) => setForm((prev) => ({ ...prev, clientId: event.target.value }))} placeholder="DEMO or tenant code" />
-                </label>
-                <label>
-                  <span>Desktop sign-in email</span>
-                  <input value={form.authEmail} onChange={(event) => setForm((prev) => ({ ...prev, authEmail: event.target.value }))} placeholder="cashier@branch.local" />
-                </label>
-                <label>
-                  <span>Desktop sign-in password</span>
-                  <input type="password" value={password} onChange={(event) => setPassword(event.target.value)} placeholder="Password" />
-                </label>
-                <label>
-                  <span>Device ID</span>
-                  <input value={form.deviceId} onChange={(event) => setForm((prev) => ({ ...prev, deviceId: event.target.value }))} placeholder="desktop-main-counter" />
-                </label>
-                <label>
-                  <span>Branch</span>
-                  <select
-                    value={form.branchId}
-                    onChange={(event) =>
-                      setForm((prev) => ({
-                        ...prev,
-                        branchId: event.target.value,
-                        branchLabel: branchOptions.find((option) => option.id === event.target.value)?.label ?? '',
-                        locationId: '',
-                        locationLabel: ''
-                      }))
-                    }
-                  >
-                    <option value="">Select branch</option>
-                    {branchOptions.map((option) => (
-                      <option key={option.id} value={option.id}>
-                        {option.label}
-                      </option>
-                    ))}
-                  </select>
-                </label>
-                <label>
-                  <span>Location</span>
-                  <select
-                    value={form.locationId}
-                    onChange={(event) =>
-                      setForm((prev) => ({
-                        ...prev,
-                        locationId: event.target.value,
-                        locationLabel: locationOptions.find((option) => option.id === event.target.value)?.label ?? ''
-                      }))
-                    }
-                  >
-                    <option value="">Select location</option>
-                    {locationOptions.map((option) => (
-                      <option key={option.id} value={option.id}>
-                        {option.label}
-                      </option>
-                    ))}
-                  </select>
-                </label>
+      <div className="settings-overview-utility-grid">
+        <SettingsOverviewCard
+          compact
+          icon="branch"
+          tone="blue"
+          eyebrow="Branch Master Data"
+          title="Download Local Branch Data"
+          description="Sign in, choose branch and location, then refresh local branch data."
+        >
+          <div className="settings-overview-surface settings-overview-surface--compact">
+            <div className="settings-overview-info-grid">
+              <div className="settings-overview-info-item">
+                <span className={settingsStatusLabelClass}>Branch</span>
+                <strong>{branchLabel || 'Not selected'}</strong>
               </div>
-            ) : null}
-          </div>
-          <div className={settingsActionRowClass}>
-            <button className="secondary-btn" type="button" onClick={() => void handleSignIn()} disabled={signingIn}>
-              {signingIn ? 'Signing In...' : 'Sign In'}
-            </button>
-            <button
-              ref={redownloadTarget.ref}
-              className={`primary-btn ${redownloadTarget.active ? 'tutorial-target-active' : ''}`}
-              type="button"
-              onClick={() => void handleRefreshCatalog()}
-              disabled={syncingCatalog || !state.auth.accessToken}
-            >
-              {syncingCatalog ? 'Downloading...' : 'Redownload Branch Data'}
-            </button>
-            {needsSetupAttention ? (
-              <button className="secondary-btn" type="button" onClick={() => void handleSaveSetup()} disabled={saving}>
-                {saving ? 'Saving...' : 'Save Desktop Setup'}
-              </button>
-            ) : null}
-          </div>
-        </section>
-
-        <section className={settingsSectionClass}>
-          <div className={settingsHeadClass}>
-            <div className="eyebrow">Printer</div>
-            <h3>Receipt Printer</h3>
-          </div>
-          <p className={settingsHelperClass}>Choose printer mode, save the printer path, then run a test print.</p>
-          <div className={settingsCardClass}>
-            <div className={settingsSubheadClass}>
-              <strong>Current Printer Path</strong>
-              <span>Choose USB or LAN, fill the path below, then save a reusable profile for this workstation.</span>
-            </div>
-            <div className={settingsChipRowClass}>
-              {PRINTER_MODE_OPTIONS.map((option) => (
-                <button
-                  key={option.value}
-                  type="button"
-                  className={`filter-chip ${form.printerMode === option.value ? 'active' : ''}`}
-                  onClick={() => setForm((prev) => ({ ...prev, printerMode: option.value as DesktopSetupState['printerMode'] }))}
-                >
-                  {option.label}
-                </button>
-              ))}
-            </div>
-            <div className="settings-form-grid">
-              <label>
-                <span>USB printer name</span>
-                <input value={form.printerName} onChange={(event) => setForm((prev) => ({ ...prev, printerName: event.target.value }))} placeholder="EPSON TM-T82X Receipt" />
-              </label>
-              <label>
-                <span>Discovered USB printers</span>
-                <select value={form.printerName} onChange={(event) => setForm((prev) => ({ ...prev, printerName: event.target.value }))}>
-                  <option value="">Select discovered printer</option>
-                  {discoveredPrinters.map((printer) => (
-                    <option key={printer} value={printer}>
-                      {printer}
-                    </option>
-                  ))}
-                </select>
-              </label>
-              <label>
-                <span>LAN printer host</span>
-                <input value={form.printerHost} onChange={(event) => setForm((prev) => ({ ...prev, printerHost: event.target.value }))} placeholder="192.168.1.120" />
-              </label>
-              <label>
-                <span>LAN printer port</span>
-                <input value={form.printerPort} onChange={(event) => setForm((prev) => ({ ...prev, printerPort: event.target.value }))} placeholder="9100" />
-              </label>
-              <label>
-                <span>Printer profile name</span>
-                <input value={profileLabel} onChange={(event) => setProfileLabel(event.target.value)} placeholder="Front Counter USB or Warehouse LAN" />
-              </label>
+              <div className="settings-overview-info-item">
+                <span className={settingsStatusLabelClass}>Location</span>
+                <strong>{locationLabel || 'Not selected'}</strong>
+              </div>
+              <div className="settings-overview-info-item">
+                <span className={settingsStatusLabelClass}>Last Download</span>
+                <strong>{state.sync.lastSyncedAt ? formatDateTime(state.sync.lastSyncedAt) : 'Not yet'}</strong>
+              </div>
+              <div className="settings-overview-info-item">
+                <span className={settingsStatusLabelClass}>Status</span>
+                <SettingsStatusBadge label={branchStatusLabel} tone={branchStatusTone} />
+              </div>
             </div>
             <div className={settingsActionRowClass}>
-              <button className="secondary-btn" type="button" onClick={() => void handleDiscoverPrinters()} disabled={discoveringPrinters}>
-                {discoveringPrinters ? 'Discovering...' : 'Discover USB Printers'}
-              </button>
-              <button className="secondary-btn" type="button" onClick={() => void persistProfile()} disabled={savingProfile || form.printerMode === 'NONE'}>
-                {savingProfile ? 'Saving...' : 'Save Profile'}
-              </button>
-              <button className="secondary-btn" type="button" onClick={() => void runPrinterTest()} disabled={testingPrinter || form.printerMode === 'NONE'}>
-                {testingPrinter ? 'Testing...' : 'Test Current Path'}
+              <button className="secondary-btn" type="button" onClick={openSetupAccessPrompt}>
+                Manage Setup
               </button>
               <button
-                ref={printerSaveTarget.ref}
-                className={`primary-btn ${printerSaveTarget.active ? 'tutorial-target-active' : ''}`}
+                ref={redownloadTarget.ref}
+                className={`primary-btn ${redownloadTarget.active ? 'tutorial-target-active' : ''}`}
                 type="button"
-                onClick={async () => {
-                  const profile = await persistProfile();
-                  if (profile) {
-                    await runPrinterTest(profile);
-                  }
-                }}
-                disabled={savingProfile || testingPrinter || form.printerMode === 'NONE'}
+                onClick={() => void handleRefreshCatalog()}
+                disabled={syncingCatalog || !state.auth.accessToken}
               >
-                {testingPrinter ? 'Testing...' : 'Save & Test Profile'}
+                {syncingCatalog ? 'Downloading...' : 'Redownload Branch Data'}
               </button>
             </div>
           </div>
+        </SettingsOverviewCard>
 
-          {selectedProfile ? (
-            <div className={settingsCardClass}>
-              <div className={settingsSubheadClass}>
-                <strong>Selected Profile</strong>
-                <span>Review the latest test result before printing live receipts.</span>
+        <SettingsOverviewCard
+          compact
+          icon="printer"
+          tone="blue"
+          eyebrow="Printer"
+          title="Receipt Printer"
+          description="Choose printer mode, save the path, then run a test print."
+        >
+          <div className="settings-overview-surface settings-overview-surface--compact">
+            <div className="settings-overview-info-grid">
+              <div className="settings-overview-info-item">
+                <span className={settingsStatusLabelClass}>Current Path</span>
+                <strong>{printerPathLabel}</strong>
               </div>
-              <div className={`sync-banner ${selectedProfile.lastTestStatus === 'error' ? 'error' : selectedProfile.lastTestStatus === 'success' ? 'success' : ''}`}>
-                <strong>Selected profile status</strong>
-                <span>Last test: {formatDateTime(selectedProfile.lastTestedAt)}</span>
-                <span>Last success: {formatDateTime(selectedProfile.lastSuccessAt)}</span>
-                <span>{selectedProfile.lastTestMessage || 'No printer feedback recorded yet.'}</span>
+              <div className="settings-overview-info-item">
+                <span className={settingsStatusLabelClass}>Saved Profiles</span>
+                <strong>{state.printerProfiles.length}</strong>
+              </div>
+              <div className="settings-overview-info-item">
+                <span className={settingsStatusLabelClass}>Mode</span>
+                <strong>{form.printerMode}</strong>
+              </div>
+              <div className="settings-overview-info-item">
+                <span className={settingsStatusLabelClass}>Status</span>
+                <SettingsStatusBadge label={printerStatusLabel} tone={printerStatusTone} />
               </div>
             </div>
-          ) : null}
-
-          <div className={settingsCardClass}>
-            <div className={settingsSubheadClass}>
-              <strong>Saved Printer Profiles</strong>
-              <span>Tap a saved profile to apply it again, rerun a test, or remove it from this device.</span>
-            </div>
-            <div className="recent-sales-list">
-              {state.printerProfiles.length === 0 ? (
-                <div className="empty-state">No saved printer profiles yet. Save one after choosing a USB or LAN printer path.</div>
-              ) : (
-                state.printerProfiles.map((profile) => (
-                  <article key={profile.id} className={`recent-sale-card ${selectedProfileId === profile.id ? 'selected-card' : ''}`}>
-                    <button type="button" className="card-fill-button" onClick={() => applyProfile(profile)}>
-                      <div>
-                        <strong>{profile.label}</strong>
-                        <span>
-                          {profile.mode === 'USB'
-                            ? profile.printerName || 'USB printer name not set'
-                            : `${profile.printerHost || 'LAN host not set'}:${profile.printerPort || '9100'}`}
-                        </span>
-                      </div>
-                      <div>
-                        <strong>{profile.mode}</strong>
-                        <span>Last success: {formatDateTime(profile.lastSuccessAt)}</span>
-                      </div>
-                      <div className={`sync-chip ${profile.lastTestStatus === 'error' ? 'failed' : profile.lastTestStatus === 'success' ? 'synced' : 'pending'}`}>
-                        {profile.lastTestStatus === 'idle' ? 'not tested' : profile.lastTestStatus}
-                      </div>
-                    </button>
-                    <div className="recent-sale-actions">
-                      <button className="secondary-btn mini-btn" type="button" onClick={() => applyProfile(profile)}>
-                        Apply
-                      </button>
-                      <button className="secondary-btn mini-btn" type="button" onClick={() => void runPrinterTest(profile)} disabled={testingPrinter}>
-                        Test Again
-                      </button>
-                      <button className="secondary-btn mini-btn" type="button" onClick={() => void handleDeletePrinterProfile(profile.id)}>
-                        Delete
-                      </button>
-                    </div>
-                  </article>
-                ))
-              )}
+            <div className={settingsActionRowClass}>
+              <button className="secondary-btn" type="button" onClick={() => setPrinterModalOpen(true)}>
+                Manage Printer Settings
+              </button>
+              <button className="secondary-btn" type="button" onClick={() => void runPrinterTest()} disabled={testingPrinter || form.printerMode === 'NONE'}>
+                {testingPrinter ? 'Testing...' : 'Test Print'}
+              </button>
             </div>
           </div>
-        </section>
+        </SettingsOverviewCard>
 
-        <section className={settingsSectionClass}>
-          <div className={settingsHeadClass}>
-            <div className="eyebrow">Software Update</div>
-            <h3>Desktop OTA</h3>
-          </div>
-          <p className={settingsHelperClass}>
-            Check whether a newer desktop release is available, then install it from the signed OTA package.
-          </p>
-          <div className={settingsCardClass}>
-            <div className={settingsSubheadClass}>
-              <strong>Installed Version</strong>
-              <span>Current desktop version: {appVersion}</span>
-            </div>
-            <div className={settingsStatusGridClass}>
-              <div className="customer-detail-card">
-                <span>Current</span>
+        <SettingsOverviewCard
+          compact
+          icon="update"
+          tone="orange"
+          eyebrow="Software Update"
+          title="Desktop OTA"
+          description="Check for updates and install the latest signed desktop package."
+        >
+          <div className="settings-overview-surface settings-overview-surface--compact">
+            <div className="settings-overview-info-grid">
+              <div className="settings-overview-info-item">
+                <span className={settingsStatusLabelClass}>Installed Version</span>
                 <strong>{appVersion}</strong>
               </div>
-              <div className="customer-detail-card">
-                <span>Latest Check</span>
-                <strong>
-                  {updateResult?.available && updateResult.manifest
-                    ? `Update ${updateResult.manifest.version}`
-                    : updateResult
-                      ? 'Up to date'
-                      : 'Not checked'}
-                </strong>
+              <div className="settings-overview-info-item">
+                <span className={settingsStatusLabelClass}>Latest Check</span>
+                <SettingsStatusBadge label={latestCheckLabel} tone={latestCheckTone} />
+              </div>
+              <div className="settings-overview-info-item">
+                <span className={settingsStatusLabelClass}>Install Safety</span>
+                <SettingsStatusBadge
+                  label={updateSafety.safe ? (hasActiveShift ? 'Shift Open' : 'Ready') : 'Action Needed'}
+                  tone={updateSafety.safe ? (hasActiveShift ? 'warn' : 'good') : 'danger'}
+                />
+              </div>
+              <div className="settings-overview-info-item">
+                <span className={settingsStatusLabelClass}>Checked At</span>
+                <strong>{updateResult?.checkedAt ? formatDateTime(updateResult.checkedAt) : 'Not checked yet'}</strong>
               </div>
             </div>
-            {updateResult?.manifest ? (
-              <div className="sync-banner info">
-                <strong>Release {updateResult.manifest.version}</strong>
-                <span>{new Date(updateResult.manifest.date).toLocaleString()}</span>
-                <span>{updateResult.manifest.body}</span>
+            {updateResult?.required ? (
+              <div className="rounded-[14px] border border-amber-300 bg-amber-50 px-3 py-2 text-[0.82rem] font-semibold text-amber-900">
+                This update is required for continued support. Sync pending work before installation.
+              </div>
+            ) : null}
+            {updateResult?.policy?.releaseNotes || manifestReleaseNotes ? (
+              <div className="rounded-[14px] border border-[var(--border-soft)] bg-[var(--surface-muted)] px-3 py-2 text-[0.82rem] leading-5 text-[var(--muted-strong)]">
+                <strong className="block text-[var(--text-strong)]">What is included</strong>
+                {updateResult?.policy?.releaseNotes ?? manifestReleaseNotes}
+              </div>
+            ) : null}
+            {updateSafety.blockers.length > 0 || updateSafety.warnings.length > 0 ? (
+              <div className="grid gap-1 text-[0.8rem] leading-5 text-[var(--muted-strong)]">
+                {[...updateSafety.blockers, ...updateSafety.warnings].map((item) => (
+                  <span key={item}>• {item}</span>
+                ))}
+              </div>
+            ) : (
+              <div className="text-[0.8rem] text-emerald-700">No pending records or active sync operations block installation.</div>
+            )}
+            {updateStatus === 'downloading' || updateStatus === 'installing' ? (
+              <div className="h-1.5 overflow-hidden rounded-full bg-slate-200" aria-label="Update download in progress">
+                <span className="block h-full w-2/3 animate-pulse rounded-full bg-[var(--accent)]" />
               </div>
             ) : null}
             <div className={settingsActionRowClass}>
               <button className="secondary-btn" type="button" onClick={() => void handleCheckForUpdates()} disabled={checkingForUpdate}>
                 {checkingForUpdate ? 'Checking...' : 'Check for Updates'}
               </button>
+              {pendingOutboxCount > 0 && onRunSync ? (
+                <button className="secondary-btn" type="button" onClick={() => void onRunSync()} disabled={syncBusy}>
+                  {syncBusy ? 'Syncing...' : `Sync ${pendingOutboxCount} Pending`}
+                </button>
+              ) : null}
               <button
                 className="primary-btn"
                 type="button"
                 onClick={() => void handleInstallUpdate()}
-                disabled={installingUpdate || !updateResult?.available || !updateResult.manifest}
+                disabled={installingUpdate || !updateSafety.safe || !updateResult?.available || !updateResult.manifest}
               >
                 {installingUpdate
                   ? 'Installing...'
@@ -1255,31 +1548,368 @@ export function SettingsScreen({ state, onStateReload, onStartWalkthrough, onRes
               </button>
             </div>
           </div>
-        </section>
+        </SettingsOverviewCard>
 
-        <section className={settingsSectionClass}>
-          <div className={settingsHeadClass}>
-            <div className="eyebrow">Device Data</div>
-            <h3>Reset Local Desktop Data</h3>
-          </div>
-          <p className={settingsHelperClass}>
-            Use this only when you want to restart desktop testing from a clean local state on this device.
-          </p>
-          <div className={settingsCardClass}>
-            <div className={settingsSubheadClass}>
+        <SettingsOverviewCard
+          compact
+          icon="reset"
+          tone="rose"
+          eyebrow="Device Data"
+          title="Reset Local Desktop Data"
+          description="Use this only when you want to restart desktop testing from a clean local state."
+        >
+          <div className="settings-overview-surface settings-overview-surface--compact">
+            <div className="settings-overview-surface-head">
               <strong>Clear Local Records</strong>
               <span>This clears local sales, sync queue, cached branch data, saved printer profiles, PIN, and sign-in on this desktop device.</span>
             </div>
             <div className={settingsActionRowClass}>
               <button className="secondary-btn" type="button" onClick={() => setResetConfirmOpen(true)} disabled={resetBusy}>
-                {resetBusy ? 'Resetting...' : 'Reset Local Desktop Data'}
+                {resetBusy ? 'Resetting...' : 'Reset Local Data'}
               </button>
             </div>
           </div>
-        </section>
-
-        <div className="message-banner">{message}</div>
+        </SettingsOverviewCard>
       </div>
+
+      <div className="settings-overview-banner">
+        <SettingsOverviewGlyph kind="info" tone="blue" />
+        <span>{message}</span>
+      </div>
+
+      {setupAccessPromptOpen ? (
+        <div className={settingsModalBackdropClass} onClick={closeSetupAccessPrompt}>
+          <div className={settingsActionModalCardClass} onClick={(event) => event.stopPropagation()}>
+            <div className="desktop-modal-header settings-pin-modal-head">
+              <div>
+                <div className="eyebrow">Branch Master Data</div>
+                <h3>Manage Setup Access</h3>
+              </div>
+              <SettingsModalCloseButton onClick={closeSetupAccessPrompt} />
+            </div>
+
+            <div className="desktop-modal-body settings-pin-stack">
+              <p className={settingsHelperClass}>Enter the access password before opening workstation setup on this device.</p>
+              <div className="settings-pin-field">
+                <span className="settings-pin-label">Access Password</span>
+                <input
+                  className="settings-access-input"
+                  type="password"
+                  value={setupAccessPassword}
+                  onChange={(event) => setSetupAccessPassword(event.target.value)}
+                  placeholder="Enter access password"
+                  autoFocus
+                />
+              </div>
+            </div>
+
+            <div className="desktop-modal-footer settings-pin-actions">
+              <button className="secondary-btn" type="button" onClick={closeSetupAccessPrompt}>
+                Cancel
+              </button>
+              <button className="primary-btn" type="button" onClick={handleConfirmSetupAccess}>
+                Continue
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
+
+      {setupModalOpen ? (
+        <div className={settingsModalBackdropClass} onClick={() => !saving && !signingIn && setSetupModalOpen(false)}>
+          <div className={settingsSetupModalCardClass} onClick={(event) => event.stopPropagation()}>
+            <div className={settingsModalToolbarClass}>
+              <div className="panel-head pos-sheet-head">
+                <div>
+                  <div className="eyebrow">Branch Master Data</div>
+                  <h3>Workstation Setup</h3>
+                  <p className={settingsHelperClass}>Sign in this workstation, choose branch and location, then refresh the local branch data before using desktop POS.</p>
+                </div>
+                <SettingsModalCloseButton onClick={() => setSetupModalOpen(false)} disabled={saving || signingIn} />
+              </div>
+            </div>
+
+            <div className="desktop-modal-body settings-layout-stack">
+              <section className="payment-section-card settings-layout-section">
+                <div className="settings-overview-info-grid">
+                  <div className="settings-overview-info-item">
+                    <span className={settingsStatusLabelClass}>Branch</span>
+                    <strong>{branchLabel || 'Not selected'}</strong>
+                  </div>
+                  <div className="settings-overview-info-item">
+                    <span className={settingsStatusLabelClass}>Location</span>
+                    <strong>{locationLabel || 'Not selected'}</strong>
+                  </div>
+                  <div className="settings-overview-info-item">
+                    <span className={settingsStatusLabelClass}>Last Download</span>
+                    <strong>{state.sync.lastSyncedAt ? formatDateTime(state.sync.lastSyncedAt) : 'Not yet'}</strong>
+                  </div>
+                  <div className="settings-overview-info-item">
+                    <span className={settingsStatusLabelClass}>Status</span>
+                    <SettingsStatusBadge label={branchStatusLabel} tone={branchStatusTone} />
+                  </div>
+                </div>
+              </section>
+
+              <section className="payment-section-card settings-layout-section">
+                <div className={settingsSubheadClass}>
+                  <strong>Workstation Setup</strong>
+                  <span>These details stay on this device so the cashier can keep working locally even after restart.</span>
+                </div>
+                <div className="settings-form-grid">
+                  <label>
+                    <span>Operator name</span>
+                    <input value={form.operatorName} onChange={(event) => setForm((prev) => ({ ...prev, operatorName: event.target.value }))} placeholder="Cashier or operator" />
+                  </label>
+                  <label>
+                    <span>API base URL</span>
+                    <input value={form.apiBaseUrl} onChange={(event) => setForm((prev) => ({ ...prev, apiBaseUrl: event.target.value }))} placeholder="https://vmjamtech.com/api" />
+                  </label>
+                  <label>
+                    <span>Tenant client ID</span>
+                    <input value={form.clientId} onChange={(event) => setForm((prev) => ({ ...prev, clientId: event.target.value }))} placeholder="DEMO or tenant code" />
+                  </label>
+                  <label>
+                    <span>Desktop sign-in email</span>
+                    <input value={form.authEmail} onChange={(event) => setForm((prev) => ({ ...prev, authEmail: event.target.value }))} placeholder="cashier@branch.local" />
+                  </label>
+                  <label>
+                    <span>Desktop sign-in password</span>
+                    <input type="password" value={password} onChange={(event) => setPassword(event.target.value)} placeholder="Password" />
+                  </label>
+                  <label>
+                    <span>Device ID</span>
+                    <input value={form.deviceId} onChange={(event) => setForm((prev) => ({ ...prev, deviceId: event.target.value }))} placeholder="desktop-main-counter" />
+                  </label>
+                  <label>
+                    <span>Branch</span>
+                    <select
+                      value={form.branchId}
+                      onChange={(event) =>
+                        setForm((prev) => ({
+                          ...prev,
+                          branchId: event.target.value,
+                          branchLabel: branchOptions.find((option) => option.id === event.target.value)?.label ?? '',
+                          locationId: '',
+                          locationLabel: ''
+                        }))
+                      }
+                    >
+                      <option value="">Select branch</option>
+                      {branchOptions.map((option) => (
+                        <option key={option.id} value={option.id}>
+                          {option.label}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                  <label>
+                    <span>Location</span>
+                    <select
+                      value={form.locationId}
+                      onChange={(event) =>
+                        setForm((prev) => ({
+                          ...prev,
+                          locationId: event.target.value,
+                          locationLabel: locationOptions.find((option) => option.id === event.target.value)?.label ?? ''
+                        }))
+                      }
+                    >
+                      <option value="">Select location</option>
+                      {locationOptions.map((option) => (
+                        <option key={option.id} value={option.id}>
+                          {option.label}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                </div>
+              </section>
+            </div>
+
+            <div className="desktop-modal-footer checkout-action-row pos-payment-actions">
+              <button className="secondary-btn checkout-btn checkout-btn-support" type="button" onClick={() => setSetupModalOpen(false)} disabled={saving || signingIn}>
+                Back
+              </button>
+              <button className="secondary-btn checkout-btn checkout-btn-print-inline" type="button" onClick={() => void handleSaveSetup()} disabled={saving}>
+                {saving ? 'Saving...' : 'Save Desktop Setup'}
+              </button>
+              <button className="primary-btn checkout-btn" type="button" onClick={() => void handleSignIn()} disabled={signingIn}>
+                {signingIn ? 'Signing In...' : state.auth.accessToken ? 'Refresh Sign In' : 'Sign In'}
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
+
+      {printerModalOpen ? (
+        <div className={settingsModalBackdropClass} onClick={() => !savingProfile && !testingPrinter && !discoveringPrinters && setPrinterModalOpen(false)}>
+          <div className={settingsPrinterModalCardClass} onClick={(event) => event.stopPropagation()}>
+            <div className={settingsModalToolbarClass}>
+              <div className="panel-head pos-sheet-head">
+                <div>
+                  <div className="eyebrow">Printer</div>
+                  <h3>Receipt Printer Settings</h3>
+                  <p className={settingsHelperClass}>Choose printer mode, save the printer path, then run a test print.</p>
+                </div>
+                <SettingsModalCloseButton
+                  onClick={() => setPrinterModalOpen(false)}
+                  disabled={savingProfile || testingPrinter || discoveringPrinters}
+                />
+              </div>
+            </div>
+
+            <div className="desktop-modal-body settings-layout-stack">
+              <section className="payment-section-card settings-layout-section">
+                <div className={settingsSubheadClass}>
+                  <strong>Current Printer Path</strong>
+                  <span>Choose USB or LAN, fill the path below, then save a reusable profile for this workstation.</span>
+                </div>
+                <div className={settingsChipRowClass}>
+                  {PRINTER_MODE_OPTIONS.map((option) => (
+                    <button
+                      key={option.value}
+                      type="button"
+                      className={`filter-chip ${form.printerMode === option.value ? 'active' : ''}`}
+                      onClick={() => setForm((prev) => ({ ...prev, printerMode: option.value as DesktopSetupState['printerMode'] }))}
+                    >
+                      {option.label}
+                    </button>
+                  ))}
+                </div>
+                <div className="settings-form-grid">
+                  <label>
+                    <span>USB printer name</span>
+                    <input value={form.printerName} onChange={(event) => setForm((prev) => ({ ...prev, printerName: event.target.value }))} placeholder="EPSON TM-T82X Receipt" />
+                  </label>
+                  <label>
+                    <span>Discovered USB printers</span>
+                    <select value={form.printerName} onChange={(event) => setForm((prev) => ({ ...prev, printerName: event.target.value }))}>
+                      <option value="">Select discovered printer</option>
+                      {discoveredPrinters.map((printer) => (
+                        <option key={printer} value={printer}>
+                          {printer}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                  <label>
+                    <span>LAN printer host</span>
+                    <input value={form.printerHost} onChange={(event) => setForm((prev) => ({ ...prev, printerHost: event.target.value }))} placeholder="192.168.1.120" />
+                  </label>
+                  <label>
+                    <span>LAN printer port</span>
+                    <input value={form.printerPort} onChange={(event) => setForm((prev) => ({ ...prev, printerPort: event.target.value }))} placeholder="9100" />
+                  </label>
+                  <label>
+                    <span>Printer profile name</span>
+                    <input value={profileLabel} onChange={(event) => setProfileLabel(event.target.value)} placeholder="Front Counter USB or Warehouse LAN" />
+                  </label>
+                </div>
+                <div className={settingsActionRowClass}>
+                  <button className="secondary-btn" type="button" onClick={() => void handleDiscoverPrinters()} disabled={discoveringPrinters}>
+                    {discoveringPrinters ? 'Discovering...' : 'Discover USB Printers'}
+                  </button>
+                  <button className="secondary-btn" type="button" onClick={() => void persistProfile()} disabled={savingProfile || form.printerMode === 'NONE'}>
+                    {savingProfile ? 'Saving...' : 'Save Profile'}
+                  </button>
+                  <button className="secondary-btn" type="button" onClick={() => void runPrinterTest()} disabled={testingPrinter || form.printerMode === 'NONE'}>
+                    {testingPrinter ? 'Testing...' : 'Test Current Path'}
+                  </button>
+                  <button
+                    ref={printerSaveTarget.ref}
+                    className={`primary-btn ${printerSaveTarget.active ? 'tutorial-target-active' : ''}`}
+                    type="button"
+                    onClick={async () => {
+                      const profile = await persistProfile({ announceSuccess: false });
+                      if (profile) {
+                        await runPrinterTest(profile);
+                      }
+                    }}
+                    disabled={savingProfile || testingPrinter || form.printerMode === 'NONE'}
+                  >
+                    {testingPrinter ? 'Testing...' : 'Save & Test Profile'}
+                  </button>
+                </div>
+              </section>
+
+              {selectedProfile ? (
+                <section className="payment-section-card settings-layout-section">
+                  <div className={settingsSubheadClass}>
+                    <strong>Selected Profile</strong>
+                    <span>Review the latest test result before printing live receipts.</span>
+                  </div>
+                  <div className={`sync-banner ${selectedProfile.lastTestStatus === 'error' ? 'error' : selectedProfile.lastTestStatus === 'success' ? 'success' : ''}`}>
+                    <strong>Selected profile status</strong>
+                    <span>Last test: {formatDateTime(selectedProfile.lastTestedAt)}</span>
+                    <span>Last success: {formatDateTime(selectedProfile.lastSuccessAt)}</span>
+                    <span>{selectedProfile.lastTestMessage || 'No printer feedback recorded yet.'}</span>
+                  </div>
+                </section>
+              ) : null}
+
+              <section className="payment-section-card settings-layout-section">
+                <div className={settingsSubheadClass}>
+                  <strong>Saved Printer Profiles</strong>
+                  <span>Tap a saved profile to apply it again, rerun a test, or remove it from this device.</span>
+                </div>
+                <div className={settingsProfileListClass}>
+                  {state.printerProfiles.length === 0 ? (
+                    <div className="empty-state">No saved printer profiles yet. Save one after choosing a USB or LAN printer path.</div>
+                  ) : (
+                    state.printerProfiles.map((profile) => (
+                      <article key={profile.id} className={`${settingsProfileCardClass} ${selectedProfileId === profile.id ? settingsProfileSelectedClass : ''}`}>
+                        <button type="button" className={settingsProfileButtonClass} onClick={() => applyProfile(profile)}>
+                          <div className="grid gap-1.5">
+                            <span className={settingsStatusLabelClass}>Profile</span>
+                            <strong className={settingsStatusValueClass}>{profile.label}</strong>
+                            <span className="text-[0.88rem] text-[var(--muted)]">
+                              {profile.mode === 'USB'
+                                ? profile.printerName || 'USB printer name not set'
+                                : `${profile.printerHost || 'LAN host not set'}:${profile.printerPort || '9100'}`}
+                            </span>
+                          </div>
+                          <div className="grid gap-1 rounded-[18px] border border-[rgba(188,210,234,0.45)] bg-[rgba(255,255,255,0.97)] px-4 py-3 shadow-[0_8px_20px_rgba(17,40,58,0.04)] md:justify-items-end">
+                            <span className={settingsStatusLabelClass}>Mode</span>
+                            <strong className={settingsStatusValueClass}>{profile.mode}</strong>
+                            <span className="text-[0.84rem] text-[var(--muted)]">Last success: {formatDateTime(profile.lastSuccessAt)}</span>
+                          </div>
+                          <div className={`sync-chip ${profile.lastTestStatus === 'error' ? 'failed' : profile.lastTestStatus === 'success' ? 'synced' : 'pending'}`}>
+                            {profile.lastTestStatus === 'idle' ? 'not tested' : profile.lastTestStatus}
+                          </div>
+                        </button>
+                        <div className="recent-sale-actions">
+                          <button className="secondary-btn mini-btn" type="button" onClick={() => applyProfile(profile)}>
+                            Apply
+                          </button>
+                          <button className="secondary-btn mini-btn" type="button" onClick={() => void runPrinterTest(profile)} disabled={testingPrinter}>
+                            Test Again
+                          </button>
+                          <button className="secondary-btn mini-btn" type="button" onClick={() => void handleDeletePrinterProfile(profile.id)}>
+                            Delete
+                          </button>
+                        </div>
+                      </article>
+                    ))
+                  )}
+                </div>
+              </section>
+            </div>
+
+            <div className="desktop-modal-footer settings-pin-actions">
+              <button
+                className="secondary-btn"
+                type="button"
+                onClick={() => setPrinterModalOpen(false)}
+                disabled={savingProfile || testingPrinter || discoveringPrinters}
+              >
+                Back
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
+
       {layoutModalOpen ? (
         <div className={settingsModalBackdropClass} onClick={() => !layoutSaving && setLayoutModalOpen(false)}>
           <div className={settingsModalCardClass} onClick={(event) => event.stopPropagation()}>
@@ -1290,13 +1920,11 @@ export function SettingsScreen({ state, onStateReload, onStartWalkthrough, onRes
                   <h3>Receipt Layout Editor</h3>
                   <p className={settingsHelperClass}>Arrange the printed receipt the same way mobile VPOS does: header first, printed fields next, then spacing and test print.</p>
                 </div>
-                <button className="secondary-btn mini-btn" type="button" onClick={() => !layoutSaving && setLayoutModalOpen(false)}>
-                  Close
-                </button>
+                <SettingsModalCloseButton onClick={() => !layoutSaving && setLayoutModalOpen(false)} disabled={layoutSaving} />
               </div>
             </div>
 
-            <div className="flex min-h-0 flex-1 flex-col gap-5 overflow-y-auto px-5 py-5">
+            <div className="desktop-modal-body settings-layout-stack">
               <section className="payment-section-card settings-layout-section">
                 <div className="panel-head compact settings-layout-section-head">
                   <div>
@@ -1404,9 +2032,9 @@ export function SettingsScreen({ state, onStateReload, onStartWalkthrough, onRes
                   </div>
                 </div>
                 <div className="two-col-grid settings-layout-spacing-grid">
-                  <div className="customer-detail-card settings-layout-spacing-card">
-                    <span>Top Padding Lines</span>
-                    <strong>{layoutDraft.topPaddingLines}</strong>
+                  <div className={`${settingsStatusCardClass} settings-layout-spacing-card`}>
+                    <span className={settingsStatusLabelClass}>Top Padding Lines</span>
+                    <strong className={settingsStatusValueClass}>{layoutDraft.topPaddingLines}</strong>
                     <div className="desktop-settings-actions">
                       <button
                         className="secondary-btn mini-btn"
@@ -1424,9 +2052,9 @@ export function SettingsScreen({ state, onStateReload, onStartWalkthrough, onRes
                       </button>
                     </div>
                   </div>
-                  <div className="customer-detail-card settings-layout-spacing-card">
-                    <span>Bottom Padding Lines</span>
-                    <strong>{layoutDraft.bottomPaddingLines}</strong>
+                  <div className={`${settingsStatusCardClass} settings-layout-spacing-card`}>
+                    <span className={settingsStatusLabelClass}>Bottom Padding Lines</span>
+                    <strong className={settingsStatusValueClass}>{layoutDraft.bottomPaddingLines}</strong>
                     <div className="desktop-settings-actions">
                       <button
                         className="secondary-btn mini-btn"
@@ -1447,7 +2075,8 @@ export function SettingsScreen({ state, onStateReload, onStartWalkthrough, onRes
                 </div>
               </section>
 
-              <div className="checkout-action-row pos-payment-actions">
+            </div>
+            <div className="desktop-modal-footer checkout-action-row pos-payment-actions">
                 <button className="secondary-btn checkout-btn checkout-btn-print-inline" type="button" onClick={() => void handleTestLayout()} disabled={layoutSaving}>
                   {layoutSaving ? 'Testing...' : 'Test Layout Print'}
                 </button>
@@ -1457,7 +2086,6 @@ export function SettingsScreen({ state, onStateReload, onStartWalkthrough, onRes
                 <button className="primary-btn checkout-btn" type="button" onClick={() => void handleSaveLayout()} disabled={layoutSaving}>
                   {layoutSaving ? 'Saving...' : 'Save Layout'}
                 </button>
-              </div>
             </div>
           </div>
         </div>
@@ -1465,24 +2093,17 @@ export function SettingsScreen({ state, onStateReload, onStartWalkthrough, onRes
 
       {pinModalOpen ? (
         <div className={settingsModalBackdropClass} onClick={() => !pinSaving && setPinModalOpen(false)}>
-          <div className="w-full max-w-xl rounded-[28px] border border-[var(--border-soft)] bg-[rgba(255,255,255,0.97)] p-5 shadow-[var(--shadow-strong)]" onClick={(event) => event.stopPropagation()}>
-            <div className="settings-pin-modal-head">
+          <div className={settingsActionModalCardClass} onClick={(event) => event.stopPropagation()}>
+            <div className="desktop-modal-header settings-pin-modal-head">
               <div>
                 <div className="eyebrow">Security PIN</div>
                 <h3>{pinConfigured ? 'Change PIN' : 'Set PIN'}</h3>
               </div>
-              <button
-                className="secondary-btn mini-btn"
-                type="button"
-                onClick={() => !pinSaving && setPinModalOpen(false)}
-              >
-                Close
-              </button>
+              <SettingsModalCloseButton onClick={() => !pinSaving && setPinModalOpen(false)} disabled={pinSaving} />
             </div>
 
-            <p className={settingsHelperClass}>Use a 4-digit PIN for fast offline unlock.</p>
-
-            <div className="settings-pin-stack">
+            <div className="desktop-modal-body settings-pin-stack">
+              <p className={settingsHelperClass}>Use a 4-digit PIN for fast offline unlock.</p>
               {pinConfigured ? (
                 <div className="settings-pin-field">
                   <span className="settings-pin-label">Current PIN</span>
@@ -1517,7 +2138,7 @@ export function SettingsScreen({ state, onStateReload, onStartWalkthrough, onRes
               </div>
             </div>
 
-            <div className={`${settingsActionRowClass} settings-pin-actions`}>
+            <div className="desktop-modal-footer settings-pin-actions">
               <button
                 className="secondary-btn"
                 type="button"
@@ -1536,31 +2157,25 @@ export function SettingsScreen({ state, onStateReload, onStartWalkthrough, onRes
 
       {resetConfirmOpen ? (
         <div className={settingsModalBackdropClass} onClick={() => !resetBusy && setResetConfirmOpen(false)}>
-          <div className="w-full max-w-xl rounded-[28px] border border-[var(--border-soft)] bg-[rgba(255,255,255,0.97)] p-5 shadow-[var(--shadow-strong)]" onClick={(event) => event.stopPropagation()}>
-            <div className="settings-pin-modal-head">
+          <div className={settingsActionModalCardClass} onClick={(event) => event.stopPropagation()}>
+            <div className="desktop-modal-header settings-pin-modal-head">
               <div>
                 <div className="eyebrow">Device Data</div>
                 <h3>Reset Local Desktop Data</h3>
               </div>
-              <button
-                className="secondary-btn mini-btn"
-                type="button"
-                onClick={() => !resetBusy && setResetConfirmOpen(false)}
-                disabled={resetBusy}
-              >
-                Close
-              </button>
+              <SettingsModalCloseButton onClick={() => !resetBusy && setResetConfirmOpen(false)} disabled={resetBusy} />
             </div>
 
-            <p className={settingsHelperClass}>
-              This will clear local sales, sync queue, cached branch data, saved printer profiles, PIN, and saved sign-in on this desktop device.
-            </p>
-            <div className="sync-banner error">
-              <strong>Fresh test reset</strong>
-              <span>Use this only when you want the device to go back to the startup flow for fresh POS testing.</span>
+            <div className="desktop-modal-body settings-pin-stack">
+              <p className={settingsHelperClass}>
+                This will clear local sales, sync queue, cached branch data, saved printer profiles, PIN, and saved sign-in on this desktop device.
+              </p>
+              <div className="sync-banner error">
+                <strong>Fresh test reset</strong>
+                <span>Use this only when you want the device to go back to the startup flow for fresh POS testing.</span>
+              </div>
             </div>
-
-            <div className={`${settingsActionRowClass} settings-pin-actions`}>
+            <div className="desktop-modal-footer settings-pin-actions">
               <button
                 className="secondary-btn"
                 type="button"
@@ -1569,7 +2184,7 @@ export function SettingsScreen({ state, onStateReload, onStartWalkthrough, onRes
               >
                 Cancel
               </button>
-              <button className="primary-btn" type="button" onClick={() => void handleResetLocalData()} disabled={resetBusy}>
+              <button className="primary-btn bg-[#b91c1c] border-transparent text-white hover:bg-[#a11a1a]" type="button" onClick={() => void handleResetLocalData()} disabled={resetBusy}>
                 {resetBusy ? 'Resetting...' : 'Confirm Reset'}
               </button>
             </div>

@@ -108,6 +108,9 @@ importers:
       '@tauri-apps/api':
         specifier: 1.6.0
         version: 1.6.0
+      '@vpos/desktop-core':
+        specifier: workspace:*
+        version: link:../../packages/desktop-core
       '@vpos/offline-core':
         specifier: workspace:*
         version: link:../../packages/offline-core
@@ -345,6 +348,12 @@ importers:
         version: 5.9.3
 
   packages/ai-ready: {}
+
+  packages/desktop-core:
+    dependencies:
+      '@vpos/shared-types':
+        specifier: workspace:*
+        version: link:../shared-types
 
   packages/eslint-config: {}
 

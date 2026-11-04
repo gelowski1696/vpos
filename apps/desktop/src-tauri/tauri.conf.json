@@ -8,7 +8,7 @@
   },
   "package": {
     "productName": "VPOS Desktop",
-    "version": "0.1.0"
+    "version": "0.1.4"
   },
   "tauri": {
     "allowlist": {
@@ -18,13 +18,54 @@
         "open": false
       }
     },
+    "updater": {
+      "active": true,
+      "dialog": false,
+      "endpoints": [
+        "https://vmjamtech.com/desktop-updates/latest.json"
+      ],
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEE5RTVBMzQzOUU2MzA5QTcKUldTbkNXT2VRNlBscVJnV1owaGFUOUZKeEF2eEFmZWxRUUZqc3lqVS9zTkFzak1CdzBPRXZ2TkIK",
+      "windows": {
+        "installMode": "passive",
+        "installerArgs": []
+      }
+    },
+    "bundle": {
+      "active": true,
+      "targets": [
+        "msi"
+      ],
+      "identifier": "com.vmjam.vpos.desktop",
+      "publisher": "VMJAM Tech",
+      "category": "Business",
+      "shortDescription": "VPOS Desktop cashier workstation",
+      "longDescription": "VPOS Desktop is the cashier workstation application for branch sales, syncing local data, printing receipts, and operating desktop POS flows.",
+      "copyright": "Copyright (c) VMJAM Tech",
+      "icon": [
+        "icons/icon.ico",
+        "icons/icon.png"
+      ],
+      "windows": {
+        "allowDowngrades": false,
+        "webviewInstallMode": {
+          "type": "downloadBootstrapper",
+          "silent": true
+        },
+        "wix": {
+          "language": "en-US"
+        }
+      }
+    },
     "windows": [
       {
         "title": "VPOS Desktop",
-        "width": 1440,
-        "height": 920,
-        "minWidth": 1180,
-        "minHeight": 760,
+        "width": 1280,
+        "height": 820,
+        "minWidth": 1280,
+        "minHeight": 720,
+        "center": true,
+        "maximized": true,
+        "visible": false,
         "resizable": true
       }
     ]

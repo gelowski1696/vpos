@@ -1,4 +1,4 @@
-﻿import { useEffect, useMemo, useState, type ReactNode } from "react";
+﻿import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { SearchField } from "../components/inputs/SearchField";
 import { useDesktopUi } from "../components/feedback/DesktopUiFeedback";
 import { desktopDb } from "../db/sqlite";
@@ -34,6 +34,7 @@ import {
 import { buildSaleOutboxPayload } from "../services/desktop-sale-sync-payload";
 import { desktopSettingsService } from "../services/desktop-settings.service";
 import { desktopShiftService } from "../services/desktop-shift.service";
+import { desktopSubscriptionPolicyService } from "../services/desktop-subscription-policy.service";
 import {
   desktopShiftInventoryReportService,
 } from "../services/desktop-shift-inventory-report.service";
@@ -93,6 +94,14 @@ type Props = {
 };
 
 type CurrentEntitlementResponse = {
+  status?: unknown;
+  subscription_status?: unknown;
+  subscriptionStatus?: unknown;
+  grace_until?: unknown;
+  graceUntil?: unknown;
+  updated_at?: unknown;
+  updatedAt?: unknown;
+  lastSyncedAt?: unknown;
   addons?: {
     receipt_amount_privacy?: boolean;
     cashier_end_of_day_inventory_count?: boolean;
@@ -217,6 +226,7 @@ function buildQueueOrderPageButtons(currentPage: number, totalPages: number): nu
 type PickerModalProps = {
   open: boolean;
   title: string;
+  variant?: "customer" | "personnel" | "helper";
   search: string;
   placeholder: string;
   emptyLabel: string;
@@ -233,6 +243,17 @@ type PickerModalProps = {
   actionDisabled?: boolean;
 };
 
+type PickerModalVariant = NonNullable<PickerModalProps["variant"]>;
+type PickerQuickFilter = "ALL" | "WITH_BALANCE" | "WITH_POINTS" | "WITH_ADDRESS" | "WITH_ROLE" | "COMMISSION" | "NO_ROLE";
+type PickerSortMode = "CODE_ASC" | "NAME_ASC" | "BALANCE_DESC" | "POINTS_DESC" | "ROLE_ASC";
+type PickerViewMode = "list" | "grid";
+type ItemPickerSortMode =
+  | "NAME_ASC"
+  | "SKU_ASC"
+  | "PRICE_ASC"
+  | "PRICE_DESC"
+  | "STOCK_DESC";
+
 const screenStackClass = "flex flex-col gap-5";
 const shellCardClass =
   "rounded-[28px] border border-[var(--border-soft)] bg-[rgba(255,255,255,0.94)] p-5 shadow-[0_18px_44px_rgba(17,40,58,0.08)] backdrop-blur";
@@ -244,6 +265,10 @@ const summaryLabelClass =
   "block text-[0.78rem] font-semibold uppercase tracking-[0.08em] text-[var(--muted)]";
 const summaryValueClass =
   "mt-1 block text-[1rem] font-extrabold text-[var(--text-strong)]";
+const posCreateCustomerLabelClass =
+  "text-[0.75rem] font-semibold uppercase tracking-[0.08em] text-[var(--muted)]";
+const posCreateCustomerInputShellClass =
+  "flex min-h-[60px] items-stretch overflow-hidden rounded-[16px] border border-[rgba(188,210,234,0.78)] bg-white shadow-[inset_0_1px_0_rgba(255,255,255,0.95),0_10px_20px_rgba(17,40,58,0.04)]";
 const selectorTileClass =
   "grid gap-1 rounded-[22px] border border-[var(--border-soft)] bg-[rgba(255,255,255,0.95)] px-4 py-4 text-left shadow-[0_10px_24px_rgba(17,40,58,0.05)] transition hover:-translate-y-[1px] hover:border-[rgba(25,118,210,0.28)] hover:shadow-[0_14px_28px_rgba(17,40,58,0.08)]";
 const selectorLabelClass =
@@ -273,6 +298,23 @@ type PosOverviewMetricIcon =
   | "lines"
   | "route"
   | "total";
+
+const POS_ORDER_TYPE_OPTIONS: ReadonlyArray<{
+  value: DesktopSaleType;
+  label: string;
+  description: string;
+}> = [
+  {
+    value: "PICKUP",
+    label: "PICKUP",
+    description: "Customer picks up the order.",
+  },
+  {
+    value: "DELIVERY",
+    label: "DELIVERY",
+    description: "Order will be delivered.",
+  },
+];
 
 function PosOverviewIcon({
   path,
@@ -356,6 +398,71 @@ function PosOverviewSymbol({
     );
   }
   return <PosOverviewIcon path={path} className={className} />;
+}
+
+function PosChevronDownIcon({ className = "" }: { className?: string }): JSX.Element {
+  return <PosOverviewIcon path={<path d="m7 10 5 5 5-5" />} className={className} />;
+}
+
+function PosChevronUpIcon({ className = "" }: { className?: string }): JSX.Element {
+  return <PosOverviewIcon path={<path d="m7 14 5-5 5 5" />} className={className} />;
+}
+
+function PosChevronRightIcon({ className = "" }: { className?: string }): JSX.Element {
+  return <PosOverviewIcon path={<path d="m9 6 6 6-6 6" />} className={className} />;
+}
+
+function PosCheckIcon({ className = "" }: { className?: string }): JSX.Element {
+  return <PosOverviewIcon path={<path d="m7.5 12.5 3 3 6-7" />} className={className} />;
+}
+
+function PosPlusIcon({ className = "" }: { className?: string }): JSX.Element {
+  return (
+    <PosOverviewIcon
+      path={
+        <>
+          <path d="M12 5v14" />
+          <path d="M5 12h14" />
+        </>
+      }
+      className={className}
+    />
+  );
+}
+
+function PosMinusIcon({ className = "" }: { className?: string }): JSX.Element {
+  return <PosOverviewIcon path={<path d="M5 12h14" />} className={className} />;
+}
+
+function PosTrashIcon({ className = "" }: { className?: string }): JSX.Element {
+  return (
+    <PosOverviewIcon
+      path={
+        <>
+          <path d="M7 7h10" />
+          <path d="M10 7V5h4v2" />
+          <path d="M9 10v7" />
+          <path d="M15 10v7" />
+          <path d="M6.5 7.5 7.2 19h9.6l.7-11.5" />
+        </>
+      }
+      className={className}
+    />
+  );
+}
+
+function PosArrowRightIcon({ className = "" }: { className?: string }): JSX.Element {
+  return (
+    <PosOverviewIcon
+      path={
+        <>
+          <path d="M5 12h14" />
+          <path d="m13 6 6 6-6 6" />
+        </>
+      }
+      className={className}
+    />
+  );
 }
 
 type PosSetupRowIconKind = "customer" | "personnel" | "helper" | "type";
@@ -718,6 +825,62 @@ function resolveStockLabel(product: DesktopCatalogProduct): string {
     return "Low Stock";
   }
   return "Ready";
+}
+
+function hasCylinderStock(product: DesktopCatalogProduct): boolean {
+  return product.isLpg || product.qtyFull > 0.0001 || product.qtyEmpty > 0.0001;
+}
+
+function formatStockQuantity(value: number): string {
+  return Number.isFinite(value) ? value.toFixed(2) : "0.00";
+}
+
+function formatCylinderStockQuantity(value: number): string {
+  return Number.isFinite(value)
+    ? value.toLocaleString(undefined, { maximumFractionDigits: 0 })
+    : "0";
+}
+
+function productMatchesItemSearch(
+  product: DesktopCatalogProduct,
+  term: string,
+): boolean {
+  if (!term) {
+    return true;
+  }
+  return (
+    product.name.toLowerCase().includes(term) ||
+    product.sku.toLowerCase().includes(term) ||
+    product.category.toLowerCase().includes(term) ||
+    (product.cylinderSizeLabel ?? "").toLowerCase().includes(term)
+  );
+}
+
+function itemPickerSortLabel(sortMode: ItemPickerSortMode): string {
+  if (sortMode === "SKU_ASC") {
+    return "Code (A-Z)";
+  }
+  if (sortMode === "PRICE_ASC") {
+    return "Price (Low-High)";
+  }
+  if (sortMode === "PRICE_DESC") {
+    return "Price (High-Low)";
+  }
+  if (sortMode === "STOCK_DESC") {
+    return "Stock (High-Low)";
+  }
+  return "Name (A-Z)";
+}
+
+function itemPickerCategoryLabel(category: string): string {
+  return category === "ALL" ? "All Items" : category;
+}
+
+function itemPickerStockSummary(product: DesktopCatalogProduct): string {
+  if (hasCylinderStock(product)) {
+    return `Full ${formatCylinderStockQuantity(product.qtyFull)} | Empty ${formatCylinderStockQuantity(product.qtyEmpty)}`;
+  }
+  return `On hand ${formatStockQuantity(product.qtyOnHand)}`;
 }
 
 function makeCartLineId(): string {
@@ -1114,84 +1277,547 @@ function toRewardRecord(
   };
 }
 
+const PICKER_PAGE_SIZE_OPTIONS = [10, 25, 50] as const;
+
+function resolvePickerVariant(
+  title: string,
+  variant?: PickerModalVariant,
+): PickerModalVariant {
+  if (variant) {
+    return variant;
+  }
+  const normalized = title.toLowerCase();
+  if (normalized.includes("helper")) {
+    return "helper";
+  }
+  if (normalized.includes("personnel")) {
+    return "personnel";
+  }
+  return "customer";
+}
+
+function pickerEntityLabel(variant: PickerModalVariant, count: number): string {
+  const singular =
+    variant === "customer"
+      ? "Customer"
+      : variant === "helper"
+        ? "Helper"
+        : "Personnel";
+  if (variant === "personnel") {
+    return `${count} Personnel found`;
+  }
+  return `${count} ${singular}${count === 1 ? "" : "s"} found`;
+}
+
+function splitOptionLabel(option: DesktopOption): { code: string; name: string } {
+  const rawLabel = option.label.trim();
+  const codeFromSubtitle =
+    option.subtitle
+      ?.split("·")[0]
+      ?.trim()
+      .replace(/^Code\s+/i, "") ?? "";
+  const codeFromLabel = rawLabel.includes(" - ")
+    ? rawLabel.split(" - ")[0]?.trim() ?? ""
+    : "";
+  const nameFromLabel = rawLabel.includes(" - ")
+    ? rawLabel.split(" - ").slice(1).join(" - ").trim()
+    : rawLabel;
+  return {
+    code: codeFromSubtitle || codeFromLabel || option.id,
+    name: nameFromLabel || rawLabel || option.id,
+  };
+}
+
+function resolvePickerMeta(
+  option: DesktopOption,
+  variant: PickerModalVariant,
+): {
+  code: string;
+  name: string;
+  subtitle: string;
+  balance: number;
+  points: number;
+  address: string;
+  role: string;
+  commission: string;
+} {
+  const split = splitOptionLabel(option);
+  const balance = Number(option.balance ?? 0);
+  const points = Math.floor(Number(option.pointsBalance ?? 0));
+  const role = option.roleName?.trim() || option.subtitle?.trim() || "-";
+  return {
+    code: split.code,
+    name: split.name,
+    subtitle:
+      variant === "customer"
+        ? option.subtitle?.trim() || `${split.code} · Bal ${balance.toFixed(2)} · Pts ${points}`
+        : option.subtitle?.trim() || role,
+    balance,
+    points,
+    address: option.address?.trim() || "-",
+    role,
+    commission: option.commissionEligible === false ? "No" : "Yes",
+  };
+}
+
+function pickerQuickFilters(
+  variant: PickerModalVariant,
+  options: DesktopOption[],
+): Array<{ id: PickerQuickFilter; label: string; count: number }> {
+  if (variant === "customer") {
+    return [
+      { id: "ALL", label: "All Customers", count: options.length },
+      {
+        id: "WITH_BALANCE",
+        label: "With Balance",
+        count: options.filter((option) => Number(option.balance ?? 0) > 0).length,
+      },
+      {
+        id: "WITH_POINTS",
+        label: "With Points",
+        count: options.filter((option) => Number(option.pointsBalance ?? 0) > 0).length,
+      },
+      {
+        id: "WITH_ADDRESS",
+        label: "With Address",
+        count: options.filter((option) => Boolean(option.address?.trim())).length,
+      },
+    ];
+  }
+
+  const personnelFilters: Array<{ id: PickerQuickFilter; label: string; count: number }> = [
+    {
+      id: "ALL",
+      label: variant === "helper" ? "All Helpers" : "All Personnel",
+      count: options.length,
+    },
+    {
+      id: "WITH_ROLE",
+      label: "With Role",
+      count: options.filter((option) => Boolean(option.roleName?.trim() || option.subtitle?.trim())).length,
+    },
+    {
+      id: "COMMISSION",
+      label: "Commission",
+      count: options.filter((option) => option.commissionEligible !== false).length,
+    },
+  ];
+
+  if (variant === "helper") {
+    personnelFilters.push({
+      id: "NO_ROLE",
+      label: "No Role",
+      count: options.filter((option) => !(option.roleName?.trim() || option.subtitle?.trim())).length,
+    });
+  }
+
+  return personnelFilters;
+}
+
+function applyPickerQuickFilter(
+  options: DesktopOption[],
+  filter: PickerQuickFilter,
+): DesktopOption[] {
+  if (filter === "WITH_BALANCE") {
+    return options.filter((option) => Number(option.balance ?? 0) > 0);
+  }
+  if (filter === "WITH_POINTS") {
+    return options.filter((option) => Number(option.pointsBalance ?? 0) > 0);
+  }
+  if (filter === "WITH_ADDRESS") {
+    return options.filter((option) => Boolean(option.address?.trim()));
+  }
+  if (filter === "WITH_ROLE") {
+    return options.filter((option) => Boolean(option.roleName?.trim() || option.subtitle?.trim()));
+  }
+  if (filter === "COMMISSION") {
+    return options.filter((option) => option.commissionEligible !== false);
+  }
+  if (filter === "NO_ROLE") {
+    return options.filter((option) => !(option.roleName?.trim() || option.subtitle?.trim()));
+  }
+  return options;
+}
+
+function pickerSortLabel(sortMode: PickerSortMode): string {
+  if (sortMode === "NAME_ASC") {
+    return "Name (A-Z)";
+  }
+  if (sortMode === "BALANCE_DESC") {
+    return "Balance (High-Low)";
+  }
+  if (sortMode === "POINTS_DESC") {
+    return "Points (High-Low)";
+  }
+  if (sortMode === "ROLE_ASC") {
+    return "Role (A-Z)";
+  }
+  return "Code (A-Z)";
+}
+
 function PickerModal(props: PickerModalProps): JSX.Element | null {
+  const variant = resolvePickerVariant(props.title, props.variant);
+  const [quickFilter, setQuickFilter] = useState<PickerQuickFilter>("ALL");
+  const [sortMode, setSortMode] = useState<PickerSortMode>(
+    variant === "customer" ? "CODE_ASC" : "NAME_ASC",
+  );
+  const [viewMode, setViewMode] = useState<PickerViewMode>("list");
+  const [pageSize, setPageSize] = useState<number>(PICKER_PAGE_SIZE_OPTIONS[0]);
+  const [currentPage, setCurrentPage] = useState(1);
+
+  useEffect(() => {
+    if (props.open) {
+      setQuickFilter("ALL");
+      setSortMode(variant === "customer" ? "CODE_ASC" : "NAME_ASC");
+      setViewMode("list");
+      setPageSize(PICKER_PAGE_SIZE_OPTIONS[0]);
+      setCurrentPage(1);
+    }
+  }, [props.open, variant]);
+
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [pageSize, props.search, quickFilter, sortMode, viewMode]);
+
+  const quickFilters = useMemo(
+    () => pickerQuickFilters(variant, props.options),
+    [props.options, variant],
+  );
+  const sortedOptions = useMemo(() => {
+    const rows = applyPickerQuickFilter(props.options, quickFilter);
+    return [...rows].sort((left, right) => {
+      const leftMeta = resolvePickerMeta(left, variant);
+      const rightMeta = resolvePickerMeta(right, variant);
+      if (sortMode === "NAME_ASC") {
+        return leftMeta.name.localeCompare(rightMeta.name);
+      }
+      if (sortMode === "BALANCE_DESC") {
+        return rightMeta.balance - leftMeta.balance;
+      }
+      if (sortMode === "POINTS_DESC") {
+        return rightMeta.points - leftMeta.points;
+      }
+      if (sortMode === "ROLE_ASC") {
+        return leftMeta.role.localeCompare(rightMeta.role);
+      }
+      return leftMeta.code.localeCompare(rightMeta.code, undefined, {
+        numeric: true,
+      });
+    });
+  }, [props.options, quickFilter, sortMode, variant]);
+  const totalPages = Math.max(1, Math.ceil(sortedOptions.length / pageSize));
+  const boundedCurrentPage = Math.min(currentPage, totalPages);
+  const pageStartIndex = (boundedCurrentPage - 1) * pageSize;
+  const pageRows = sortedOptions.slice(pageStartIndex, pageStartIndex + pageSize);
+  const pageButtons = buildQueueOrderPageButtons(boundedCurrentPage, totalPages);
+  const selectionLabel =
+    variant === "customer"
+      ? "Customer"
+      : variant === "helper"
+        ? "Helper"
+        : "Personnel";
+  const pickerSubtitle =
+    variant === "customer"
+      ? "Choose a saved customer for this sale, or create a local customer before checkout."
+      : null;
+
   if (!props.open) {
     return null;
   }
 
   return (
-    <div className={posModalBackdropClass} onClick={props.onClose}>
-        <div
-          className={posModalCardClass}
-          style={{
-            width: "min(1480px, calc(100vw - 32px))",
-            maxWidth: "min(1480px, calc(100vw - 32px))",
-          }}
-          onClick={(event) => event.stopPropagation()}
-        >
-        <div className={posModalToolbarClass}>
-          <div className="panel-head pos-sheet-head">
-            <div>
+    <div className={`${posModalBackdropClass} pos-directory-backdrop`} onClick={props.onClose}>
+      <div
+        className={`desktop-modal-card desktop-modal-card--picker pos-directory-modal ${
+          variant === "customer" ? "pos-directory-modal--customer" : ""
+        }`}
+        onClick={(event) => event.stopPropagation()}
+      >
+        <div className="desktop-modal-header pos-directory-header">
+          <div className="pos-directory-title">
+            {variant === "customer" ? (
+              <span className="pos-directory-title-icon" aria-hidden="true">
+                <PosSetupRowSymbol kind="customer" className="h-[24px] w-[24px]" />
+              </span>
+            ) : null}
+            <div className="pos-directory-title-copy">
               <div className="eyebrow">Selection</div>
               <h3>{props.title}</h3>
+              {pickerSubtitle ? <p>{pickerSubtitle}</p> : null}
             </div>
-            <button
-              className="secondary-btn mini-btn modal-close-icon-btn"
-              type="button"
-              onClick={props.onClose}
-              aria-label="Close modal"
-              title="Close"
-            >
-              <span aria-hidden="true">X</span>
-            </button>
           </div>
-
-          <SearchField
-            className="pos-sheet-search"
-            value={props.search}
-            onChange={props.onSearch}
-            placeholder={props.placeholder}
-            autoFocus
-          />
+          <button
+            className="secondary-btn mini-btn modal-close-icon-btn"
+            type="button"
+            onClick={props.onClose}
+            aria-label="Close modal"
+            title="Close"
+          >
+            <span aria-hidden="true">X</span>
+          </button>
         </div>
 
-        <div className="desktop-modal-body picker-list">
-          {!props.hideEmptyOption ? (
-            <button
-              type="button"
-              className={`catalog-row picker-row ${props.selectedId === "" ? "picker-row-selected" : ""}`}
-              onClick={() => props.onSelect("")}
-            >
-              <div>
-                <strong>{props.emptyOptionLabel ?? "None"}</strong>
-                <span>{props.emptyOptionHint ?? "No selection yet."}</span>
+        <div className="desktop-modal-body pos-directory-body">
+          <aside className="pos-directory-sidebar">
+            <SearchField
+              className="pos-directory-search"
+              value={props.search}
+              onChange={props.onSearch}
+              placeholder={props.placeholder}
+              autoFocus
+            />
+
+            <div className="pos-directory-filter-block">
+              <span className="pos-directory-filter-title">Quick filters</span>
+              <div className="pos-directory-filter-list">
+                {quickFilters.map((filter) => (
+                  <button
+                    key={filter.id}
+                    className={`pos-directory-filter-btn ${quickFilter === filter.id ? "is-active" : ""}`}
+                    type="button"
+                    onClick={() => setQuickFilter(filter.id)}
+                  >
+                    <span className="pos-directory-filter-icon" aria-hidden="true">
+                      <PosOverviewSymbol
+                        kind={filter.id === "ALL" ? "total" : filter.id === "WITH_BALANCE" || filter.id === "COMMISSION" ? "shift" : "lines"}
+                        className="h-[19px] w-[19px]"
+                      />
+                    </span>
+                    <span>{filter.label}</span>
+                    <strong>{filter.count}</strong>
+                  </button>
+                ))}
               </div>
-            </button>
-          ) : null}
+            </div>
+          </aside>
 
-          {props.options.length === 0 ? (
-            <div className="empty-state">{props.emptyLabel}</div>
-          ) : (
-            props.options.map((option) => (
-              <button
-                key={option.id}
-                type="button"
-                className={`catalog-row picker-row ${props.selectedId === option.id ? "picker-row-selected" : ""}`}
-                onClick={() => props.onSelect(option.id)}
-              >
-                <div>
-                  <strong>{option.label}</strong>
-                  <span>{option.subtitle ?? "No extra details yet."}</span>
-                  {option.address?.trim() ? (
-                    <span>{option.address.trim()}</span>
-                  ) : null}
+          <section className="pos-directory-main">
+            <div className="pos-directory-toolbar">
+              <strong>{pickerEntityLabel(variant, sortedOptions.length)}</strong>
+              <div className="pos-directory-controls">
+                <label className="pos-directory-sort">
+                  <span aria-hidden="true">↕</span>
+                  <select
+                    value={sortMode}
+                    onChange={(event) => setSortMode(event.target.value as PickerSortMode)}
+                    aria-label={`Sort ${selectionLabel.toLowerCase()} list`}
+                  >
+                    <option value="CODE_ASC">Sort by: {pickerSortLabel("CODE_ASC")}</option>
+                    <option value="NAME_ASC">Sort by: {pickerSortLabel("NAME_ASC")}</option>
+                    {variant === "customer" ? (
+                      <>
+                        <option value="BALANCE_DESC">Sort by: {pickerSortLabel("BALANCE_DESC")}</option>
+                        <option value="POINTS_DESC">Sort by: {pickerSortLabel("POINTS_DESC")}</option>
+                      </>
+                    ) : (
+                      <option value="ROLE_ASC">Sort by: {pickerSortLabel("ROLE_ASC")}</option>
+                    )}
+                  </select>
+                </label>
+                <div className="pos-directory-view-toggle" aria-label="View mode">
+                  <button
+                    className={viewMode === "list" ? "is-active" : ""}
+                    type="button"
+                    onClick={() => setViewMode("list")}
+                    aria-label="List view"
+                    title="List view"
+                  >
+                    <span aria-hidden="true">☰</span>
+                  </button>
+                  <button
+                    className={viewMode === "grid" ? "is-active" : ""}
+                    type="button"
+                    onClick={() => setViewMode("grid")}
+                    aria-label="Grid view"
+                    title="Grid view"
+                  >
+                    <span aria-hidden="true">▦</span>
+                  </button>
                 </div>
-              </button>
-            ))
-          )}
+              </div>
+            </div>
+
+            {viewMode === "list" ? (
+              <div className={`pos-directory-table pos-directory-table--${variant}`}>
+                <div className="pos-directory-table-head">
+                  <span aria-hidden="true" />
+                  <span>Code</span>
+                  <span>{selectionLabel} Name</span>
+                  {variant === "customer" ? (
+                    <>
+                      <span>Balance</span>
+                      <span>Points</span>
+                      <span>Address</span>
+                    </>
+                  ) : (
+                    <>
+                      <span>Role</span>
+                      <span>Commission</span>
+                    </>
+                  )}
+                  <span aria-hidden="true" />
+                </div>
+
+                <div className="pos-directory-rows">
+                  {!props.hideEmptyOption && boundedCurrentPage === 1 ? (
+                    <button
+                      type="button"
+                      className={`pos-directory-row ${props.selectedId === "" ? "is-selected" : ""}`}
+                      onClick={() => props.onSelect("")}
+                    >
+                      <span className="pos-directory-avatar" aria-hidden="true">
+                        <PosOverviewSymbol kind="total" className="h-[18px] w-[18px]" />
+                      </span>
+                      <strong>-</strong>
+                      <span className="pos-directory-name-cell">
+                        <strong>{props.emptyOptionLabel ?? `No ${selectionLabel.toLowerCase()}`}</strong>
+                        <small>{props.emptyOptionHint ?? "No selection yet."}</small>
+                      </span>
+                      {variant === "customer" ? (
+                        <>
+                          <span>-</span>
+                          <span>-</span>
+                          <span>-</span>
+                        </>
+                      ) : (
+                        <>
+                          <span>{props.emptyOptionHint ?? "-"}</span>
+                          <span>-</span>
+                        </>
+                      )}
+                      <span className="pos-directory-row-action" aria-hidden="true">
+                        {props.selectedId === "" ? "✓" : "›"}
+                      </span>
+                    </button>
+                  ) : null}
+
+                  {pageRows.length === 0 ? (
+                    <div className="empty-state pos-directory-empty">{props.emptyLabel}</div>
+                  ) : (
+                    pageRows.map((option) => {
+                      const meta = resolvePickerMeta(option, variant);
+                      const isSelected = props.selectedId === option.id;
+                      return (
+                        <button
+                          key={option.id}
+                          type="button"
+                          className={`pos-directory-row ${isSelected ? "is-selected" : ""}`}
+                          onClick={() => props.onSelect(option.id)}
+                        >
+                          <span className="pos-directory-avatar" aria-hidden="true">
+                            <PosOverviewSymbol kind="total" className="h-[18px] w-[18px]" />
+                          </span>
+                          <strong>{meta.code}</strong>
+                          <span className="pos-directory-name-cell">
+                            <strong>{meta.name}</strong>
+                            <small>{variant === "customer" ? meta.address : meta.subtitle}</small>
+                            <span className="pos-directory-inline-meta">
+                              {variant === "customer"
+                                ? `Bal ${fmtMoney(meta.balance)} | Pts ${meta.points}`
+                                : `Role ${meta.role} | Comm ${meta.commission}`}
+                            </span>
+                          </span>
+                          {variant === "customer" ? (
+                            <>
+                              <span>{fmtMoney(meta.balance)}</span>
+                              <span>{meta.points}</span>
+                              <span>{meta.address}</span>
+                            </>
+                          ) : (
+                            <>
+                              <span>{meta.role}</span>
+                              <span>{meta.commission}</span>
+                            </>
+                          )}
+                          <span className="pos-directory-row-action" aria-hidden="true">
+                            {isSelected ? "✓" : "›"}
+                          </span>
+                        </button>
+                      );
+                    })
+                  )}
+                </div>
+              </div>
+            ) : (
+              <div className="pos-directory-card-grid">
+                {pageRows.length === 0 ? (
+                  <div className="empty-state pos-directory-empty">{props.emptyLabel}</div>
+                ) : (
+                  pageRows.map((option) => {
+                    const meta = resolvePickerMeta(option, variant);
+                    const isSelected = props.selectedId === option.id;
+                    return (
+                      <button
+                        key={option.id}
+                        className={`pos-directory-card-option ${isSelected ? "is-selected" : ""}`}
+                        type="button"
+                        onClick={() => props.onSelect(option.id)}
+                      >
+                        <span className="pos-directory-avatar" aria-hidden="true">
+                          <PosOverviewSymbol kind="total" className="h-[18px] w-[18px]" />
+                        </span>
+                        <strong>{meta.name}</strong>
+                        <span>{meta.code}</span>
+                        <small>{variant === "customer" ? meta.address : meta.role}</small>
+                      </button>
+                    );
+                  })
+                )}
+              </div>
+            )}
+
+            <div className="pos-directory-pager">
+              <span>
+                Showing {sortedOptions.length === 0 ? 0 : pageStartIndex + 1} to{" "}
+                {Math.min(pageStartIndex + pageSize, sortedOptions.length)} of{" "}
+                {sortedOptions.length} {variant === "customer" ? "customers" : "records"}
+              </span>
+              <div className="pos-directory-page-buttons">
+                <button
+                  type="button"
+                  onClick={() => setCurrentPage((page) => Math.max(1, page - 1))}
+                  disabled={boundedCurrentPage <= 1}
+                  aria-label="Previous page"
+                >
+                  ‹
+                </button>
+                {pageButtons.map((page) => (
+                  <button
+                    key={page}
+                    className={boundedCurrentPage === page ? "is-active" : ""}
+                    type="button"
+                    onClick={() => setCurrentPage(page)}
+                  >
+                    {page}
+                  </button>
+                ))}
+                <button
+                  type="button"
+                  onClick={() => setCurrentPage((page) => Math.min(totalPages, page + 1))}
+                  disabled={boundedCurrentPage >= totalPages}
+                  aria-label="Next page"
+                >
+                  ›
+                </button>
+              </div>
+              <label className="pos-directory-page-size">
+                <select
+                  value={pageSize}
+                  onChange={(event) => setPageSize(Number(event.target.value))}
+                  aria-label="Rows per page"
+                >
+                  {PICKER_PAGE_SIZE_OPTIONS.map((size) => (
+                    <option key={size} value={size}>
+                      {size} per page
+                    </option>
+                  ))}
+                </select>
+              </label>
+            </div>
+          </section>
         </div>
 
-        <div className="desktop-modal-footer">
+        <div className="desktop-modal-footer pos-directory-footer">
           {props.onAction ? (
             <button
               className="primary-btn"
@@ -1199,9 +1825,15 @@ function PickerModal(props: PickerModalProps): JSX.Element | null {
               onClick={props.onAction}
               disabled={props.actionDisabled}
             >
+              <span className="pos-directory-action-icon" aria-hidden="true">
+                +
+              </span>
               {props.actionLabel ?? "Add New"}
             </button>
           ) : null}
+          <button className="secondary-btn" type="button" onClick={props.onClose}>
+            Cancel
+          </button>
         </div>
       </div>
     </div>
@@ -1307,6 +1939,14 @@ export function PosScreen({
   );
   const [heldCartCurrentPage, setHeldCartCurrentPage] = useState(1);
   const [itemCategoryFilter, setItemCategoryFilter] = useState("ALL");
+  const [itemPickerSortMode, setItemPickerSortMode] =
+    useState<ItemPickerSortMode>("NAME_ASC");
+  const [itemPickerViewMode, setItemPickerViewMode] =
+    useState<PickerViewMode>("list");
+  const [itemPickerPageSize, setItemPickerPageSize] = useState<number>(
+    PICKER_PAGE_SIZE_OPTIONS[0],
+  );
+  const [itemPickerCurrentPage, setItemPickerCurrentPage] = useState(1);
   const [selectedCustomerId, setSelectedCustomerId] = useState("");
   const [selectedPersonnelId, setSelectedPersonnelId] = useState("");
   const [selectedHelperId, setSelectedHelperId] = useState("");
@@ -1367,6 +2007,8 @@ export function PosScreen({
   const [endDayInventoryCounts, setEndDayInventoryCounts] =
     useState<InventoryCountInputMap>({});
   const [checkoutSetupModalOpen, setCheckoutSetupModalOpen] = useState(false);
+  const [orderTypeDropdownOpen, setOrderTypeDropdownOpen] = useState(false);
+  const orderTypeDropdownRef = useRef<HTMLDivElement | null>(null);
   const [holdLabel, setHoldLabel] = useState("");
   const [recreatedFromSaleId, setRecreatedFromSaleId] = useState<string | null>(
     null,
@@ -1397,6 +2039,78 @@ export function PosScreen({
   const [message, setMessage] = useState(
     "Download branch data in Settings first, then POS will use the local products and customers.",
   );
+  const pickerModalOpen =
+    customerModalOpen || personnelModalOpen || helperModalOpen || itemModalOpen;
+
+  useEffect(() => {
+    if (itemModalOpen) {
+      setItemPickerCurrentPage(1);
+      setItemPickerViewMode("list");
+      setItemPickerPageSize(PICKER_PAGE_SIZE_OPTIONS[0]);
+    }
+  }, [itemModalOpen]);
+
+  useEffect(() => {
+    setItemPickerCurrentPage(1);
+  }, [
+    itemCategoryFilter,
+    itemPickerPageSize,
+    itemPickerSortMode,
+    itemPickerViewMode,
+    itemSearch,
+  ]);
+
+  useEffect(() => {
+    if (!pickerModalOpen) {
+      return;
+    }
+
+    const previousBodyOverflow = document.body.style.overflow;
+    const previousHtmlOverflow = document.documentElement.style.overflow;
+
+    document.body.style.overflow = "hidden";
+    document.documentElement.style.overflow = "hidden";
+
+    return () => {
+      document.body.style.overflow = previousBodyOverflow;
+      document.documentElement.style.overflow = previousHtmlOverflow;
+    };
+  }, [pickerModalOpen]);
+
+  useEffect(() => {
+    if (!orderTypeDropdownOpen) {
+      return;
+    }
+
+    const handlePointerDown = (event: PointerEvent): void => {
+      const eventTarget = event.target;
+      if (
+        eventTarget instanceof Node &&
+        orderTypeDropdownRef.current?.contains(eventTarget)
+      ) {
+        return;
+      }
+      setOrderTypeDropdownOpen(false);
+    };
+
+    const handleKeyDown = (event: KeyboardEvent): void => {
+      if (event.key === "Escape") {
+        setOrderTypeDropdownOpen(false);
+      }
+    };
+
+    document.addEventListener("pointerdown", handlePointerDown);
+    document.addEventListener("keydown", handleKeyDown);
+    return () => {
+      document.removeEventListener("pointerdown", handlePointerDown);
+      document.removeEventListener("keydown", handleKeyDown);
+    };
+  }, [orderTypeDropdownOpen]);
+
+  const handleOrderTypeSelect = (nextOrderType: DesktopSaleType): void => {
+    setOrderType(nextOrderType);
+    setOrderTypeDropdownOpen(false);
+  };
 
   const showInfo = (nextMessage: string): void => {
     setMessage(nextMessage);
@@ -1565,17 +2279,65 @@ export function PosScreen({
       if (!matchesCategory) {
         return false;
       }
-      if (!term) {
-        return true;
-      }
-      return (
-        product.name.toLowerCase().includes(term) ||
-        product.sku.toLowerCase().includes(term) ||
-        product.category.toLowerCase().includes(term) ||
-        (product.cylinderSizeLabel ?? "").toLowerCase().includes(term)
-      );
+      return productMatchesItemSearch(product, term);
     });
   }, [catalog, itemCategoryFilter, itemSearch]);
+
+  const itemDirectoryCategoryFilters = useMemo(() => {
+    const term = sanitizeSearchTerm(itemSearch);
+    return itemCategoryOptions.map((category) => {
+      const count = catalog.filter((product) => {
+        const matchesCategory =
+          category === "ALL" || product.category === category;
+        return matchesCategory && productMatchesItemSearch(product, term);
+      }).length;
+      return {
+        id: category,
+        label: itemPickerCategoryLabel(category),
+        count,
+      };
+    });
+  }, [catalog, itemCategoryOptions, itemSearch]);
+
+  const sortedItemDirectoryProducts = useMemo(() => {
+    return [...filteredProducts].sort((left, right) => {
+      if (itemPickerSortMode === "SKU_ASC") {
+        return left.sku.localeCompare(right.sku, undefined, { numeric: true });
+      }
+      if (itemPickerSortMode === "PRICE_ASC") {
+        return left.unitPrice - right.unitPrice || left.name.localeCompare(right.name);
+      }
+      if (itemPickerSortMode === "PRICE_DESC") {
+        return right.unitPrice - left.unitPrice || left.name.localeCompare(right.name);
+      }
+      if (itemPickerSortMode === "STOCK_DESC") {
+        return (
+          resolveAvailableQty(right) - resolveAvailableQty(left) ||
+          left.name.localeCompare(right.name)
+        );
+      }
+      return left.name.localeCompare(right.name);
+    });
+  }, [filteredProducts, itemPickerSortMode]);
+
+  const itemDirectoryTotalPages = Math.max(
+    1,
+    Math.ceil(sortedItemDirectoryProducts.length / itemPickerPageSize),
+  );
+  const itemDirectoryCurrentPage = Math.min(
+    itemPickerCurrentPage,
+    itemDirectoryTotalPages,
+  );
+  const itemDirectoryStartIndex =
+    (itemDirectoryCurrentPage - 1) * itemPickerPageSize;
+  const itemDirectoryPageProducts = sortedItemDirectoryProducts.slice(
+    itemDirectoryStartIndex,
+    itemDirectoryStartIndex + itemPickerPageSize,
+  );
+  const itemDirectoryPageButtons = buildQueueOrderPageButtons(
+    itemDirectoryCurrentPage,
+    itemDirectoryTotalPages,
+  );
 
   const filteredHeldCarts = useMemo(() => {
     return filterQueueOrdersByAddress(
@@ -1716,7 +2478,9 @@ export function PosScreen({
     }
     return {
       ...product,
-      qtyOnHand: projected.qtyOnHand,
+      qtyOnHand: product.isLpg
+        ? Number((projected.qtyFull + projected.qtyEmpty).toFixed(4))
+        : projected.qtyOnHand,
       qtyFull: projected.qtyFull,
       qtyEmpty: projected.qtyEmpty,
     };
@@ -1972,7 +2736,9 @@ export function PosScreen({
         return projected
           ? {
               ...product,
-              qtyOnHand: projected.qtyOnHand,
+              qtyOnHand: product.isLpg
+                ? Number((projected.qtyFull + projected.qtyEmpty).toFixed(4))
+                : projected.qtyOnHand,
               qtyFull: projected.qtyFull,
               qtyEmpty: projected.qtyEmpty,
             }
@@ -2068,6 +2834,11 @@ export function PosScreen({
         throw new Error(`Unable to load tenant add-ons (${response.status})`);
       }
       const payload = (await response.json()) as CurrentEntitlementResponse;
+      await desktopSubscriptionPolicyService.applyRemotePayload(
+        payload as Record<string, unknown>,
+        undefined,
+        "pos_entitlements",
+      );
       const enabled = payload?.addons?.receipt_amount_privacy === true;
       const cashierInventoryCountEnabled =
         payload?.addons?.cashier_end_of_day_inventory_count === true;
@@ -2638,6 +3409,11 @@ export function PosScreen({
     : checkoutSetupReady
       ? "All required information is set."
       : "Review customer, personnel, helper, and order type before payment.";
+  const compactCheckoutSetupNote = !activeShiftId
+    ? "Open a shift before checkout."
+    : checkoutSetupReady
+      ? "Setup is ready for payment."
+      : "";
   const totalQuantity = useMemo(
     () => cart.reduce((sum, line) => sum + line.quantity, 0),
     [cart],
@@ -2656,6 +3432,25 @@ export function PosScreen({
         .reduce((sum, line) => sum + line.quantity, 0),
     [cart],
   );
+  const compactCategoryOptions = useMemo(() => {
+    const visible = itemCategoryOptions.slice(0, 5);
+    if (visible.includes(itemCategoryFilter)) {
+      return visible;
+    }
+    return [
+      itemCategoryFilter,
+      ...visible.filter((category) => category !== itemCategoryFilter),
+    ].slice(0, 5);
+  }, [itemCategoryFilter, itemCategoryOptions]);
+  const compactVisibleProducts = useMemo(
+    () => filteredProducts,
+    [filteredProducts],
+  );
+  const compactShowsCylinderStock = useMemo(
+    () => compactVisibleProducts.some((product) => hasCylinderStock(product)),
+    [compactVisibleProducts],
+  );
+  const compactVisibleCartLines = useMemo(() => cart, [cart]);
 
   const hasDraftToClear = useMemo(() => {
     if (cart.length > 0) {
@@ -3319,6 +4114,7 @@ export function PosScreen({
       showWarning(cartWarnings[0]);
       return null;
     }
+    await desktopSubscriptionPolicyService.assertCanCreateTransactions("sale");
     const nowDate = new Date();
     const now = nowDate.toISOString();
     const existingLocalSales = await desktopDb.listSales();
@@ -3559,51 +4355,8 @@ export function PosScreen({
   };
 
   return (
-    <div className={screenStackClass}>
-      <section className="grid gap-3 rounded-[24px] border border-[rgba(188,210,234,0.58)] bg-[linear-gradient(180deg,rgba(255,255,255,0.99),rgba(246,250,255,0.97))] px-4 py-3.5 shadow-[0_14px_30px_rgba(17,40,58,0.07)] sm:px-5 sm:py-4 xl:grid-cols-[minmax(0,1fr)_auto] xl:items-center">
-        <div className="flex min-w-0 items-start gap-3">
-          <div className="grid h-[54px] w-[54px] shrink-0 place-items-center rounded-[18px] border border-[rgba(196,220,255,0.78)] bg-[rgba(240,246,255,0.98)] text-[var(--accent-strong)] shadow-[0_8px_18px_rgba(17,40,58,0.05)]">
-            <PosOverviewSymbol kind="pos" className="h-[22px] w-[22px]" />
-          </div>
-          <div className="min-w-0">
-            <h2 className="m-0 text-[1.12rem] font-extrabold tracking-[-0.02em] text-[var(--text-strong)] sm:text-[1.36rem]">
-              POS Sales
-            </h2>
-            <p className="mt-1 text-[0.8rem] leading-5 text-[var(--muted)]">
-              Build the order, queue carts, and complete checkout.
-            </p>
-          </div>
-        </div>
-        <div className="flex flex-wrap items-center justify-start gap-2.5 xl:justify-end">
-          <button
-            className="primary-btn relative inline-flex min-h-[48px] items-center gap-2.5 rounded-[16px] px-5 text-[0.88rem]"
-            type="button"
-            onClick={() => {
-              setHeldCartSearch("");
-              setHeldCartModalOpen(true);
-            }}
-            disabled={heldCarts.length === 0}
-          >
-            <span aria-hidden="true">{"\uD83D\uDCC2"}</span>
-            <span>Queue Orders</span>
-            {heldCarts.length > 0 ? (
-              <span className="absolute right-[-5px] top-[-5px] grid h-[18px] min-w-[18px] place-items-center rounded-full bg-white px-1 text-[0.62rem] font-extrabold text-[var(--accent-strong)] shadow-[0_8px_16px_rgba(25,118,210,0.18)]">
-                {heldCarts.length > 99 ? "99+" : heldCarts.length}
-              </span>
-            ) : null}
-          </button>
-          <button
-            className="secondary-btn min-h-[46px] px-4 text-[0.86rem]"
-            type="button"
-            onClick={() => void openEndDayModal()}
-            disabled={endDayLoading || saving || !activeShiftId}
-          >
-            {endDayLoading ? "Loading..." : "End Day"}
-          </button>
-        </div>
-      </section>
-
-      <section className="grid gap-3 md:grid-cols-2 xl:grid-cols-5">
+    <div className="pos-static-shell">
+      <section className="pos-static-metrics" aria-label="POS summary">
         {(
           [
             {
@@ -3612,6 +4365,8 @@ export function PosScreen({
               value: activeShiftId ? "Open" : "Required",
               icon: "shift",
               tone: activeShiftId ? "good" : "danger",
+              onClick: onGoToShift,
+              disabled: Boolean(activeShiftId || !onGoToShift),
             },
             {
               key: "queue",
@@ -3619,6 +4374,11 @@ export function PosScreen({
               value: String(heldCarts.length),
               icon: "queue",
               tone: heldCarts.length > 0 ? "accent" : "neutral",
+              onClick: () => {
+                setHeldCartSearch("");
+                setHeldCartModalOpen(true);
+              },
+              disabled: heldCarts.length === 0,
             },
             {
               key: "lines",
@@ -3626,6 +4386,8 @@ export function PosScreen({
               value: String(cart.length),
               icon: "lines",
               tone: cart.length > 0 ? "accent" : "neutral",
+              onClick: undefined,
+              disabled: true,
             },
             {
               key: "route",
@@ -3633,386 +4395,473 @@ export function PosScreen({
               value: orderType,
               icon: "route",
               tone: "neutral",
+              onClick: undefined,
+              disabled: true,
             },
             {
               key: "total",
               label: "Total Due",
-              value: fmtMoney(total),
+              value: formatAmountForSummary(total),
               icon: "total",
               tone: total > 0 ? "good" : "neutral",
+              onClick: undefined,
+              disabled: true,
             },
           ] as const
         ).map((card) => {
           const tone = posOverviewMetricTone(card.tone);
-          return (
-            <article
-              key={card.key}
-              className={`grid gap-3 overflow-hidden rounded-[20px] border px-4 py-3.5 shadow-[0_10px_22px_rgba(17,40,58,0.05)] ${tone.shell}`}
-            >
-              <div className="flex items-start gap-3">
-                <div
-                  className={`grid h-[50px] w-[50px] shrink-0 place-items-center rounded-full border ${tone.icon}`}
-                >
+          if (card.key === "route") {
+            return (
+              <label
+                key={card.key}
+                className={`pos-static-metric pos-static-order-select-card ${tone.shell}`}
+              >
+                <span className={`pos-static-metric-icon ${tone.icon}`}>
                   <PosOverviewSymbol
                     kind={card.icon}
-                    className="h-[21px] w-[21px]"
+                    className="h-[20px] w-[20px]"
                   />
-                </div>
-                <div className="min-w-0">
-                  <div className={`text-[0.82rem] font-semibold ${tone.label}`}>
+                </span>
+                <span className="pos-static-metric-copy">
+                  <span className={`pos-static-metric-label ${tone.label}`}>
                     {card.label}
-                  </div>
-                  <strong className="mt-1.5 block text-[0.98rem] font-extrabold tracking-[-0.01em] text-[var(--text-strong)] sm:text-[1.08rem]">
-                    {card.value}
-                  </strong>
-                </div>
-              </div>
-              <div
-                className={`h-[4px] rounded-full bg-gradient-to-r ${tone.line}`}
-              />
-            </article>
+                  </span>
+                  <strong>{card.value}</strong>
+                </span>
+                <PosChevronDownIcon className="pos-static-select-chevron h-[18px] w-[18px]" />
+                <select
+                  className="pos-static-native-select"
+                  aria-label="Order type"
+                  value={orderType}
+                  onChange={(event) =>
+                    setOrderType(event.target.value as DesktopSaleType)
+                  }
+                >
+                  <option value="PICKUP">PICKUP</option>
+                  <option value="DELIVERY">DELIVERY</option>
+                </select>
+              </label>
+            );
+          }
+          return (
+            <button
+              key={card.key}
+              type="button"
+              className={`pos-static-metric ${tone.shell}`}
+              onClick={card.onClick}
+              disabled={card.disabled}
+            >
+              <span className={`pos-static-metric-icon ${tone.icon}`}>
+                <PosOverviewSymbol
+                  kind={card.icon}
+                  className="h-[20px] w-[20px]"
+                />
+              </span>
+              <span className="pos-static-metric-copy">
+                <span className={`pos-static-metric-label ${tone.label}`}>
+                  {card.label}
+                </span>
+                <strong>{card.value}</strong>
+              </span>
+              {card.key === "shift" && activeShiftId ? (
+                <span className={`pos-static-meter-line ${tone.line}`} />
+              ) : null}
+            </button>
           );
         })}
       </section>
 
-      <section className={`${shellCardClass} pos-workspace-shell`}>
-        <div className="pos-workspace-grid">
-          <div className="pos-workspace-column">
-            <section className="desktop-workspace-section pos-composer-panel">
-              <div className="pos-setup-summary-card">
-                <div className="pos-setup-summary-head">
-                  <span
-                    className={`pos-setup-summary-icon ${checkoutSetupReady ? "good" : "warn"}`}
-                  >
-                    <PosOverviewSymbol
-                      kind={checkoutSetupReady ? "shift" : "pos"}
-                      className="h-[22px] w-[22px]"
-                    />
-                  </span>
-                  <div className="min-w-0">
-                    <div className="eyebrow">Checkout setup</div>
-                    <h3>{checkoutSetupTitle}</h3>
-                    <p>{checkoutSetupDescription}</p>
-                  </div>
-                  <button
-                    ref={customerTarget.ref}
-                    className={getCheckoutSetupChangeButtonClass(customerTarget.active)}
-                    type="button"
-                    onClick={() => setCheckoutSetupModalOpen(true)}
-                  >
-                    Change
-                  </button>
+      <section className="pos-static-workspace" aria-label="POS checkout">
+        <aside className="pos-static-panel pos-static-setup-panel">
+          <div className="pos-static-panel-head">
+            <h2>Checkout setup</h2>
+          </div>
+
+          <div className="pos-static-step-list">
+            <div className="pos-static-order-control" ref={orderTypeDropdownRef}>
+              <button
+                ref={orderTypeTarget.ref}
+                className={`pos-static-step pos-static-order-trigger is-active ${
+                  orderTypeDropdownOpen ? "is-open" : ""
+                } ${orderTypeTarget.active ? "tutorial-target-active" : ""}`}
+                type="button"
+                aria-expanded={orderTypeDropdownOpen}
+                aria-haspopup="listbox"
+                onClick={() => setOrderTypeDropdownOpen((isOpen) => !isOpen)}
+              >
+                <span className="pos-static-order-trigger-icon">
+                  <PosOverviewSymbol kind="route" className="h-[19px] w-[19px]" />
+                </span>
+                <span className="pos-static-step-copy">
+                  <span>Order Type</span>
+                  <strong>{orderType}</strong>
+                </span>
+                {orderTypeDropdownOpen ? (
+                  <PosChevronUpIcon className="pos-static-select-chevron h-[18px] w-[18px]" />
+                ) : (
+                  <PosChevronDownIcon className="pos-static-select-chevron h-[18px] w-[18px]" />
+                )}
+              </button>
+              {orderTypeDropdownOpen ? (
+                <div className="pos-static-order-menu" role="listbox" aria-label="Order type">
+                  {POS_ORDER_TYPE_OPTIONS.map((option) => {
+                    const isSelected = option.value === orderType;
+                    return (
+                      <button
+                        key={option.value}
+                        className={`pos-static-order-option ${
+                          isSelected ? "is-selected" : ""
+                        }`}
+                        type="button"
+                        role="option"
+                        aria-selected={isSelected}
+                        onClick={() => handleOrderTypeSelect(option.value)}
+                      >
+                        <span className="pos-static-order-option-icon">
+                          <PosOverviewSymbol
+                            kind="route"
+                            className="h-[18px] w-[18px]"
+                          />
+                        </span>
+                        <span className="pos-static-order-option-copy">
+                          <strong>{option.label}</strong>
+                          <span>{option.description}</span>
+                        </span>
+                        {isSelected ? (
+                          <PosCheckIcon className="pos-static-order-option-check h-[20px] w-[20px]" />
+                        ) : null}
+                      </button>
+                    );
+                  })}
                 </div>
+              ) : null}
+            </div>
 
-                {!activeShiftId ? (
-                  <div className="message-banner stock-warning-banner !mt-4 flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
-                    <div>
-                      <strong className="block text-[1rem] font-extrabold text-[var(--text-strong)]">
-                        Shift needed before POS sale.
-                      </strong>
-                      <div className="mt-1 text-[0.92rem] text-[var(--muted-strong)]">
-                        Open a shift first, then continue with customer,
-                        personnel, items, and payment.
-                      </div>
-                    </div>
+            <button
+              ref={customerTarget.ref}
+              className={`pos-static-step ${customerTarget.active ? "tutorial-target-active" : ""}`}
+              type="button"
+              onClick={openCustomerPicker}
+            >
+              <span className="pos-static-step-number">2</span>
+              <span className="pos-static-step-copy">
+                <span>Customer</span>
+                <strong>{selectedCustomer?.label ?? "Select customer"}</strong>
+              </span>
+              <PosChevronDownIcon className="pos-static-select-chevron h-[18px] w-[18px]" />
+            </button>
+
+            <button
+              className="pos-static-step"
+              type="button"
+              onClick={openPersonnelPicker}
+            >
+              <span className="pos-static-step-number">3</span>
+              <span className="pos-static-step-copy">
+                <span>Personnel</span>
+                <strong>{selectedPersonnel?.label ?? "Select personnel"}</strong>
+              </span>
+              <PosChevronDownIcon className="pos-static-select-chevron h-[18px] w-[18px]" />
+            </button>
+
+            <button
+              className="pos-static-step"
+              type="button"
+              onClick={openHelperPicker}
+            >
+              <span className="pos-static-step-number">4</span>
+              <span className="pos-static-step-copy">
+                <span>Helper</span>
+                <strong>{selectedHelper?.label ?? "Not assigned"}</strong>
+              </span>
+              <PosChevronDownIcon className="pos-static-select-chevron h-[18px] w-[18px]" />
+            </button>
+          </div>
+
+          {compactCheckoutSetupNote ? (
+            <div
+              className={`pos-static-setup-note ${!activeShiftId ? "is-warning" : ""}`}
+            >
+              <span className="pos-static-note-icon" aria-hidden="true">
+                i
+              </span>
+              <span>
+                {compactCheckoutSetupNote}
+              </span>
+              {!activeShiftId ? (
+                <button
+                  className="pos-static-inline-action"
+                  type="button"
+                  onClick={onGoToShift}
+                  disabled={!onGoToShift}
+                >
+                  Go
+                </button>
+              ) : null}
+            </div>
+          ) : null}
+
+          <div className="pos-static-side-actions">
+            <button
+              className="secondary-btn pos-static-action-btn"
+              type="button"
+              onClick={promptHoldCurrentCart}
+              disabled={!cart.length || saving}
+            >
+              <PosOverviewSymbol kind="queue" className="h-[18px] w-[18px]" />
+              <span>Add to Queue</span>
+            </button>
+            <button
+              className="secondary-btn pos-static-action-btn pos-static-clear-btn"
+              type="button"
+              onClick={promptClearCurrentOrder}
+              disabled={saving || !hasDraftToClear}
+            >
+              <PosTrashIcon className="h-[18px] w-[18px]" />
+              <span>Clear Order</span>
+            </button>
+          </div>
+        </aside>
+
+        <main className="pos-static-panel pos-static-items-panel">
+          <div className="pos-static-item-toolbar">
+            <SearchField
+              className="pos-static-search"
+              value={itemSearch}
+              onChange={setItemSearch}
+              placeholder="Search items..."
+            />
+          </div>
+
+          <div className="pos-static-category-row" aria-label="Item categories">
+            {compactCategoryOptions.map((category) => (
+              <button
+                key={category}
+                type="button"
+                className={`pos-static-category-chip ${itemCategoryFilter === category ? "active" : ""}`}
+                onClick={() => setItemCategoryFilter(category)}
+              >
+                {category === "ALL" ? "All" : category}
+              </button>
+            ))}
+          </div>
+
+          <div className="pos-static-item-table">
+            <div className="pos-static-item-head">
+              <span>Item Name</span>
+              <span>{compactShowsCylinderStock ? "Full" : "QOH"}</span>
+              <span>{compactShowsCylinderStock ? "Empty" : ""}</span>
+              <span>Price</span>
+              <span aria-hidden="true" />
+            </div>
+            <div className="pos-static-item-rows">
+              {compactVisibleProducts.length === 0 ? (
+                <div className="pos-static-empty-state">No matching items.</div>
+              ) : (
+                compactVisibleProducts.map((product) => {
+                  const stockTone = resolveStockTone(product);
+                  const showCylinderStock = hasCylinderStock(product);
+                  const itemDisabled = !selectedCustomerId || stockTone === "out";
+                  return (
                     <button
-                      className="primary-btn mini-btn"
+                      key={product.id}
                       type="button"
-                      onClick={onGoToShift}
-                      disabled={!onGoToShift}
-                    >
-                      Go To Shift
-                    </button>
-                  </div>
-                ) : null}
-
-                <div className="pos-setup-detail-grid">
-                  <div className="pos-setup-detail-item">
-                    <span className={summaryLabelClass}>Order Type</span>
-                    <strong>
-                      {orderType === "PICKUP" ? "Pickup" : "Delivery"}
-                    </strong>
-                    <span>
-                      {orderType === "PICKUP"
-                        ? "Customer picks up the order."
-                        : "Field delivery uses assigned crew."}
-                    </span>
-                  </div>
-                  <div className="pos-setup-detail-item">
-                    <span className={summaryLabelClass}>Customer</span>
-                    <strong>
-                      {selectedCustomer?.label ?? "Select customer"}
-                    </strong>
-                    <span>
-                      {selectedCustomer
-                        ? `Points: ${selectedCustomer.pointsBalance ?? 0} | Balance: ${fmtMoney(selectedCustomer.balance ?? 0)}`
-                        : "Select a customer before payment."}
-                    </span>
-                  </div>
-                  <div className="pos-setup-detail-item">
-                    <span className={summaryLabelClass}>Personnel</span>
-                    <strong>
-                      {selectedPersonnel?.label ?? "Select personnel"}
-                    </strong>
-                    <span>
-                      {selectedPersonnel?.subtitle ?? "Required for this sale."}
-                    </span>
-                  </div>
-                  <div className="pos-setup-detail-item">
-                    <span className={summaryLabelClass}>Helper</span>
-                    <strong>{selectedHelper?.label ?? "Not assigned"}</strong>
-                    <span>
-                      {selectedHelper?.subtitle ??
-                        "Optional helper for this sale."}
-                    </span>
-                  </div>
-                </div>
-              </div>
-
-              <section className="desktop-workspace-section pos-cart-panel">
-                <div className="panel-head compact pos-cart-head">
-                  <div>
-                    <div className="eyebrow">Cart</div>
-                    <h3>Sale lines</h3>
-                  </div>
-                  <div className="desktop-settings-actions">
-                    <button
-                      ref={itemSelectorTarget.ref}
-                      className={`secondary-btn mini-btn ${itemSelectorTarget.active ? "tutorial-target-active" : ""}`}
-                      type="button"
-                      onClick={openItemPicker}
-                      disabled={!selectedCustomerId}
+                      className="pos-static-item-row"
+                      onClick={() => {
+                        addToCart(product);
+                        showSuccess(`${product.name} was added to the POS cart.`);
+                      }}
+                      disabled={itemDisabled}
                       title={
                         !selectedCustomerId
                           ? "Select a customer first"
-                          : "Add item"
+                          : stockTone === "out"
+                            ? "Out of stock"
+                            : `Add ${product.name}`
                       }
                     >
-                      Add Item
-                    </button>
-                    <button
-                      className="secondary-btn mini-btn"
-                      type="button"
-                      onClick={promptHoldCurrentCart}
-                      disabled={!cart.length || saving}
-                    >
-                      Add to Queue
-                    </button>
-                  </div>
-                </div>
-
-                {!cart.length ? (
-                  <div className="empty-state">No items added yet.</div>
-                ) : (
-                  <div className="cart-list pos-cart-list">
-                    {cart.map((line) => (
-                      <div
-                        key={line.lineId}
-                        className="cart-row cart-row-stack pos-cart-card"
+                      <span className="pos-static-item-name">
+                        <strong>{product.name}</strong>
+                        <small>
+                          {product.sku} | {product.category}
+                          {product.isLpg
+                            ? ` | ${formatCylinderSizeLabel(product)}`
+                            : ""}
+                        </small>
+                      </span>
+                      <span className="pos-static-item-stock-count" title={showCylinderStock ? `Full quantity: ${formatCylinderStockQuantity(product.qtyFull)}` : `Qty on hand: ${formatStockQuantity(product.qtyOnHand)}`}>
+                        {showCylinderStock ? formatCylinderStockQuantity(product.qtyFull) : formatStockQuantity(product.qtyOnHand)}
+                      </span>
+                      <span
+                        className="pos-static-item-stock-count"
+                        title={
+                          showCylinderStock
+                            ? `Empty quantity: ${formatCylinderStockQuantity(product.qtyEmpty)}`
+                          : undefined
+                        }
                       >
-                        <div className="pos-cart-main">
-                          <strong>
-                            {(line.sku || line.id).trim()} - {line.name}
-                          </strong>
-                          {line.isLpg ? (
-                            <span className="pos-cart-code">
-                              Size: {formatCylinderSizeLabel(line)}
-                            </span>
-                          ) : null}
-                          {line.isLpg && !line.cylinderFlow ? (
-                            <span className="field-warning">
-                              Select Refill or Non-Refill before payment.
-                            </span>
-                          ) : null}
-                          {line.quantity >
-                          resolveAvailableForLine(line) + 0.0001 ? (
-                            <span className="field-warning">
-                              {line.name} is above available stock.
-                            </span>
-                          ) : null}
-                          <span className="pos-cart-stock">
-                            Available {resolveAvailableForLine(line).toFixed(2)}
-                          </span>
-                        </div>
-                        <div className="pos-cart-side">
-                          {line.isLpg ? (
-                            <div className="flow-chip-row pos-cart-flow-row">
-                              {(
-                                [
-                                  { value: "REFILL_EXCHANGE", label: "Refill" },
-                                  { value: "NON_REFILL", label: "Non-Refill" },
-                                ] as const
-                              ).map((flow) => (
-                                <button
-                                  key={`${line.lineId}-${flow.value}`}
-                                  type="button"
-                                  className={`flow-chip ${line.cylinderFlow === flow.value ? "active" : ""}`}
-                                  onClick={() =>
-                                    setLineCylinderFlow(line.lineId, flow.value)
-                                  }
-                                >
-                                  {flow.label}
-                                </button>
-                              ))}
-                            </div>
-                          ) : null}
-                          <strong className="pos-cart-line-total">
-                            {fmtMoney(line.quantity * line.unitPrice)}
-                          </strong>
-                          <div className="cart-controls pos-cart-qty-rail">
-                            <button
-                              type="button"
-                              onClick={() =>
-                                updateQuantity(
-                                  line.lineId,
-                                  Math.max(0, line.quantity - 1),
-                                )
-                              }
-                            >
-                              -
-                            </button>
-                            <CartQuantityInput
-                              lineId={line.lineId}
-                              quantity={line.quantity}
-                              onUpdateQuantity={updateQuantity}
-                            />
-                            <button
-                              type="button"
-                              onClick={() =>
-                                updateQuantity(line.lineId, line.quantity + 1)
-                              }
-                            >
-                              +
-                            </button>
-                          </div>
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                )}
-              </section>
-            </section>
+                        {showCylinderStock ? formatCylinderStockQuantity(product.qtyEmpty) : ""}
+                      </span>
+                      <strong className="pos-static-item-price">
+                        {fmtMoney(product.unitPrice)}
+                      </strong>
+                      <span className="pos-static-add-icon" aria-hidden="true">
+                        <PosPlusIcon className="h-[18px] w-[18px]" />
+                      </span>
+                    </button>
+                  );
+                })
+              )}
+            </div>
           </div>
 
-          <section className="desktop-workspace-section pos-checkout-panel">
-            <div className="pos-order-summary-list">
-              <div className="pos-order-summary-head">
-                <div>
-                  <h3>Order summary</h3>
+          <div className="pos-static-item-footer">
+            <span>
+              Showing {compactVisibleProducts.length} of {filteredProducts.length} items
+            </span>
+            <button
+              ref={itemSelectorTarget.ref}
+              className="secondary-btn"
+              type="button"
+              onClick={openItemPicker}
+              disabled={!selectedCustomerId}
+            >
+              View all items
+            </button>
+          </div>
+        </main>
+
+        <aside className="pos-static-panel pos-static-cart-panel">
+          <div className="pos-static-cart-head">
+            <h2>Cart</h2>
+            <button
+              className="secondary-btn pos-static-icon-btn"
+              type="button"
+              onClick={promptClearCurrentOrder}
+              disabled={saving || !hasDraftToClear}
+              aria-label="Clear order"
+              title="Clear order"
+            >
+              <PosTrashIcon className="h-[20px] w-[20px]" />
+            </button>
+          </div>
+
+          <div className="pos-static-cart-body">
+            {!cart.length ? (
+              <div className="pos-static-cart-empty">
+                <div className="pos-static-cart-empty-icon" aria-hidden="true">
+                  <PosOverviewSymbol kind="lines" className="h-[34px] w-[34px]" />
                 </div>
-                <span
-                  className={`pos-status-pill ${
-                    checkoutSetupReady
-                      ? "good"
-                      : !activeShiftId
-                        ? "danger"
-                        : cartWarnings.length > 0
-                          ? "warn"
-                          : "warn"
-                  }`}
-                >
-                  {checkoutStatusLabel}
-                </span>
+                <strong>No items added yet.</strong>
+                <span>Add items from the menu to build your order.</span>
               </div>
+            ) : (
+              <div className="pos-static-cart-lines">
+                {compactVisibleCartLines.map((line) => (
+                  <div key={line.lineId} className="pos-static-cart-line">
+                    <div className="pos-static-cart-line-main">
+                      <strong>{line.name}</strong>
+                      <span>
+                        {line.isLpg
+                          ? formatCylinderSizeLabel(line)
+                          : line.sku}
+                      </span>
+                      {line.isLpg ? (
+                        <div className="pos-static-flow-row">
+                          {(
+                            [
+                              { value: "REFILL_EXCHANGE", label: "Refill" },
+                              { value: "NON_REFILL", label: "Non-Refill" },
+                            ] as const
+                          ).map((flow) => (
+                            <button
+                              key={`${line.lineId}-${flow.value}`}
+                              type="button"
+                              className={`flow-chip ${line.cylinderFlow === flow.value ? "active" : ""}`}
+                              onClick={() => setLineCylinderFlow(line.lineId, flow.value)}
+                            >
+                              {flow.label}
+                            </button>
+                          ))}
+                        </div>
+                      ) : null}
+                    </div>
+                    <div className="pos-static-cart-line-side">
+                      <strong>{fmtMoney(line.quantity * line.unitPrice)}</strong>
+                      <div className="cart-controls pos-static-cart-controls">
+                        <button
+                          type="button"
+                          onClick={() =>
+                            updateQuantity(
+                              line.lineId,
+                              Math.max(0, line.quantity - 1),
+                            )
+                          }
+                          aria-label={`Decrease ${line.name}`}
+                        >
+                          <PosMinusIcon className="h-[15px] w-[15px]" />
+                        </button>
+                        <CartQuantityInput
+                          lineId={line.lineId}
+                          quantity={line.quantity}
+                          onUpdateQuantity={updateQuantity}
+                        />
+                        <button
+                          type="button"
+                          onClick={() => updateQuantity(line.lineId, line.quantity + 1)}
+                          aria-label={`Increase ${line.name}`}
+                        >
+                          <PosPlusIcon className="h-[15px] w-[15px]" />
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
 
-              <div className="pos-order-summary-row">
-                <span>Order type</span>
-                <strong>
-                  {orderType === "PICKUP" ? "Pickup" : "Delivery"}
-                </strong>
-              </div>
-              <div className="pos-order-summary-row">
-                <span>Customer</span>
-                <strong>{selectedCustomer?.label ?? "Select customer"}</strong>
-              </div>
-              <div className="pos-order-summary-row">
-                <span>LPG Mix</span>
-                <strong>
-                  Refill {refillQuantity} | Non-Refill {nonRefillQuantity}
-                </strong>
-              </div>
-              <div className="pos-order-summary-row">
-                <span>Personnel</span>
-                <strong>
-                  {selectedPersonnel?.label ?? "Select personnel"}
-                </strong>
-              </div>
-              <div className="pos-order-summary-row">
-                <span>Helper</span>
-                <strong>{selectedHelper?.label ?? "—"}</strong>
-              </div>
-              <div className="pos-order-summary-row">
-                <span>Items</span>
-                <strong>{cart.length}</strong>
-              </div>
-              <div className="pos-order-summary-row">
-                <span>Total quantity</span>
-                <strong>{totalQuantity}</strong>
-              </div>
+          <div className="pos-static-total-block">
+            <div className="pos-static-total-row">
+              <span>Subtotal</span>
+              <strong>{formatAmountForSummary(subtotal)}</strong>
             </div>
-
-            <div className="pos-order-total-card">
-              <div className="pos-order-total-row">
-                <span>Subtotal</span>
-                <strong>{formatAmountForSummary(subtotal)}</strong>
-              </div>
-              {discount > 0 ? (
-                <div className="pos-order-total-row">
-                  <span>Discount</span>
-                  <strong>{formatAmountForSummary(discount)}</strong>
-                </div>
-              ) : null}
-              {orderType === "DELIVERY" ? (
-                <div className="pos-order-total-row">
-                  <span>Delivery Fee</span>
-                  <strong>{formatAmountForSummary(deliveryFeeValue)}</strong>
-                </div>
-              ) : null}
-              <div className="pos-order-total-row pos-order-total-row--highlight">
-                <span>Total Due</span>
-                <strong>{formatAmountForSummary(total)}</strong>
-              </div>
-            </div>
-
-            <div className="pos-order-actions">
-              <button
-                ref={proceedPaymentTarget.ref}
-                className={`primary-btn checkout-btn ${proceedPaymentTarget.active ? "tutorial-target-active" : ""}`}
-                type="button"
-                onClick={handleProceedToPayment}
-                disabled={saving || !cart.length}
-              >
-                Proceed To Payment
-              </button>
-              <button
-                className="secondary-btn checkout-btn checkout-btn-support"
-                type="button"
-                onClick={promptClearCurrentOrder}
-                disabled={saving || !hasDraftToClear}
-              >
-                Clear Order
-              </button>
-            </div>
-
-            {cartWarnings.length > 0 ? (
-              <div className="message-banner stock-warning-banner !mt-0">
-                {cartWarnings[0]}
+            {discount > 0 ? (
+              <div className="pos-static-total-row">
+                <span>Discount</span>
+                <strong>{formatAmountForSummary(discount)}</strong>
               </div>
             ) : null}
             {orderType === "DELIVERY" ? (
-              <div className="delivery-note-card !mt-0">
-                <strong>Delivery reminder</strong>
-                <span>
-                  Keep the assigned personnel and helper on this order before
-                  completing payment.
-                </span>
+              <div className="pos-static-total-row">
+                <span>Delivery Fee</span>
+                <strong>{formatAmountForSummary(deliveryFeeValue)}</strong>
               </div>
             ) : null}
-          </section>
-        </div>
+            <div className="pos-static-total-row pos-static-total-row--due">
+              <span>Total Due</span>
+              <strong>{formatAmountForSummary(total)}</strong>
+            </div>
+          </div>
+
+          <div className="pos-static-cart-actions">
+            <button
+              ref={proceedPaymentTarget.ref}
+              className={`primary-btn pos-static-pay-btn ${proceedPaymentTarget.active ? "tutorial-target-active" : ""}`}
+              type="button"
+              onClick={handleProceedToPayment}
+              disabled={saving || !cart.length}
+            >
+              <span>Proceed To Payment</span>
+              <PosArrowRightIcon className="h-[18px] w-[18px]" />
+            </button>
+          </div>
+        </aside>
       </section>
 
-      <div className="message-banner">{message}</div>
+      <div className="pos-static-status-line">
+        <span>{cartWarnings[0] ?? message}</span>
+      </div>
 
       {clearOrderConfirmOpen ? (
         <div
@@ -4249,7 +5098,7 @@ export function PosScreen({
                       : "Select who this order is for."}
                   </span>
                 </span>
-                <span className="pos-setup-modal-row__chevron">›</span>
+                <PosChevronRightIcon className="pos-setup-modal-row__chevron h-[20px] w-[20px]" />
               </button>
 
               <button
@@ -4273,7 +5122,7 @@ export function PosScreen({
                       "Assign the cashier or driver handling this order."}
                   </span>
                 </span>
-                <span className="pos-setup-modal-row__chevron">›</span>
+                <PosChevronRightIcon className="pos-setup-modal-row__chevron h-[20px] w-[20px]" />
               </button>
 
               <button
@@ -4295,7 +5144,7 @@ export function PosScreen({
                       "Add a helper only when needed."}
                   </span>
                 </span>
-                <span className="pos-setup-modal-row__chevron">›</span>
+                <PosChevronRightIcon className="pos-setup-modal-row__chevron h-[20px] w-[20px]" />
               </button>
 
               <div className="pos-setup-note">
@@ -4329,13 +5178,13 @@ export function PosScreen({
       <PickerModal
         open={customerModalOpen}
         title="Select Customer"
+        variant="customer"
         search={customerSearch}
         placeholder="Search customer, code, address, points, or balance"
         emptyLabel="No matching customers found."
         options={filteredCustomers}
         selectedId={selectedCustomerId}
-        emptyOptionLabel="Select customer"
-        emptyOptionHint="No saved customer selected yet."
+        hideEmptyOption
         onSearch={setCustomerSearch}
         onClose={() => setCustomerModalOpen(false)}
         onSelect={handleCustomerSelect}
@@ -4346,121 +5195,153 @@ export function PosScreen({
 
       {createCustomerModalOpen ? (
         <div
-          className={posModalBackdropClass}
+          className={`${posModalBackdropClass} pos-create-customer-backdrop`}
+          role="presentation"
           onClick={closeCreateCustomerModal}
         >
           <div
-            className="desktop-modal-card desktop-modal-card--action"
+            className="desktop-modal-card desktop-modal-card--action customers-create-modal pos-create-customer-modal"
+            aria-busy={createCustomerSaving}
             onClick={(event) => event.stopPropagation()}
           >
-            <div className="desktop-modal-header flex shrink-0 flex-col gap-3">
-              <div className="panel-head !mb-0">
-                <div>
+            <div className="desktop-modal-header customers-create-modal-head">
+              <div className="customers-create-modal-hero">
+                <div className="customers-create-modal-hero-icon" aria-hidden="true">
+                  <PosSetupRowSymbol kind="customer" className="h-[24px] w-[24px]" />
+                </div>
+                <div className="min-w-0">
                   <div className="eyebrow">Offline customer</div>
-                  <h3 className="m-0 text-[1.08rem] font-extrabold text-[var(--text-strong)]">
+                  <h3 className="m-0 text-[1.36rem] font-extrabold tracking-[-0.03em] text-[var(--text-strong)]">
                     New customer
                   </h3>
-                  <p className="mt-2 text-[0.94rem] leading-6 text-[var(--muted)]">
-                    Save a customer locally now. We&apos;ll sync it when desktop
-                    is connected again.
+                  <p className="mt-2 text-[0.92rem] leading-6 text-[var(--muted)]">
+                    Save this customer locally and use it for the current sale.
+                    It will sync when desktop connects again.
                   </p>
                 </div>
-                <button
-                  className="secondary-btn mini-btn modal-close-icon-btn"
-                  type="button"
-                  onClick={closeCreateCustomerModal}
-                  disabled={createCustomerSaving}
-                  aria-label="Close modal"
-                  title="Close"
-                >
-                  <span aria-hidden="true">X</span>
-                </button>
               </div>
+              <button
+                className="secondary-btn mini-btn modal-close-icon-btn"
+                type="button"
+                onClick={closeCreateCustomerModal}
+                disabled={createCustomerSaving}
+                aria-label="Close modal"
+                title="Close"
+              >
+                <span aria-hidden="true">X</span>
+              </button>
             </div>
 
-            <div className="desktop-modal-body flex min-h-0 flex-1 flex-col gap-4">
-              <label className="grid gap-2">
-                <span className={summaryLabelClass}>Name</span>
-                <input
-                  className="app-input"
-                  value={createCustomerName}
-                  onChange={(event) =>
-                    setCreateCustomerName(event.target.value)
-                  }
-                  placeholder="Customer name"
-                />
-              </label>
-              <label className="grid gap-2">
-                <span className={summaryLabelClass}>Address</span>
-                <input
-                  className="app-input"
-                  value={createCustomerAddress}
-                  onChange={(event) =>
-                    setCreateCustomerAddress(event.target.value)
-                  }
-                  placeholder="Customer address"
-                />
-              </label>
-              <div className="rounded-[18px] border border-[var(--border-soft)] bg-[rgba(245,248,252,0.88)] px-4 py-3">
-                <div className="text-[0.78rem] font-semibold uppercase tracking-[0.08em] text-[var(--muted)]">
-                  Optional Details
+            <div className="desktop-modal-body customers-create-modal-body">
+              <div className="customers-create-modal-grid">
+                <label className="grid gap-2">
+                  <span className={posCreateCustomerLabelClass}>
+                    Customer Name <span className="text-[var(--danger)]">*</span>
+                  </span>
+                  <div className={posCreateCustomerInputShellClass}>
+                    <input
+                      className="customers-create-modal-input"
+                      value={createCustomerName}
+                      onChange={(event) => setCreateCustomerName(event.target.value)}
+                      placeholder="Enter customer name"
+                      disabled={createCustomerSaving}
+                      autoFocus
+                    />
+                  </div>
+                </label>
+                <label className="grid gap-2">
+                  <span className={posCreateCustomerLabelClass}>Address</span>
+                  <div className={posCreateCustomerInputShellClass}>
+                    <input
+                      className="customers-create-modal-input"
+                      value={createCustomerAddress}
+                      onChange={(event) => setCreateCustomerAddress(event.target.value)}
+                      placeholder="Enter customer address"
+                      disabled={createCustomerSaving}
+                    />
+                  </div>
+                </label>
+              </div>
+
+              <div className="customers-create-modal-section-head">
+                <div className="customers-create-modal-section-label-row">
+                  <div className="customers-create-modal-section-title">Optional Details</div>
+                  <svg viewBox="0 0 24 24" aria-hidden="true" className="customers-create-modal-section-chevron">
+                    <path d="m7 14 5-5 5 5" />
+                  </svg>
                 </div>
-                <p className="mt-1 text-[0.88rem] leading-6 text-[var(--muted)]">
-                  Customer code is assigned after sync. Add the rest only if
-                  needed for this sale.
+                <p>
+                  Customer code is assigned after sync. Add more details now only
+                  if they help complete this sale.
                 </p>
               </div>
-              <div className="grid gap-4 md:grid-cols-2">
+
+              <div className="customers-create-modal-grid">
                 <label className="grid gap-2">
-                  <span className={summaryLabelClass}>Contact Number</span>
-                  <input
-                    className="app-input"
-                    value={createCustomerContactNumber}
-                    onChange={(event) =>
-                      setCreateCustomerContactNumber(event.target.value)
-                    }
-                    placeholder="Optional contact number"
-                  />
+                  <span className={posCreateCustomerLabelClass}>Customer Code</span>
+                  <div className={posCreateCustomerInputShellClass}>
+                    <input
+                      className="customers-create-modal-input"
+                      value="Auto-assigned after sync"
+                      readOnly
+                      disabled
+                    />
+                  </div>
                 </label>
                 <label className="grid gap-2">
-                  <span className={summaryLabelClass}>Gas</span>
-                  <input
-                    className="app-input"
-                    value={createCustomerGas}
-                    onChange={(event) =>
-                      setCreateCustomerGas(event.target.value)
-                    }
-                    placeholder="Optional gas preference"
-                  />
+                  <span className={posCreateCustomerLabelClass}>Gas Preference</span>
+                  <div className={posCreateCustomerInputShellClass}>
+                    <input
+                      className="customers-create-modal-input"
+                      value={createCustomerGas}
+                      onChange={(event) => setCreateCustomerGas(event.target.value)}
+                      placeholder="Enter gas preference"
+                      disabled={createCustomerSaving}
+                    />
+                  </div>
                 </label>
                 <label className="grid gap-2">
-                  <span className={summaryLabelClass}>Province</span>
-                  <input
-                    className="app-input"
-                    value={createCustomerProvince}
-                    onChange={(event) =>
-                      setCreateCustomerProvince(event.target.value)
-                    }
-                    placeholder="Optional province"
-                  />
+                  <span className={posCreateCustomerLabelClass}>Contact Number</span>
+                  <div className={posCreateCustomerInputShellClass}>
+                    <input
+                      className="customers-create-modal-input"
+                      value={createCustomerContactNumber}
+                      onChange={(event) => setCreateCustomerContactNumber(event.target.value)}
+                      placeholder="Enter contact number"
+                      disabled={createCustomerSaving}
+                    />
+                  </div>
                 </label>
                 <label className="grid gap-2">
-                  <span className={summaryLabelClass}>City</span>
-                  <input
-                    className="app-input"
-                    value={createCustomerCity}
-                    onChange={(event) =>
-                      setCreateCustomerCity(event.target.value)
-                    }
-                    placeholder="Optional city"
-                  />
+                  <span className={posCreateCustomerLabelClass}>Province</span>
+                  <div className={posCreateCustomerInputShellClass}>
+                    <input
+                      className="customers-create-modal-input"
+                      value={createCustomerProvince}
+                      onChange={(event) => setCreateCustomerProvince(event.target.value)}
+                      placeholder="Enter province"
+                      disabled={createCustomerSaving}
+                    />
+                  </div>
+                </label>
+                <label className="grid gap-2 customers-create-modal-grid-span">
+                  <span className={posCreateCustomerLabelClass}>City</span>
+                  <div className={posCreateCustomerInputShellClass}>
+                    <input
+                      className="customers-create-modal-input"
+                      value={createCustomerCity}
+                      onChange={(event) => setCreateCustomerCity(event.target.value)}
+                      placeholder="Enter city"
+                      disabled={createCustomerSaving}
+                    />
+                  </div>
                 </label>
               </div>
             </div>
 
-            <div className="desktop-modal-footer">
+            <div className="desktop-modal-footer customers-create-modal-footer">
               <button
-                className="secondary-btn"
+                className="secondary-btn customers-create-modal-btn"
                 type="button"
                 onClick={closeCreateCustomerModal}
                 disabled={createCustomerSaving}
@@ -4468,7 +5349,7 @@ export function PosScreen({
                 Cancel
               </button>
               <button
-                className="primary-btn"
+                className="primary-btn customers-create-modal-btn"
                 type="button"
                 onClick={() => void handleCreateOfflineCustomer()}
                 disabled={createCustomerSaving}
@@ -4483,6 +5364,7 @@ export function PosScreen({
       <PickerModal
         open={personnelModalOpen}
         title="Select Personnel"
+        variant="personnel"
         search={personnelSearch}
         placeholder="Search personnel or role"
         emptyLabel="No matching personnel found."
@@ -4497,6 +5379,7 @@ export function PosScreen({
       <PickerModal
         open={helperModalOpen}
         title="Select Helper"
+        variant="helper"
         search={helperSearch}
         placeholder="Search helper or role"
         emptyLabel="No matching helper found."
@@ -4511,93 +5394,305 @@ export function PosScreen({
 
       {itemModalOpen ? (
         <div
-          className={posModalBackdropClass}
+          className={`${posModalBackdropClass} pos-directory-backdrop`}
           onClick={() => setItemModalOpen(false)}
         >
           <div
-            className={posModalCardClass}
-            style={QUEUE_ORDERS_MODAL_CARD_STYLE as any}
+            className="desktop-modal-card desktop-modal-card--picker pos-directory-modal pos-directory-item-modal"
             onClick={(event) => event.stopPropagation()}
           >
-            <div className={posModalToolbarClass}>
-              <div className="panel-head pos-sheet-head">
-                <div>
-                  <div className="eyebrow">Selection</div>
-                  <h3>Select Item</h3>
-                </div>
-                <button
-                  className="secondary-btn mini-btn modal-close-icon-btn"
-                  type="button"
-                  onClick={() => setItemModalOpen(false)}
-                  aria-label="Close modal"
-                  title="Close"
-                >
-                  <span aria-hidden="true">X</span>
-                </button>
+            <div className="desktop-modal-header pos-directory-header">
+              <div>
+                <div className="eyebrow">Selection</div>
+                <h3>Select Item</h3>
               </div>
+              <button
+                className="secondary-btn mini-btn modal-close-icon-btn"
+                type="button"
+                onClick={() => setItemModalOpen(false)}
+                aria-label="Close modal"
+                title="Close"
+              >
+                <span aria-hidden="true">X</span>
+              </button>
+            </div>
 
+            <div className="desktop-modal-body pos-directory-body">
+              <aside className="pos-directory-sidebar pos-directory-item-sidebar">
               <SearchField
-                className="pos-sheet-search"
+                  className="pos-directory-search"
                 value={itemSearch}
                 onChange={setItemSearch}
                 placeholder="Search item code or name"
                 autoFocus
               />
 
-              <div className="filter-chip-row">
-                {itemCategoryOptions.map((category) => (
-                  <button
-                    key={category}
-                    type="button"
-                    className={`filter-chip ${itemCategoryFilter === category ? "active" : ""}`}
-                    onClick={() => setItemCategoryFilter(category)}
-                  >
-                    {category === "ALL" ? "All Items" : category}
-                  </button>
-                ))}
-              </div>
+                <div className="pos-directory-filter-block">
+                  <span className="pos-directory-filter-title">Categories</span>
+                  <div className="pos-directory-filter-list pos-directory-item-filter-list">
+                    {itemDirectoryCategoryFilters.map((category) => (
+                      <button
+                        key={category.id}
+                        type="button"
+                        className={`pos-directory-filter-btn ${itemCategoryFilter === category.id ? "is-active" : ""}`}
+                        onClick={() => setItemCategoryFilter(category.id)}
+                      >
+                        <span className="pos-directory-filter-icon" aria-hidden="true">
+                          <PosOverviewSymbol
+                            kind={category.id === "ALL" ? "total" : "lines"}
+                            className="h-[19px] w-[19px]"
+                          />
+                        </span>
+                        <span>{category.label}</span>
+                        <strong>{category.count}</strong>
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              </aside>
+
+              <section className="pos-directory-main">
+                <div className="pos-directory-toolbar">
+                  <strong>{sortedItemDirectoryProducts.length} Items found</strong>
+                  <div className="pos-directory-controls">
+                    <label className="pos-directory-sort">
+                      <span aria-hidden="true">↕</span>
+                      <select
+                        value={itemPickerSortMode}
+                        onChange={(event) =>
+                          setItemPickerSortMode(event.target.value as ItemPickerSortMode)
+                        }
+                        aria-label="Sort item list"
+                      >
+                        <option value="NAME_ASC">
+                          Sort by: {itemPickerSortLabel("NAME_ASC")}
+                        </option>
+                        <option value="SKU_ASC">
+                          Sort by: {itemPickerSortLabel("SKU_ASC")}
+                        </option>
+                        <option value="PRICE_ASC">
+                          Sort by: {itemPickerSortLabel("PRICE_ASC")}
+                        </option>
+                        <option value="PRICE_DESC">
+                          Sort by: {itemPickerSortLabel("PRICE_DESC")}
+                        </option>
+                        <option value="STOCK_DESC">
+                          Sort by: {itemPickerSortLabel("STOCK_DESC")}
+                        </option>
+                      </select>
+                    </label>
+                    <div className="pos-directory-view-toggle" aria-label="View mode">
+                      <button
+                        className={itemPickerViewMode === "list" ? "is-active" : ""}
+                        type="button"
+                        onClick={() => setItemPickerViewMode("list")}
+                        aria-label="List view"
+                        title="List view"
+                      >
+                        <span aria-hidden="true">☰</span>
+                      </button>
+                      <button
+                        className={itemPickerViewMode === "grid" ? "is-active" : ""}
+                        type="button"
+                        onClick={() => setItemPickerViewMode("grid")}
+                        aria-label="Grid view"
+                        title="Grid view"
+                      >
+                        <span aria-hidden="true">▦</span>
+                      </button>
+                    </div>
+                  </div>
+                </div>
+
+                {itemPickerViewMode === "list" ? (
+                  <div className="pos-directory-table pos-directory-table--item">
+                    <div className="pos-directory-table-head">
+                      <span aria-hidden="true" />
+                      <span>Code</span>
+                      <span>Item Name</span>
+                      <span>Category</span>
+                      <span>Stock</span>
+                      <span>Price</span>
+                      <span aria-hidden="true" />
+                    </div>
+
+                    <div className="pos-directory-rows">
+                      {itemDirectoryPageProducts.length === 0 ? (
+                        <div className="empty-state pos-directory-empty">
+                          No matching items.
+                        </div>
+                      ) : (
+                        itemDirectoryPageProducts.map((product) => {
+                          const stockTone = resolveStockTone(product);
+                          const disabled = stockTone === "out";
+                          return (
+                            <button
+                              key={product.id}
+                              type="button"
+                              className={`pos-directory-row pos-directory-item-row ${disabled ? "is-disabled" : ""}`}
+                              onClick={() => {
+                                addToCart(product);
+                                setItemModalOpen(false);
+                              }}
+                              disabled={disabled}
+                            >
+                              <span className="pos-directory-avatar" aria-hidden="true">
+                                <PosOverviewSymbol kind="lines" className="h-[18px] w-[18px]" />
+                              </span>
+                              <strong>{product.sku}</strong>
+                              <span className="pos-directory-name-cell">
+                              <strong>{product.name}</strong>
+                              <small>
+                                {product.unit}
+                                {product.isLpg
+                                  ? ` | Size ${formatCylinderSizeLabel(product)}`
+                                  : ""}
+                              </small>
+                              <span className="pos-directory-inline-meta">
+                                {`${product.category || "-"} | ${itemPickerStockSummary(product)} | ${fmtMoney(product.unitPrice)}`}
+                              </span>
+                            </span>
+                              <span>{product.category || "-"}</span>
+                              <span className="pos-directory-item-stock">
+                                <strong>{itemPickerStockSummary(product)}</strong>
+                                <small className={`stock-pill ${stockTone}`}>
+                                  {resolveStockLabel(product)}
+                                </small>
+                              </span>
+                              <span>{fmtMoney(product.unitPrice)}</span>
+                              <span className="pos-directory-row-action" aria-hidden="true">
+                                <PosPlusIcon className="h-[16px] w-[16px]" />
+                              </span>
+                            </button>
+                          );
+                        })
+                      )}
+                    </div>
+                  </div>
+                ) : (
+                  <div className="pos-directory-card-grid pos-directory-item-card-grid">
+                    {itemDirectoryPageProducts.length === 0 ? (
+                      <div className="empty-state pos-directory-empty">
+                        No matching items.
+                      </div>
+                    ) : (
+                      itemDirectoryPageProducts.map((product) => {
+                        const stockTone = resolveStockTone(product);
+                        const disabled = stockTone === "out";
+                        return (
+                          <button
+                            key={product.id}
+                            className={`pos-directory-card-option pos-directory-item-card-option ${disabled ? "is-disabled" : ""}`}
+                            type="button"
+                            onClick={() => {
+                              addToCart(product);
+                              setItemModalOpen(false);
+                            }}
+                            disabled={disabled}
+                          >
+                            <span className="pos-directory-avatar" aria-hidden="true">
+                              <PosOverviewSymbol kind="lines" className="h-[18px] w-[18px]" />
+                            </span>
+                            <span className="pos-directory-item-card-main">
+                              <strong>{product.name}</strong>
+                              <span>{product.sku}</span>
+                            </span>
+                            <small className="pos-directory-item-card-meta">
+                              {product.category || "-"}
+                            </small>
+                            <span className="pos-directory-item-card-stock">
+                              <span className={`stock-pill ${stockTone}`}>
+                                {resolveStockLabel(product)}
+                              </span>
+                              <span>{itemPickerStockSummary(product)}</span>
+                            </span>
+                            <span className="pos-directory-item-card-footer">
+                              <strong>{fmtMoney(product.unitPrice)}</strong>
+                              <span className="pos-directory-item-card-add" aria-hidden="true">
+                                <PosPlusIcon className="h-[15px] w-[15px]" />
+                              </span>
+                            </span>
+                          </button>
+                        );
+                      })
+                    )}
+                  </div>
+                )}
+
+                <div className="pos-directory-pager">
+                  <span>
+                    Showing{" "}
+                    {sortedItemDirectoryProducts.length === 0
+                      ? 0
+                      : itemDirectoryStartIndex + 1}{" "}
+                    to{" "}
+                    {Math.min(
+                      itemDirectoryStartIndex + itemPickerPageSize,
+                      sortedItemDirectoryProducts.length,
+                    )}{" "}
+                    of {sortedItemDirectoryProducts.length} items
+                  </span>
+                  <div className="pos-directory-page-buttons">
+                    <button
+                      type="button"
+                      onClick={() =>
+                        setItemPickerCurrentPage((page) => Math.max(1, page - 1))
+                      }
+                      disabled={itemDirectoryCurrentPage <= 1}
+                      aria-label="Previous page"
+                    >
+                      ‹
+                    </button>
+                    {itemDirectoryPageButtons.map((page) => (
+                      <button
+                        key={page}
+                        className={itemDirectoryCurrentPage === page ? "is-active" : ""}
+                        type="button"
+                        onClick={() => setItemPickerCurrentPage(page)}
+                      >
+                        {page}
+                      </button>
+                    ))}
+                    <button
+                      type="button"
+                      onClick={() =>
+                        setItemPickerCurrentPage((page) =>
+                          Math.min(itemDirectoryTotalPages, page + 1),
+                        )
+                      }
+                      disabled={itemDirectoryCurrentPage >= itemDirectoryTotalPages}
+                      aria-label="Next page"
+                    >
+                      ›
+                    </button>
+                  </div>
+                  <label className="pos-directory-page-size">
+                    <select
+                      value={itemPickerPageSize}
+                      onChange={(event) =>
+                        setItemPickerPageSize(Number(event.target.value))
+                      }
+                      aria-label="Rows per page"
+                    >
+                      {PICKER_PAGE_SIZE_OPTIONS.map((size) => (
+                        <option key={size} value={size}>
+                          {size} per page
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                </div>
+              </section>
             </div>
 
-            <div className="desktop-modal-body picker-list">
-              {filteredProducts.length === 0 ? (
-                <div className="empty-state">No matching items.</div>
-              ) : (
-                filteredProducts.map((product) => (
-                  <button
-                    key={product.id}
-                    type="button"
-                    className="catalog-row picker-row pos-item-card"
-                    onClick={() => {
-                      addToCart(product);
-                      setItemModalOpen(false);
-                    }}
-                    disabled={resolveStockTone(product) === "out"}
-                  >
-                    <div className="pos-item-card-main">
-                      <strong>{product.name}</strong>
-                      <span className="pos-item-card-meta">
-                        {product.sku} | {product.category} | {product.unit}
-                        {product.isLpg
-                          ? ` | Size ${formatCylinderSizeLabel(product)}`
-                          : ""}
-                      </span>
-                      <span className="pos-item-card-stock">
-                        {product.isLpg
-                          ? `Full ${product.qtyFull.toFixed(2)} | Empty ${product.qtyEmpty.toFixed(2)}`
-                          : `On hand ${product.qtyOnHand.toFixed(2)}`}
-                      </span>
-                    </div>
-                    <div className="catalog-row-right">
-                      <strong>{fmtMoney(product.unitPrice)}</strong>
-                      <div
-                        className={`stock-pill ${resolveStockTone(product)}`}
-                      >
-                        {resolveStockLabel(product)}
-                      </div>
-                    </div>
-                  </button>
-                ))
-              )}
+            <div className="desktop-modal-footer pos-directory-footer">
+              <button
+                className="secondary-btn"
+                type="button"
+                onClick={() => setItemModalOpen(false)}
+              >
+                Cancel
+              </button>
             </div>
           </div>
         </div>
@@ -5157,15 +6252,11 @@ export function PosScreen({
 
       {paymentModalOpen ? (
         <div
-          className={posModalBackdropClass}
+          className={`${posModalBackdropClass} pos-payment-backdrop`}
           onClick={() => setPaymentModalOpen(false)}
         >
           <div
             className="desktop-modal-card desktop-modal-card--action pos-payment-modal"
-            style={{
-              width: "min(1780px, calc(100vw - 500px))",
-              maxWidth: "min(1780px, calc(100vw - 500px))",
-            }}
             onClick={(event) => event.stopPropagation()}
           >
             <div className={posModalToolbarClass}>
@@ -5533,26 +6624,26 @@ export function PosScreen({
                     <p>Review the final amounts before completing this sale.</p>
                   </div>
                 </div>
-                <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
-                  <div className={posMetricCardClass}>
+                <div className="pos-payment-summary-amount-grid">
+                  <div className={`${posMetricCardClass} pos-payment-summary-amount-card`}>
                     <span className={posMetricLabelClass}>Paid</span>
                     <strong className={posMetricValueClass}>
                       {formatAmountForSummary(parsedPaidAmount)}
                     </strong>
                   </div>
-                  <div className={posMetricCardClass}>
+                  <div className={`${posMetricCardClass} pos-payment-summary-amount-card`}>
                     <span className={posMetricLabelClass}>Change</span>
                     <strong className={posMetricValueClass}>
                       {formatAmountForSummary(changeAmount)}
                     </strong>
                   </div>
-                  <div className={posMetricCardClass}>
+                  <div className={`${posMetricCardClass} pos-payment-summary-amount-card`}>
                     <span className={posMetricLabelClass}>Credit</span>
                     <strong className={posMetricValueClass}>
                       {formatAmountForSummary(creditBalance)}
                     </strong>
                   </div>
-                  <div className={posMetricCardClass}>
+                  <div className={`${posMetricCardClass} pos-payment-summary-amount-card`}>
                     <span className={posMetricLabelClass}>Total</span>
                     <strong className={posMetricValueClass}>
                       {formatAmountForSummary(total)}
@@ -5596,6 +6687,9 @@ export function PosScreen({
                 </div>
               ) : null}
 
+            </div>
+
+            <div className="desktop-modal-footer pos-payment-footer">
               <div className="pos-payment-footer-stack">
                 <button
                   className="secondary-btn checkout-btn checkout-btn-print-inline"
@@ -5617,14 +6711,6 @@ export function PosScreen({
                   disabled={saving || !hasDraftToClear}
                 >
                   Clear Order
-                </button>
-                <button
-                  className="secondary-btn checkout-btn checkout-btn-support"
-                  type="button"
-                  onClick={() => setPaymentModalOpen(false)}
-                  disabled={saving}
-                >
-                  Back
                 </button>
                 <button
                   className="primary-btn checkout-btn"

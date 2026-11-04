@@ -52,6 +52,10 @@ function friendlyDecodeError(error: unknown): string {
   return message;
 }
 
+const modalBackdropClass = 'fixed inset-0 z-[80] flex items-center justify-center bg-slate-950/45 px-4 py-8 backdrop-blur-sm';
+const modalCardClass =
+  'w-full max-w-5xl rounded-[30px] border border-slate-200 bg-white p-5 shadow-[0_30px_90px_-40px_rgba(15,23,42,0.5)]';
+
 export function QuickSetupQrModal({ open, busy = false, onClose, onSubmit }: Props): JSX.Element | null {
   const [manualValue, setManualValue] = useState('');
   const [pin, setPin] = useState('');
@@ -176,16 +180,23 @@ export function QuickSetupQrModal({ open, busy = false, onClose, onSubmit }: Pro
   }
 
   return (
-    <div className="desktop-modal-backdrop" role="presentation">
-      <section className="desktop-modal-card startup-qr-modal">
+    <div className={modalBackdropClass} role="presentation">
+      <section className={`${modalCardClass} startup-qr-modal`}>
         <div className="panel-head">
           <div>
             <div className="eyebrow">Quick setup</div>
             <h3>Scan or upload the setup QR</h3>
             <p>Same shortcut as mobile: claim setup token, sign in the cashier, then download branch data.</p>
           </div>
-          <button className="secondary-btn mini-btn" type="button" onClick={onClose} disabled={busy}>
-            Close
+          <button
+            className="secondary-btn mini-btn modal-close-icon-btn"
+            type="button"
+            onClick={onClose}
+            disabled={busy}
+            aria-label="Close modal"
+            title="Close"
+          >
+            <span aria-hidden="true">X</span>
           </button>
         </div>
 

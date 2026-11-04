@@ -1,4 +1,6 @@
-﻿use chrono::Utc;
+#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
+
+use chrono::Utc;
 use rusqlite::{params, Connection};
 use serde::{Deserialize, Serialize};
 use std::fs;
@@ -6,15 +8,20 @@ use std::io::Write;
 use std::net::TcpStream;
 use std::path::PathBuf;
 use std::process::Command;
+#[cfg(target_os = "windows")]
+use std::os::windows::process::CommandExt;
 use tauri::AppHandle;
+use tauri::Manager;
 #[cfg(target_os = "windows")]
 use windows::{
-    core::PWSTR,
+    core::{w, PWSTR},
     Win32::Foundation::HANDLE,
     Win32::Graphics::Printing::{
         ClosePrinter, DOC_INFO_1W, EndDocPrinter, EndPagePrinter, OpenPrinterW, StartDocPrinterW,
         StartPagePrinter, WritePrinter,
     },
+    Win32::Media::Audio::{PlaySoundW, SND_ALIAS, SND_ASYNC, SND_NODEFAULT},
+    Win32::System::Diagnostics::Debug::Beep,
 };
 
 const STATE_KEY: &str = "desktop_app_state";
@@ -35,6 +42,8 @@ struct DesktopSetupPayload {
     printer_name: String,
     printer_host: String,
     printer_port: String,
+    #[serde(default = "default_pos_lpg_flow")]
+    pos_default_lpg_flow: String,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, Default)]
@@ -43,6 +52,14 @@ struct DesktopAuthPayload {
     access_token: Option<String>,
     refresh_token: Option<String>,
     signed_in_at: Option<String>,
+    #[serde(default)]
+    user_email: Option<String>,
+    #[serde(default)]
+    user_full_name: Option<String>,
+    #[serde(default)]
+    pin_hash: Option<String>,
+    #[serde(default)]
+    pin_salt: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, Default)]
@@ -68,6 +85,8 @@ struct DesktopPrinterProfilePayload {
 #[serde(rename_all = "camelCase")]
 struct DesktopSyncPayload {
     last_synced_at: Option<String>,
+    #[serde(default)]
+    last_pull_token: Option<String>,
     last_sync_status: String,
     last_sync_message: String,
 }
@@ -83,6 +102,10 @@ struct DesktopAppStatePayload {
     auth: DesktopAuthPayload,
     #[serde(default)]
     printer_profiles: Vec<DesktopPrinterProfilePayload>,
+    #[serde(default = "default_json_object")]
+    receipt_layout: serde_json::Value,
+    #[serde(default = "default_json_object")]
+    walkthrough: serde_json::Value,
     sync: DesktopSyncPayload,
 }
 
@@ -98,11 +121,19 @@ struct DesktopMasterDataRowPayload {
 #[derive(Debug, Serialize, Deserialize, Clone)]
 #[serde(rename_all = "camelCase")]
 struct DesktopSaleLinePayload {
+    #[serde(default)]
+    line_id: Option<String>,
     product_id: String,
     product_name: String,
+    #[serde(default)]
+    subtitle: Option<String>,
     quantity: f64,
     unit_price: f64,
     line_total: f64,
+    #[serde(default)]
+    cylinder_flow: Option<String>,
+    #[serde(flatten, default)]
+    extra: serde_json::Map<String, serde_json::Value>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -121,6 +152,8 @@ struct DesktopSalePayload {
     notes: Option<String>,
     lines: Vec<DesktopSaleLinePayload>,
     created_at: String,
+    #[serde(flatten, default)]
+    extra: serde_json::Map<String, serde_json::Value>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -132,6 +165,42 @@ struct DesktopSaleRecordPayload {
     receipt_number: String,
     created_at: String,
     updated_at: String,
+    #[serde(flatten, default)]
+    extra: serde_json::Map<String, serde_json::Value>,
+}
+
+fn deserialize_sale_record_payload(
+    id: String,
+    payload_raw: &str,
+    sync_status: String,
+    receipt_number: String,
+    created_at: String,
+    updated_at: String,
+) -> Result<DesktopSaleRecordPayload, String> {
+    if let Ok(mut record) = serde_json::from_str::<DesktopSaleRecordPayload>(payload_raw) {
+        record.id = id;
+        record.sync_status = sync_status;
+        record.receipt_number = receipt_number;
+        record.created_at = created_at;
+        record.updated_at = updated_at;
+        return Ok(record);
+    }
+
+    let payload =
+        serde_json::from_str::<DesktopSalePayload>(payload_raw).map_err(|err| err.to_string())?;
+    Ok(DesktopSaleRecordPayload {
+        id,
+        payload,
+        sync_status,
+        receipt_number,
+        created_at,
+        updated_at,
+        extra: serde_json::Map::new(),
+    })
+}
+
+fn serialize_sale_record_payload(sale: &DesktopSaleRecordPayload) -> Result<String, String> {
+    serde_json::to_string(sale).map_err(|err| err.to_string())
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -195,15 +264,23 @@ fn default_state() -> DesktopAppStatePayload {
             printer_name: String::new(),
             printer_host: String::new(),
             printer_port: "9100".to_string(),
+            pos_default_lpg_flow: default_pos_lpg_flow(),
         },
         auth: DesktopAuthPayload {
             access_token: None,
             refresh_token: None,
             signed_in_at: None,
+            user_email: None,
+            user_full_name: None,
+            pin_hash: None,
+            pin_salt: None,
         },
         printer_profiles: Vec::new(),
+        receipt_layout: default_json_object(),
+        walkthrough: default_json_object(),
         sync: DesktopSyncPayload {
             last_synced_at: None,
+            last_pull_token: None,
             last_sync_status: "idle".to_string(),
             last_sync_message: "Desktop setup has not been completed yet.".to_string(),
         },
@@ -212,6 +289,14 @@ fn default_state() -> DesktopAppStatePayload {
 
 fn default_last_test_status() -> String {
     "idle".to_string()
+}
+
+fn default_pos_lpg_flow() -> String {
+    "NONE".to_string()
+}
+
+fn default_json_object() -> serde_json::Value {
+    serde_json::json!({})
 }
 
 fn now_iso() -> String {
@@ -417,14 +502,64 @@ fn print_bytes(config: PrinterConfigPayload, bytes: &[u8]) -> Result<(), String>
 
 #[cfg(target_os = "windows")]
 fn list_system_printers() -> Result<Vec<String>, String> {
-    let output = Command::new("powershell")
-        .args([
-            "-NoProfile",
-            "-Command",
-            "Get-Printer | Select-Object -ExpandProperty Name",
-        ])
-        .output()
-        .map_err(|err| err.to_string())?;
+    let script = r#"
+$printerRows = @()
+try {
+  $printerRows += Get-Printer | Select-Object Name, PortName, Type, DriverName, Shared
+} catch {}
+try {
+  $printerRows += Get-CimInstance Win32_Printer | Select-Object Name, PortName, DriverName, Local, Network
+} catch {}
+
+$virtualNames = @(
+  'Microsoft Print to PDF',
+  'Microsoft XPS Document Writer',
+  'Fax',
+  'OneNote',
+  'Send To OneNote'
+)
+
+$normalized = $printerRows |
+  Where-Object { $_.Name } |
+  Group-Object -Property Name |
+  ForEach-Object {
+    $sample = $_.Group | Select-Object -First 1
+    $portName = [string]$sample.PortName
+    $name = [string]$sample.Name
+    $type = [string]$sample.Type
+    $isUsb = $portName -match '^(USB|DOT4|LPT)'
+    $isLocal = ($type -eq 'Local') -or ($sample.Local -eq $true)
+    $isVirtual = $virtualNames -contains $name
+    [PSCustomObject]@{
+      Name = $name
+      IsUsb = $isUsb
+      IsLocal = $isLocal
+      IsVirtual = $isVirtual
+    }
+  }
+
+$preferred = $normalized |
+  Sort-Object -Property `
+    @{ Expression = { if ($_.IsUsb) { 0 } else { 1 } } }, `
+    @{ Expression = { if ($_.IsLocal) { 0 } else { 1 } } }, `
+    @{ Expression = { if ($_.IsVirtual) { 1 } else { 0 } } }, `
+    Name
+
+$filtered = $preferred | Where-Object { -not $_.IsVirtual } | Select-Object -ExpandProperty Name
+if (-not $filtered) {
+  $filtered = $preferred | Select-Object -ExpandProperty Name
+}
+
+$filtered
+"#;
+
+    let mut command = Command::new("powershell.exe");
+    command.args(["-NoProfile", "-Command", script]);
+    #[cfg(target_os = "windows")]
+    {
+        command.creation_flags(0x0800_0000);
+    }
+    let output = command.output().map_err(|err| err.to_string())?;
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
@@ -478,15 +613,19 @@ fn desktop_list_sales(app: AppHandle) -> Result<Vec<DesktopSaleRecordPayload>, S
     let rows = stmt
         .query_map([], |row| {
             let payload_raw: String = row.get(1)?;
-            let payload = serde_json::from_str::<DesktopSalePayload>(&payload_raw)
-                .map_err(|err| rusqlite::Error::ToSqlConversionFailure(Box::new(err)))?;
-            Ok(DesktopSaleRecordPayload {
-                id: row.get(0)?,
-                payload,
-                sync_status: row.get(2)?,
-                receipt_number: row.get(3)?,
-                created_at: row.get(4)?,
-                updated_at: row.get(5)?,
+            deserialize_sale_record_payload(
+                row.get(0)?,
+                &payload_raw,
+                row.get(2)?,
+                row.get(3)?,
+                row.get(4)?,
+                row.get(5)?,
+            )
+            .map_err(|err| {
+                rusqlite::Error::ToSqlConversionFailure(Box::new(std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    err,
+                )))
             })
         })
         .map_err(|err| err.to_string())?;
@@ -501,7 +640,7 @@ fn desktop_list_sales(app: AppHandle) -> Result<Vec<DesktopSaleRecordPayload>, S
 #[tauri::command]
 fn desktop_save_sale(app: AppHandle, sale: DesktopSaleRecordPayload) -> Result<DesktopSaleRecordPayload, String> {
     let conn = connection(&app)?;
-    let payload_raw = serde_json::to_string(&sale.payload).map_err(|err| err.to_string())?;
+    let payload_raw = serialize_sale_record_payload(&sale)?;
     conn.execute(
         "INSERT INTO sales_local(id, payload, sync_status, receipt_number, created_at, updated_at)
          VALUES(?1, ?2, ?3, ?4, ?5, ?6)
@@ -657,6 +796,21 @@ fn desktop_upsert_master_data_rows(
 }
 
 #[tauri::command]
+fn desktop_delete_master_data_row(
+    app: AppHandle,
+    entity: String,
+    record_id: String,
+) -> Result<(), String> {
+    let conn = connection(&app)?;
+    conn.execute(
+        "DELETE FROM master_data_local WHERE entity = ?1 AND record_id = ?2",
+        params![entity, record_id],
+    )
+    .map_err(|err| err.to_string())?;
+    Ok(())
+}
+
+#[tauri::command]
 fn desktop_list_outbox(app: AppHandle) -> Result<Vec<DesktopOutboxItemPayload>, String> {
     let conn = connection(&app)?;
     let mut stmt = conn
@@ -767,6 +921,45 @@ fn desktop_increment_outbox_retry(app: AppHandle, id: String, error: String) -> 
 }
 
 #[tauri::command]
+fn desktop_update_outbox_payload(
+    app: AppHandle,
+    id: String,
+    payload: serde_json::Value,
+) -> Result<(), String> {
+    let conn = connection(&app)?;
+    conn.execute(
+        "UPDATE outbox_items SET payload = ?2, updated_at = ?3 WHERE id = ?1",
+        params![id, payload.to_string(), now_iso()],
+    )
+    .map_err(|err| err.to_string())?;
+    Ok(())
+}
+
+#[tauri::command]
+fn desktop_delete_outbox_item(app: AppHandle, id: String) -> Result<(), String> {
+    let conn = connection(&app)?;
+    conn.execute("DELETE FROM outbox_items WHERE id = ?1", params![id])
+        .map_err(|err| err.to_string())?;
+    Ok(())
+}
+
+#[tauri::command]
+fn desktop_reset_local_data(app: AppHandle) -> Result<(), String> {
+    let mut conn = connection(&app)?;
+    let tx = conn.transaction().map_err(|err| err.to_string())?;
+    tx.execute("DELETE FROM outbox_items", [])
+        .map_err(|err| err.to_string())?;
+    tx.execute("DELETE FROM sales_local", [])
+        .map_err(|err| err.to_string())?;
+    tx.execute("DELETE FROM master_data_local", [])
+        .map_err(|err| err.to_string())?;
+    tx.execute("DELETE FROM app_meta", [])
+        .map_err(|err| err.to_string())?;
+    tx.commit().map_err(|err| err.to_string())?;
+    Ok(())
+}
+
+#[tauri::command]
 fn desktop_print_esc_pos(lines: Vec<ReceiptLinePayload>, config: Option<PrinterConfigPayload>) -> Result<(), String> {
     let bytes = build_esc_pos_bytes(&lines);
     let resolved = config.unwrap_or(PrinterConfigPayload {
@@ -783,8 +976,158 @@ fn desktop_list_printers() -> Result<Vec<String>, String> {
     list_system_printers()
 }
 
+#[tauri::command]
+fn desktop_play_startup_sound() -> Result<(), String> {
+    #[cfg(target_os = "windows")]
+    {
+        std::thread::spawn(|| {
+            unsafe {
+                let played = PlaySoundW(
+                    w!("SystemAsterisk"),
+                    None,
+                    SND_ALIAS | SND_ASYNC | SND_NODEFAULT,
+                )
+                .as_bool();
+
+                if !played {
+                    let sequence = [(740u32, 55u32), (988u32, 72u32), (1175u32, 48u32)];
+                    for (frequency, duration) in sequence {
+                        let _ = Beep(frequency, duration);
+                    }
+                }
+            }
+        });
+        Ok(())
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    {
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn sale_payload_roundtrip_preserves_lpg_line_flow_fields_and_partial_payment_mode() {
+        let payload_json = r#"
+        {
+          "id": "sale-1",
+          "shiftId": "shift-1",
+          "customerId": null,
+          "customerName": null,
+          "saleType": "PICKUP",
+          "paymentMode": "PARTIAL",
+          "paymentMethod": "CASH",
+          "branchLabel": "VMJAM - Desktop",
+          "locationLabel": "VMJAM - Desktop Primary",
+          "subtotal": 50,
+          "discountAmount": 0,
+          "totalAmount": 50,
+          "paidAmount": 20,
+          "creditBalance": 30,
+          "payments": [
+            {
+              "id": "sale-1-payment-1",
+              "source": "SALE",
+              "method": "CASH",
+              "amount": 20,
+              "createdAt": "2026-06-05T00:00:00.000Z"
+            }
+          ],
+          "notes": null,
+          "lines": [
+            {
+              "productId": "product-1",
+              "productName": "Cylinder A",
+              "quantity": 1,
+              "unitPrice": 50,
+              "lineTotal": 50,
+              "subtitle": "Refill | 5 kg",
+              "cylinderFlow": "REFILL_EXCHANGE"
+            }
+          ],
+          "createdAt": "2026-06-05T00:00:00.000Z"
+        }
+        "#;
+
+        let payload: DesktopSalePayload =
+            serde_json::from_str(payload_json).expect("sale payload should deserialize");
+        let serialized = serde_json::to_value(&payload).expect("sale payload should serialize");
+        let line = &serialized["lines"][0];
+
+        assert_eq!(serialized["shiftId"], "shift-1");
+        assert_eq!(serialized["paymentMode"], "PARTIAL");
+        assert_eq!(serialized["paidAmount"], 20.0);
+        assert_eq!(serialized["creditBalance"], 30.0);
+        assert_eq!(serialized["payments"][0]["source"], "SALE");
+        assert_eq!(line["subtitle"], "Refill | 5 kg");
+        assert_eq!(line["cylinderFlow"], "REFILL_EXCHANGE");
+    }
+
+    #[test]
+    fn sale_record_roundtrip_preserves_cancel_status_fields() {
+        let record_json = r#"
+        {
+          "id": "sale-1",
+          "syncStatus": "pending",
+          "receiptNumber": "RCP-0001",
+          "createdAt": "2026-06-10T00:00:00.000Z",
+          "updatedAt": "2026-06-10T00:01:00.000Z",
+          "saleStatus": "CANCELLED",
+          "cancelReason": "Customer requested cancellation",
+          "cancelledAt": "2026-06-10T00:01:00.000Z",
+          "payload": {
+            "id": "sale-1",
+            "customerId": "cust-1",
+            "customerName": "Customer One",
+            "saleType": "PICKUP",
+            "paymentMethod": "CASH",
+            "paymentMode": "FULL",
+            "branchLabel": "VMJAM - Desktop",
+            "locationLabel": "VMJAM - Desktop Primary",
+            "subtotal": 50,
+            "discountAmount": 0,
+            "totalAmount": 50,
+            "notes": null,
+            "lines": [],
+            "createdAt": "2026-06-10T00:00:00.000Z"
+          }
+        }
+        "#;
+
+        let record: DesktopSaleRecordPayload =
+            serde_json::from_str(record_json).expect("sale record should deserialize");
+        let raw = serialize_sale_record_payload(&record).expect("sale record should serialize");
+        let restored = deserialize_sale_record_payload(
+            "sale-1".to_string(),
+            &raw,
+            "pending".to_string(),
+            "RCP-0001".to_string(),
+            "2026-06-10T00:00:00.000Z".to_string(),
+            "2026-06-10T00:01:00.000Z".to_string(),
+        )
+        .expect("sale record should restore");
+
+        let serialized = serde_json::to_value(&restored).expect("restored record should serialize");
+        assert_eq!(serialized["saleStatus"], "CANCELLED");
+        assert_eq!(serialized["cancelReason"], "Customer requested cancellation");
+        assert_eq!(serialized["cancelledAt"], "2026-06-10T00:01:00.000Z");
+    }
+}
+
 fn main() {
     tauri::Builder::default()
+        .setup(|app| {
+            if let Some(window) = app.get_window("main") {
+                let _ = window.maximize();
+                let _ = window.show();
+                let _ = window.set_focus();
+            }
+            Ok(())
+        })
         .invoke_handler(tauri::generate_handler![
             desktop_ready,
             desktop_load_state,
@@ -795,12 +1138,17 @@ fn main() {
             desktop_list_master_data,
             desktop_replace_master_data_entity,
             desktop_upsert_master_data_rows,
+            desktop_delete_master_data_row,
             desktop_list_outbox,
             desktop_enqueue_outbox_item,
             desktop_mark_outbox_status,
             desktop_increment_outbox_retry,
+            desktop_update_outbox_payload,
+            desktop_delete_outbox_item,
+            desktop_reset_local_data,
             desktop_print_esc_pos,
-            desktop_list_printers
+            desktop_list_printers,
+            desktop_play_startup_sound
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

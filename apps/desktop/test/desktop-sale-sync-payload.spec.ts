@@ -1,5 +1,4 @@
-import type { DesktopSalePayload } from '../src/db/schema';
-import { buildSaleOutboxPayload } from '../src/services/desktop-sale-sync-payload';
+import { buildSaleOutboxPayload, type DesktopSalePayload } from '@vpos/desktop-core';
 
 function makePayload(overrides: Partial<DesktopSalePayload> = {}): DesktopSalePayload {
   return {

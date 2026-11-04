@@ -1,0 +1,172 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><title>VPOS Desktop Update Guide</title>
+<style>
+@page { size: A4; margin: 15mm 16mm 17mm; }
+:root { color: #10263a; font-family: "Segoe UI", Arial, sans-serif; }
+* { box-sizing: border-box; }
+body { margin: 0; font-size: 10.5pt; line-height: 1.52; color: #183148; }
+h1 { margin: 0 0 8mm; padding: 13mm 12mm; color: white; font-size: 27pt; line-height: 1.08; background: #0d4770; border-radius: 7mm; }
+h2 { margin: 9mm 0 4mm; padding-bottom: 2.5mm; color: #0d4770; font-size: 18pt; border-bottom: 1px solid #c9d9e7; }
+h2.chapter { break-before: page; }
+h3 { margin: 6mm 0 2mm; color: #123f61; font-size: 13.5pt; }
+h4 { margin: 4mm 0 1.5mm; font-size: 11.5pt; }
+p { margin: 0 0 3mm; }
+ul, ol { margin: 0 0 4mm 5mm; padding-left: 5mm; }
+li { margin: 0 0 1.4mm; }
+strong { color: #102b42; }
+code { padding: .3mm 1.2mm; color: #8a3d00; background: #fff4e8; border-radius: 1.2mm; font-family: Consolas, monospace; font-size: 9pt; }
+pre { margin: 3mm 0 5mm; padding: 4mm; color: #eaf5ff; background: #102b42; border-radius: 3mm; white-space: pre-wrap; word-break: break-word; break-inside: avoid; }
+pre code { padding: 0; color: inherit; background: none; font-size: 8.5pt; }
+figure { margin: 5mm auto 7mm; text-align: center; break-inside: avoid; }
+figure img { max-width: 92%; max-height: 205mm; border: 1px solid #cad9e6; border-radius: 5mm; box-shadow: 0 2mm 7mm rgba(20,55,82,.12); }
+figcaption { margin-top: 2mm; color: #567087; font-size: 8.5pt; }
+body > p:first-of-type { font-size: 12pt; color: #456178; }
+</style></head><body><h1>VPOS Desktop Update Guide</h1>
+<p>This guide explains how an administrator publishes a signed VPOS Desktop update and how a cashier installs it safely.</p>
+<h2>What the update system protects</h2>
+<ul>
+<li>Updates replace application files, not branch data.</li>
+<li>Local SQLite records, cached products, printer settings, device setup, and the sync queue remain on the workstation.</li>
+<li>The updater verifies the package using the public key embedded in VPOS Desktop.</li>
+<li>The release process uploads the versioned package first and publishes <code>latest.json</code> last, so an incomplete upload cannot be offered to cashiers.</li>
+</ul>
+<h2 class="chapter">Part A: One-time administrator setup</h2>
+<h3>1. Keep the signing key on the release computer</h3>
+<p>Store the Tauri updater private key outside the repository, for example:</p>
+<pre data-language="text"><code>C:\Secure\TauriUpdater\vpos-desktop-updater.key</code></pre>
+<p>Do not upload this key to GitHub or the VPS. The VPS only needs signed public release files.</p>
+<h3>2. Confirm the VPS update folder</h3>
+<pre data-language="bash"><code>sudo mkdir -p /var/www/vpos-desktop-updates
+sudo chown -R $USER:$USER /var/www/vpos-desktop-updates</code></pre>
+<p>The Caddy site must include this handler before the main web handler:</p>
+<pre data-language="caddy"><code>handle_path /desktop-updates/* {
+  root * /var/www/vpos-desktop-updates
+  file_server
+}</code></pre>
+<p>Reload Caddy:</p>
+<pre data-language="bash"><code>sudo caddy reload --config /etc/caddy/Caddyfile</code></pre>
+<h3>3. Configure the API update policy</h3>
+<p>Add these values to the production API environment:</p>
+<pre data-language="env"><code>DESKTOP_WINDOWS_UPDATES_ENABLED=true
+DESKTOP_WINDOWS_LATEST_VERSION=0.1.3
+DESKTOP_WINDOWS_MIN_SUPPORTED_VERSION=0.1.1
+DESKTOP_WINDOWS_REQUIRED=false
+DESKTOP_WINDOWS_ROLLOUT_PERCENTAGE=100
+DESKTOP_WINDOWS_RELEASE_NOTES=Inventory and stability improvements.
+DESKTOP_WINDOWS_PUBLISHED_AT=2026-11-04T10:00:00.000Z
+DESKTOP_WINDOWS_SUPPORT_URL=https://vmjamtech.com/support</code></pre>
+<p>Use <code>REQUIRED=false</code> for normal releases. Raise <code>MIN_SUPPORTED_VERSION</code> only when older desktop builds must stop creating new transactions.</p>
+<h2 class="chapter">Part B: Publish an update</h2>
+<h3>1. Choose the next version</h3>
+<p>Use a higher semantic version. Example: <code>0.1.2</code> becomes <code>0.1.3</code>.</p>
+<p>From PowerShell in <code>D:\vpos</code>:</p>
+<pre data-language="powershell"><code>pnpm desktop:version -- 0.1.3
+pnpm --filter @vpos/desktop version:check</code></pre>
+<p>This updates and verifies:</p>
+<ul>
+<li><code>apps/desktop/package.json</code></li>
+<li><code>apps/desktop/src-tauri/tauri.conf.json</code></li>
+<li><code>apps/desktop/src-tauri/Cargo.toml</code></li>
+</ul>
+<h3>2. Commit the release source</h3>
+<pre data-language="powershell"><code>git add apps/desktop/package.json apps/desktop/src-tauri/tauri.conf.json apps/desktop/src-tauri/Cargo.toml
+git commit -m "Release VPOS Desktop 0.1.3"
+git push origin main</code></pre>
+<p>The release tool expects a clean Git working tree so the package can be traced to one commit.</p>
+<h3>3. Set signing secrets for this PowerShell session</h3>
+<pre data-language="powershell"><code>$env:TAURI_PRIVATE_KEY="C:\Secure\TauriUpdater\vpos-desktop-updater.key"
+$env:TAURI_KEY_PASSWORD="&lt;YOUR-PRIVATE-KEY-PASSWORD&gt;"
+$env:VPOS_SIGN_CERT_SHA1="&lt;WINDOWS-CODE-SIGNING-CERTIFICATE-SHA1&gt;"
+$env:VPOS_SIGN_TIMESTAMP_URL="http://timestamp.digicert.com"</code></pre>
+<p>The Tauri private key signs the updater package. The Windows certificate signs the installer and improves publisher trust.</p>
+<h3>4. Build without publishing</h3>
+<pre data-language="powershell"><code>pnpm desktop:release -- -Version 0.1.3 -Notes "Inventory and stability improvements"</code></pre>
+<p>The command:</p>
+<ol>
+<li>verifies that the working tree and versions are correct;</li>
+<li>runs desktop type checks and tests;</li>
+<li>builds the Windows MSI and updater ZIP;</li>
+<li>verifies that a signature exists;</li>
+<li>generates SHA-256 checksums and release metadata;</li>
+<li>creates <code>latest.json</code> locally;</li>
+<li>stops before uploading.</li>
+</ol>
+<p>Test the generated MSI on a non-production workstation before publishing.</p>
+<h3>5. Publish after testing</h3>
+<pre data-language="powershell"><code>pnpm desktop:release -- -Version 0.1.3 -Notes "Inventory and stability improvements" -Publish</code></pre>
+<p>The command uploads the immutable <code>0.1.3</code> folder, verifies the public artifact URL, and replaces <code>latest.json</code> last.</p>
+<h3>6. Update the production policy and API</h3>
+<p>Set the API policy values to the published version, then update the VPS services:</p>
+<pre data-language="bash"><code>cd /opt/vpos
+git pull --ff-only origin main
+docker compose -f infra/compose/docker-compose.prod.yml up -d --build api</code></pre>
+<p>If the Compose service is not named <code>api</code>, run the normal full update:</p>
+<pre data-language="bash"><code>docker compose -f infra/compose/docker-compose.prod.yml up -d --build</code></pre>
+<p>Verify:</p>
+<pre data-language="bash"><code>curl https://vmjamtech.com/api/desktop-updates/policy?platform=windows\&amp;arch=x86_64\&amp;version=0.1.2
+curl https://vmjamtech.com/desktop-updates/latest.json</code></pre>
+<h2 class="chapter">Part C: Install an update on a cashier workstation</h2>
+<h3>1. Open Settings</h3>
+<p>Open VPOS Desktop, select <strong>Settings</strong>, and find <strong>Software Update → Desktop OTA</strong>.</p>
+<h3>2. Check workstation safety</h3>
+<p>The panel shows the installed version, available version, release notes, and installation safety.</p>
+<figure><img src="assets/desktop-update-guide/update-ready.png" alt="Update ready to install"><figcaption>Update ready to install</figcaption></figure>
+<p>When Install Safety is <strong>Ready</strong>:</p>
+<ol>
+<li>select <strong>Check for Updates</strong>;</li>
+<li>review the version and release notes;</li>
+<li>select <strong>Install</strong>;</li>
+<li>allow VPOS Desktop to download, verify, install, and restart.</li>
+</ol>
+<h3>3. Sync pending work first</h3>
+<p>If the workstation has unsynced transactions, installation is disabled.</p>
+<figure><img src="assets/desktop-update-guide/update-sync-required.png" alt="Update blocked until pending records are synchronized"><figcaption>Update blocked until pending records are synchronized</figcaption></figure>
+<p>Select <strong>Sync Pending</strong>, wait until the panel changes to <strong>Ready</strong>, then install the update.</p>
+<p>If a cashier shift is open, VPOS warns before installation. Close the shift first when operationally possible.</p>
+<h3>4. Verify after restart</h3>
+<p>After VPOS Desktop restarts:</p>
+<ol>
+<li>open <strong>Settings → Desktop OTA</strong>;</li>
+<li>confirm Installed Version shows the new version;</li>
+<li>confirm branch, location, printer, and cashier settings remain correct;</li>
+<li>select <strong>Sync Now</strong>;</li>
+<li>perform a test print and a small test transaction if this is a pilot workstation.</li>
+</ol>
+<h2 class="chapter">Troubleshooting</h2>
+<h3>Check failed</h3>
+<ul>
+<li>Confirm the workstation has internet access.</li>
+<li>Open <code>https://vmjamtech.com/desktop-updates/latest.json</code> in a browser.</li>
+<li>Confirm the API policy endpoint returns JSON.</li>
+<li>Confirm the manifest references an existing HTTPS ZIP URL.</li>
+</ul>
+<h3>Action Needed</h3>
+<ul>
+<li>Select <strong>Sync Pending</strong>.</li>
+<li>Wait for the top status to show <strong>All Synced</strong>.</li>
+<li>Finish any active transaction.</li>
+<li>Retry installation.</li>
+</ul>
+<h3>Invalid manifest or signature</h3>
+<ul>
+<li>Do not bypass verification.</li>
+<li>Rebuild the same source as a newer patch version.</li>
+<li>Sign it using the same updater key whose public key is embedded in the installed app.</li>
+<li>Publish the version folder before <code>latest.json</code>.</li>
+</ul>
+<h3>Update needs to be reversed</h3>
+<p>The desktop configuration disallows downgrades. Publish a newer patch containing the revert—for example, publish <code>0.1.4</code> to reverse a problem in <code>0.1.3</code>. Keep the previous installers for emergency manual recovery.</p>
+<h2>Release record checklist</h2>
+<ul>
+<li>☐ Source commit and tag recorded.</li>
+<li>☐ Version sources match.</li>
+<li>☐ Tests and type checks pass.</li>
+<li>☐ MSI/updater bundle produced.</li>
+<li>☐ Updater signature present.</li>
+<li>☐ SHA-256 checksum recorded.</li>
+<li>☐ Test workstation upgraded successfully.</li>
+<li>☐ Version folder uploaded.</li>
+<li>☐ <code>latest.json</code> published last.</li>
+<li>☐ API policy updated.</li>
+<li>☐ Pilot cashier workstation confirmed healthy.</li>
+</ul></body></html>

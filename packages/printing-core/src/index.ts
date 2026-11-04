@@ -1,4 +1,4 @@
-export type PrinterType = 'IMIN' | 'GENERIC_BUILTIN' | 'BLUETOOTH' | 'NONE';
+export type PrinterType = 'IMIN' | 'SUNMI' | 'GENERIC_BUILTIN' | 'BLUETOOTH' | 'NONE';
 
 export interface ReceiptLine {
   align?: 'left' | 'center' | 'right';
@@ -124,8 +124,12 @@ function withPadding(lines: ReceiptLine[], topPaddingLines?: number, bottomPaddi
   return [...buildBlankLines(top), ...lines, ...buildBlankLines(bottom)];
 }
 
+export function materializeReceiptDocument(doc: ReceiptDocument): ReceiptLine[] {
+  return withPadding(withReprintMarker(doc), doc.topPaddingLines, doc.bottomPaddingLines);
+}
+
 export async function printReceipt(adapter: PrinterAdapter, doc: ReceiptDocument): Promise<void> {
-  await adapter.print(withPadding(withReprintMarker(doc), doc.topPaddingLines, doc.bottomPaddingLines));
+  await adapter.print(materializeReceiptDocument(doc));
 }
 
 export async function printXRead(adapter: PrinterAdapter, summaryLines: ReceiptLine[]): Promise<void> {
@@ -139,3 +143,20 @@ export async function printZRead(adapter: PrinterAdapter, summaryLines: ReceiptL
 export async function testPrint(adapter: PrinterAdapter): Promise<void> {
   await adapter.testPrint();
 }
+
+export type {
+  VposReceiptItemLine,
+  VposReceiptLayoutSettings,
+  VposReceiptOrderType,
+  VposReceiptPaymentMethod,
+  VposReceiptPaymentMode,
+  VposSaleReceiptInput,
+  VposQueueOrderReceiptInput,
+  VposCustomerPaymentReceiptInput
+} from './vpos-receipts';
+export {
+  normalizeVposReceiptLayoutSettings,
+  buildVposSaleReceiptDocument,
+  buildVposQueueOrderReceiptDocument,
+  buildVposCustomerPaymentReceiptDocument
+} from './vpos-receipts';

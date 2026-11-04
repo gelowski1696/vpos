@@ -1,9 +1,19 @@
 import {
+  materializeReceiptDocument,
   type PrinterAdapter,
   type ReceiptDocument,
   type ReceiptLine
-} from '@vpos/printing-core';
-import type { DesktopAppState, DesktopSaleRecord } from '../db/schema';
+} from '@vpos/printing-core/src/index';
+import {
+  buildVposCustomerPaymentReceiptDocument,
+  buildVposQueueOrderReceiptDocument,
+  buildVposSaleReceiptDocument
+} from '@vpos/printing-core/src/vpos-receipts';
+import type {
+  DesktopAppState,
+  DesktopReceiptLayoutSettings,
+  DesktopSaleRecord
+} from '../db/schema';
 import { printEscPosNative } from './desktop-printer.bridge';
 
 function money(value: number): string {
@@ -109,18 +119,46 @@ class BrowserPrintAdapter implements PrinterAdapter {
   }
 }
 
-function buildPrintableLines(doc: ReceiptDocument): ReceiptLine[] {
-  const lines: ReceiptLine[] = [];
-  lines.push({ align: 'center', emphasis: true, text: doc.title });
-  lines.push(...doc.lines);
-  if (doc.footer) {
-    lines.push({ align: 'center', emphasis: doc.footerEmphasis ?? false, text: doc.footer });
-  }
-  return lines;
-}
+export type DesktopQueueOrderReceiptPayload = {
+  queueId: string;
+  queueLabel: string;
+  branchName: string;
+  locationName: string;
+  cashierName: string | null;
+  orderType: 'PICKUP' | 'DELIVERY';
+  customerName: string | null;
+  customerAddress?: string | null;
+  personnelName: string | null;
+  helperName: string | null;
+  lines: Array<{ productId?: string | null; name: string; quantity: number; unitPrice: number; subtitle?: string | null }>;
+  subtotal: number;
+  discount: number;
+  total: number;
+  paidAmount: number;
+  paymentMode: 'FULL' | 'PARTIAL';
+  paymentMethod: 'CASH' | 'CARD' | 'E_WALLET';
+  notes?: string | null;
+  createdAt: string;
+};
+
+export type DesktopCustomerPaymentReceiptPayload = {
+  customerName: string;
+  customerAddress?: string | null;
+  amount: number;
+  remainingBalance: number;
+  method: 'CASH' | 'CARD' | 'E_WALLET';
+  referenceNo?: string | null;
+  notes?: string | null;
+  createdAt: string;
+};
 
 export class DesktopReceiptService {
-  private async printLines(lines: ReceiptLine[], appState: DesktopAppState): Promise<void> {
+  private async printLines(
+    lines: ReceiptLine[],
+    appState: DesktopAppState,
+    options: { allowBrowserFallback?: boolean } = {}
+  ): Promise<void> {
+    const allowBrowserFallback = options.allowBrowserFallback ?? true;
     const printerMode = appState.setup.printerMode;
     const nativePrintable = printerMode === 'USB' || printerMode === 'LAN';
 
@@ -135,11 +173,19 @@ export class DesktopReceiptService {
         if (didPrintNatively) {
           return;
         }
+        if (!allowBrowserFallback) {
+          throw new Error('Native desktop printer transport is not available. Open VPOS in the desktop app to run a printer test.');
+        }
       } catch (error) {
+        if (!allowBrowserFallback) {
+          throw error;
+        }
         // Fall back to print dialog so cashier flow is not blocked by native printer setup issues.
         // eslint-disable-next-line no-console
         console.warn('[VPOS DESKTOP] Native printer transport failed, falling back to print dialog.', error);
       }
+    } else if (!allowBrowserFallback) {
+      throw new Error('Choose USB or LAN before running a printer test.');
     }
 
     const adapter = new BrowserPrintAdapter();
@@ -147,50 +193,151 @@ export class DesktopReceiptService {
   }
 
   buildSaleReceiptDocument(sale: DesktopSaleRecord, appState: DesktopAppState): ReceiptDocument {
-    const lines: ReceiptLine[] = [
-      { align: 'center', text: appState.setup.branchLabel || 'VPOS Desktop', emphasis: true },
-      { align: 'center', text: appState.setup.locationLabel || 'Cashier Station' },
-      { align: 'center', text: new Date(sale.createdAt).toLocaleString() },
-      { text: '--------------------------------' },
-      { text: `Receipt: ${sale.receiptNumber}` },
-      { text: `Cashier: ${appState.setup.operatorName || 'Operator'}` },
-      { text: `Customer: ${sale.payload.customerName || 'Walk-in'}` },
-      { text: `Payment: ${sale.payload.paymentMethod}` },
-      { text: `Sale Type: ${sale.payload.saleType}` },
-      { text: '--------------------------------' }
-    ];
+    return buildVposSaleReceiptDocument(
+      {
+        receiptNumber: sale.receiptNumber,
+        saleId: sale.payload.id,
+        branchName: sale.payload.branchLabel || appState.setup.branchLabel,
+        locationName: sale.payload.locationLabel || appState.setup.locationLabel,
+        cashierName: appState.setup.operatorName || null,
+        orderType: sale.payload.saleType,
+        customerName: sale.payload.customerName,
+        personnelName: sale.payload.personnelName ?? null,
+        helperName: sale.payload.helperName ?? null,
+        lines: sale.payload.lines.map((line) => ({
+          name: line.productName,
+          subtitle: line.subtitle ?? null,
+          quantity: line.quantity,
+          unitPrice: line.unitPrice
+        })),
+        subtotal: sale.payload.subtotal,
+        discount: sale.payload.discountAmount,
+        total: sale.payload.totalAmount,
+        paidAmount: sale.payload.paidAmount ?? sale.payload.totalAmount,
+        changeAmount: sale.payload.changeAmount ?? 0,
+        creditBalance: sale.payload.creditBalance ?? 0,
+        notes: sale.payload.notes,
+        paymentMode: sale.payload.paymentMode ?? 'FULL',
+        paymentMethod: sale.payload.paymentMethod,
+        rewardRedemptionUsed: sale.payload.rewardRedemptionUsed,
+        hideAmounts: sale.payload.hideAmounts === true,
+        createdAt: sale.createdAt
+      },
+      appState.receiptLayout
+    );
+  }
 
-    for (const line of sale.payload.lines) {
-      lines.push({
-        text: `${line.productName} x${line.quantity}`
-      });
-      lines.push({
-        text: `${money(line.unitPrice)}  ${money(line.lineTotal)}`,
-        align: 'right'
-      });
-    }
+  buildQueueOrderReceiptDocument(input: DesktopQueueOrderReceiptPayload, appState: DesktopAppState): ReceiptDocument {
+    return buildVposQueueOrderReceiptDocument(
+      {
+        queueId: input.queueId,
+        queueLabel: input.queueLabel,
+        branchName: input.branchName,
+        locationName: input.locationName,
+        cashierName: input.cashierName,
+        orderType: input.orderType,
+        customerName: input.customerName,
+        customerAddress: input.customerAddress ?? null,
+        personnelName: input.personnelName,
+        helperName: input.helperName,
+        lines: input.lines.map((line) => ({
+          name: line.name,
+          subtitle: line.subtitle ?? null,
+          quantity: line.quantity,
+          unitPrice: line.unitPrice
+        })),
+        subtotal: input.subtotal,
+        discount: input.discount,
+        total: input.total,
+        paidAmount: input.paidAmount,
+        notes: input.notes,
+        paymentMode: input.paymentMode,
+        paymentMethod: input.paymentMethod,
+        createdAt: input.createdAt
+      },
+      appState.receiptLayout
+    );
+  }
 
-    lines.push({ text: '--------------------------------' });
-    lines.push({ text: `Subtotal ${money(sale.payload.subtotal)}`, align: 'right' });
-    lines.push({ text: `Discount ${money(sale.payload.discountAmount)}`, align: 'right' });
-    lines.push({ text: `Total ${money(sale.payload.totalAmount)}`, align: 'right', emphasis: true });
-
-    if (sale.payload.notes) {
-      lines.push({ text: '--------------------------------' });
-      lines.push({ text: `Notes: ${sale.payload.notes}` });
-    }
-
-    return {
-      title: 'VPOS SALES RECEIPT',
-      lines,
-      footer: 'Thank you. Please keep this receipt.',
-      footerEmphasis: false
-    };
+  buildCustomerPaymentReceiptDocument(
+    input: DesktopCustomerPaymentReceiptPayload,
+    appState: DesktopAppState
+  ): ReceiptDocument {
+    return buildVposCustomerPaymentReceiptDocument(
+      {
+        branchName: appState.setup.branchLabel || null,
+        locationName: appState.setup.locationLabel || null,
+        cashierName: appState.setup.operatorName || null,
+        customerName: input.customerName,
+        customerAddress: input.customerAddress ?? null,
+        amount: input.amount,
+        remainingBalance: input.remainingBalance,
+        method: input.method,
+        referenceNo: input.referenceNo ?? null,
+        notes: input.notes ?? null,
+        createdAt: input.createdAt
+      },
+      appState.receiptLayout
+    );
   }
 
   async printSaleReceipt(sale: DesktopSaleRecord, appState: DesktopAppState): Promise<void> {
-    const lines = buildPrintableLines(this.buildSaleReceiptDocument(sale, appState));
+    const lines = materializeReceiptDocument(this.buildSaleReceiptDocument(sale, appState));
     await this.printLines(lines, appState);
+  }
+
+  async printQueueOrderReceipt(input: DesktopQueueOrderReceiptPayload, appState: DesktopAppState): Promise<void> {
+    const lines = materializeReceiptDocument(this.buildQueueOrderReceiptDocument(input, appState));
+    await this.printLines(lines, appState);
+  }
+
+  async printCustomerPaymentReceipt(
+    input: DesktopCustomerPaymentReceiptPayload,
+    appState: DesktopAppState
+  ): Promise<void> {
+    const lines = materializeReceiptDocument(this.buildCustomerPaymentReceiptDocument(input, appState));
+    await this.printLines(lines, appState);
+  }
+
+  buildLayoutTestReceiptDocument(layout: DesktopReceiptLayoutSettings, appState: DesktopAppState): ReceiptDocument {
+    const now = new Date().toISOString();
+    return buildVposSaleReceiptDocument(
+      {
+        receiptNumber: 'TEST-000123',
+        saleId: 'sale-test-001',
+        branchName: appState.setup.branchLabel || 'Branch Name',
+        locationName: appState.setup.locationLabel || 'Counter 1',
+        cashierName: appState.setup.operatorName || 'Cashier',
+        orderType: 'PICKUP',
+        customerName: 'Walk-in Customer',
+        personnelName: 'Assigned Driver',
+        helperName: 'Assigned Helper',
+        lines: [
+          {
+            name: 'Shinegas 11kg',
+            subtitle: 'SKU-011',
+            quantity: 1,
+            unitPrice: 980
+          }
+        ],
+        subtotal: 980,
+        discount: 20,
+        total: 960,
+        paidAmount: 1000,
+        changeAmount: 40,
+        creditBalance: 0,
+        notes: 'Layout preview',
+        paymentMode: 'FULL',
+        paymentMethod: 'CASH',
+        createdAt: now
+      },
+      {
+        ...layout,
+        storeContactInfo: layout.storeContactInfo || '0917-000-0000',
+        storeAddress: layout.storeAddress || 'Store Address',
+        cashierRoleLabel: layout.cashierRoleLabel || 'Cashier'
+      }
+    );
   }
 
   async testPrinter(appState: DesktopAppState): Promise<void> {
@@ -206,7 +353,15 @@ export class DesktopReceiptService {
       { text: '--------------------------------' },
       { text: 'If this printed correctly, this desktop station is ready.' }
     ];
-    await this.printLines(lines, appState);
+    await this.printLines(lines, appState, { allowBrowserFallback: false });
+  }
+
+  async testReceiptLayout(
+    layout: DesktopReceiptLayoutSettings,
+    appState: DesktopAppState
+  ): Promise<void> {
+    const lines = materializeReceiptDocument(this.buildLayoutTestReceiptDocument(layout, appState));
+    await this.printLines(lines, appState, { allowBrowserFallback: false });
   }
 }
 
