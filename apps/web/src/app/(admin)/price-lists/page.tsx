@@ -357,6 +357,8 @@ export default function PriceListsPage(): JSX.Element {
   const [versionError, setVersionError] = useState<string | null>(null);
   const [selectedVersionId, setSelectedVersionId] = useState<string | null>(null);
   const [selectedVersionDetail, setSelectedVersionDetail] = useState<PriceListVersionRecord | null>(null);
+  const [draftRuleEdits, setDraftRuleEdits] = useState<PriceRule[]>([]);
+  const [draftRulesDirty, setDraftRulesDirty] = useState(false);
   const [draftNotes, setDraftNotes] = useState('');
   const [bulkAdjustMode, setBulkAdjustMode] = useState<'PERCENT' | 'FIXED'>('PERCENT');
   const [bulkAdjustValue, setBulkAdjustValue] = useState('0');
@@ -480,6 +482,10 @@ export default function PriceListsPage(): JSX.Element {
     () => visiblePriceLists.filter((row) => row.id !== editingId),
     [editingId, visiblePriceLists]
   );
+  const editingPriceList = useMemo(
+    () => (editingId ? priceLists.find((row) => row.id === editingId) ?? null : null),
+    [editingId, priceLists]
+  );
   const selectedPriceList = useMemo(
     () => (selectedPriceListId ? priceLists.find((row) => row.id === selectedPriceListId) ?? null : null),
     [priceLists, selectedPriceListId]
@@ -491,6 +497,10 @@ export default function PriceListsPage(): JSX.Element {
   const allVersionRules = useMemo(
     () => selectedVersionDetail?.rules ?? [],
     [selectedVersionDetail?.rules]
+  );
+  const displayedVersionRules = useMemo(
+    () => (selectedVersionDetail?.status === 'DRAFT' ? draftRuleEdits : allVersionRules),
+    [allVersionRules, draftRuleEdits, selectedVersionDetail?.status]
   );
   const allVersionProductIds = useMemo(
     () => Array.from(new Set(allVersionRules.map((rule) => rule.productId))),
@@ -624,10 +634,14 @@ export default function PriceListsPage(): JSX.Element {
       const detail = await apiRequest<PriceListVersionRecord>(`/master-data/price-lists/${priceListId}/versions/${versionId}`);
       setSelectedVersionDetail(detail);
       setSelectedVersionId(detail.id);
+      setDraftRuleEdits(detail.status === 'DRAFT' ? detail.rules ?? [] : []);
+      setDraftRulesDirty(false);
     } catch (loadError) {
       const message = loadError instanceof Error ? loadError.message : 'Failed to load version details.';
       setVersionError(message);
       setSelectedVersionDetail(null);
+      setDraftRuleEdits([]);
+      setDraftRulesDirty(false);
       toastError('Failed to load version details', { description: message });
     } finally {
       setVersionLoading(false);
@@ -648,8 +662,12 @@ export default function PriceListsPage(): JSX.Element {
       if (nextVersionId) {
         const detail = await apiRequest<PriceListVersionRecord>(`/master-data/price-lists/${priceListId}/versions/${nextVersionId}`);
         setSelectedVersionDetail(detail);
+        setDraftRuleEdits(detail.status === 'DRAFT' ? detail.rules ?? [] : []);
+        setDraftRulesDirty(false);
       } else {
         setSelectedVersionDetail(null);
+        setDraftRuleEdits([]);
+        setDraftRulesDirty(false);
       }
     } catch (loadError) {
       const message = loadError instanceof Error ? loadError.message : 'Failed to load versions.';
@@ -657,6 +675,8 @@ export default function PriceListsPage(): JSX.Element {
       setVersionRows([]);
       setSelectedVersionId(null);
       setSelectedVersionDetail(null);
+      setDraftRuleEdits([]);
+      setDraftRulesDirty(false);
       toastError('Failed to load versions', { description: message });
     } finally {
       setVersionLoading(false);
@@ -680,6 +700,8 @@ export default function PriceListsPage(): JSX.Element {
     setVersionRows([]);
     setSelectedVersionId(null);
     setSelectedVersionDetail(null);
+    setDraftRuleEdits([]);
+    setDraftRulesDirty(false);
     setVersionError(null);
     setBulkAdjustSelectedProductIds([]);
   }
@@ -710,6 +732,121 @@ export default function PriceListsPage(): JSX.Element {
     }
   }
 
+  function updateDraftRule<K extends keyof PriceRule>(index: number, key: K, value: PriceRule[K]): void {
+    setDraftRuleEdits((prev) => {
+      const next = [...prev];
+      const current = next[index];
+      if (!current) {
+        return prev;
+      }
+      const updated = { ...current, [key]: value } as PriceRule;
+      if (key === 'productId') {
+        const product = productById.get(String(value ?? ''));
+        updated.flowMode = product?.isLpg
+          ? updated.flowMode === 'ANY'
+            ? 'REFILL_EXCHANGE'
+            : updated.flowMode
+          : 'ANY';
+      }
+      if (key === 'flowMode' && !productById.get(updated.productId)?.isLpg) {
+        updated.flowMode = 'ANY';
+      }
+      updated.priority = selectedPriceList ? PRIORITY_BY_SCOPE[selectedPriceList.scope] : updated.priority;
+      next[index] = updated;
+      return next;
+    });
+    setDraftRulesDirty(true);
+  }
+
+  function addDraftRule(): void {
+    if (!selectedPriceList) {
+      return;
+    }
+    setDraftRuleEdits((prev) => [...prev, createEmptyRule(defaultProductId, selectedPriceList.scope)]);
+    setDraftRulesDirty(true);
+  }
+
+  function removeDraftRule(index: number): void {
+    setDraftRuleEdits((prev) => prev.filter((_, ruleIndex) => ruleIndex !== index));
+    setDraftRulesDirty(true);
+  }
+
+  function validateDraftRules(): string | null {
+    if (draftRuleEdits.length === 0) {
+      return 'Add at least one product rule before saving the draft.';
+    }
+    if (draftRuleEdits.some((rule) => !rule.productId)) {
+      return 'Each draft row must have a product.';
+    }
+    if (draftRuleEdits.some((rule) => !Number.isFinite(rule.unitPrice) || rule.unitPrice < 0)) {
+      return 'Selling prices must be zero or greater.';
+    }
+    if (
+      draftRuleEdits.some(
+        (rule) => rule.unitCost !== null && rule.unitCost !== undefined && (!Number.isFinite(rule.unitCost) || rule.unitCost < 0)
+      )
+    ) {
+      return 'Unit costs must be blank, zero, or greater.';
+    }
+    const keys = new Set<string>();
+    for (const rule of draftRuleEdits) {
+      const product = productById.get(rule.productId);
+      if (product && !product.isLpg && rule.flowMode !== 'ANY') {
+        return 'Non-LPG products can only use Any Flow.';
+      }
+      const key = `${rule.productId}|${rule.flowMode}`;
+      if (keys.has(key)) {
+        return 'Each Product + Flow combination can appear only once in a draft.';
+      }
+      keys.add(key);
+    }
+    return null;
+  }
+
+  async function saveDraftRules(): Promise<void> {
+    if (!selectedPriceListId || !selectedVersionId || selectedVersionDetail?.status !== 'DRAFT') {
+      toastInfo('Draft rules', { description: 'Select a draft version first.' });
+      return;
+    }
+    const validationError = validateDraftRules();
+    if (validationError) {
+      setVersionError(validationError);
+      toastInfo('Draft validation', { description: validationError });
+      return;
+    }
+    setVersionBusy(true);
+    setVersionError(null);
+    try {
+      const updated = await apiRequest<PriceListVersionRecord>(
+        `/master-data/price-lists/${selectedPriceListId}/versions/${selectedVersionId}/rules`,
+        {
+          method: 'PUT',
+          body: {
+            rules: draftRuleEdits.map((rule) => ({
+              productId: rule.productId,
+              flowMode: productById.get(rule.productId)?.isLpg ? rule.flowMode : 'ANY',
+              unitPrice: Number(rule.unitPrice),
+              unitCost: rule.unitCost === null || rule.unitCost === undefined ? null : Number(rule.unitCost),
+              discountCapPct: Number(rule.discountCapPct),
+              priority: selectedPriceList ? PRIORITY_BY_SCOPE[selectedPriceList.scope] : Number(rule.priority)
+            }))
+          }
+        }
+      );
+      setSelectedVersionDetail(updated);
+      setDraftRuleEdits(updated.rules ?? []);
+      setDraftRulesDirty(false);
+      setVersionRows((prev) => prev.map((row) => (row.id === updated.id ? { ...row, updatedAt: updated.updatedAt } : row)));
+      toastSuccess('Draft prices saved');
+    } catch (actionError) {
+      const message = actionError instanceof Error ? actionError.message : 'Failed to save draft prices.';
+      setVersionError(message);
+      toastError('Save draft failed', { description: message });
+    } finally {
+      setVersionBusy(false);
+    }
+  }
+
   async function applyBulkAdjust(): Promise<void> {
     if (!selectedPriceListId || !selectedVersionId) {
       toastInfo('Bulk adjust', { description: 'Select a draft version first.' });
@@ -717,6 +854,10 @@ export default function PriceListsPage(): JSX.Element {
     }
     if (selectedVersionDetail?.status !== 'DRAFT') {
       toastInfo('Bulk adjust', { description: 'Bulk adjust can only be applied to draft versions.' });
+      return;
+    }
+    if (draftRulesDirty) {
+      toastInfo('Bulk adjust', { description: 'Save or discard individual draft edits before applying a bulk adjustment.' });
       return;
     }
     const value = Number(bulkAdjustValue);
@@ -751,6 +892,8 @@ export default function PriceListsPage(): JSX.Element {
         }
       );
       setSelectedVersionDetail(result.version);
+      setDraftRuleEdits(result.version.rules ?? []);
+      setDraftRulesDirty(false);
       setVersionRows((prev) => prev.map((row) => (row.id === result.version.id ? { ...row, updatedAt: result.version.updatedAt } : row)));
       toastSuccess('Bulk adjustment applied', { description: `${result.affectedCount} row(s) updated.` });
     } catch (actionError) {
@@ -769,6 +912,10 @@ export default function PriceListsPage(): JSX.Element {
     }
     if (selectedVersionDetail?.status !== 'DRAFT') {
       toastInfo('Publish', { description: 'Only draft versions can be published.' });
+      return;
+    }
+    if (draftRulesDirty) {
+      toastInfo('Publish', { description: 'Save the individual draft edits before publishing.' });
       return;
     }
     setVersionBusy(true);
@@ -1063,6 +1210,9 @@ export default function PriceListsPage(): JSX.Element {
     if (!form.name.trim()) {
       return 'Please enter a price list name.';
     }
+    if (editingId) {
+      return null;
+    }
     if (form.scope === 'BRANCH' && !form.branchId) {
       return 'Please select the branch for this price list.';
     }
@@ -1113,7 +1263,7 @@ export default function PriceListsPage(): JSX.Element {
 
     const finalCode = form.code.trim() || makeCodeFromName(form.name);
 
-    const payload = {
+    const createPayload = {
       code: finalCode,
       name: form.name.trim(),
       scope: form.scope,
@@ -1144,13 +1294,17 @@ export default function PriceListsPage(): JSX.Element {
       if (editingId) {
         await apiRequest(`/master-data/price-lists/${editingId}`, {
           method: 'PUT',
-          body: payload
+          body: {
+            code: finalCode,
+            name: form.name.trim(),
+            isActive: form.isActive
+          }
         });
-        toastSuccess('Price list updated successfully.');
+        toastSuccess('Price list details updated successfully.');
       } else {
         await apiRequest('/master-data/price-lists', {
           method: 'POST',
-          body: payload
+          body: createPayload
         });
         toastSuccess('Price list created successfully.');
       }
@@ -1458,14 +1612,50 @@ export default function PriceListsPage(): JSX.Element {
 
                     <section className="rounded-xl border border-slate-200 p-3 dark:border-slate-700">
                       <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
-                        <h4 className="text-sm font-semibold text-slate-900 dark:text-slate-100">Rules Snapshot</h4>
-                        <span className="text-xs text-slate-500 dark:text-slate-400">
-                          {selectedVersionDetail.rules?.length ?? 0} row(s)
-                        </span>
+                        <div>
+                          <h4 className="text-sm font-semibold text-slate-900 dark:text-slate-100">
+                            {selectedVersionDetail.status === 'DRAFT' ? 'Draft Rules Editor' : 'Rules Snapshot'}
+                          </h4>
+                          <p className="mt-0.5 text-xs text-slate-500 dark:text-slate-400">
+                            {selectedVersionDetail.status === 'DRAFT'
+                              ? 'Edit item prices and costs here, save the draft, then publish when ready.'
+                              : 'Published and historical versions are immutable.'}
+                          </p>
+                        </div>
+                        <div className="flex flex-wrap items-center gap-2">
+                          <span className="text-xs text-slate-500 dark:text-slate-400">
+                            {displayedVersionRules.length} row(s)
+                          </span>
+                          {selectedVersionDetail.status === 'DRAFT' ? (
+                            <>
+                              <button
+                                className="rounded-lg border border-slate-300 px-2 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-100 dark:border-slate-600 dark:text-slate-200 dark:hover:bg-slate-800"
+                                disabled={versionBusy}
+                                onClick={addDraftRule}
+                                type="button"
+                              >
+                                Add Rule
+                              </button>
+                              <button
+                                className="rounded-lg bg-brandPrimary px-3 py-1.5 text-xs font-semibold text-white hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-60"
+                                disabled={versionBusy || !draftRulesDirty}
+                                onClick={() => void saveDraftRules()}
+                                type="button"
+                              >
+                                {versionBusy ? 'Saving...' : 'Save Draft Prices'}
+                              </button>
+                            </>
+                          ) : null}
+                        </div>
                       </div>
-                      {selectedVersionDetail.rules && selectedVersionDetail.rules.length > 0 ? (
+                      {draftRulesDirty ? (
+                        <p className="mb-2 rounded-lg bg-amber-50 px-2 py-1.5 text-xs font-medium text-amber-800 dark:bg-amber-950/30 dark:text-amber-200">
+                          Unsaved draft changes. Save them before bulk adjustment or publishing.
+                        </p>
+                      ) : null}
+                      {displayedVersionRules.length > 0 ? (
                         <div className="max-h-[45vh] overflow-auto rounded-lg border border-slate-200 dark:border-slate-700">
-                          <table className="w-full min-w-[720px] border-collapse text-xs">
+                          <table className="w-full min-w-[980px] border-collapse text-xs">
                             <thead>
                               <tr className="border-b border-slate-200 text-left uppercase tracking-wide text-slate-500 dark:border-slate-700 dark:text-slate-400">
                                 <th className="px-2 py-2">Product</th>
@@ -1474,21 +1664,91 @@ export default function PriceListsPage(): JSX.Element {
                                 <th className="px-2 py-2">Unit Cost</th>
                                 <th className="px-2 py-2">Max Discount</th>
                                 <th className="px-2 py-2">Priority</th>
+                                {selectedVersionDetail.status === 'DRAFT' ? <th className="px-2 py-2">Action</th> : null}
                               </tr>
                             </thead>
                             <tbody>
-                              {selectedVersionDetail.rules.map((rule) => (
-                                <tr className="border-b border-slate-100 dark:border-slate-800" key={rule.id}>
+                              {displayedVersionRules.map((rule, index) => (
+                                <tr className="border-b border-slate-100 dark:border-slate-800" key={rule.id ?? `${rule.productId}-${rule.flowMode}-${index}`}>
                                   <td className="px-2 py-2 text-slate-900 dark:text-slate-100">
-                                    {productNameById.get(rule.productId) ?? rule.productId}
+                                    {selectedVersionDetail.status === 'DRAFT' ? (
+                                      <select
+                                        className="w-full min-w-52 rounded-md border border-slate-300 bg-white px-2 py-1.5 text-xs text-slate-900 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-100"
+                                        onChange={(event) => updateDraftRule(index, 'productId', event.target.value)}
+                                        value={rule.productId}
+                                      >
+                                        <option value="">Select product</option>
+                                        {productOptions.map((option) => (
+                                          <option key={option.id} value={option.id}>{option.label}</option>
+                                        ))}
+                                      </select>
+                                    ) : productNameById.get(rule.productId) ?? rule.productId}
                                   </td>
-                                  <td className="px-2 py-2 text-slate-700 dark:text-slate-200">{flowLabel(rule.flowMode)}</td>
-                                  <td className="px-2 py-2 text-slate-700 dark:text-slate-200">{formatMoney(rule.unitPrice)}</td>
                                   <td className="px-2 py-2 text-slate-700 dark:text-slate-200">
-                                    {rule.unitCost === null || rule.unitCost === undefined ? '-' : formatMoney(rule.unitCost)}
+                                    {selectedVersionDetail.status === 'DRAFT' ? (
+                                      <select
+                                        className="w-full min-w-32 rounded-md border border-slate-300 bg-white px-2 py-1.5 text-xs text-slate-900 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-100"
+                                        onChange={(event) => updateDraftRule(index, 'flowMode', event.target.value as FlowMode)}
+                                        value={rule.flowMode}
+                                      >
+                                        {(productById.get(rule.productId)?.isLpg
+                                          ? rule.flowMode === 'ANY'
+                                            ? [...FLOW_OPTIONS_LPG, { value: 'ANY' as FlowMode, label: 'Any Flow (legacy)' }]
+                                            : FLOW_OPTIONS_LPG
+                                          : FLOW_OPTIONS_NON_LPG
+                                        ).map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
+                                      </select>
+                                    ) : flowLabel(rule.flowMode)}
                                   </td>
-                                  <td className="px-2 py-2 text-slate-700 dark:text-slate-200">{rule.discountCapPct}%</td>
+                                  <td className="px-2 py-2 text-slate-700 dark:text-slate-200">
+                                    {selectedVersionDetail.status === 'DRAFT' ? (
+                                      <input
+                                        className="w-28 rounded-md border border-slate-300 bg-white px-2 py-1.5 text-xs text-slate-900 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-100"
+                                        min="0"
+                                        onChange={(event) => updateDraftRule(index, 'unitPrice', Number(event.target.value || 0))}
+                                        step="0.01"
+                                        type="number"
+                                        value={rule.unitPrice}
+                                      />
+                                    ) : formatMoney(rule.unitPrice)}
+                                  </td>
+                                  <td className="px-2 py-2 text-slate-700 dark:text-slate-200">
+                                    {selectedVersionDetail.status === 'DRAFT' ? (
+                                      <input
+                                        className="w-28 rounded-md border border-slate-300 bg-white px-2 py-1.5 text-xs text-slate-900 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-100"
+                                        min="0"
+                                        onChange={(event) => updateDraftRule(index, 'unitCost', event.target.value === '' ? null : Number(event.target.value))}
+                                        placeholder="Default"
+                                        step="0.0001"
+                                        type="number"
+                                        value={rule.unitCost ?? ''}
+                                      />
+                                    ) : rule.unitCost === null || rule.unitCost === undefined ? '-' : formatMoney(rule.unitCost)}
+                                  </td>
+                                  <td className="px-2 py-2 text-slate-700 dark:text-slate-200">
+                                    {selectedVersionDetail.status === 'DRAFT' ? (
+                                      <input
+                                        className="w-24 rounded-md border border-slate-300 bg-white px-2 py-1.5 text-xs text-slate-900 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-100"
+                                        min="0"
+                                        onChange={(event) => updateDraftRule(index, 'discountCapPct', Number(event.target.value || 0))}
+                                        step="0.01"
+                                        type="number"
+                                        value={rule.discountCapPct}
+                                      />
+                                    ) : `${rule.discountCapPct}%`}
+                                  </td>
                                   <td className="px-2 py-2 text-slate-700 dark:text-slate-200">{rule.priority}</td>
+                                  {selectedVersionDetail.status === 'DRAFT' ? (
+                                    <td className="px-2 py-2">
+                                      <button
+                                        className="rounded-md border border-rose-300 px-2 py-1.5 text-xs font-semibold text-rose-700 hover:bg-rose-50 dark:border-rose-700 dark:text-rose-300 dark:hover:bg-rose-950/40"
+                                        onClick={() => removeDraftRule(index)}
+                                        type="button"
+                                      >
+                                        Remove
+                                      </button>
+                                    </td>
+                                  ) : null}
                                 </tr>
                               ))}
                             </tbody>
@@ -1594,7 +1854,7 @@ export default function PriceListsPage(): JSX.Element {
                     <div className="flex items-end md:col-span-2">
                       <button
                         className="w-full rounded-lg border border-brandPrimary px-3 py-2 text-xs font-semibold text-brandPrimary hover:bg-brandPrimary/10 disabled:cursor-not-allowed disabled:opacity-60"
-                        disabled={versionBusy || versionLoading || selectedVersionDetail?.status !== 'DRAFT'}
+                        disabled={versionBusy || versionLoading || draftRulesDirty || selectedVersionDetail?.status !== 'DRAFT'}
                         onClick={() => void applyBulkAdjust()}
                         type="button"
                       >
@@ -1697,7 +1957,7 @@ export default function PriceListsPage(): JSX.Element {
                     </label>
                     <button
                       className="mt-2 w-full rounded-lg bg-emerald-600 px-3 py-2 text-xs font-semibold text-white hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-60"
-                      disabled={versionBusy || versionLoading || selectedVersionDetail?.status !== 'DRAFT'}
+                      disabled={versionBusy || versionLoading || draftRulesDirty || selectedVersionDetail?.status !== 'DRAFT'}
                       onClick={() => void publishVersion()}
                       type="button"
                     >
@@ -1783,6 +2043,8 @@ export default function PriceListsPage(): JSX.Element {
                 </label>
               </div>
 
+              {dialogMode === 'create' ? (
+                <>
               <div>
                 <p className="mb-2 text-sm font-medium text-slate-700 dark:text-slate-200">Who gets this price?</p>
                 <p className="mb-2 text-xs text-slate-500 dark:text-slate-400">
@@ -2078,14 +2340,62 @@ export default function PriceListsPage(): JSX.Element {
                   ))}
                 </div>
               </section>
+                </>
+              ) : (
+                <section className="space-y-3 rounded-xl border border-brandPrimary/30 bg-brandPrimary/5 p-4">
+                  <div>
+                    <h3 className="text-sm font-semibold text-slate-900 dark:text-slate-100">Version-controlled pricing</h3>
+                    <p className="mt-1 text-xs text-slate-600 dark:text-slate-300">
+                      Change product prices, costs, discounts, flows, and item rows through a draft version. Targeting and the base effective window are fixed after creation; create a new price list to change them.
+                    </p>
+                  </div>
+                  {editingPriceList ? (
+                    <div className="grid gap-2 rounded-lg border border-slate-200 bg-white p-3 text-xs text-slate-700 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200 md:grid-cols-2">
+                      <p><span className="font-semibold">Target:</span> {scopeLabelWithAddonText(editingPriceList.scope)} - {scopeTarget(editingPriceList, branchById, customerById, customerCategoryById)}</p>
+                      <p><span className="font-semibold">Effective:</span> {formatDateTime(editingPriceList.startsAt)} to {formatDateTime(editingPriceList.endsAt)}</p>
+                      <p><span className="font-semibold">Published rules:</span> {editingPriceList.rules.length}</p>
+                      <p><span className="font-semibold">Current status:</span> {statusLabel(editingPriceList)}</p>
+                    </div>
+                  ) : null}
+                  <div className="flex flex-wrap items-end justify-between gap-3">
+                    <label className="text-sm">
+                      <span className="mb-1 block font-medium text-slate-700 dark:text-slate-200">Operational Status</span>
+                      <select
+                        className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-slate-900 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-100"
+                        onChange={(event) => setField('isActive', event.target.value === 'true')}
+                        value={String(form.isActive)}
+                      >
+                        <option value="true">Active</option>
+                        <option value="false">Inactive</option>
+                      </select>
+                    </label>
+                    <button
+                      className="rounded-lg border border-brandPrimary px-3 py-2 text-sm font-semibold text-brandPrimary hover:bg-brandPrimary/10"
+                      onClick={() => {
+                        if (!editingId) return;
+                        const priceListId = editingId;
+                        closeDialog();
+                        void openVersionsPanel(priceListId);
+                      }}
+                      type="button"
+                    >
+                      Open Versions
+                    </button>
+                  </div>
+                </section>
+              )}
 
               <section className="rounded-xl border border-slate-200 bg-slate-50 p-3 text-sm dark:border-slate-700 dark:bg-slate-800/60">
                 <p className="font-semibold text-slate-900 dark:text-slate-100">Summary</p>
                 <p className="text-slate-700 dark:text-slate-200">
-                  {scopeLabelWithAddonText(form.scope)} | {lookupStepLabel(form.scope, tenantAddons.custom_pricing)} | {form.rules.length} product rule(s)
+                  {dialogMode === 'create'
+                    ? `${scopeLabelWithAddonText(form.scope)} | ${lookupStepLabel(form.scope, tenantAddons.custom_pricing)} | ${form.rules.length} product rule(s)`
+                    : 'Only the name, reference code, and operational status will be updated.'}
                 </p>
                 <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">
-                  Tie-breaker: if two lists are the same type, the smaller priority number is used first.
+                  {dialogMode === 'create'
+                    ? 'Tie-breaker: if two lists are the same type, the smaller priority number is used first.'
+                    : 'Use Versions for every item price, cost, discount, flow, or product-row change.'}
                 </p>
               </section>
 
@@ -2111,7 +2421,9 @@ export default function PriceListsPage(): JSX.Element {
           <section className="w-full max-w-md rounded-2xl border border-slate-200 bg-white p-4 shadow-2xl dark:border-slate-700 dark:bg-slate-900">
             <h3 className="text-lg font-semibold text-slate-900 dark:text-slate-100">Confirm Save</h3>
             <p className="mt-2 text-sm text-slate-600 dark:text-slate-300">
-              This will {editingId ? 'update' : 'create'} the price list with the selected customer type and item prices.
+              {editingId
+                ? 'This updates descriptive details and operational status only. Published pricing remains unchanged.'
+                : 'This creates the price list with the selected customer type and initial item prices.'}
             </p>
             <div className="mt-4 flex items-center justify-end gap-2">
               <button

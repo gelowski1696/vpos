@@ -116,23 +116,11 @@ describe('Price List Versioning (focused e2e)', () => {
     const priceListId = createdPriceList.body.id as string;
     expect(priceListId).toBeTruthy();
 
-    // The web editor includes null optional targets when editing a regular
-    // price list. This must not be treated as a Custom Pricing request.
-    const editedPriceList = await request(app.getHttpServer())
+    const directPricingEdit = await request(app.getHttpServer())
       .put(`/api/master-data/price-lists/${priceListId}`)
       .set('Authorization', `Bearer ${session.access}`)
       .set('X-Client-Id', session.clientId)
       .send({
-        code: `E2E-PL-${unique}`,
-        name: `E2E Price List ${unique}`,
-        scope: 'GLOBAL',
-        branchId: null,
-        customerTier: null,
-        customerCategoryId: null,
-        customerId: null,
-        startsAt,
-        endsAt: null,
-        isActive: true,
         rules: [
           {
             productId,
@@ -144,9 +132,22 @@ describe('Price List Versioning (focused e2e)', () => {
           }
         ]
       })
+      .expect(400);
+    expect(String(directPricingEdit.body.message)).toContain('version-controlled');
+
+    const editedPriceList = await request(app.getHttpServer())
+      .put(`/api/master-data/price-lists/${priceListId}`)
+      .set('Authorization', `Bearer ${session.access}`)
+      .set('X-Client-Id', session.clientId)
+      .send({
+        code: `E2E-PL-${unique}`,
+        name: `Renamed E2E Price List ${unique}`,
+        isActive: true
+      })
       .expect(200);
-    expect(Number(editedPriceList.body.rules?.[0]?.unitPrice)).toBe(101);
-    expect(Number(editedPriceList.body.rules?.[0]?.unitCost)).toBe(71);
+    expect(editedPriceList.body.name).toBe(`Renamed E2E Price List ${unique}`);
+    expect(Number(editedPriceList.body.rules?.[0]?.unitPrice)).toBe(100);
+    expect(Number(editedPriceList.body.rules?.[0]?.unitCost)).toBe(70);
 
     const versionsInitial = await request(app.getHttpServer())
       .get(`/api/master-data/price-lists/${priceListId}/versions`)
@@ -157,6 +158,14 @@ describe('Price List Versioning (focused e2e)', () => {
     expect(initialRows.length).toBeGreaterThan(0);
     const publishedV1 = initialRows.find((row) => row.status === 'PUBLISHED');
     expect(publishedV1).toBeDefined();
+
+    const publishedV1Detail = await request(app.getHttpServer())
+      .get(`/api/master-data/price-lists/${priceListId}/versions/${publishedV1?.id}`)
+      .set('Authorization', `Bearer ${session.access}`)
+      .set('X-Client-Id', session.clientId)
+      .expect(200);
+    expect(Number(publishedV1Detail.body.rules?.[0]?.unitPrice)).toBe(100);
+    expect(Number(publishedV1Detail.body.rules?.[0]?.unitCost)).toBe(70);
 
     const draftCreate = await request(app.getHttpServer())
       .post(`/api/master-data/price-lists/${priceListId}/versions`)

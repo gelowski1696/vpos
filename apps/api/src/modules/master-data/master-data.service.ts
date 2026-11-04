@@ -6411,183 +6411,57 @@ export class MasterDataService {
   async updatePriceList(id: string, input: Partial<CreatePriceList>): Promise<PriceListRecord> {
     const companyId = await this.getCompanyIdOrNull();
     await this.enforceMasterDataWritePolicy(companyId ?? undefined);
-    // The web editor sends `customerCategoryId: null` for non-customer-group
-    // lists.  A null value clears the optional target; it does not opt the
-    // list into Custom Pricing.  Only enforce the add-on when the list is
-    // actually being assigned to a customer group (or a non-null category is
-    // supplied in a partial update).
-    if (
-      input.scope === 'CUSTOMER_GROUP' ||
-      (input.customerCategoryId !== undefined && input.customerCategoryId !== null)
-    ) {
-      await this.enforceAddonPolicy('custom_pricing', companyId ?? undefined);
+    const versionControlledFields: Array<keyof CreatePriceList> = [
+      'scope',
+      'branchId',
+      'customerTier',
+      'customerCategoryId',
+      'customerId',
+      'startsAt',
+      'endsAt',
+      'rules'
+    ];
+    const attemptedVersionControlledFields = versionControlledFields.filter(
+      (field) => input[field] !== undefined
+    );
+    if (attemptedVersionControlledFields.length > 0) {
+      throw new BadRequestException(
+        'Price rules are version-controlled. Create or edit a draft version, then publish it. Targeting and the base effective window are immutable after creation; create a new price list to change them.'
+      );
     }
     const binding = await this.getTenantBinding(companyId);
     if (!binding || !companyId) {
       const row = this.find(this.priceLists, id, 'Price list');
-      if (input.rules) {
-        row.rules = input.rules.map((rule) => ({
-          id: rule.id ?? uuidv4(),
-          productId: rule.productId,
-          flowMode: rule.flowMode ?? 'ANY',
-          unitPrice: Number(rule.unitPrice),
-          unitCost:
-            rule.unitCost === undefined || rule.unitCost === null
-              ? null
-              : Number(rule.unitCost),
-          discountCapPct: Number(rule.discountCapPct),
-          priority: Number(rule.priority)
-        }));
-      }
-      Object.assign(row, this.clean({ ...input, rules: undefined }));
+      Object.assign(row, this.clean({
+        code: input.code?.trim(),
+        name: input.name?.trim(),
+        isActive: input.isActive
+      }));
       row.updatedAt = this.now();
-      if (input.rules && row.activeVersionId) {
-        const activeVersion = this.priceListVersions.find((version) => version.id === row.activeVersionId);
-        if (activeVersion) {
-          activeVersion.rules = row.rules.map((rule) => ({
-            id: uuidv4(),
-            productId: rule.productId,
-            flowMode: rule.flowMode,
-            unitPrice: rule.unitPrice,
-            unitCost: rule.unitCost ?? null,
-            discountCapPct: rule.discountCapPct,
-            priority: rule.priority,
-            createdAt: this.now(),
-            updatedAt: this.now()
-          }));
-          activeVersion.updatedAt = this.now();
-        }
-      }
       return row;
     }
     try {
-      const result = await binding.client.$transaction(async (tx) => {
-        await this.ensurePriceListVersionSeedForDb(tx, companyId, id);
-        const previousRules = input.rules
-          ? await tx.priceRule.findMany({
-              where: { companyId, priceListId: id },
-              select: {
-                productId: true,
-                flowMode: true,
-                priority: true,
-                unitPrice: true
-              }
-            })
-          : [];
-        if (input.rules) {
-          await tx.priceRule.deleteMany({ where: { priceListId: id } });
-        }
-        const updated = await tx.priceList.update({
-          where: { id },
-          data: {
-            code: input.code === undefined ? undefined : input.code.trim(),
-            name: input.name === undefined ? undefined : input.name.trim(),
-            scope: input.scope,
-            branchId: input.branchId,
-            customerTier: input.customerTier,
-            customerCategoryId: input.customerCategoryId,
-            customerId: input.customerId,
-            startsAt: input.startsAt === undefined ? undefined : this.toDate(input.startsAt),
-            endsAt: input.endsAt === undefined ? undefined : input.endsAt ? this.toDate(input.endsAt) : null,
-            isActive: input.isActive,
-            rules: input.rules
-              ? {
-                  create: input.rules.map((rule) => ({
-                    companyId,
-                    productId: rule.productId,
-                    flowMode: rule.flowMode ?? PriceFlowMode.ANY,
-                    unitPrice: new Prisma.Decimal(rule.unitPrice),
-                    unitCost:
-                      rule.unitCost === undefined || rule.unitCost === null
-                        ? null
-                        : new Prisma.Decimal(rule.unitCost),
-                    discountCapPct: new Prisma.Decimal(rule.discountCapPct),
-                    priority: rule.priority
-                  }))
-                }
-              : undefined
-          },
-          include: { rules: true }
-        });
-        if (input.rules && updated.activeVersionId) {
-          const normalized = await this.normalizePriceListVersionRules(tx, companyId, input.rules);
-          await tx.priceListVersionRule.deleteMany({
-            where: { companyId, priceListVersionId: updated.activeVersionId }
-          });
-          if (normalized.length) {
-            await tx.priceListVersionRule.createMany({
-              data: normalized.map((rule) => ({
-                companyId,
-                priceListVersionId: updated.activeVersionId as string,
-                productId: rule.productId,
-                flowMode: rule.flowMode,
-                unitPrice: new Prisma.Decimal(rule.unitPrice),
-                unitCost:
-                  rule.unitCost === null || rule.unitCost === undefined
-                    ? null
-                    : new Prisma.Decimal(rule.unitCost),
-                discountCapPct: new Prisma.Decimal(rule.discountCapPct),
-                priority: rule.priority
-              }))
-            });
-          }
-        }
-        return { updated, previousRules };
+      const updated = await binding.client.priceList.update({
+        where: { id },
+        data: {
+          code: input.code === undefined ? undefined : input.code.trim(),
+          name: input.name === undefined ? undefined : input.name.trim(),
+          isActive: input.isActive
+        },
+        include: { rules: true }
       });
-      const mapped = this.mapPriceListFromPrisma(result.updated);
-      if (input.rules) {
-        await this.appendPriceListUpdateAuditEntries(
-          binding,
-          companyId,
-          mapped.id,
-          result.previousRules.map((row) => ({
-            productId: row.productId,
-            flowMode: row.flowMode as 'ANY' | 'REFILL_EXCHANGE' | 'NON_REFILL',
-            priority: row.priority,
-            unitPrice: Number(row.unitPrice)
-          })),
-          mapped.rules
-        );
-      }
-      return mapped;
+      return this.mapPriceListFromPrisma(updated);
     } catch (error) {
       if (binding.mode === TenancyDatastoreMode.DEDICATED_DB) {
         throw error;
       }
       const row = this.find(this.priceLists, id, 'Price list');
-      if (input.rules) {
-        row.rules = input.rules.map((rule) => ({
-          id: rule.id ?? uuidv4(),
-          productId: rule.productId,
-          flowMode: rule.flowMode ?? 'ANY',
-          unitPrice: Number(rule.unitPrice),
-          unitCost:
-            rule.unitCost === undefined || rule.unitCost === null
-              ? null
-              : Number(rule.unitCost),
-          discountCapPct: Number(rule.discountCapPct),
-          priority: Number(rule.priority)
-        }));
-      }
-      Object.assign(row, this.clean({ ...input, rules: undefined }));
+      Object.assign(row, this.clean({
+        code: input.code?.trim(),
+        name: input.name?.trim(),
+        isActive: input.isActive
+      }));
       row.updatedAt = this.now();
-      if (input.rules && row.activeVersionId) {
-        const activeVersion = this.priceListVersions.find((version) => version.id === row.activeVersionId);
-        if (activeVersion) {
-          activeVersion.rules = row.rules.map((rule) => ({
-            id: uuidv4(),
-            productId: rule.productId,
-            flowMode: rule.flowMode,
-            unitPrice: rule.unitPrice,
-            unitCost: rule.unitCost ?? null,
-            discountCapPct: rule.discountCapPct,
-            priority: rule.priority,
-            createdAt: this.now(),
-            updatedAt: this.now()
-          }));
-          activeVersion.updatedAt = this.now();
-        }
-      }
       return row;
     }
   }
@@ -6975,6 +6849,16 @@ export class MasterDataService {
         include: { rules: true }
       });
 
+      const previousRules = await tx.priceRule.findMany({
+        where: { companyId, priceListId },
+        select: {
+          productId: true,
+          flowMode: true,
+          priority: true,
+          unitPrice: true,
+          unitCost: true
+        }
+      });
       await tx.priceRule.deleteMany({ where: { companyId, priceListId } });
       if (published.rules.length) {
         await tx.priceRule.createMany({
@@ -6997,13 +6881,26 @@ export class MasterDataService {
         include: { rules: true }
       });
 
-      return { priceList, version: published };
+      return { priceList, version: published, previousRules };
     });
 
-    return {
-      priceList: this.mapPriceListFromPrisma(result.priceList),
-      version: this.mapPriceListVersionFromPrisma(result.version, true)
-    };
+    const priceList = this.mapPriceListFromPrisma(result.priceList);
+    const version = this.mapPriceListVersionFromPrisma(result.version, true);
+    await this.appendPriceListUpdateAuditEntries(
+      binding,
+      companyId,
+      priceList.id,
+      result.previousRules.map((rule) => ({
+        productId: rule.productId,
+        flowMode: rule.flowMode as 'ANY' | 'REFILL_EXCHANGE' | 'NON_REFILL',
+        priority: rule.priority,
+        unitPrice: Number(rule.unitPrice),
+        unitCost: rule.unitCost === null ? null : Number(rule.unitCost)
+      })),
+      priceList.rules,
+      'PRICE_LIST_VERSION_PUBLISH'
+    );
+    return { priceList, version };
   }
 
   async rollbackPriceList(
@@ -7809,7 +7706,8 @@ export class MasterDataService {
       priority: number;
       unitPrice: number;
       unitCost?: number | null;
-    }>
+    }>,
+    contextType = 'PRICE_LIST_UPDATE'
   ): Promise<void> {
     const keyOf = (rule: { productId: string; flowMode: string; priority: number }): string =>
       `${rule.productId}|${rule.flowMode}|${rule.priority}`;
@@ -7855,7 +7753,7 @@ export class MasterDataService {
         newPrice: Number(rule.unitPrice),
         oldCost: previous ? previousCost : null,
         newCost: nextCost,
-        contextType: 'PRICE_LIST_UPDATE',
+        contextType,
         contextId: priceListId,
         sourceChannel: 'api'
       });
@@ -7880,7 +7778,7 @@ export class MasterDataService {
         newPrice: null,
         oldCost: previousCost,
         newCost: null,
-        contextType: 'PRICE_LIST_UPDATE',
+        contextType,
         contextId: priceListId,
         sourceChannel: 'api'
       });
