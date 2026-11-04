@@ -1,8 +1,6 @@
 name: Ops Maintenance
 
 on:
-  schedule:
-    - cron: '30 2 * * *'
   workflow_dispatch:
     inputs:
       run_backup:
