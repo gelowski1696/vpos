@@ -174,7 +174,7 @@ const PRODUCT_DETAIL_TABS: Array<{ id: ProductDetailTab; label: string }> = [
   { id: 'pricing', label: 'Pricing' },
   { id: 'inventory', label: 'Inventory' },
   { id: 'audit', label: 'Price/Cost Audit' },
-  { id: 'movements', label: 'Movements' }
+  { id: 'movements', label: 'Item History' }
 ];
 
 function yesNo(value: unknown): string {
@@ -856,6 +856,28 @@ export default function ProductsPage(): JSX.Element {
             },
             buttonClassName:
               'rounded-lg border border-sky-300 px-3 py-1.5 text-xs font-semibold text-sky-700 hover:bg-sky-50 dark:border-sky-700 dark:text-sky-300 dark:hover:bg-sky-950/40',
+            showWhenReadOnly: true
+          },
+          {
+            key: 'history',
+            label: 'Item History',
+            onClick: (row) => {
+              const productId = String(row.id);
+              setViewProductId(productId);
+              setProductDetailTab('movements');
+              setCostSnapshot(null);
+              setCostError(null);
+              setMovementRows([]);
+              setMovementError(null);
+              setPriceCostAuditRows([]);
+              setPriceCostAuditError(null);
+              void loadDetailData();
+              void loadCostSnapshot(productId);
+              void loadMovementHistory(productId);
+              void loadPriceCostAudit(productId);
+            },
+            buttonClassName:
+              'rounded-lg border border-slate-300 px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50 dark:border-slate-600 dark:text-slate-200 dark:hover:bg-slate-800',
             showWhenReadOnly: true
           }
         ]}

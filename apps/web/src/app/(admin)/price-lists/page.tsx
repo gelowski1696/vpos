@@ -304,6 +304,14 @@ function statusLabel(row: PriceListRecord): string {
   return 'Active';
 }
 
+function priceListStatusRank(row: PriceListRecord): number {
+  const status = statusLabel(row);
+  if (status === 'Active') return 0;
+  if (status === 'Scheduled') return 1;
+  if (status === 'Expired') return 2;
+  return 3;
+}
+
 function scopeTarget(
   row: PriceListRecord,
   branchById: Map<string, string>,
@@ -337,6 +345,7 @@ export default function PriceListsPage(): JSX.Element {
 
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
+  const [statusUpdatingId, setStatusUpdatingId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   const [search, setSearch] = useState('');
@@ -432,7 +441,13 @@ export default function PriceListsPage(): JSX.Element {
     [tenantAddons.custom_pricing]
   );
   const visiblePriceLists = useMemo(
-    () => priceLists.filter((row) => row.scope !== 'CUSTOMER_GROUP' || tenantAddons.custom_pricing),
+    () =>
+      priceLists
+        .filter((row) => row.scope !== 'CUSTOMER_GROUP' || tenantAddons.custom_pricing)
+        .slice()
+        .sort((left, right) =>
+          priceListStatusRank(left) - priceListStatusRank(right) || left.name.localeCompare(right.name)
+        ),
     [priceLists, tenantAddons.custom_pricing]
   );
 
@@ -629,6 +644,26 @@ export default function PriceListsPage(): JSX.Element {
     const refreshed = await apiRequest<PriceListRecord[]>('/master-data/price-lists');
     setPriceLists(refreshed);
     return refreshed;
+  }
+
+  async function updateOperationalStatus(row: PriceListRecord, isActive: boolean): Promise<void> {
+    if (row.isActive === isActive || statusUpdatingId) {
+      return;
+    }
+    setStatusUpdatingId(row.id);
+    try {
+      const updated = await apiRequest<PriceListRecord>(`/master-data/price-lists/${row.id}`, {
+        method: 'PUT',
+        body: { code: row.code, name: row.name, isActive }
+      });
+      setPriceLists((current) => current.map((item) => (item.id === updated.id ? updated : item)));
+      toastSuccess(isActive ? 'Price list activated' : 'Price list deactivated');
+    } catch (statusError) {
+      const message = statusError instanceof Error ? statusError.message : 'Failed to update price list status.';
+      toastError('Status update failed', { description: message });
+    } finally {
+      setStatusUpdatingId(null);
+    }
   }
 
   async function loadVersionDetail(priceListId: string, versionId: string): Promise<void> {
@@ -1422,7 +1457,19 @@ export default function PriceListsPage(): JSX.Element {
                           </p>
                         </td>
                         <td className="px-4 py-3 align-top">
-                          <span className="rounded-full bg-slate-100 px-2 py-1 text-xs font-semibold text-slate-700 dark:bg-slate-800 dark:text-slate-200">{status}</span>
+                          <div className="grid gap-1.5">
+                            <span className="w-fit rounded-full bg-slate-100 px-2 py-1 text-xs font-semibold text-slate-700 dark:bg-slate-800 dark:text-slate-200">{status}</span>
+                            <select
+                              aria-label={`Operational status for ${row.name}`}
+                              className="rounded-md border border-slate-300 bg-white px-2 py-1 text-xs text-slate-800 disabled:opacity-60 dark:border-slate-600 dark:bg-slate-900 dark:text-slate-100"
+                              disabled={statusUpdatingId !== null}
+                              onChange={(event) => void updateOperationalStatus(row, event.target.value === 'true')}
+                              value={String(row.isActive)}
+                            >
+                              <option value="true">Active</option>
+                              <option value="false">Inactive</option>
+                            </select>
+                          </div>
                         </td>
                         <td className="px-4 py-3 align-top">
                           <div className="flex flex-wrap items-center gap-2">
@@ -1484,7 +1531,19 @@ export default function PriceListsPage(): JSX.Element {
                     </p>
                     <p><span className="font-semibold">Target:</span> {scopeTarget(row, branchById, customerById, customerCategoryById)}</p>
                     <p><span className="font-semibold">Start:</span> {formatDateTime(row.startsAt)}</p>
-                    <p><span className="font-semibold">Status:</span> {statusLabel(row)}</p>
+                    <label className="flex items-center gap-2">
+                      <span className="font-semibold">Status:</span>
+                      <select
+                        aria-label={`Operational status for ${row.name}`}
+                        className="rounded-md border border-slate-300 bg-white px-2 py-1 text-xs dark:border-slate-600 dark:bg-slate-900"
+                        disabled={statusUpdatingId !== null}
+                        onChange={(event) => void updateOperationalStatus(row, event.target.value === 'true')}
+                        value={String(row.isActive)}
+                      >
+                        <option value="true">Active</option>
+                        <option value="false">Inactive</option>
+                      </select>
+                    </label>
                     <p><span className="font-semibold">Products:</span> {row.rules.length}</p>
                     {row.rules[0] ? (
                       <p><span className="font-semibold">Flow:</span> {flowLabel(row.rules[0].flowMode)}</p>

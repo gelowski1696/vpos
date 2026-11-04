@@ -958,9 +958,11 @@ export class TransfersService {
                 }
               }
             });
-            const currentQty = Number(balance?.qtyOnHand ?? 0);
             const currentFull = Number(balance?.qtyFull ?? balance?.qtyOnHand ?? 0);
             const currentEmpty = Number(balance?.qtyEmpty ?? 0);
+            const currentQty = isLpgCylinderLine
+              ? this.roundQty(currentFull + currentEmpty)
+              : Number(balance?.qtyOnHand ?? 0);
             const currentAvg = Number(balance?.avgCost ?? 0);
             const adjustmentDeltas = this.getAdjustmentDeltas(transfer.transferMode, qtyFull, qtyEmpty);
             if (isRestockOut) {
@@ -987,9 +989,11 @@ export class TransfersService {
               );
             }
 
-            const nextQty = this.roundQty(currentQty + adjustmentDeltas.qtyDelta);
             const nextFull = this.roundQty(currentFull + adjustmentDeltas.fullDelta);
             const nextEmpty = this.roundQty(currentEmpty + adjustmentDeltas.emptyDelta);
+            const nextQty = isLpgCylinderLine
+              ? this.roundQty(nextFull + nextEmpty)
+              : this.roundQty(currentQty + adjustmentDeltas.qtyDelta);
 
             await tx.inventoryBalance.upsert({
               where: {
@@ -1067,9 +1071,11 @@ export class TransfersService {
               }
             }
           });
-          const sourceQty = Number(sourceBalance?.qtyOnHand ?? 0);
           const sourceFull = Number(sourceBalance?.qtyFull ?? sourceBalance?.qtyOnHand ?? 0);
           const sourceEmpty = Number(sourceBalance?.qtyEmpty ?? 0);
+          const sourceQty = isLpgCylinderLine
+            ? this.roundQty(sourceFull + sourceEmpty)
+            : Number(sourceBalance?.qtyOnHand ?? 0);
           const sourceAvg = Number(sourceBalance?.avgCost ?? 0);
           if (isLpgCylinderLine) {
             if (sourceFull < qtyFull || sourceEmpty < qtyEmpty || sourceQty < inventoryMoveQty) {
@@ -1091,17 +1097,23 @@ export class TransfersService {
               }
             }
           });
-          const destinationQty = Number(destinationBalance?.qtyOnHand ?? 0);
           const destinationFull = Number(destinationBalance?.qtyFull ?? destinationBalance?.qtyOnHand ?? 0);
           const destinationEmpty = Number(destinationBalance?.qtyEmpty ?? 0);
+          const destinationQty = isLpgCylinderLine
+            ? this.roundQty(destinationFull + destinationEmpty)
+            : Number(destinationBalance?.qtyOnHand ?? 0);
           const destinationAvg = Number(destinationBalance?.avgCost ?? sourceAvg);
 
-          const nextSourceQty = this.roundQty(sourceQty - inventoryMoveQty);
-          const nextDestinationQty = this.roundQty(destinationQty + inventoryMoveQty);
           const nextSourceFull = this.roundQty(sourceFull - qtyFull);
           const nextSourceEmpty = this.roundQty(sourceEmpty - qtyEmpty);
           const nextDestinationFull = this.roundQty(destinationFull + qtyFull);
           const nextDestinationEmpty = this.roundQty(destinationEmpty + qtyEmpty);
+          const nextSourceQty = isLpgCylinderLine
+            ? this.roundQty(nextSourceFull + nextSourceEmpty)
+            : this.roundQty(sourceQty - inventoryMoveQty);
+          const nextDestinationQty = isLpgCylinderLine
+            ? this.roundQty(nextDestinationFull + nextDestinationEmpty)
+            : this.roundQty(destinationQty + inventoryMoveQty);
           const nextDestinationAvg =
             nextDestinationQty <= 0
               ? this.roundQty(destinationAvg)
@@ -1324,9 +1336,11 @@ export class TransfersService {
                 }
               }
             });
-            const currentQty = Number(balance?.qtyOnHand ?? 0);
             const currentFull = Number(balance?.qtyFull ?? balance?.qtyOnHand ?? 0);
             const currentEmpty = Number(balance?.qtyEmpty ?? 0);
+            const currentQty = isLpgCylinderLine
+              ? this.roundQty(currentFull + currentEmpty)
+              : Number(balance?.qtyOnHand ?? 0);
             const currentAvg = Number(balance?.avgCost ?? 0);
             const forwardDeltas = this.getAdjustmentDeltas(transfer.transferMode, qtyFull, qtyEmpty);
             const reverseQtyDelta = this.roundQty(-forwardDeltas.qtyDelta);
@@ -1343,9 +1357,11 @@ export class TransfersService {
               );
             }
 
-            const nextQty = this.roundQty(currentQty + reverseQtyDelta);
             const nextFull = this.roundQty(currentFull + reverseFullDelta);
             const nextEmpty = this.roundQty(currentEmpty + reverseEmptyDelta);
+            const nextQty = isLpgCylinderLine
+              ? this.roundQty(nextFull + nextEmpty)
+              : this.roundQty(currentQty + reverseQtyDelta);
 
             await tx.inventoryBalance.upsert({
               where: {
@@ -1423,9 +1439,11 @@ export class TransfersService {
               }
             }
           });
-          const destinationQty = Number(destinationBalance?.qtyOnHand ?? 0);
           const destinationFull = Number(destinationBalance?.qtyFull ?? destinationBalance?.qtyOnHand ?? 0);
           const destinationEmpty = Number(destinationBalance?.qtyEmpty ?? 0);
+          const destinationQty = isLpgCylinderLine
+            ? this.roundQty(destinationFull + destinationEmpty)
+            : Number(destinationBalance?.qtyOnHand ?? 0);
           const destinationAvg = Number(destinationBalance?.avgCost ?? 0);
           if (isLpgCylinderLine) {
             if (destinationFull < qtyFull || destinationEmpty < qtyEmpty || destinationQty < inventoryMoveQty) {
@@ -1447,17 +1465,23 @@ export class TransfersService {
               }
             }
           });
-          const sourceQty = Number(sourceBalance?.qtyOnHand ?? 0);
           const sourceFull = Number(sourceBalance?.qtyFull ?? sourceBalance?.qtyOnHand ?? 0);
           const sourceEmpty = Number(sourceBalance?.qtyEmpty ?? 0);
+          const sourceQty = isLpgCylinderLine
+            ? this.roundQty(sourceFull + sourceEmpty)
+            : Number(sourceBalance?.qtyOnHand ?? 0);
           const sourceAvg = Number(sourceBalance?.avgCost ?? destinationAvg);
 
-          const nextDestinationQty = this.roundQty(destinationQty - inventoryMoveQty);
-          const nextSourceQty = this.roundQty(sourceQty + inventoryMoveQty);
           const nextDestinationFull = this.roundQty(destinationFull - qtyFull);
           const nextDestinationEmpty = this.roundQty(destinationEmpty - qtyEmpty);
           const nextSourceFull = this.roundQty(sourceFull + qtyFull);
           const nextSourceEmpty = this.roundQty(sourceEmpty + qtyEmpty);
+          const nextDestinationQty = isLpgCylinderLine
+            ? this.roundQty(nextDestinationFull + nextDestinationEmpty)
+            : this.roundQty(destinationQty - inventoryMoveQty);
+          const nextSourceQty = isLpgCylinderLine
+            ? this.roundQty(nextSourceFull + nextSourceEmpty)
+            : this.roundQty(sourceQty + inventoryMoveQty);
           const nextSourceAvg =
             nextSourceQty <= 0
               ? this.roundQty(sourceAvg)

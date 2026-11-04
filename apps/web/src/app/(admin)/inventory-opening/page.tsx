@@ -367,6 +367,13 @@ export default function InventoryOpeningPage(): JSX.Element {
         toastInfo('Opening stock validation', { description: message });
         return;
       }
+      const costDecimals = line.avgCost.trim().split('.')[1]?.length ?? 0;
+      if (costDecimals > 2) {
+        const message = `Row ${index + 1}: Average cost can have at most 2 decimal places.`;
+        setError(message);
+        toastInfo('Opening stock validation', { description: message });
+        return;
+      }
 
       preparedRows.push({
         product,
@@ -376,7 +383,7 @@ export default function InventoryOpeningPage(): JSX.Element {
           qtyOnHand: product.isLpg ? parsedFull + parsedEmpty : parsedQty,
           qtyFull: product.isLpg ? parsedFull : undefined,
           qtyEmpty: product.isLpg ? parsedEmpty : undefined,
-          avgCost: parsedCost,
+          avgCost: Number(parsedCost.toFixed(2)),
           notes: line.notes.trim() || null,
           force
         }
@@ -637,7 +644,7 @@ export default function InventoryOpeningPage(): JSX.Element {
                               disabled={!canEdit || saving}
                               min={0}
                               onChange={(event) => updateLine(index, { avgCost: event.target.value })}
-                              step="0.0001"
+                              step="0.01"
                               type="number"
                               value={line.avgCost}
                             />

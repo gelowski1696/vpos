@@ -372,6 +372,15 @@ function dt(value: string | null | undefined): string {
   return parsed.toLocaleString();
 }
 
+function pettyNoteParts(notes: string | null | undefined): { description: string; reference: string } {
+  const lines = String(notes ?? '').split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
+  const referenceLine = lines.find((line) => line.toLowerCase().startsWith('reference:'));
+  return {
+    description: lines.filter((line) => line !== referenceLine).join(' ') || '-',
+    reference: referenceLine ? referenceLine.slice('reference:'.length).trim() || '-' : '-'
+  };
+}
+
 function pct(value: number): string {
   return `${Number.isFinite(value) ? value.toFixed(2) : '0.00'}%`;
 }
@@ -1445,42 +1454,63 @@ export default function ReportsPage(): JSX.Element {
                 <p className="rounded-lg bg-slate-50 p-2 dark:bg-slate-900">Cash OUT: <span className="font-semibold">{money(data.pettySummary?.total_out ?? 0)}</span></p>
                 <p className="rounded-lg bg-slate-50 p-2 dark:bg-slate-900">Net: <span className="font-semibold">{money(data.pettySummary?.net ?? 0)}</span></p>
               </div>
-              <div className="mt-2 space-y-2 text-xs">
-                {data.pettyEntries.slice(0, 20).map((row) => {
-                  const attachments = Array.isArray(row.attachments) ? row.attachments : [];
-                  return (
-                    <div key={row.id} className="rounded-md border border-slate-200 px-2 py-1 dark:border-slate-700">
-                      <p>
-                        {dt(row.posted_at)} | {row.direction} | {row.category_code} | {money(row.amount)} | Shift {row.shift_id} | Attachments {attachments.length}
-                      </p>
-                      {attachments.length > 0 ? (
-                        <div className="mt-1 flex flex-wrap gap-2">
-                          {attachments.slice(0, 3).map((attachment, index) => {
-                            const href = attachment.public_url ?? attachment.uploaded_url ?? null;
-                            if (!href) {
-                              return (
-                                <span key={attachment.id} className="text-[11px] text-slate-400">
-                                  Attachment {index + 1}
-                                </span>
-                              );
-                            }
-                            return (
-                              <a
-                                key={attachment.id}
-                                className="text-[11px] font-semibold text-blue-600 underline underline-offset-2 hover:text-blue-500"
-                                href={href}
-                                target="_blank"
-                                rel="noreferrer"
-                              >
-                                Attachment {index + 1}
-                              </a>
-                            );
-                          })}
-                        </div>
-                      ) : null}
-                    </div>
-                  );
-                })}
+              <div className="mt-3 overflow-x-auto rounded-lg border border-slate-200 dark:border-slate-700">
+                <table className="w-full min-w-[1100px] text-left text-xs">
+                  <thead className="bg-slate-50 text-slate-500 dark:bg-slate-900 dark:text-slate-400">
+                    <tr>
+                      <th className="px-3 py-2">Date / Time</th>
+                      <th className="px-3 py-2">Direction</th>
+                      <th className="px-3 py-2">Category</th>
+                      <th className="px-3 py-2">Amount</th>
+                      <th className="px-3 py-2">Description / Remarks</th>
+                      <th className="px-3 py-2">Reference</th>
+                      <th className="px-3 py-2">Shift</th>
+                      <th className="px-3 py-2">Attachments</th>
+                      <th className="px-3 py-2">Status</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {data.pettyEntries.slice(0, 20).map((row) => {
+                      const attachments = Array.isArray(row.attachments) ? row.attachments : [];
+                      const noteParts = pettyNoteParts(row.notes);
+                      return (
+                        <tr className="border-t border-slate-200 align-top dark:border-slate-700" key={row.id}>
+                          <td className="whitespace-nowrap px-3 py-2">{dt(row.posted_at)}</td>
+                          <td className="px-3 py-2 font-semibold">{row.direction}</td>
+                          <td className="px-3 py-2">{row.category_code}</td>
+                          <td className="whitespace-nowrap px-3 py-2 font-semibold">{money(row.amount)}</td>
+                          <td className="max-w-72 px-3 py-2">{noteParts.description}</td>
+                          <td className="px-3 py-2">{noteParts.reference}</td>
+                          <td className="px-3 py-2 font-mono text-[11px]">{row.shift_id}</td>
+                          <td className="px-3 py-2">
+                            {attachments.length === 0 ? '-' : (
+                              <div className="flex flex-wrap gap-2">
+                                {attachments.slice(0, 3).map((attachment, index) => {
+                                  const href = attachment.public_url ?? attachment.uploaded_url ?? null;
+                                  return href ? (
+                                    <a
+                                      className="font-semibold text-blue-600 underline underline-offset-2 hover:text-blue-500"
+                                      href={href}
+                                      key={attachment.id}
+                                      rel="noreferrer"
+                                      target="_blank"
+                                    >
+                                      File {index + 1}
+                                    </a>
+                                  ) : <span className="text-slate-400" key={attachment.id}>File {index + 1}</span>;
+                                })}
+                              </div>
+                            )}
+                          </td>
+                          <td className="px-3 py-2 font-semibold text-emerald-700 dark:text-emerald-300">Posted</td>
+                        </tr>
+                      );
+                    })}
+                    {data.pettyEntries.length === 0 ? (
+                      <tr><td className="px-3 py-4 text-slate-500 dark:text-slate-400" colSpan={9}>No petty-cash entries for this report range.</td></tr>
+                    ) : null}
+                  </tbody>
+                </table>
               </div>
             </ReportCard>
               </section>
