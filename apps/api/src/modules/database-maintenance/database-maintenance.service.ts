@@ -15,6 +15,7 @@ type ForeignKeyMetadata = {
   childColumn: string;
   parentTable: string;
   parentColumn: string;
+  isNullable: boolean;
 };
 
 type BackupTablePayload = {
@@ -70,6 +71,7 @@ export type TenantDatabaseRestoreResult = {
 
 type TableRowMap = Map<string, Record<string, unknown>>;
 type RowsByTable = Map<string, TableRowMap>;
+type DatabaseClient = Pick<PrismaClient, '$queryRawUnsafe' | '$executeRawUnsafe'>;
 
 const SYSTEM_TABLES = new Set(['_prisma_migrations']);
 const BACKUP_EXCLUDED_TABLES = new Set(['TenantDatabaseBackup']);
@@ -261,92 +263,100 @@ export class DatabaseMaintenanceService {
     }
 
     const binding = await this.tenantRouter.forCompany(companyId);
-    const metadata = await this.loadTableMetadata(binding.client);
-    const metadataByName = new Map(metadata.map((entry) => [entry.tableName, entry]));
-    const foreignKeys = await this.loadForeignKeys(binding.client);
-    const selfForeignKeysByTable = this.buildSelfForeignKeyMap(foreignKeys);
-
-    const backupRowsByTable = this.normalizeBackupTables(normalized.tables, metadataByName);
-    const backupTableNames = [...backupRowsByTable.keys()];
-    if (backupTableNames.length === 0) {
-      throw new BadRequestException('Backup payload has no restorable table rows.');
-    }
-
-    const existingRowsByTable = await this.collectTenantRows(
-      binding.client,
-      companyId,
-      metadata,
-      foreignKeys
-    );
-    const restoreOrder = this.topologicalTableOrder(
-      backupTableNames,
-      foreignKeys
-    );
-    const deleteOrder = [...restoreOrder].reverse();
-
-    const rowsDeleted = await this.deleteExistingRows(
-      binding.client,
-      deleteOrder,
-      existingRowsByTable,
-      metadataByName
-    );
-
-    let rowsInserted = 0;
-    for (const tableName of restoreOrder) {
-      const tableMeta = metadataByName.get(tableName);
-      if (!tableMeta || !tableMeta.primaryKeyColumn) {
-        continue;
-      }
-      const tableRows = backupRowsByTable.get(tableName) ?? new Map();
-      if (tableRows.size === 0) {
-        continue;
+    return binding.client.$transaction(async (client) => {
+      const metadata = await this.loadTableMetadata(client);
+      const metadataByName = new Map(metadata.map((entry) => [entry.tableName, entry]));
+      const foreignKeys = await this.loadForeignKeys(client);
+      const backupRowsByTable = this.normalizeBackupTables(normalized.tables, metadataByName);
+      const backupTableNames = [...backupRowsByTable.keys()];
+      if (backupTableNames.length === 0) {
+        throw new BadRequestException('Backup payload has no restorable table rows.');
       }
 
-      if (tableName === 'Company') {
-        rowsInserted += await this.restoreCompanyRow(
-          binding.client,
-          companyId,
-          tableMeta,
-          [...tableRows.values()][0] ?? null
-        );
-        continue;
-      }
+      const existingRowsByTable = await this.collectTenantRows(
+        client,
+        companyId,
+        metadata,
+        foreignKeys
+      );
+      const deferredForeignKeysByTable = this.buildDeferredForeignKeyMap(foreignKeys, backupTableNames);
+      const immediateForeignKeys = foreignKeys.filter(
+        (fk) => !deferredForeignKeysByTable.get(fk.childTable)?.includes(fk)
+      );
+      const restoreOrder = this.topologicalTableOrder(backupTableNames, immediateForeignKeys);
+      const deleteOrder = [...restoreOrder].reverse();
 
-      const selfForeignKeys = selfForeignKeysByTable.get(tableName) ?? [];
-      const rows = [...tableRows.values()];
-      if (tableMeta.columns.includes('createdAt')) {
-        rows.sort((a, b) =>
-          String(a.createdAt ?? '').localeCompare(String(b.createdAt ?? ''))
-        );
-      }
+      await this.clearDeferredForeignKeys(client, deferredForeignKeysByTable, existingRowsByTable, metadataByName);
+      const rowsDeleted = await this.deleteExistingRows(
+        client,
+        deleteOrder,
+        existingRowsByTable,
+        metadataByName
+      );
 
-      for (const row of rows) {
-        const prepared = this.prepareInsertRow(row, selfForeignKeys);
-        await this.insertRow(binding.client, tableName, prepared);
-        rowsInserted += 1;
-      }
+      let rowsInserted = 0;
+      for (const tableName of restoreOrder) {
+        const tableMeta = metadataByName.get(tableName);
+        if (!tableMeta || !tableMeta.primaryKeyColumn) {
+          continue;
+        }
+        const tableRows = backupRowsByTable.get(tableName) ?? new Map();
+        if (tableRows.size === 0) {
+          continue;
+        }
 
-      if (selfForeignKeys.length > 0) {
-        for (const row of rows) {
-          await this.applySelfForeignKeyUpdates(
-            binding.client,
-            tableName,
-            tableMeta.primaryKeyColumn,
-            row,
-            selfForeignKeys
+        if (tableName === 'Company') {
+          rowsInserted += await this.restoreCompanyRow(
+            client,
+            companyId,
+            tableMeta,
+            [...tableRows.values()][0] ?? null
+          );
+          continue;
+        }
+
+        const deferredForeignKeys = deferredForeignKeysByTable.get(tableName) ?? [];
+        const rows = [...tableRows.values()];
+        if (tableMeta.columns.includes('createdAt')) {
+          rows.sort((a, b) =>
+            String(a.createdAt ?? '').localeCompare(String(b.createdAt ?? ''))
           );
         }
-      }
-    }
 
-    return {
-      restoredAt: new Date().toISOString(),
-      companyId,
-      tablesRestored: backupTableNames.length,
-      rowsDeleted,
-      rowsInserted,
-      datastoreMode: binding.mode
-    };
+        for (const row of rows) {
+          const prepared = this.prepareInsertRow(row, deferredForeignKeys);
+          await this.insertRow(client, tableName, prepared);
+          rowsInserted += 1;
+        }
+      }
+
+      // Nullable references can point to rows inserted later, including cycles
+      // such as PriceList.activeVersionId -> PriceListVersion.priceListId.
+      for (const tableName of restoreOrder) {
+        const tableMeta = metadataByName.get(tableName);
+        const deferredForeignKeys = deferredForeignKeysByTable.get(tableName) ?? [];
+        if (tableMeta?.primaryKeyColumn && deferredForeignKeys.length > 0) {
+          for (const row of backupRowsByTable.get(tableName)?.values() ?? []) {
+            await this.applyDeferredForeignKeyUpdates(
+              client,
+              tableName,
+              tableMeta.primaryKeyColumn,
+              row,
+              deferredForeignKeys
+            );
+          }
+        }
+      }
+
+      return {
+        restoredAt: new Date().toISOString(),
+        companyId,
+        tablesRestored: backupTableNames.length,
+        rowsDeleted,
+        rowsInserted,
+        datastoreMode: binding.mode
+      };
+    }, { timeout: 120_000, maxWait: 10_000, isolationLevel: 'Serializable' });
   }
 
   private normalizeBackupPayload(payload: unknown): TenantDatabaseBackupPayload {
@@ -443,7 +453,7 @@ export class DatabaseMaintenanceService {
   }
 
   private async deleteExistingRows(
-    client: PrismaClient,
+    client: DatabaseClient,
     deleteOrder: string[],
     existingRowsByTable: RowsByTable,
     metadataByName: Map<string, TableMetadata>
@@ -475,7 +485,7 @@ export class DatabaseMaintenanceService {
   }
 
   private async restoreCompanyRow(
-    client: PrismaClient,
+    client: DatabaseClient,
     companyId: string,
     meta: TableMetadata,
     row: Record<string, unknown> | null
@@ -488,67 +498,64 @@ export class DatabaseMaintenanceService {
       return 0;
     }
     const assignments = columns
-      .map((column, index) => `${this.quoteIdentifier(column)} = $${index + 1}`)
+      .map((column) => `${this.quoteIdentifier(column)} = source.${this.quoteIdentifier(column)}`)
       .join(', ');
-    const values = columns.map((column) => row[column]);
-    const updateSql = `UPDATE ${this.quoteIdentifier('Company')} SET ${assignments} WHERE ${this.quoteIdentifier('id')} = $${columns.length + 1}`;
-    const updated = await client.$executeRawUnsafe(updateSql, ...values, companyId);
+    const values = JSON.stringify(row);
+    const updateSql = `UPDATE ${this.quoteIdentifier('Company')} AS target SET ${assignments} FROM jsonb_populate_record(NULL::${this.quoteIdentifier('Company')}, $1::jsonb) AS source WHERE target.${this.quoteIdentifier('id')} = $2`;
+    const updated = await client.$executeRawUnsafe(updateSql, values, companyId);
     if (updated > 0) {
       return 1;
     }
-    const insertColumns = ['id', ...columns];
-    const insertValues = [companyId, ...values];
-    const placeholders = insertColumns.map((_, index) => `$${index + 1}`).join(', ');
-    const insertSql = `INSERT INTO ${this.quoteIdentifier('Company')} (${insertColumns
-      .map((column) => this.quoteIdentifier(column))
-      .join(', ')}) VALUES (${placeholders})`;
-    await client.$executeRawUnsafe(insertSql, ...insertValues);
+    await this.insertRow(client, 'Company', {
+      id: companyId,
+      ...Object.fromEntries(columns.map((column) => [column, row[column]]))
+    });
     return 1;
   }
 
   private prepareInsertRow(
     row: Record<string, unknown>,
-    selfForeignKeys: ForeignKeyMetadata[]
+    deferredForeignKeys: ForeignKeyMetadata[]
   ): Record<string, unknown> {
-    if (selfForeignKeys.length === 0) {
+    if (deferredForeignKeys.length === 0) {
       return row;
     }
     const copy: Record<string, unknown> = { ...row };
-    for (const fk of selfForeignKeys) {
-      copy[fk.childColumn] = null;
+    for (const fk of deferredForeignKeys) {
+      if (Object.prototype.hasOwnProperty.call(copy, fk.childColumn)) {
+        copy[fk.childColumn] = null;
+      }
     }
     return copy;
   }
 
-  private async applySelfForeignKeyUpdates(
-    client: PrismaClient,
+  private async applyDeferredForeignKeyUpdates(
+    client: DatabaseClient,
     tableName: string,
     primaryKeyColumn: string,
     row: Record<string, unknown>,
-    selfForeignKeys: ForeignKeyMetadata[]
+    deferredForeignKeys: ForeignKeyMetadata[]
   ): Promise<void> {
     const pkValue = this.readPrimaryKeyValue(row, primaryKeyColumn);
     if (!pkValue) {
       return;
     }
     const updates: string[] = [];
-    const values: unknown[] = [];
-    for (const fk of selfForeignKeys) {
+    for (const fk of deferredForeignKeys) {
       if (!Object.prototype.hasOwnProperty.call(row, fk.childColumn)) {
         continue;
       }
-      updates.push(`${this.quoteIdentifier(fk.childColumn)} = $${updates.length + 1}`);
-      values.push(row[fk.childColumn] ?? null);
+      updates.push(`${this.quoteIdentifier(fk.childColumn)} = source.${this.quoteIdentifier(fk.childColumn)}`);
     }
     if (updates.length === 0) {
       return;
     }
-    const sql = `UPDATE ${this.quoteIdentifier(tableName)} SET ${updates.join(', ')} WHERE ${this.quoteIdentifier(primaryKeyColumn)} = $${updates.length + 1}`;
-    await client.$executeRawUnsafe(sql, ...values, pkValue);
+    const sql = `UPDATE ${this.quoteIdentifier(tableName)} AS target SET ${updates.join(', ')} FROM jsonb_populate_record(NULL::${this.quoteIdentifier(tableName)}, $1::jsonb) AS source WHERE target.${this.quoteIdentifier(primaryKeyColumn)} = $2`;
+    await client.$executeRawUnsafe(sql, JSON.stringify(row), pkValue);
   }
 
   private async insertRow(
-    client: PrismaClient,
+    client: DatabaseClient,
     tableName: string,
     row: Record<string, unknown>
   ): Promise<void> {
@@ -556,20 +563,21 @@ export class DatabaseMaintenanceService {
     if (columns.length === 0) {
       return;
     }
-    const placeholders = columns.map((_, index) => `$${index + 1}`).join(', ');
-    const sql = `INSERT INTO ${this.quoteIdentifier(tableName)} (${columns
-      .map((column) => this.quoteIdentifier(column))
-      .join(', ')}) VALUES (${placeholders})`;
-    const values = columns.map((column) => row[column]);
-    await client.$executeRawUnsafe(sql, ...values);
+    const columnList = columns.map((column) => this.quoteIdentifier(column)).join(', ');
+    // Stored JSON contains strings for timestamps, decimals and enums. Let PostgreSQL
+    // convert each value using the destination table's actual column types.
+    const sql = `INSERT INTO ${this.quoteIdentifier(tableName)} (${columnList}) SELECT ${columnList} FROM jsonb_populate_record(NULL::${this.quoteIdentifier(tableName)}, $1::jsonb)`;
+    await client.$executeRawUnsafe(sql, JSON.stringify(row));
   }
 
-  private buildSelfForeignKeyMap(
-    foreignKeys: ForeignKeyMetadata[]
+  private buildDeferredForeignKeyMap(
+    foreignKeys: ForeignKeyMetadata[],
+    tableNames: string[]
   ): Map<string, ForeignKeyMetadata[]> {
     const byTable = new Map<string, ForeignKeyMetadata[]>();
+    const selected = new Set(tableNames);
     for (const fk of foreignKeys) {
-      if (fk.childTable !== fk.parentTable) {
+      if (!fk.isNullable || !selected.has(fk.childTable) || !selected.has(fk.parentTable)) {
         continue;
       }
       byTable.set(fk.childTable, [...(byTable.get(fk.childTable) ?? []), fk]);
@@ -577,8 +585,30 @@ export class DatabaseMaintenanceService {
     return byTable;
   }
 
+  private async clearDeferredForeignKeys(
+    client: DatabaseClient,
+    byTable: Map<string, ForeignKeyMetadata[]>,
+    existingRowsByTable: RowsByTable,
+    metadataByName: Map<string, TableMetadata>
+  ): Promise<void> {
+    for (const [tableName, foreignKeys] of byTable) {
+      const primaryKey = metadataByName.get(tableName)?.primaryKeyColumn;
+      const ids = [...(existingRowsByTable.get(tableName)?.keys() ?? [])];
+      if (!primaryKey || ids.length === 0) continue;
+      const columns = [...new Set(foreignKeys.map(fk => fk.childColumn))];
+      const assignments = columns.map(column => `${this.quoteIdentifier(column)} = NULL`).join(', ');
+      for (const batch of this.chunk(ids, 150)) {
+        const placeholders = batch.map((_, index) => `$${index + 1}`).join(', ');
+        await client.$executeRawUnsafe(
+          `UPDATE ${this.quoteIdentifier(tableName)} SET ${assignments} WHERE ${this.quoteIdentifier(primaryKey)} IN (${placeholders})`,
+          ...batch
+        );
+      }
+    }
+  }
+
   private async collectTenantRows(
-    client: PrismaClient,
+    client: DatabaseClient,
     companyId: string,
     metadata: TableMetadata[],
     foreignKeys: ForeignKeyMetadata[]
@@ -642,7 +672,7 @@ export class DatabaseMaintenanceService {
   }
 
   private async fetchRowsByForeignKey(
-    client: PrismaClient,
+    client: DatabaseClient,
     tableName: string,
     columnName: string,
     values: string[]
@@ -711,10 +741,12 @@ export class DatabaseMaintenanceService {
       if (fk.childTable === fk.parentTable) {
         continue;
       }
-      childrenByParent.set(
-        fk.parentTable,
-        new Set([...(childrenByParent.get(fk.parentTable) ?? new Set<string>()), fk.childTable])
-      );
+      const children = childrenByParent.get(fk.parentTable) ?? new Set<string>();
+      if (children.has(fk.childTable)) {
+        continue;
+      }
+      children.add(fk.childTable);
+      childrenByParent.set(fk.parentTable, children);
       indegree.set(fk.childTable, (indegree.get(fk.childTable) ?? 0) + 1);
     }
 
@@ -742,10 +774,7 @@ export class DatabaseMaintenanceService {
     if (ordered.length === tableNames.length) {
       return ordered;
     }
-    const leftovers = tableNames.filter((table) => !ordered.includes(table)).sort((a, b) =>
-      a.localeCompare(b)
-    );
-    return [...ordered, ...leftovers];
+    throw new BadRequestException('Backup contains a cycle of required foreign keys and cannot be restored safely.');
   }
 
   private groupForeignKeysByParent(
@@ -758,7 +787,7 @@ export class DatabaseMaintenanceService {
     return map;
   }
 
-  private async loadTableMetadata(client: PrismaClient): Promise<TableMetadata[]> {
+  private async loadTableMetadata(client: DatabaseClient): Promise<TableMetadata[]> {
     const tableRows = await client.$queryRawUnsafe<Array<{ tableName: string }>>(
       `
         SELECT t.table_name AS "tableName"
@@ -834,13 +863,14 @@ export class DatabaseMaintenanceService {
     return metadata;
   }
 
-  private async loadForeignKeys(client: PrismaClient): Promise<ForeignKeyMetadata[]> {
+  private async loadForeignKeys(client: DatabaseClient): Promise<ForeignKeyMetadata[]> {
     const rows = await client.$queryRawUnsafe<
       Array<{
         childTable: string;
         childColumn: string;
         parentTable: string;
         parentColumn: string;
+        isNullable: boolean;
       }>
     >(
       `
@@ -848,7 +878,8 @@ export class DatabaseMaintenanceService {
           tc.table_name AS "childTable",
           kcu.column_name AS "childColumn",
           ccu.table_name AS "parentTable",
-          ccu.column_name AS "parentColumn"
+          ccu.column_name AS "parentColumn",
+          (col.is_nullable = 'YES') AS "isNullable"
         FROM information_schema.table_constraints tc
         JOIN information_schema.key_column_usage kcu
           ON tc.constraint_name = kcu.constraint_name
@@ -857,6 +888,10 @@ export class DatabaseMaintenanceService {
         JOIN information_schema.constraint_column_usage ccu
           ON ccu.constraint_name = tc.constraint_name
          AND ccu.table_schema = tc.table_schema
+        JOIN information_schema.columns col
+          ON col.table_schema = tc.table_schema
+         AND col.table_name = tc.table_name
+         AND col.column_name = kcu.column_name
         WHERE tc.table_schema = 'public'
           AND tc.constraint_type = 'FOREIGN KEY'
       `
@@ -868,7 +903,8 @@ export class DatabaseMaintenanceService {
         childTable: row.childTable,
         childColumn: row.childColumn,
         parentTable: row.parentTable,
-        parentColumn: row.parentColumn
+        parentColumn: row.parentColumn,
+        isNullable: row.isNullable
       }));
   }
 
