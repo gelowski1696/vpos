@@ -153,7 +153,7 @@ function sourceLabelFor(source: CustomerPricingSource): string {
     case 'contract_list':
       return 'Specific Customer Contract';
     case 'customer_contract_price':
-      return 'Customer Contract Price';
+      return 'Customer Fixed Discount';
     case 'customer_group':
       return 'Customer Category Price';
     case 'tier':
@@ -346,18 +346,9 @@ export function resolveCustomerPricingView(
       const contractLists = scopedActiveLists.filter(
         (list) => list.scope === 'CONTRACT' && list.customerId === input.customer.id
       );
-      const contractCandidate =
-        resolveScopeCandidate('CONTRACT', contractLists, product, input.requestedFlow) ??
-        (input.customer.contractPrice === null || input.customer.contractPrice === undefined
-          ? null
-          : makeCandidate('customer_contract_price', 'CONTRACT', {
-              unitPrice: input.customer.contractPrice,
-              resolvedUnitCost: product.standardCost ?? null,
-              discountCapPct: 0,
-              startsAt: input.requestedAt
-            }));
+      const exactContractCandidate = resolveScopeCandidate('CONTRACT', contractLists, product, input.requestedFlow);
       const scopeCandidates: Partial<Record<PriceListScope, CustomerPricingCandidate | null>> = {
-        CONTRACT: contractCandidate,
+        CONTRACT: exactContractCandidate,
         TIER: resolveScopeCandidate(
           'TIER',
           scopedActiveLists.filter((list) => list.customerTier === input.customer.tier),
@@ -384,6 +375,26 @@ export function resolveCustomerPricingView(
           product,
           input.requestedFlow
         );
+      }
+
+      if (!exactContractCandidate && (input.customer.contractPrice ?? 0) > 0) {
+        const baseCandidate = scopeOrder
+          .filter((scope) => scope !== 'CONTRACT')
+          .map((scope) => scopeCandidates[scope] ?? null)
+          .find((candidate): candidate is CustomerPricingCandidate => Boolean(candidate));
+        if (baseCandidate) {
+          scopeCandidates.CONTRACT = makeCandidate('customer_contract_price', 'CONTRACT', {
+            priceListId: baseCandidate.priceListId,
+            priceListCode: baseCandidate.priceListCode,
+            priceListName: baseCandidate.priceListName,
+            ruleId: baseCandidate.ruleId,
+            unitPrice: Number(Math.max(0, baseCandidate.unitPrice - (input.customer.contractPrice ?? 0)).toFixed(2)),
+            resolvedUnitCost: baseCandidate.resolvedUnitCost,
+            discountCapPct: 0,
+            flowMode: baseCandidate.flowMode,
+            startsAt: baseCandidate.startsAt
+          });
+        }
       }
 
       const final = scopeOrder

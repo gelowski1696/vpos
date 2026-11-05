@@ -188,7 +188,7 @@ function formatSubscriptionDate(value: string | null): string {
   return parsed.toLocaleString();
 }
 
-export default function TenantsPage(): JSX.Element {
+export default function TenantsPage(): React.JSX.Element {
   const [items, setItems] = useState<TenantSummary[]>([]);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);

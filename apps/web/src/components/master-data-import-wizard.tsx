@@ -4,6 +4,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import * as XLSX from 'xlsx';
 import { apiRequest } from '../lib/api-client';
 import { toastError, toastInfo, toastPromise, toastSuccess } from '../lib/web-toast';
+import { AdminModalMotion } from './admin-motion';
 
 type ImportColumn = {
   key: string;
@@ -107,7 +108,7 @@ export function MasterDataImportWizard({
   endpointBase,
   columns,
   onImported
-}: Props): JSX.Element {
+}: Props): React.JSX.Element {
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const [open, setOpen] = useState(false);
   const [fileName, setFileName] = useState<string>('');
@@ -509,14 +510,15 @@ export function MasterDataImportWizard({
       </button>
 
       {open ? (
-        <div className="fixed inset-0 z-[80] flex items-center justify-center bg-slate-950/55 p-4">
-          <section className="flex max-h-[92vh] w-full max-w-5xl flex-col overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-2xl dark:border-slate-700 dark:bg-slate-900">
+        <AdminModalMotion className="fixed inset-0 z-[80] flex items-center justify-center bg-slate-950/55 p-4 backdrop-blur-[3px]">
+          <section aria-labelledby={`import-wizard-title-${entity}`} aria-modal="true" className="flex max-h-[92vh] w-full max-w-5xl flex-col overflow-hidden rounded-xl border border-adminBorder bg-adminSurface shadow-2xl" role="dialog">
             <header className="flex items-center justify-between border-b border-slate-200 px-4 py-3 dark:border-slate-700">
               <div>
-                <h2 className="text-lg font-semibold text-slate-900 dark:text-slate-100">{title} Import Wizard</h2>
+                <h2 className="text-lg font-semibold text-slate-900 dark:text-slate-100" id={`import-wizard-title-${entity}`}>{title} Import Wizard</h2>
                 <p className="text-xs text-slate-500 dark:text-slate-400">Fast, guided import with preview and validation.</p>
               </div>
               <button
+                aria-label={`Close ${title} import wizard`}
                 className="rounded-md border border-slate-300 px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-100 dark:border-slate-600 dark:text-slate-200 dark:hover:bg-slate-800"
                 onClick={close}
                 type="button"
@@ -835,7 +837,7 @@ export function MasterDataImportWizard({
               </div>
             </footer>
           </section>
-        </div>
+        </AdminModalMotion>
       ) : null}
     </>
   );

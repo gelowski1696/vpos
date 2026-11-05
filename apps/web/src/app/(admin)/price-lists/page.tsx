@@ -257,7 +257,7 @@ function buildDefaultForm(defaultProductId: string): FormState {
   };
 }
 
-function AddonBadge(): JSX.Element {
+function AddonBadge(): React.JSX.Element {
   return (
     <span className="rounded-full border border-brandPrimary/40 bg-brandPrimary/10 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide text-brandPrimary">
       Add-on
@@ -335,7 +335,7 @@ function scopeTarget(
   return 'All branches and customers';
 }
 
-export default function PriceListsPage(): JSX.Element {
+export default function PriceListsPage(): React.JSX.Element {
   const [priceLists, setPriceLists] = useState<PriceListRecord[]>([]);
   const [products, setProducts] = useState<ProductRecord[]>([]);
   const [branches, setBranches] = useState<BranchRecord[]>([]);
@@ -574,6 +574,17 @@ export default function PriceListsPage(): JSX.Element {
     const effectiveSet = new Set(bulkAdjustEffectiveProductIds);
     return bulkAdjustCandidateRules.filter((rule) => effectiveSet.has(rule.productId)).length;
   }, [allVersionRules.length, bulkAdjustCandidateRules, bulkAdjustEffectiveProductIds, bulkAdjustScopeMode]);
+  const bulkAdjustDisabledReason = versionBusy
+    ? 'A price-list operation is already in progress.'
+    : versionLoading
+      ? 'The selected version is still loading.'
+      : selectedVersionDetail?.status !== 'DRAFT'
+        ? 'Select or create a draft version before applying changes.'
+        : draftRulesDirty
+          ? 'Save the draft rule edits before applying a bulk update.'
+          : bulkAdjustPreviewRuleCount === 0
+            ? 'Choose at least one item with a price row to update.'
+            : null;
 
   useEffect(() => {
     (async () => {
@@ -1916,12 +1927,13 @@ export default function PriceListsPage(): JSX.Element {
                     </label>
                     <div className="flex items-end md:col-span-2">
                       <button
-                        className="w-full rounded-lg border border-brandPrimary px-3 py-2 text-xs font-semibold text-brandPrimary hover:bg-brandPrimary/10 disabled:cursor-not-allowed disabled:opacity-60"
-                        disabled={versionBusy || versionLoading || draftRulesDirty || selectedVersionDetail?.status !== 'DRAFT'}
+                        aria-describedby="bulk-adjust-status"
+                        className="w-full rounded-lg bg-brandPrimary px-3 py-2 text-xs font-semibold text-white shadow-sm hover:brightness-110 disabled:cursor-not-allowed disabled:bg-slate-300 disabled:text-slate-600 disabled:shadow-none dark:disabled:bg-slate-700 dark:disabled:text-slate-300"
+                        disabled={bulkAdjustDisabledReason !== null}
                         onClick={() => void applyBulkAdjust()}
                         type="button"
                       >
-                        Apply
+                        {bulkAdjustDisabledReason ? 'Apply' : `Apply to ${bulkAdjustPreviewRuleCount} rows`}
                       </button>
                     </div>
                   </div>
@@ -1941,6 +1953,12 @@ export default function PriceListsPage(): JSX.Element {
                     <span className="font-semibold">{allVersionRules.length}</span> rows · Target{' '}
                     <span className="font-semibold">{bulkAdjustEffectiveProductIds.length}</span> items /{' '}
                     <span className="font-semibold">{bulkAdjustPreviewRuleCount}</span> rows.
+                  </p>
+                  <p
+                    className={`mt-1 text-xs ${bulkAdjustDisabledReason ? 'text-amber-700 dark:text-amber-300' : 'text-emerald-700 dark:text-emerald-300'}`}
+                    id="bulk-adjust-status"
+                  >
+                    {bulkAdjustDisabledReason ?? `Ready to update ${bulkAdjustPreviewRuleCount} price rows. Review the preview, apply, then publish the draft.`}
                   </p>
 
                   {bulkAdjustScopeMode !== 'ALL' ? (

@@ -72,7 +72,7 @@ function actionLabel(value: LpgItemActionRow['actionType'] | null): string {
   return 'Junked';
 }
 
-export default function LpgItemActionsPage(): JSX.Element {
+export default function LpgItemActionsPage(): React.JSX.Element {
   const [actionTypeFilter, setActionTypeFilter] = useState<'ALL' | 'DISPOSE' | 'JUNK' | 'REPLACE'>('ALL');
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);

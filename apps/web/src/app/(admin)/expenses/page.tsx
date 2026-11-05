@@ -2,7 +2,7 @@
 
 import { EntityManager } from '../../../components/entity-manager';
 
-export default function ExpensesPage(): JSX.Element {
+export default function ExpensesPage(): React.JSX.Element {
   function activeMark(value: unknown): string {
     if (value === true || value === 'true' || value === 1 || value === '1') {
       return 'Yes';

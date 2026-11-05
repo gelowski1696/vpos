@@ -214,7 +214,7 @@ function buildVisiblePageButtons(currentPage: number, totalPages: number): numbe
   return buttons;
 }
 
-function summaryCard(label: string, value: string, subText: string, toneClass?: string): JSX.Element {
+function summaryCard(label: string, value: string, subText: string, toneClass?: string): React.JSX.Element {
   return (
     <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm dark:border-slate-700 dark:bg-slate-900">
       <div className="text-[0.76rem] font-semibold uppercase tracking-[0.08em] text-slate-500 dark:text-slate-400">
@@ -233,7 +233,7 @@ function renderSnapshotMetric(
   summary: DailyInventorySnapshotSummary | null,
   missingLabel: string,
   fallbackTone?: string
-): JSX.Element {
+): React.JSX.Element {
   return (
     <div className="rounded-[16px] border border-slate-200 bg-slate-50 p-3 dark:border-slate-700 dark:bg-slate-800/50">
       <div className="text-[0.74rem] font-semibold uppercase tracking-[0.08em] text-slate-500 dark:text-slate-400">
@@ -304,7 +304,7 @@ function ShiftInventoryField({
   value,
   subtitle,
   valueClassName
-}: ShiftInventoryFieldProps): JSX.Element {
+}: ShiftInventoryFieldProps): React.JSX.Element {
   return (
     <div className="min-w-0">
       <div className="text-[0.64rem] font-semibold uppercase tracking-[0.08em] text-slate-500 dark:text-slate-400">
@@ -320,7 +320,7 @@ function ShiftInventoryField({
   );
 }
 
-function ShiftInventoryDetails({ row }: { row: DailyInventoryShiftRow }): JSX.Element {
+function ShiftInventoryDetails({ row }: { row: DailyInventoryShiftRow }): React.JSX.Element {
   const isOpen = row.status === 'OPEN';
   const totalItems = row.inventory_report?.totals.item_count ?? row.opening_snapshot_summary?.item_count ?? 0;
   const changeText = row.inventory_report
@@ -397,7 +397,7 @@ function ShiftInventoryTable({
   selectedDate: string;
   branchFilter: string;
   targetShiftId: string | null;
-}): JSX.Element {
+}): React.JSX.Element {
   const [expandedShiftId, setExpandedShiftId] = useState<string | null>(null);
   const pagination = useTablePagination(rows, {
     initialPageSize: 5,
@@ -651,7 +651,7 @@ function ShiftInventoryTable({
   );
 }
 
-function DailyInventoryCountPageContent(): JSX.Element {
+function DailyInventoryCountPageContent(): React.JSX.Element {
   const today = useMemo(() => toDateOnly(new Date()), []);
   const searchParams = useSearchParams();
   const reportTargetSearch = searchParams.toString();
@@ -917,7 +917,7 @@ function DailyInventoryCountPageContent(): JSX.Element {
   );
 }
 
-export default function DailyInventoryCountPage(): JSX.Element {
+export default function DailyInventoryCountPage(): React.JSX.Element {
   return (
     <Suspense
       fallback={

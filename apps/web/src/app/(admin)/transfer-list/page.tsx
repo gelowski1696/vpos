@@ -126,7 +126,7 @@ function statusBadgeClass(status: TransferRow['status']): string {
   return 'bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-300';
 }
 
-export default function TransferListPage(): JSX.Element {
+export default function TransferListPage(): React.JSX.Element {
   const searchParams = useSearchParams();
   const [branches, setBranches] = useState<BranchRecord[]>([]);
   const [locations, setLocations] = useState<LocationRecord[]>([]);

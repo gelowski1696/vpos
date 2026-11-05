@@ -5,6 +5,7 @@ import Image from 'next/image';
 import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
 import { useEffect, useMemo, useRef, useState } from 'react';
+import { AdminMotionProvider, AdminPageTransition } from './admin-motion';
 import { AdminWalkthrough, type AdminTourStep } from './admin-walkthrough';
 import { ChatWidget } from './chat/ChatWidget';
 import {
@@ -710,7 +711,7 @@ function resolveInitialTheme(): ThemeMode {
   return window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
 }
 
-function NavIcon({ name, className }: { name: NavIconName; className?: string }): JSX.Element {
+function NavIcon({ name, className }: { name: NavIconName; className?: string }): React.JSX.Element {
   switch (name) {
     case 'dashboard':
       return (
@@ -849,7 +850,7 @@ function NavIcon({ name, className }: { name: NavIconName; className?: string })
   }
 }
 
-export function AdminShell({ children }: { children: React.ReactNode }): JSX.Element {
+export function AdminShell({ children }: { children: React.ReactNode }): React.JSX.Element {
   const pathname = usePathname();
   const router = useRouter();
   const [ready, setReady] = useState(false);
@@ -858,6 +859,7 @@ export function AdminShell({ children }: { children: React.ReactNode }): JSX.Ele
   const [theme, setTheme] = useState<ThemeMode>('light');
   const [brandName, setBrandName] = useState('VPOS');
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+  const [mobileNavOpen, setMobileNavOpen] = useState(false);
   const [roles, setRoles] = useState<string[]>([]);
   const [tenantAddons, setTenantAddons] = useState<TenantAddons>(DEFAULT_TENANT_ADDONS);
   const [walkthroughOpen, setWalkthroughOpen] = useState(false);
@@ -891,7 +893,9 @@ export function AdminShell({ children }: { children: React.ReactNode }): JSX.Ele
     document.documentElement.classList.toggle('dark', initialTheme === 'dark');
 
     const storedSidebar = window.localStorage.getItem(SIDEBAR_STORAGE_KEY);
-    setSidebarCollapsed(storedSidebar === '1');
+    setSidebarCollapsed(
+      storedSidebar === '1' || (storedSidebar === null && window.innerWidth < 1280)
+    );
     setInventoryNotificationReadIds(readInventoryNotificationReadIds());
 
     setHasToken(Boolean(getAccessToken()));
@@ -920,9 +924,11 @@ export function AdminShell({ children }: { children: React.ReactNode }): JSX.Ele
         }
         if (branding.primaryColor) {
           document.documentElement.style.setProperty('--brand-primary', branding.primaryColor);
+          document.documentElement.style.setProperty('--admin-accent', branding.primaryColor);
         }
         if (branding.secondaryColor) {
           document.documentElement.style.setProperty('--brand-secondary', branding.secondaryColor);
+          document.documentElement.style.setProperty('--admin-accent-strong', branding.secondaryColor);
         }
       } catch {
         // Keep defaults if branding fetch fails.
@@ -1422,6 +1428,10 @@ export function AdminShell({ children }: { children: React.ReactNode }): JSX.Ele
   }, [flatSearchItems]);
 
   const active = useMemo(() => pathname ?? '/', [pathname]);
+
+  useEffect(() => {
+    setMobileNavOpen(false);
+  }, [active]);
   const activeRouteKey = useMemo(() => {
     const exactMatch = visibleNavItems.find((item) => routeIsActive(active, item.href));
     return exactMatch?.href ?? active;
@@ -1717,28 +1727,29 @@ export function AdminShell({ children }: { children: React.ReactNode }): JSX.Ele
   }
 
   return (
-    <div className="min-h-screen">
+    <AdminMotionProvider>
+      <div data-admin-workspace className="min-h-screen bg-adminCanvas text-adminText">
       <aside
         data-tour="sidebar"
-        className={`fixed inset-y-0 left-0 z-30 hidden border-r border-slate-200/70 bg-white/90 text-slate-700 shadow-2xl shadow-slate-300/20 transition-[width] duration-200 dark:border-slate-800 dark:bg-slate-950/90 dark:text-slate-200 dark:shadow-black/40 md:block ${sidebarCollapsed ? 'w-20' : 'w-72'}`}
+        className={`admin-sidebar fixed inset-y-0 left-0 z-30 hidden border-r transition-[width] duration-150 lg:block ${sidebarCollapsed ? 'w-16' : 'w-56'}`}
       >
-        <div className={`flex h-16 items-center border-b border-slate-200/70 dark:border-slate-800 ${sidebarCollapsed ? 'justify-center px-2' : 'gap-3 px-6'}`}>
-          <div className="flex h-9 w-9 items-center justify-center overflow-hidden rounded-lg border border-slate-300/60 bg-white/70 dark:border-slate-700 dark:bg-slate-900/70">
+        <div className={`flex h-[3.75rem] items-center border-b border-adminBorder ${sidebarCollapsed ? 'justify-center px-2' : 'gap-3 px-4'}`}>
+          <div className="flex h-8 w-8 items-center justify-center overflow-hidden rounded-lg border border-adminBorder bg-adminSurface">
             <Image src="/logo.png" alt="VPOS logo" width={32} height={32} className="h-8 w-8 object-contain p-0.5" />
           </div>
           {!sidebarCollapsed ? (
-            <div>
-              <p className="text-xs uppercase tracking-[0.2em] text-slate-500 dark:text-slate-400">System</p>
-              <p className="text-base font-semibold text-slate-900 dark:text-slate-100">{brandName}</p>
+            <div className="min-w-0">
+              <p className="text-[10px] font-semibold uppercase tracking-[0.18em] text-adminTextMuted">Workspace</p>
+              <p className="truncate text-sm font-semibold text-adminText">{brandName}</p>
             </div>
           ) : null}
         </div>
 
-        <div data-tour="sidebar-nav" className={`h-[calc(100vh-4rem)] overflow-y-auto py-5 ${sidebarCollapsed ? 'px-2' : 'px-4'}`}>
+        <div data-tour="sidebar-nav" className={`h-[calc(100vh-3.75rem)] overflow-y-auto py-4 ${sidebarCollapsed ? 'px-2' : 'px-3'}`}>
           {visibleNavSections.map((section) => (
-            <div className="mb-6" key={section.title}>
+            <div className="mb-5" key={section.title}>
               {!sidebarCollapsed ? (
-                <p className="mb-2 px-2 text-xs font-semibold uppercase tracking-[0.18em] text-slate-500 dark:text-slate-400">{section.title}</p>
+                <p className="mb-1.5 px-2 text-[10px] font-semibold uppercase tracking-[0.14em] text-adminTextMuted">{section.title}</p>
               ) : null}
               <nav className="space-y-1">
                 {section.items.map((item) => {
@@ -1746,11 +1757,12 @@ export function AdminShell({ children }: { children: React.ReactNode }): JSX.Ele
                   const dataTour = `nav-${routeToTourToken(item.href)}`;
                   return (
                     <Link
+                      aria-current={isActive ? 'page' : undefined}
                       data-tour={dataTour}
-                      className={`flex items-center rounded-xl px-3 py-2 text-sm transition ${sidebarCollapsed ? 'justify-center' : 'justify-between'} ${
+                      className={`flex min-h-9 items-center rounded-lg px-2.5 py-2 text-[13px] transition-colors duration-150 ${sidebarCollapsed ? 'justify-center' : 'justify-between'} ${
                         isActive
-                          ? 'bg-slate-900 text-white shadow-lg shadow-slate-400/30 dark:bg-slate-100 dark:text-slate-900'
-                          : 'text-slate-700 hover:bg-slate-200/60 hover:text-slate-900 dark:text-slate-300 dark:hover:bg-slate-800/70 dark:hover:text-slate-100'
+                          ? 'bg-adminSurface font-semibold text-adminText shadow-[0_1px_2px_rgba(20,20,30,0.05)]'
+                          : 'text-adminTextMuted hover:bg-adminSurface/70 hover:text-adminText'
                       }`}
                       href={item.href}
                       key={item.href}
@@ -1765,7 +1777,7 @@ export function AdminShell({ children }: { children: React.ReactNode }): JSX.Ele
                             <span>{item.label}</span>
                           </span>
                           {item.badge ? (
-                            <span className="rounded-md bg-slate-200 px-2 py-0.5 text-[10px] uppercase tracking-wide text-slate-700 dark:bg-slate-800 dark:text-slate-300">
+                            <span className="rounded-md bg-adminAccentSoft px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wide text-brandPrimary">
                               {item.badge}
                             </span>
                           ) : null}
@@ -1780,13 +1792,80 @@ export function AdminShell({ children }: { children: React.ReactNode }): JSX.Ele
         </div>
       </aside>
 
-      <div className={`transition-[padding] duration-200 ${sidebarCollapsed ? 'md:pl-20' : 'md:pl-72'}`}>
-        <header className="sticky top-0 z-20 border-b border-slate-200/70 bg-white/85 backdrop-blur-md dark:border-slate-800 dark:bg-slate-950/85">
-          <div className="flex flex-wrap items-center justify-between gap-3 px-4 py-3 md:px-6">
-            <div className="flex min-w-[220px] flex-1 items-center gap-2">
+      {mobileNavOpen ? (
+        <div className="fixed inset-0 z-40 lg:hidden">
+          <button
+            aria-label="Close navigation"
+            className="absolute inset-0 h-full w-full bg-slate-950/40"
+            onClick={() => setMobileNavOpen(false)}
+            type="button"
+          />
+          <aside aria-label="Mobile navigation" className="admin-sidebar relative h-full w-[min(19rem,86vw)] overflow-y-auto border-r p-3 shadow-xl">
+            <div className="mb-3 flex h-12 items-center justify-between border-b border-adminBorder px-1">
+              <span className="flex min-w-0 items-center gap-2">
+                <Image src="/logo.png" alt="" width={30} height={30} className="h-8 w-8 object-contain" />
+                <span className="truncate text-sm font-semibold text-adminText">{brandName}</span>
+              </span>
+              <button
+                aria-label="Close navigation"
+                className="inline-flex h-9 w-9 items-center justify-center rounded-lg border border-adminBorder bg-adminSurface text-adminText"
+                onClick={() => setMobileNavOpen(false)}
+                type="button"
+              >
+                <svg aria-hidden="true" className="h-4 w-4" fill="none" viewBox="0 0 24 24">
+                  <path d="M6 6l12 12M18 6 6 18" stroke="currentColor" strokeLinecap="round" strokeWidth="2" />
+                </svg>
+              </button>
+            </div>
+            <div data-tour="mobile-nav-list">
+              {visibleNavSections.map((section) => (
+                <div className="mb-5" key={`mobile-${section.title}`}>
+                  <p className="mb-1.5 px-2 text-[10px] font-semibold uppercase tracking-[0.14em] text-adminTextMuted">{section.title}</p>
+                  <nav className="space-y-1">
+                    {section.items.map((item) => {
+                      const isActive = routeIsActive(active, item.href);
+                      return (
+                        <Link
+                          aria-current={isActive ? 'page' : undefined}
+                          className={`flex min-h-11 items-center justify-between rounded-lg px-3 py-2 text-sm ${isActive ? 'bg-adminSurface font-semibold text-adminText shadow-sm' : 'text-adminTextMuted'}`}
+                          data-tour={`mobile-nav-${routeToTourToken(item.href)}`}
+                          href={item.href}
+                          key={`mobile-${item.href}`}
+                        >
+                          <span className="flex items-center gap-2.5">
+                            <NavIcon className="h-4 w-4" name={item.icon} />
+                            <span>{item.label}</span>
+                          </span>
+                          {item.badge ? <span className="text-[9px] font-semibold uppercase text-brandPrimary">{item.badge}</span> : null}
+                        </Link>
+                      );
+                    })}
+                  </nav>
+                </div>
+              ))}
+            </div>
+          </aside>
+        </div>
+      ) : null}
+
+      <div className={`transition-[padding] duration-150 ${sidebarCollapsed ? 'lg:pl-16' : 'lg:pl-56'}`}>
+        <header className="admin-topbar sticky top-0 z-20 border-b backdrop-blur-md">
+          <div className="flex min-h-[3.75rem] flex-wrap items-center justify-between gap-3 px-3 py-2 md:flex-nowrap md:px-5">
+            <div className="flex shrink-0 items-center gap-2">
+              <button
+                aria-expanded={mobileNavOpen}
+                aria-label="Open navigation"
+                className="inline-flex h-9 w-9 items-center justify-center rounded-lg border border-adminBorder bg-adminSurface text-adminText lg:hidden"
+                onClick={() => setMobileNavOpen(true)}
+                type="button"
+              >
+                <svg aria-hidden="true" className="h-4 w-4" fill="none" viewBox="0 0 24 24">
+                  <path d="M4 7h16M4 12h16M4 17h16" stroke="currentColor" strokeLinecap="round" strokeWidth="2" />
+                </svg>
+              </button>
               <button
                 aria-label={sidebarCollapsed ? 'Expand sidebar' : 'Collapse sidebar'}
-                className="hidden rounded-lg border border-slate-300/70 p-2 text-slate-700 hover:bg-slate-200/70 dark:border-slate-700 dark:text-slate-200 dark:hover:bg-slate-800/70 md:inline-flex"
+                className="hidden h-9 w-9 items-center justify-center rounded-lg border border-adminBorder bg-adminSurface text-adminText hover:bg-adminMuted lg:inline-flex"
                 onClick={toggleSidebar}
                 type="button"
               >
@@ -1798,16 +1877,13 @@ export function AdminShell({ children }: { children: React.ReactNode }): JSX.Ele
                   )}
                 </svg>
               </button>
-              <div>
-                <p className="text-xs uppercase tracking-[0.16em] text-slate-500 dark:text-slate-400">{brandName}</p>
-                <h1 className="text-lg font-semibold text-slate-900 dark:text-slate-100" data-tour="header-page-title">{pageTitle}</h1>
-              </div>
+              <p className="hidden max-w-36 truncate text-sm font-semibold text-adminText lg:block" data-tour="header-page-title">{pageTitle}</p>
             </div>
 
             <div
               data-tour="global-search"
               ref={searchContainerRef}
-              className="relative flex w-full max-w-xl items-center gap-2 rounded-xl border border-slate-300/70 bg-white px-3 py-2 dark:border-slate-700 dark:bg-slate-900 md:w-auto md:flex-1"
+              className="relative order-last flex w-full items-center gap-2 rounded-lg border border-adminBorder bg-adminSurface px-3 py-2 md:order-none md:max-w-xl md:flex-1"
             >
               <svg aria-hidden="true" className="h-4 w-4 text-slate-400 dark:text-slate-500" fill="none" viewBox="0 0 24 24">
                 <path d="M21 21L16.65 16.65M10 18a8 8 0 1 1 0-16 8 8 0 0 1 0 16Z" stroke="currentColor" strokeLinecap="round" strokeWidth="2" />
@@ -2108,52 +2184,30 @@ export function AdminShell({ children }: { children: React.ReactNode }): JSX.Ele
             </div>
           </div>
 
-          <div data-tour="mobile-nav-list" className="no-scrollbar flex gap-2 overflow-x-auto px-4 pb-3 md:hidden">
-            {visibleNavItems.map((item) => {
-              const isActive = routeIsActive(active, item.href);
-              const dataTour = `mobile-nav-${routeToTourToken(item.href)}`;
-              return (
-                <Link
-                  data-tour={dataTour}
-                  className={`whitespace-nowrap rounded-full px-3 py-1.5 text-xs font-semibold ${isActive ? 'bg-slate-900 text-white dark:bg-slate-100 dark:text-slate-900' : 'border border-slate-300/70 text-slate-700 dark:border-slate-700 dark:text-slate-300'}`}
-                  href={item.href}
-                  key={item.href}
-                >
-                  <span className="flex items-center gap-1.5">
-                    <NavIcon className="h-3.5 w-3.5" name={item.icon} />
-                    <span>{item.label}</span>
-                    {item.badge ? (
-                      <span className="rounded-full border border-current/40 px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wide">
-                        {item.badge}
-                      </span>
-                    ) : null}
-                  </span>
-                </Link>
-              );
-            })}
-          </div>
         </header>
 
-        <main className="px-4 py-4 md:px-6 md:py-5">
-          <section data-tour="workspace" className="rounded-2xl border border-slate-200/70 bg-white/80 p-4 shadow-sm dark:border-slate-800 dark:bg-slate-900/55 md:p-6">
-            {platformOwnerRouteBlocked ? (
-              <div className="rounded-2xl border border-slate-300/70 bg-slate-100 p-5 text-slate-700 dark:border-slate-700 dark:bg-slate-800/80 dark:text-slate-200">
-                <h2 className="text-xl font-semibold">Platform Console Scope</h2>
-                <p className="mt-2 text-sm">
-                  This module is outside the current platform-owner menu scope. Use Tenants, Branches, Locations, Users, Sync Reviews, and Audit Logs from the left menu.
-                </p>
-                <div className="mt-4 flex flex-wrap gap-2">
-                  <Link className="rounded-lg bg-slate-900 px-3 py-2 text-sm font-semibold text-white dark:bg-slate-100 dark:text-slate-900" href="/tenants">
-                    Open Tenants
-                  </Link>
-                  <Link className="rounded-lg border border-slate-300/70 px-3 py-2 text-sm font-semibold text-slate-700 dark:border-slate-700 dark:text-slate-200" href="/audit-logs">
-                    Open Audit Logs
-                  </Link>
+        <main className="admin-page-content p-3 md:p-5">
+          <section data-tour="workspace" className="admin-workspace-surface p-4 md:p-5">
+            <AdminPageTransition routeKey={activeRouteKey}>
+              {platformOwnerRouteBlocked ? (
+                <div className="rounded-2xl border border-slate-300/70 bg-slate-100 p-5 text-slate-700 dark:border-slate-700 dark:bg-slate-800/80 dark:text-slate-200">
+                  <h2 className="text-xl font-semibold">Platform Console Scope</h2>
+                  <p className="mt-2 text-sm">
+                    This module is outside the current platform-owner menu scope. Use Tenants, Branches, Locations, Users, Sync Reviews, and Audit Logs from the left menu.
+                  </p>
+                  <div className="mt-4 flex flex-wrap gap-2">
+                    <Link className="rounded-lg bg-slate-900 px-3 py-2 text-sm font-semibold text-white dark:bg-slate-100 dark:text-slate-900" href="/tenants">
+                      Open Tenants
+                    </Link>
+                    <Link className="rounded-lg border border-slate-300/70 px-3 py-2 text-sm font-semibold text-slate-700 dark:border-slate-700 dark:text-slate-200" href="/audit-logs">
+                      Open Audit Logs
+                    </Link>
+                  </div>
                 </div>
-              </div>
-            ) : (
-              children
-            )}
+              ) : (
+                children
+              )}
+            </AdminPageTransition>
           </section>
         </main>
       </div>
@@ -2362,6 +2416,7 @@ export function AdminShell({ children }: { children: React.ReactNode }): JSX.Ele
         />
       ) : null}
       {!isPlatformOwner ? <ChatWidget /> : null}
-    </div>
+      </div>
+    </AdminMotionProvider>
   );
 }

@@ -228,12 +228,13 @@ function flowModeLabel(value: 'ANY' | 'REFILL_EXCHANGE' | 'NON_REFILL'): string 
   return 'Any Flow';
 }
 
-export default function ProductsPage(): JSX.Element {
+export default function ProductsPage(): React.JSX.Element {
   const router = useRouter();
   const pathname = usePathname();
   const searchParams = useSearchParams();
   const [reloadSignal, setReloadSignal] = useState(0);
   const [products, setProducts] = useState<ProductRecord[]>([]);
+  const [productsLoaded, setProductsLoaded] = useState(false);
   const [cylinderTypes, setCylinderTypes] = useState<CylinderTypeRecord[]>([]);
   const [priceLists, setPriceLists] = useState<PriceListRecord[]>([]);
   const [branches, setBranches] = useState<BranchRecord[]>([]);
@@ -262,7 +263,6 @@ export default function ProductsPage(): JSX.Element {
     setDetailError(null);
     try {
       const [
-        productResult,
         cylinderResult,
         priceListResult,
         branchResult,
@@ -271,7 +271,6 @@ export default function ProductsPage(): JSX.Element {
         productBrandResult
       ] =
         await Promise.allSettled([
-          apiRequest<ProductRecord[]>('/master-data/products'),
           apiRequest<CylinderTypeRecord[]>('/master-data/cylinder-types'),
           apiRequest<PriceListRecord[]>('/master-data/price-lists'),
           apiRequest<BranchRecord[]>('/master-data/branches'),
@@ -280,9 +279,6 @@ export default function ProductsPage(): JSX.Element {
           apiRequest<ProductBrandRecord[]>('/master-data/product-brands')
         ]);
 
-      if (productResult.status === 'rejected') {
-        throw productResult.reason;
-      }
       if (cylinderResult.status === 'rejected') {
         throw cylinderResult.reason;
       }
@@ -290,7 +286,6 @@ export default function ProductsPage(): JSX.Element {
         throw priceListResult.reason;
       }
 
-      setProducts(productResult.value);
       setCylinderTypes(cylinderResult.value);
       setPriceLists(priceListResult.value);
       setBranches(branchResult.status === 'fulfilled' ? branchResult.value : []);
@@ -300,7 +295,6 @@ export default function ProductsPage(): JSX.Element {
       );
       setProductBrands(productBrandResult.status === 'fulfilled' ? productBrandResult.value : []);
     } catch (error) {
-      setProducts([]);
       setCylinderTypes([]);
       setPriceLists([]);
       setBranches([]);
@@ -493,6 +487,34 @@ export default function ProductsPage(): JSX.Element {
   const selectedProduct = useMemo(
     () => products.find((row) => row.id === viewProductId) ?? null,
     [products, viewProductId]
+  );
+
+  const productSummary = useMemo(
+    () => [
+      {
+        label: 'Total products',
+        value: productsLoaded ? products.length.toLocaleString() : '—',
+        detail: 'Full catalogue'
+      },
+      {
+        label: 'Active products',
+        value: productsLoaded ? products.filter((product) => product.isActive).length.toLocaleString() : '—',
+        detail: 'Available for operations',
+        tone: 'positive' as const
+      },
+      {
+        label: 'Inactive products',
+        value: productsLoaded ? products.filter((product) => !product.isActive).length.toLocaleString() : '—',
+        detail: 'Hidden from active use',
+        tone: 'warning' as const
+      },
+      {
+        label: 'LPG products',
+        value: productsLoaded ? products.filter((product) => product.isLpg).length.toLocaleString() : '—',
+        detail: 'Cylinder inventory items'
+      }
+    ],
+    [products, productsLoaded]
   );
 
   const linkedPrices = useMemo<LinkedPriceRow[]>(() => {
@@ -743,6 +765,53 @@ export default function ProductsPage(): JSX.Element {
   return (
     <div className="space-y-5">
       <EntityManager
+        description="Manage products, pricing, and availability across your operation."
+        primaryActionLabel="Add product"
+        summary={productSummary}
+        statusFilters={[
+          { key: 'all', label: 'All' },
+          { key: 'active', label: 'Active', matches: (row) => Boolean(row.isActive) },
+          { key: 'inactive', label: 'Inactive', matches: (row) => !Boolean(row.isActive) }
+        ]}
+        filters={[
+          {
+            key: 'category',
+            label: 'categories',
+            options: categoryOptions.filter((option) => option.value),
+            value: (row) => String(row.category ?? '')
+          },
+          {
+            key: 'brand',
+            label: 'brands',
+            options: brandOptions.filter((option) => option.value),
+            value: (row) => String(row.brand ?? '')
+          },
+          {
+            key: 'kind',
+            label: 'types',
+            options: [
+              { value: 'lpg', label: 'LPG' },
+              { value: 'other', label: 'Non-LPG' }
+            ],
+            value: (row) => (Boolean(row.isLpg) ? 'lpg' : 'other')
+          }
+        ]}
+        selection={{
+          fileName: 'vpos-products.csv',
+          columns: [
+            { key: 'sku', label: 'Item Code' },
+            { key: 'name', label: 'Product Name' },
+            { key: 'category', label: 'Category' },
+            { key: 'brand', label: 'Brand' },
+            { key: 'unit', label: 'Unit' },
+            { key: 'isLpg', label: 'LPG', value: (row) => (row.isLpg ? 'Yes' : 'No') },
+            { key: 'isActive', label: 'Active', value: (row) => (row.isActive ? 'Yes' : 'No') }
+          ]
+        }}
+        onItemsChange={(rows) => {
+          setProducts(rows as unknown as ProductRecord[]);
+          setProductsLoaded(true);
+        }}
         defaultValues={{
           sku: '',
           name: '',
@@ -771,17 +840,18 @@ export default function ProductsPage(): JSX.Element {
           />
         }
         fields={[
+          { key: 'name', label: 'Name', required: true },
           {
             key: 'sku',
             label: 'Item Code',
             required: true,
             helperText: 'Unique code used to identify the product in POS and inventory.'
           },
-          { key: 'name', label: 'Name', required: true },
           {
             key: 'category',
             label: 'Category',
             type: 'select',
+            tableHidden: true,
             options: categoryOptions,
             helperText: 'Optional grouping managed from Product Categories master data.'
           },
@@ -789,6 +859,7 @@ export default function ProductsPage(): JSX.Element {
             key: 'brand',
             label: 'Brand',
             type: 'select',
+            tableHidden: true,
             options: brandOptions,
             helperText: 'Optional brand managed from Product Brands master data.'
           },
@@ -796,6 +867,7 @@ export default function ProductsPage(): JSX.Element {
             key: 'unit',
             label: 'Unit of Measure',
             type: 'select',
+            tableHidden: true,
             required: true,
             options: [
               { value: 'unit', label: 'Piece / Unit' },
@@ -810,6 +882,7 @@ export default function ProductsPage(): JSX.Element {
             key: 'cylinderTypeId',
             label: 'Cylinder Type',
             type: 'select',
+            tableHidden: true,
             options: cylinderTypeOptions,
             helperText:
               'Pick a cylinder type for LPG products. Leave as None for non-cylinder products.'
@@ -818,6 +891,7 @@ export default function ProductsPage(): JSX.Element {
             key: 'lowStockAlertQty',
             label: 'Low Stock Alert Qty',
             type: 'number',
+            tableHidden: true,
             helperText:
               'Set per product. LPG products use FULL qty for low-stock alerts; non-LPG products use Qty On Hand.'
           },
@@ -825,12 +899,14 @@ export default function ProductsPage(): JSX.Element {
             key: 'pickupCommissionRate',
             label: 'Pickup Commission',
             type: 'number',
+            tableHidden: true,
             helperText: 'Fixed commission per item when the sale type is Pickup.'
           },
           {
             key: 'deliveryCommissionRate',
             label: 'Delivery Commission',
             type: 'number',
+            tableHidden: true,
             helperText: 'Fixed commission per item when the sale type is Delivery.'
           },
           { key: 'isActive', label: 'Active', type: 'boolean' }
@@ -900,7 +976,32 @@ export default function ProductsPage(): JSX.Element {
               : Number(payload.deliveryCommissionRate)
         })}
         tableColumnOverrides={{
-          sku: { label: 'Item Code' },
+          name: {
+            label: 'Product',
+            render: (value, row) => (
+              <span className="flex min-w-0 items-center gap-2.5">
+                <span aria-hidden="true" className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-adminMuted text-brandPrimary">
+                  <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24">
+                    <path d="M5 8.5 12 4l7 4.5v7L12 20l-7-4.5v-7Z" stroke="currentColor" strokeLinejoin="round" strokeWidth="1.6" />
+                    <path d="m5.5 8.8 6.5 4 6.5-4M12 12.8V20" stroke="currentColor" strokeWidth="1.6" />
+                  </svg>
+                </span>
+                <span className="min-w-0">
+                  <span className="block truncate font-semibold text-adminText">{String(value ?? 'Unnamed product')}</span>
+                  <span className="block truncate text-[11px] text-adminTextMuted">{String(row.category ?? (row.isLpg ? 'LPG product' : 'General product'))}</span>
+                </span>
+              </span>
+            )
+          },
+          sku: {
+            label: 'Item code',
+            render: (value, row) => (
+              <span>
+                <span className="block font-medium text-adminText">{String(value ?? '—')}</span>
+                <span className="block text-[11px] text-adminTextMuted">{formatDate(typeof row.createdAt === 'string' ? row.createdAt : null)}</span>
+              </span>
+            )
+          },
           category: {
             label: 'Category',
             render: (value) => (value ? String(value) : 'N/A')
@@ -910,12 +1011,21 @@ export default function ProductsPage(): JSX.Element {
             render: (value) => (value ? String(value) : 'N/A')
           },
           isLpg: {
-            label: 'LPG',
-            render: (value) => yesNo(value)
+            label: 'Type',
+            render: (value) => (
+              <span className={`inline-flex rounded-full px-2 py-1 text-[11px] font-semibold ${value ? 'bg-violet-50 text-violet-700 dark:bg-violet-950/40 dark:text-violet-300' : 'bg-slate-100 text-slate-600 dark:bg-slate-800 dark:text-slate-300'}`}>
+                {value ? 'LPG' : 'Non-LPG'}
+              </span>
+            )
           },
           isActive: {
-            label: 'Active',
-            render: (value) => yesNo(value)
+            label: 'Status',
+            render: (value) => (
+              <span className={`inline-flex items-center gap-1.5 rounded-full px-2 py-1 text-[11px] font-semibold ${value ? 'bg-emerald-50 text-emerald-700 dark:bg-emerald-950/40 dark:text-emerald-300' : 'bg-rose-50 text-rose-700 dark:bg-rose-950/40 dark:text-rose-300'}`}>
+                <span aria-hidden="true" className={`h-1.5 w-1.5 rounded-full ${value ? 'bg-emerald-500' : 'bg-rose-500'}`} />
+                {value ? 'Active' : 'Inactive'}
+              </span>
+            )
           },
           cylinderTypeId: {
             label: 'Cylinder Type',

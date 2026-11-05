@@ -25,7 +25,7 @@ function generateShortCode(prefix: string): string {
   return `${normalizedPrefix}${suffix}`.slice(0, 8);
 }
 
-export default function PersonnelRolesPage(): JSX.Element {
+export default function PersonnelRolesPage(): React.JSX.Element {
   const [liveFormState, setLiveFormState] = useState<{
     mode: 'create' | 'edit';
     editingId: string | null;

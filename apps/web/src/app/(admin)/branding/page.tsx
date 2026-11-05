@@ -33,7 +33,7 @@ const defaults: BrandingConfig = {
   updatedAt: ''
 };
 
-export default function BrandingPage(): JSX.Element {
+export default function BrandingPage(): React.JSX.Element {
   const roles = useMemo(() => getSessionRoles(), []);
   const isPlatformOwner = roles.includes('platform_owner');
   const [form, setForm] = useState<BrandingConfig>(defaults);

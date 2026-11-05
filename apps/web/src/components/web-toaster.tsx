@@ -3,7 +3,7 @@
 import { useEffect, useState } from 'react';
 import { Toaster } from 'sileo';
 
-export function WebToaster(): JSX.Element {
+export function WebToaster(): React.JSX.Element {
   const resolveMode = (): 'light' | 'dark' => {
     if (typeof window === 'undefined' || typeof document === 'undefined') {
       return 'light';

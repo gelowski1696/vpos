@@ -25,7 +25,7 @@ function generateShortCode(prefix: string): string {
   return `${normalizedPrefix}${suffix}`.slice(0, 8);
 }
 
-export default function ProductBrandsPage(): JSX.Element {
+export default function ProductBrandsPage(): React.JSX.Element {
   const [reloadSignal, setReloadSignal] = useState(0);
   const importColumns: ImportColumn[] = [
     { key: 'code', label: 'Brand Code', required: true, example: 'VMJAM', aliases: ['brand_code'] },

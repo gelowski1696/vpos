@@ -103,7 +103,7 @@ function statusBadgeClass(status: LendingStatus): string {
   return 'bg-indigo-100 text-indigo-700 dark:bg-indigo-900/30 dark:text-indigo-300';
 }
 
-export default function LendingPage(): JSX.Element {
+export default function LendingPage(): React.JSX.Element {
   const [branches, setBranches] = useState<BranchRecord[]>([]);
   const [rows, setRows] = useState<LendingRecord[]>([]);
   const [branchId, setBranchId] = useState('ALL');

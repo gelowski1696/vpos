@@ -127,7 +127,7 @@ function candidateScopeCell(candidate: CustomerPricingView['productRows'][number
   );
 }
 
-export default function CustomerViewingPage(): JSX.Element {
+export default function CustomerViewingPage(): React.JSX.Element {
   const [loading, setLoading] = useState(true);
   const [enabled, setEnabled] = useState<boolean | null>(null);
   const [error, setError] = useState<string | null>(null);

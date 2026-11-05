@@ -1,6 +1,14 @@
 'use client';
 
+import { motion } from 'framer-motion';
 import { useEffect, useMemo, useState } from 'react';
+import {
+  DistributionDonutChart,
+  MultiSeriesAreaChart,
+  PerformanceBarChart,
+  TrendAreaChart
+} from '../../../components/admin-charts';
+import { buildDailyTotals } from '../../../lib/admin-chart-series';
 import { apiRequest, getSessionRoles } from '../../../lib/api-client';
 
 type PeriodPreset = 'TODAY' | 'WEEK' | 'MONTH' | 'YEAR';
@@ -129,10 +137,6 @@ function qty(v: number): string {
   return (v || 0).toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 2 });
 }
 
-function dayKey(v: string | null | undefined): string {
-  return (v ?? '').slice(0, 10);
-}
-
 function parseDate(v: string | null | undefined): Date | null {
   if (!v) return null;
   const d = new Date(v);
@@ -154,18 +158,25 @@ async function safeRequest<T>(url: string): Promise<{ data: T | null; error: str
   }
 }
 
-function Card(props: { title: string; children: React.ReactNode }): JSX.Element {
+function Card(props: { title: string; children: React.ReactNode }): React.JSX.Element {
   return (
-    <article className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm dark:border-slate-700 dark:bg-slate-800/70">
+    <motion.article
+      className="rounded-xl border border-adminBorder bg-adminSurface p-4"
+      initial={{ opacity: 0, y: 8 }}
+      transition={{ duration: 0.2 }}
+      viewport={{ amount: 0.12, once: true }}
+      whileInView={{ opacity: 1, y: 0 }}
+      whileHover={{ y: -2 }}
+    >
       <div className="mb-2 flex items-center justify-between gap-2">
         <h2 className="text-sm font-semibold text-slate-900 dark:text-slate-100">{props.title}</h2>
       </div>
       {props.children}
-    </article>
+    </motion.article>
   );
 }
 
-function AlertLevelPill({ level }: { level: DashboardAlert['level'] }): JSX.Element {
+function AlertLevelPill({ level }: { level: DashboardAlert['level'] }): React.JSX.Element {
   const tone =
     level === 'CRITICAL'
       ? 'bg-rose-500/10 text-rose-700 ring-rose-200 dark:bg-rose-500/15 dark:text-rose-200 dark:ring-rose-900/50'
@@ -180,7 +191,7 @@ function AlertLevelPill({ level }: { level: DashboardAlert['level'] }): JSX.Elem
   );
 }
 
-function AlertIcon({ alertId, level }: { alertId: string; level: DashboardAlert['level'] }): JSX.Element {
+function AlertIcon({ alertId, level }: { alertId: string; level: DashboardAlert['level'] }): React.JSX.Element {
   const palette =
     level === 'CRITICAL'
       ? 'bg-rose-100 text-rose-700 ring-rose-200 dark:bg-rose-500/15 dark:text-rose-200 dark:ring-rose-900/50'
@@ -206,7 +217,7 @@ function AlertIcon({ alertId, level }: { alertId: string; level: DashboardAlert[
   );
 }
 
-export default function DashboardPage(): JSX.Element {
+export default function DashboardPage(): React.JSX.Element {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [preset, setPreset] = useState<PeriodPreset>('TODAY');
@@ -376,14 +387,14 @@ export default function DashboardPage(): JSX.Element {
     [sales]
   );
 
-  const salesTrend = useMemo(() => {
-    const map = new Map<string, number>();
-    for (const row of activeSales) {
-      const key = dayKey(row.posted_at ?? row.created_at);
-      map.set(key, (map.get(key) ?? 0) + row.total_amount);
-    }
-    return Array.from(map.entries()).sort((a, b) => a[0].localeCompare(b[0])).slice(-14).map(([date, amount]) => ({ date, amount }));
-  }, [activeSales]);
+  const salesTrend = useMemo(
+    () => buildDailyTotals(activeSales, {
+      date: (row) => row.posted_at ?? row.created_at,
+      value: (row) => row.total_amount,
+      limit: 14
+    }),
+    [activeSales]
+  );
 
   const dueSales = useMemo(() => {
     return activeSales
@@ -570,25 +581,13 @@ export default function DashboardPage(): JSX.Element {
     return cards;
   }, [alerts]);
 
-  const trendMax = useMemo(() => Math.max(...salesTrend.map((row) => row.amount), 1), [salesTrend]);
-  const branchRevenueMax = useMemo(() => Math.max(...branchCompare.map((row) => row.revenue), 1), [branchCompare]);
-  const branchMarginMax = useMemo(() => Math.max(...branchCompare.map((row) => row.gross_profit), 1), [branchCompare]);
-  const dueCustomerMax = useMemo(() => Math.max(...topDueCustomers.map((row) => row.outstandingBalance ?? 0), 1), [topDueCustomers]);
-  const collectionByDay = useMemo(() => {
-    const map = new Map<string, number>();
-    for (const row of payments) {
-      const key = dayKey(row.posted_at);
-      map.set(key, (map.get(key) ?? 0) + row.amount);
-    }
-    return Array.from(map.entries())
-      .sort((a, b) => a[0].localeCompare(b[0]))
-      .slice(-10)
-      .map(([date, amount]) => ({ date, amount }));
-  }, [payments]);
-  const collectionMax = useMemo(() => Math.max(...collectionByDay.map((row) => row.amount), 1), [collectionByDay]);
-  const kiloSeriesMax = useMemo(
-    () => Math.max(...(kiloOverview?.series ?? []).map((row) => row.total_kg), 1),
-    [kiloOverview?.series]
+  const collectionByDay = useMemo(
+    () => buildDailyTotals(payments, {
+      date: (row) => row.posted_at,
+      value: (row) => row.amount,
+      limit: 10
+    }),
+    [payments]
   );
 
   const roleLabel = roleView === 'OWNER' ? 'Owner View' : roleView === 'ADMIN' ? 'Admin View' : 'Cashier View';
@@ -599,7 +598,7 @@ export default function DashboardPage(): JSX.Element {
         <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
           <div>
             <h1 className="text-2xl font-bold text-slate-900 dark:text-slate-100">Dashboard Overview & Insights</h1>
-            <p className="mt-1 text-sm text-slate-600 dark:text-slate-300">Task B2 dashboard widgets with operational drill-down actions.</p>
+            <p className="mt-1 text-sm text-slate-600 dark:text-slate-300">Monitor sales, margins, inventory, and operational alerts.</p>
           </div>
           <div className="flex items-center gap-2">
             <span className="rounded-full border border-slate-300 bg-white px-3 py-1 text-xs font-semibold dark:border-slate-600 dark:bg-slate-900">{roleLabel}</span>
@@ -690,81 +689,40 @@ export default function DashboardPage(): JSX.Element {
                 { label: 'Customers w/ Due', value: String(topDueCustomers.length), hint: `${dueSales.filter((s) => s.age > 30).length} overdue` },
                 { label: 'Shift Variance', value: money(shiftStats.variance), hint: `Expected ${money(shiftStats.expected)} / Counted ${money(shiftStats.counted)}` }
               ].map((k) => (
-                <article key={k.label} className="rounded-xl border border-slate-200 bg-white p-4 text-left shadow-sm dark:border-slate-700 dark:bg-slate-800/70">
+                <motion.article
+                  className="rounded-xl border border-adminBorder bg-adminSurface p-4 text-left"
+                  initial={{ opacity: 0, y: 8 }}
+                  key={k.label}
+                  transition={{ duration: 0.18 }}
+                  viewport={{ once: true }}
+                  whileHover={{ y: -2 }}
+                  whileInView={{ opacity: 1, y: 0 }}
+                >
                   <p className="text-xs uppercase tracking-wide text-slate-500">{k.label}</p>
                   <p className="mt-2 text-lg font-bold">{k.value}</p>
                   <p className="mt-1 text-xs text-slate-500">{k.hint}</p>
-                </article>
+                </motion.article>
               ))}
             </section>
           ) : null}
 
           <section className="grid gap-4 xl:grid-cols-2">
             {canView('trend') ? (
-              <Card title="Sales Trend (Line Chart)">
-                {salesTrend.length > 1 ? (
-                  <div className="space-y-2">
-                    <div className="h-44 rounded-xl border border-slate-200 bg-slate-50 p-2 dark:border-slate-700 dark:bg-slate-900/50">
-                      <svg className="h-full w-full" preserveAspectRatio="none" viewBox="0 0 100 100">
-                        <polyline
-                          fill="none"
-                          points={salesTrend.map((r, i) => `${(i / Math.max(salesTrend.length - 1, 1)) * 100},${100 - (r.amount / trendMax) * 100}`).join(' ')}
-                          stroke="#0ea5e9"
-                          strokeLinecap="round"
-                          strokeLinejoin="round"
-                          strokeWidth="2.5"
-                        />
-                      </svg>
-                    </div>
-                    <div className="grid grid-cols-2 text-xs text-slate-500">
-                      <span>{salesTrend[0]?.date}</span>
-                      <span className="text-right">{salesTrend[salesTrend.length - 1]?.date}</span>
-                    </div>
-                  </div>
-                ) : salesTrend.length === 1 ? (
-                  <div className="space-y-2">
-                    <div className="h-44 rounded-xl border border-slate-200 bg-slate-50 p-3 dark:border-slate-700 dark:bg-slate-900/50">
-                      <div className="flex h-full items-end justify-center">
-                        <div className="relative w-16 rounded-t-lg bg-cyan-500/90" style={{ height: '75%' }}>
-                          <span className="absolute -top-6 left-1/2 -translate-x-1/2 whitespace-nowrap text-xs font-semibold text-slate-700 dark:text-slate-200">
-                            {money(salesTrend[0]?.amount ?? 0)}
-                          </span>
-                        </div>
-                      </div>
-                    </div>
-                    <p className="text-center text-xs text-slate-500">{salesTrend[0]?.date}</p>
-                  </div>
-                ) : (
-                  <p className="text-xs text-slate-500">No sales data for selected scope.</p>
-                )}
+              <Card title="Sales Trend">
+                <TrendAreaChart data={salesTrend} label="Net sales" valueFormatter={money} />
               </Card>
             ) : null}
 
             {canView('branch') ? (
-              <Card title="Branch Comparison (Bar Charts)">
-                <div className="space-y-2 text-xs">
-                  {branchCompare.map((b) => (
-                    <div key={b.branch_id} className="rounded-lg border border-slate-200 p-2 dark:border-slate-700">
-                      <p className="mb-1 font-semibold">{b.branch_name}</p>
-                      <div className="grid grid-cols-[70px,1fr,90px] items-center gap-2">
-                        <span>Sales</span>
-                        <div className="h-2 rounded-full bg-slate-100 dark:bg-slate-700"><div className="h-2 rounded-full bg-cyan-500" style={{ width: `${Math.max(8, (b.revenue / branchRevenueMax) * 100)}%` }} /></div>
-                        <span className="text-right">{money(b.revenue)}</span>
-                      </div>
-                      <div className="mt-1 grid grid-cols-[70px,1fr,90px] items-center gap-2">
-                        <span>Margin</span>
-                        <div className="h-2 rounded-full bg-slate-100 dark:bg-slate-700"><div className="h-2 rounded-full bg-emerald-500" style={{ width: `${Math.max(8, (b.gross_profit / branchMarginMax) * 100)}%` }} /></div>
-                        <span className="text-right">{money(b.gross_profit)}</span>
-                      </div>
-                      <div className="mt-1 grid grid-cols-[70px,1fr,90px] items-center gap-2">
-                        <span>Stock</span>
-                        <div className="h-2 rounded-full bg-slate-100 dark:bg-slate-700"><div className="h-2 rounded-full bg-violet-500" style={{ width: `${Math.max(8, b.stock_health)}%` }} /></div>
-                        <span className="text-right">{pct(b.stock_health)}</span>
-                      </div>
-                    </div>
-                  ))}
-                  {branchCompare.length === 0 ? <p className="text-slate-500">No branch rows.</p> : null}
-                </div>
+              <Card title="Branch Performance">
+                <PerformanceBarChart
+                  data={branchCompare.map((branch) => ({
+                    name: branch.branch_name,
+                    primary: branch.revenue,
+                    secondary: branch.gross_profit
+                  }))}
+                  valueFormatter={money}
+                />
               </Card>
             ) : null}
 
@@ -790,30 +748,16 @@ export default function DashboardPage(): JSX.Element {
                         <p className="text-sm font-semibold">{qty(kiloOverview.summary.non_lpg_kg)}</p>
                       </div>
                     </div>
-                    <div className="h-44 rounded-xl border border-slate-200 bg-slate-50 p-2 dark:border-slate-700 dark:bg-slate-900/50">
-                      <svg className="h-full w-full" preserveAspectRatio="none" viewBox="0 0 100 100">
-                        <polyline
-                          fill="none"
-                          points={kiloOverview.series.map((row, index) => `${(index / Math.max(kiloOverview.series.length - 1, 1)) * 100},${100 - (row.total_kg / kiloSeriesMax) * 100}`).join(' ')}
-                          stroke="#0284c7"
-                          strokeLinecap="round"
-                          strokeLinejoin="round"
-                          strokeWidth="2.5"
-                        />
-                        <polyline
-                          fill="none"
-                          points={kiloOverview.series.map((row, index) => `${(index / Math.max(kiloOverview.series.length - 1, 1)) * 100},${100 - (row.lpg_kg / kiloSeriesMax) * 100}`).join(' ')}
-                          stroke="#0f766e"
-                          strokeLinecap="round"
-                          strokeLinejoin="round"
-                          strokeWidth="1.8"
-                        />
-                      </svg>
-                    </div>
-                    <div className="grid grid-cols-2 text-xs text-slate-500">
-                      <span>{kiloOverview.series[0]?.date}</span>
-                      <span className="text-right">{kiloOverview.series[kiloOverview.series.length - 1]?.date}</span>
-                    </div>
+                    <MultiSeriesAreaChart
+                      data={kiloOverview.series.map((row) => ({
+                        date: row.date,
+                        primary: row.total_kg,
+                        secondary: row.lpg_kg
+                      }))}
+                      primaryLabel="Total KG"
+                      secondaryLabel="LPG KG"
+                      valueFormatter={qty}
+                    />
                     <div className="space-y-1 text-xs">
                       <p className="font-semibold">Top items by kilo</p>
                       {kiloOverview.by_item.slice(0, 5).map((row) => (
@@ -833,17 +777,18 @@ export default function DashboardPage(): JSX.Element {
 
           <section className="grid gap-4 xl:grid-cols-3">
             {canView('cylinder') ? (
-              <Card title="Cylinder Operations (Donut)">
-                <div className="flex items-center justify-center py-2">
-                  <div className="relative h-32 w-32 rounded-full" style={{ background: `conic-gradient(#14b8a6 0 ${Math.min(100, cylinderOps.ratio)}%, #e2e8f0 ${Math.min(100, cylinderOps.ratio)}% 100%)` }}>
-                    <div className="absolute inset-4 rounded-full bg-white dark:bg-slate-800" />
-                    <div className="absolute inset-0 grid place-items-center text-center">
-                      <p className="text-sm font-bold">{pct(cylinderOps.ratio)}</p>
-                      <p className="text-[10px] text-slate-500">Refill/Sale</p>
-                    </div>
-                  </div>
-                </div>
+              <Card title="Cylinder Operations">
+                <DistributionDonutChart
+                  data={[
+                    { name: 'Refill', value: cylinderOps.refill, color: '#7047eb' },
+                    { name: 'Sales', value: cylinderOps.sale, color: '#10b981' },
+                    { name: 'Damaged', value: cylinderOps.damaged, color: '#f59e0b' },
+                    { name: 'Disposed', value: cylinderOps.disposed, color: '#f43f5e' },
+                    { name: 'Lost', value: cylinderOps.lost, color: '#64748b' }
+                  ]}
+                />
                 <div className="text-xs space-y-1">
+                  <p>Refill-to-sale ratio: <span className="font-semibold">{pct(cylinderOps.ratio)}</span></p>
                   <p>Refill movements: <span className="font-semibold">{cylinderOps.refill}</span></p>
                   <p>FULL-&gt;EMPTY conversion: <span className="font-semibold">{qty(cylinderOps.conversion)}</span></p>
                   <p>Damaged: <span className="font-semibold">{cylinderOps.damaged}</span></p>
@@ -885,13 +830,7 @@ export default function DashboardPage(): JSX.Element {
                 </div>
                 <div className="mt-3 space-y-1 text-xs">
                   <p className="font-semibold">Collection Trend</p>
-                  {collectionByDay.map((row) => (
-                    <div key={row.date} className="grid grid-cols-[85px,1fr,100px] items-center gap-2">
-                      <span>{row.date}</span>
-                      <div className="h-2 rounded-full bg-slate-100 dark:bg-slate-700"><div className="h-2 rounded-full bg-indigo-500" style={{ width: `${Math.max(8, (row.amount / collectionMax) * 100)}%` }} /></div>
-                      <span className="text-right">{money(row.amount)}</span>
-                    </div>
-                  ))}
+                  <TrendAreaChart data={collectionByDay} label="Collections" valueFormatter={money} />
                 </div>
               </Card>
             ) : null}

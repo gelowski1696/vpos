@@ -53,7 +53,7 @@ export function AdminWalkthrough({
   steps: AdminTourStep[];
   onClose: () => void;
   onComplete: () => void;
-}): JSX.Element | null {
+}): React.JSX.Element | null {
   const [currentStepIndex, setCurrentStepIndex] = useState(0);
   const [targetRect, setTargetRect] = useState<Rect | null>(null);
   const [viewport, setViewport] = useState({ width: 0, height: 0 });

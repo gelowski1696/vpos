@@ -59,7 +59,7 @@ function branchIdFromMetadata(metadata: unknown): string | null {
   return null;
 }
 
-export default function AuditLogsPage(): JSX.Element {
+export default function AuditLogsPage(): React.JSX.Element {
   const sessionRoles = useMemo(() => getSessionRoles(), []);
   const sessionCompanyId = useMemo(() => getSessionCompanyId(), []);
   const isPlatformOwner = sessionRoles.includes('platform_owner');

@@ -40,7 +40,7 @@ export function PosSettingsPanel({
   onNoteChange,
   onSave,
   onReset
-}: Props): JSX.Element {
+}: Props): React.JSX.Element {
   return (
     <section className="space-y-4">
       <div className="flex flex-wrap items-start justify-between gap-3 rounded-2xl border border-slate-200 bg-white p-5 shadow-sm dark:border-slate-800 dark:bg-slate-900">

@@ -26,7 +26,7 @@ export function TenantOperationalResetDialog({
   onConfirm,
   onConfirmationChange,
   onNotesChange
-}: TenantOperationalResetDialogProps): JSX.Element | null {
+}: TenantOperationalResetDialogProps): React.JSX.Element | null {
   if (!open) {
     return null;
   }

@@ -82,7 +82,7 @@ function extractRoleList(value: unknown): string[] {
     .filter(Boolean);
 }
 
-export default function UsersPage(): JSX.Element {
+export default function UsersPage(): React.JSX.Element {
   const sessionRoles = useMemo(() => getSessionRoles(), []);
   const sessionCompanyId = useMemo(() => getSessionCompanyId(), []);
   const isPlatformOwner = sessionRoles.includes('platform_owner');

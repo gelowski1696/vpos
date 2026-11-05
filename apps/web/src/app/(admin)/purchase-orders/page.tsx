@@ -172,7 +172,7 @@ async function fileToBase64(file: File): Promise<string> {
   return btoa(binary);
 }
 
-export default function PurchaseOrdersPage(): JSX.Element {
+export default function PurchaseOrdersPage(): React.JSX.Element {
   const webReadOnly = true;
   const [featureEnabled, setFeatureEnabled] = useState(false);
   const [loading, setLoading] = useState(true);

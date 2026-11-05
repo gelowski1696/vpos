@@ -12,7 +12,7 @@ import {
   saveAuthSession
 } from '../../../lib/api-client';
 
-export default function LoginPage(): JSX.Element {
+export default function LoginPage(): React.JSX.Element {
   const router = useRouter();
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');

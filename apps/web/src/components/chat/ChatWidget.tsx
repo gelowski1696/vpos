@@ -25,7 +25,7 @@ function makeId(): string {
   return Math.random().toString(36).slice(2);
 }
 
-export function ChatWidget(): JSX.Element | null {
+export function ChatWidget(): React.JSX.Element | null {
   const [open, setOpen] = useState(false);
   const [input, setInput] = useState('');
   const [messages, setMessages] = useState<ChatMessage[]>([]);

@@ -181,7 +181,7 @@ function emptyRewardForm(): RewardFormState {
   };
 }
 
-export default function CustomerCardsPage(): JSX.Element {
+export default function CustomerCardsPage(): React.JSX.Element {
   const sessionRoles = useMemo(() => getSessionRoles().map((role) => role.toLowerCase()), []);
   const canManageCards = useMemo(
     () => sessionRoles.includes('admin') || sessionRoles.includes('owner') || sessionRoles.includes('platform_owner'),

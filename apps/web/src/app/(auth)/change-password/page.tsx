@@ -11,7 +11,7 @@ import {
   getSessionRequiresPasswordChange
 } from '../../../lib/api-client';
 
-export default function ChangePasswordPage(): JSX.Element {
+export default function ChangePasswordPage(): React.JSX.Element {
   const router = useRouter();
   const [currentPassword, setCurrentPassword] = useState('');
   const [newPassword, setNewPassword] = useState('');

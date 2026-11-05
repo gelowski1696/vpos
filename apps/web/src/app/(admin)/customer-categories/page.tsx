@@ -66,7 +66,7 @@ function formatDate(value: string): string {
   return Number.isNaN(date.getTime()) ? value : date.toLocaleString();
 }
 
-export default function CustomerCategoriesPage(): JSX.Element {
+export default function CustomerCategoriesPage(): React.JSX.Element {
   const [categories, setCategories] = useState<CustomerCategoryRecord[]>([]);
   const [customers, setCustomers] = useState<CustomerRecord[]>([]);
   const [loading, setLoading] = useState(true);

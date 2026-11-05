@@ -77,7 +77,7 @@ function transferHref(params: {
   return query.toString() ? `/transfer-list?${query.toString()}` : '/transfer-list';
 }
 
-export default function SyncReviewsPage(): JSX.Element {
+export default function SyncReviewsPage(): React.JSX.Element {
   const [rows, setRows] = useState<SyncReviewRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);

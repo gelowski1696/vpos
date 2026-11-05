@@ -36,7 +36,7 @@ type LocationRecord = {
   isActive: boolean;
 };
 
-export default function SuppliersPage(): JSX.Element {
+export default function SuppliersPage(): React.JSX.Element {
   const [reloadSignal, setReloadSignal] = useState(0);
   const [locations, setLocations] = useState<LocationRecord[]>([]);
   const [liveFormState, setLiveFormState] = useState<{

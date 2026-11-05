@@ -35,7 +35,7 @@ function formatDateTime(value: string): string {
   return parsed.toLocaleString();
 }
 
-export default function DatabaseMaintenancePage(): JSX.Element {
+export default function DatabaseMaintenancePage(): React.JSX.Element {
   const [backups, setBackups] = useState<OnlineBackupRow[]>([]);
   const [selectedBackupId, setSelectedBackupId] = useState('');
   const [backupLabel, setBackupLabel] = useState('');

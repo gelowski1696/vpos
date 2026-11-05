@@ -34,7 +34,7 @@ function yesNo(value: boolean): string {
   return value ? 'Yes' : 'No';
 }
 
-export default function CostingPage(): JSX.Element {
+export default function CostingPage(): React.JSX.Element {
   const [config, setConfig] = useState<CostingConfigRecord>(DEFAULT_CONFIG);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);

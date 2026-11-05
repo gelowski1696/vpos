@@ -82,7 +82,7 @@ function qty(value: number): string {
   return value.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 4 });
 }
 
-export default function InventoryOpeningPage(): JSX.Element {
+export default function InventoryOpeningPage(): React.JSX.Element {
   const [roles, setRoles] = useState<string[]>([]);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);

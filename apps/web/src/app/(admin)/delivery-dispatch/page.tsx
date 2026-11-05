@@ -110,7 +110,7 @@ function deliveryPersonnelLabel(
   return `Unresolved rider (${shortRef(entry.user_id)})`;
 }
 
-export default function DeliveryDispatchPage(): JSX.Element {
+export default function DeliveryDispatchPage(): React.JSX.Element {
   const webReadOnly = true;
   const searchParams = useSearchParams();
   const saleFromQuery = searchParams.get('sale_id')?.trim() ?? '';

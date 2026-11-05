@@ -26,7 +26,7 @@ function generateShortCode(prefix: string): string {
   return `${normalizedPrefix}${suffix}`.slice(0, 8);
 }
 
-export default function CylinderTypesPage(): JSX.Element {
+export default function CylinderTypesPage(): React.JSX.Element {
   const [reloadSignal, setReloadSignal] = useState(0);
   const [liveFormState, setLiveFormState] = useState<{
     mode: 'create' | 'edit';

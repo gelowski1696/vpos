@@ -240,7 +240,7 @@ function joinUniquePersonnelLabels(values: Array<string | null | undefined>): st
   return labels.length > 0 ? labels.join(', ') : 'N/A';
 }
 
-export default function SalesListPage(): JSX.Element {
+export default function SalesListPage(): React.JSX.Element {
   const router = useRouter();
   const pathname = usePathname();
   const searchParams = useSearchParams();

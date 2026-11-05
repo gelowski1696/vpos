@@ -24,7 +24,7 @@ export const metadata: Metadata = {
   }
 };
 
-export default function HomePage(): JSX.Element {
+export default function HomePage(): React.JSX.Element {
   const softwareStructuredData = {
     '@context': 'https://schema.org',
     '@type': 'SoftwareApplication',

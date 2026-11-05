@@ -141,7 +141,7 @@ function InventoryBreakdownField({
   title,
   subtitle,
   titleClassName
-}: InventoryBreakdownFieldProps): JSX.Element {
+}: InventoryBreakdownFieldProps): React.JSX.Element {
   return (
     <div className="min-w-0">
       <div className="text-[0.64rem] font-semibold uppercase tracking-[0.08em] text-slate-500 xl:hidden dark:text-slate-400">
@@ -163,7 +163,7 @@ function InventoryBreakdownField({
   );
 }
 
-export function InventoryShiftItemBreakdown({ row }: InventoryShiftItemBreakdownProps): JSX.Element {
+export function InventoryShiftItemBreakdown({ row }: InventoryShiftItemBreakdownProps): React.JSX.Element {
   const inventoryReport = row.inventory_report;
   const pagination = useTablePagination(inventoryReport?.rows ?? [], {
     initialPageSize: 6,

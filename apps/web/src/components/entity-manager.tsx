@@ -2,8 +2,16 @@
 
 import { type ReactNode, useEffect, useMemo, useRef, useState } from 'react';
 import { apiRequest } from '../lib/api-client';
+import {
+  buildCsv,
+  reconcileSelection,
+  togglePageSelection,
+  toggleRowSelection,
+  type CsvColumn
+} from '../lib/admin-table-state';
 import { useTablePagination } from '../lib/table-pagination';
 import { toastError, toastSuccess } from '../lib/web-toast';
+import { AdminModalMotion } from './admin-motion';
 import { TablePaginationControls } from './table-pagination-controls';
 
 export type FieldType = 'text' | 'number' | 'boolean' | 'textarea' | 'date' | 'select' | 'password';
@@ -35,11 +43,43 @@ export type EntityRowAction = {
   showWhenReadOnly?: boolean;
 };
 
+export type EntitySummaryItem = {
+  label: string;
+  value: ReactNode;
+  detail?: string;
+  tone?: 'default' | 'positive' | 'warning';
+};
+
+export type EntityStatusFilter = {
+  key: string;
+  label: string;
+  matches?: (row: Record<string, unknown>) => boolean;
+};
+
+export type EntityFilter = {
+  key: string;
+  label: string;
+  options: SelectOption[];
+  value: (row: Record<string, unknown>) => string;
+};
+
+export type EntitySelectionConfig = {
+  fileName: string;
+  columns: Array<CsvColumn<Record<string, unknown>>>;
+};
+
 type EntityManagerProps = {
   title: string;
+  description?: string;
+  primaryActionLabel?: string;
   endpoint: string;
   reloadSignal?: number;
   toolbarActions?: ReactNode;
+  summary?: EntitySummaryItem[];
+  statusFilters?: EntityStatusFilter[];
+  filters?: EntityFilter[];
+  selection?: EntitySelectionConfig;
+  onItemsChange?: (items: Array<Record<string, unknown>>) => void;
   fields: EntityField[];
   rowActions?: EntityRowAction[];
   defaultValues?: Record<string, unknown>;
@@ -128,9 +168,16 @@ function scalarFromValue(value: unknown): string {
 
 export function EntityManager({
   title,
+  description,
+  primaryActionLabel,
   endpoint,
   reloadSignal = 0,
   toolbarActions,
+  summary = [],
+  statusFilters = [],
+  filters = [],
+  selection,
+  onItemsChange,
   fields,
   rowActions = [],
   defaultValues = {},
@@ -149,7 +196,7 @@ export function EntityManager({
   tableColumnOverrides = {},
   deepLinkEditId = null,
   onDeepLinkHandled
-}: EntityManagerProps): JSX.Element {
+}: EntityManagerProps): React.JSX.Element {
   const [items, setItems] = useState<Array<Record<string, unknown>>>([]);
   const [form, setForm] = useState<Record<string, unknown>>({ ...defaultValues });
   const [editingId, setEditingId] = useState<string | null>(null);
@@ -163,10 +210,16 @@ export function EntityManager({
   const [savingAction, setSavingAction] = useState<'create' | 'update' | 'delete' | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [searchTerm, setSearchTerm] = useState('');
+  const [statusFilterKey, setStatusFilterKey] = useState(statusFilters[0]?.key ?? 'all');
+  const [filterValues, setFilterValues] = useState<Record<string, string>>({});
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(() => new Set());
   const [sortState, setSortState] = useState<{ column: string; direction: 'asc' | 'desc' } | null>(
     null
   );
   const handledDeepLinkRef = useRef<string | null>(null);
+  const selectPageRef = useRef<HTMLInputElement | null>(null);
+  const activeDialogRef = useRef<HTMLElement | null>(null);
+  const dialogReturnFocusRef = useRef<HTMLElement | null>(null);
   const onFormStateChangeRef = useRef(onFormStateChange);
   const tourSlug = useMemo(
     () =>
@@ -194,6 +247,7 @@ export function EntityManager({
     try {
       const data = await apiRequest<Array<Record<string, unknown>>>(endpoint);
       setItems(data);
+      onItemsChange?.(data);
     } catch (loadError) {
       const message = loadError instanceof Error ? loadError.message : 'Failed to load records';
       setError(message);
@@ -242,6 +296,25 @@ export function EntityManager({
       editingId
     });
   }, [dialogMode, editingId, form]);
+
+  useEffect(() => {
+    if (statusFilters.length === 0) {
+      setStatusFilterKey('all');
+      return;
+    }
+    if (!statusFilters.some((filter) => filter.key === statusFilterKey)) {
+      setStatusFilterKey(statusFilters[0].key);
+    }
+  }, [statusFilterKey, statusFilters]);
+
+  useEffect(() => {
+    setSelectedIds((current) =>
+      reconcileSelection(
+        current,
+        items.map((item) => String(item.id ?? ''))
+      )
+    );
+  }, [items]);
 
   const sortableColumnSet = useMemo(() => {
     const sortableColumns = new Set<string>();
@@ -315,12 +388,24 @@ export function EntityManager({
 
   const filteredItems = useMemo(() => {
     const term = searchTerm.trim().toLowerCase();
-    const filtered =
+    let filtered =
       !term
         ? items
         : items.filter((item) =>
             columns.some((column) => stringifyValue(item[column]).toLowerCase().includes(term))
           );
+
+    const activeStatusFilter = statusFilters.find((filter) => filter.key === statusFilterKey);
+    if (activeStatusFilter?.matches) {
+      filtered = filtered.filter(activeStatusFilter.matches);
+    }
+
+    for (const filter of filters) {
+      const selectedValue = filterValues[filter.key];
+      if (selectedValue) {
+        filtered = filtered.filter((item) => filter.value(item) === selectedValue);
+      }
+    }
 
     if (!sortState || !sortableColumnSet.has(sortState.column)) {
       return filtered;
@@ -342,15 +427,132 @@ export function EntityManager({
     });
 
     return decorated.map((entry) => entry.item);
-  }, [columns, items, searchTerm, sortState, sortableColumnSet, tableColumnOverrides]);
+  }, [columns, filterValues, filters, items, searchTerm, sortState, sortableColumnSet, statusFilterKey, statusFilters, tableColumnOverrides]);
 
   const paginatedItems = useTablePagination(filteredItems, {
     initialPageSize: 25,
     pageSizeOptions: [10, 25, 50, 100],
-    resetKey: `${searchTerm}|${sortState?.column ?? ''}|${sortState?.direction ?? ''}|${
+    resetKey: `${searchTerm}|${statusFilterKey}|${JSON.stringify(filterValues)}|${sortState?.column ?? ''}|${sortState?.direction ?? ''}|${
       filteredItems.length
     }`
   });
+
+  const pageIds = useMemo(
+    () => paginatedItems.pageRows.map((item) => String(item.id ?? '')).filter(Boolean),
+    [paginatedItems.pageRows]
+  );
+  const selectedRows = useMemo(
+    () => items.filter((item) => selectedIds.has(String(item.id ?? ''))),
+    [items, selectedIds]
+  );
+  const allPageRowsSelected = pageIds.length > 0 && pageIds.every((id) => selectedIds.has(id));
+  const somePageRowsSelected = pageIds.some((id) => selectedIds.has(id));
+  const selectionQueryKey = `${searchTerm}|${statusFilterKey}|${JSON.stringify(filterValues)}`;
+
+  useEffect(() => {
+    setSelectedIds(new Set());
+  }, [selectionQueryKey]);
+
+  useEffect(() => {
+    if (selectPageRef.current) {
+      selectPageRef.current.indeterminate = somePageRowsSelected && !allPageRowsSelected;
+    }
+  }, [allPageRowsSelected, somePageRowsSelected]);
+
+  const activeDialog = saving
+    ? 'saving'
+    : deleteConfirmOpen
+      ? 'delete'
+      : confirmOpen
+        ? 'confirm'
+        : dialogMode
+          ? 'editor'
+          : null;
+
+  useEffect(() => {
+    if (!activeDialog) {
+      dialogReturnFocusRef.current?.focus();
+      dialogReturnFocusRef.current = null;
+      return;
+    }
+
+    if (!dialogReturnFocusRef.current && document.activeElement instanceof HTMLElement) {
+      dialogReturnFocusRef.current = document.activeElement;
+    }
+
+    const dialog = activeDialogRef.current;
+    const focusableSelector =
+      'button:not([disabled]), a[href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
+    const focusable = dialog ? Array.from(dialog.querySelectorAll<HTMLElement>(focusableSelector)) : [];
+    (focusable[0] ?? dialog)?.focus();
+
+    function handleDialogKeyDown(event: KeyboardEvent): void {
+      if (event.key === 'Escape' && activeDialog !== 'saving') {
+        event.preventDefault();
+        if (activeDialog === 'delete') {
+          setDeleteConfirmOpen(false);
+          setDeleteTarget(null);
+        } else if (activeDialog === 'confirm') {
+          setConfirmOpen(false);
+        } else {
+          closeDialog();
+        }
+        return;
+      }
+
+      if (event.key !== 'Tab' || !dialog) {
+        return;
+      }
+      const currentFocusable = Array.from(dialog.querySelectorAll<HTMLElement>(focusableSelector));
+      if (currentFocusable.length === 0) {
+        event.preventDefault();
+        dialog.focus();
+        return;
+      }
+      const first = currentFocusable[0];
+      const last = currentFocusable[currentFocusable.length - 1];
+      if (event.shiftKey && document.activeElement === first) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault();
+        first.focus();
+      }
+    }
+
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+    document.addEventListener('keydown', handleDialogKeyDown);
+    return () => {
+      document.body.style.overflow = previousOverflow;
+      document.removeEventListener('keydown', handleDialogKeyDown);
+    };
+  }, [activeDialog]);
+
+  function downloadSelection(): void {
+    if (!selection || selectedRows.length === 0) {
+      return;
+    }
+    const csv = buildCsv(selectedRows, selection.columns);
+    const blob = new Blob([`\uFEFF${csv}`], { type: 'text/csv;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = selection.fileName;
+    link.click();
+    URL.revokeObjectURL(url);
+  }
+
+  const hasActiveFilters =
+    searchTerm.trim().length > 0 ||
+    Boolean(statusFilters.find((filter) => filter.key === statusFilterKey)?.matches) ||
+    Object.values(filterValues).some(Boolean);
+
+  function clearFilters(): void {
+    setSearchTerm('');
+    setStatusFilterKey(statusFilters[0]?.key ?? 'all');
+    setFilterValues({});
+  }
 
   function toggleSort(column: string): void {
     if (!sortableColumnSet.has(column)) {
@@ -589,55 +791,149 @@ export function EntityManager({
           : 'Processing request...';
 
   return (
-    <div data-tour={`${tourPrefix}-root`}>
-      <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
-        <div>
-          <h1 className="text-2xl font-bold text-brandPrimary">{title}</h1>
-          <p className="text-sm text-slate-500 dark:text-slate-400">Manage records with modal create/edit workflow.</p>
+    <div data-tour={`${tourPrefix}-root`} className={selectedIds.size > 0 ? 'pb-16' : undefined}>
+      <div className="mb-4 flex flex-wrap items-start justify-between gap-3">
+        <div className="min-w-0">
+          <h1 className="text-2xl font-semibold text-adminText">{title}</h1>
+          <p className="mt-1 text-sm text-adminTextMuted">
+            {description ?? `Manage ${title.toLowerCase()} records.`}
+          </p>
         </div>
-        <div className="flex items-center gap-2">
-          <input
-            data-tour={`${tourPrefix}-search`}
-            className="w-52 rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 dark:border-slate-600 dark:bg-slate-900 dark:text-slate-100"
-            onChange={(event) => setSearchTerm(event.target.value)}
-            placeholder="Search records..."
-            value={searchTerm}
-          />
+        <div className="flex flex-wrap items-center justify-end gap-2">
           {toolbarActions}
           {!readOnly ? (
             <button
               data-tour={`${tourPrefix}-add`}
-              className="rounded-lg bg-brandPrimary px-3 py-2 text-sm font-semibold text-white hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-60"
+              className="inline-flex min-h-9 items-center justify-center rounded-lg bg-brandPrimary px-3.5 py-2 text-sm font-semibold text-white shadow-[0_1px_2px_rgba(45,30,90,0.18)] hover:brightness-105 disabled:cursor-not-allowed disabled:opacity-60"
               disabled={saving}
               onClick={openCreate}
               type="button"
             >
-              Add New
+              <span aria-hidden="true" className="mr-1.5 text-base leading-none">+</span>
+              {primaryActionLabel ?? `Add ${title.replace(/s$/i, '')}`}
             </button>
           ) : null}
         </div>
       </div>
 
-      {error ? <p className="mb-3 text-sm text-rose-700">{error}</p> : null}
+      {summary.length > 0 ? (
+        <section aria-label={`${title} summary`} className="mb-4 grid gap-2 sm:grid-cols-2 xl:grid-cols-4">
+          {summary.map((item) => (
+            <article className="rounded-xl border border-adminBorder bg-adminMuted px-3.5 py-3" key={item.label}>
+              <p className="text-[11px] font-semibold uppercase tracking-[0.08em] text-adminTextMuted">{item.label}</p>
+              <p className={`mt-1 text-xl font-semibold tabular-nums ${item.tone === 'positive' ? 'text-emerald-700 dark:text-emerald-300' : item.tone === 'warning' ? 'text-amber-700 dark:text-amber-300' : 'text-adminText'}`}>
+                {item.value}
+              </p>
+              {item.detail ? <p className="mt-1 text-[11px] text-adminTextMuted">{item.detail}</p> : null}
+            </article>
+          ))}
+        </section>
+      ) : null}
+
+      <div className="mb-3 flex flex-wrap items-center justify-between gap-2 border-y border-adminBorder py-2.5">
+        <div className="flex min-w-[16rem] flex-1 flex-wrap items-center gap-2">
+          <label className="relative min-w-[14rem] flex-1 sm:max-w-sm">
+            <span className="sr-only">Search {title.toLowerCase()}</span>
+            <svg aria-hidden="true" className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-adminTextMuted" fill="none" viewBox="0 0 24 24">
+              <path d="M21 21l-4.4-4.4M10.8 18a7.2 7.2 0 1 1 0-14.4 7.2 7.2 0 0 1 0 14.4Z" stroke="currentColor" strokeLinecap="round" strokeWidth="1.8" />
+            </svg>
+            <input
+              data-tour={`${tourPrefix}-search`}
+              className="h-9 w-full rounded-lg border border-adminBorder bg-adminSurface py-2 pl-9 pr-3 text-sm text-adminText"
+              onChange={(event) => setSearchTerm(event.target.value)}
+              placeholder={`Search ${title.toLowerCase()}...`}
+              type="search"
+              value={searchTerm}
+            />
+          </label>
+          {filters.map((filter) => (
+            <label key={filter.key}>
+              <span className="sr-only">{filter.label}</span>
+              <select
+                aria-label={filter.label}
+                className="h-9 rounded-lg border border-adminBorder bg-adminSurface px-2.5 text-xs font-medium text-adminText"
+                onChange={(event) => setFilterValues((current) => ({ ...current, [filter.key]: event.target.value }))}
+                value={filterValues[filter.key] ?? ''}
+              >
+                <option value="">All {filter.label}</option>
+                {filter.options.map((option) => <option key={`${filter.key}-${option.value}`} value={option.value}>{option.label}</option>)}
+              </select>
+            </label>
+          ))}
+          {hasActiveFilters ? (
+            <button className="h-9 rounded-lg px-2.5 text-xs font-semibold text-adminTextMuted hover:bg-adminMuted hover:text-adminText" onClick={clearFilters} type="button">
+              Clear filters
+            </button>
+          ) : null}
+        </div>
+        {statusFilters.length > 0 ? (
+          <div aria-label={`${title} status`} className="flex items-center rounded-lg bg-adminMuted p-1" role="group">
+            {statusFilters.map((filter) => (
+              <button
+                aria-pressed={statusFilterKey === filter.key}
+                className={`rounded-md px-2.5 py-1.5 text-xs font-semibold transition-colors ${statusFilterKey === filter.key ? 'bg-adminSurface text-adminText shadow-sm' : 'text-adminTextMuted hover:text-adminText'}`}
+                key={filter.key}
+                onClick={() => setStatusFilterKey(filter.key)}
+                type="button"
+              >
+                {filter.label}
+              </button>
+            ))}
+          </div>
+        ) : null}
+      </div>
+
+      {error ? (
+        <div className="mb-3 flex flex-wrap items-center justify-between gap-2 rounded-lg border border-rose-200 bg-rose-50 px-3 py-2 text-sm text-rose-700 dark:border-rose-900/60 dark:bg-rose-950/30 dark:text-rose-200" role="alert">
+          <span>{error}</span>
+          <button className="rounded-md border border-rose-300 px-2.5 py-1 text-xs font-semibold hover:bg-rose-100 dark:border-rose-800 dark:hover:bg-rose-950" onClick={() => void load()} type="button">
+            Retry
+          </button>
+        </div>
+      ) : null}
       {readOnly && readOnlyMessage ? (
         <p className="mb-3 text-sm text-amber-700 dark:text-amber-300">
           {readOnlyMessage}
         </p>
       ) : null}
 
-      <div data-tour={`${tourPrefix}-table`} className="rounded-2xl border border-slate-200 bg-white shadow-sm dark:border-slate-800 dark:bg-slate-900">
+      <div data-tour={`${tourPrefix}-table`} className="overflow-hidden rounded-xl border border-adminBorder bg-adminSurface">
         {loading ? (
-          <p className="p-4 text-sm text-slate-500 dark:text-slate-400">Loading records...</p>
+          <div aria-busy="true" aria-label={`Loading ${title.toLowerCase()}`} className="space-y-2 p-4" role="status">
+            {Array.from({ length: 5 }, (_, index) => <div className="h-11 animate-pulse rounded-lg bg-adminMuted" key={index} />)}
+          </div>
         ) : filteredItems.length === 0 ? (
-          <p className="p-4 text-sm text-slate-500 dark:text-slate-400">No records found.</p>
+          <div className="px-4 py-10 text-center" role="status">
+            <p className="text-sm font-semibold text-adminText">{items.length === 0 ? `No ${title.toLowerCase()} yet.` : 'No matching records.'}</p>
+            <p className="mt-1 text-xs text-adminTextMuted">{items.length === 0 ? 'Add a record to get started.' : 'Try changing or clearing the current filters.'}</p>
+            {hasActiveFilters ? <button className="mt-3 rounded-lg border border-adminBorder px-3 py-2 text-xs font-semibold text-adminText" onClick={clearFilters} type="button">Clear filters</button> : null}
+            {items.length === 0 && !readOnly ? <button className="mt-3 rounded-lg bg-brandPrimary px-3 py-2 text-xs font-semibold text-white" onClick={openCreate} type="button">{primaryActionLabel ?? `Add ${title.replace(/s$/i, '')}`}</button> : null}
+          </div>
         ) : (
           <>
             <div className="hidden overflow-x-auto md:block">
               <table className="w-full min-w-[820px] border-collapse">
-                <thead className="sticky top-0 bg-slate-50 dark:bg-slate-800/70">
-                  <tr className="border-b border-slate-200 text-left text-xs uppercase tracking-wide text-slate-500 dark:border-slate-700 dark:text-slate-400">
+                <thead className="sticky top-0 bg-adminMuted">
+                  <tr className="border-b border-adminBorder text-left text-xs uppercase tracking-wide text-adminTextMuted">
+                    {selection ? (
+                      <th className="w-11 px-3 py-2.5" scope="col">
+                        <input
+                          ref={selectPageRef}
+                          aria-label={allPageRowsSelected ? 'Clear current page selection' : 'Select current page'}
+                          checked={allPageRowsSelected}
+                          className="h-4 w-4 rounded border-adminBorder text-brandPrimary accent-[var(--admin-accent)]"
+                          onChange={(event) => setSelectedIds((current) => togglePageSelection(current, pageIds, event.target.checked))}
+                          type="checkbox"
+                        />
+                      </th>
+                    ) : null}
                     {columns.map((column) => (
-                      <th className="px-4 py-3" key={column}>
+                      <th
+                        aria-sort={sortState?.column === column ? (sortState.direction === 'asc' ? 'ascending' : 'descending') : undefined}
+                        className="px-3 py-2.5"
+                        key={column}
+                        scope="col"
+                      >
                         {sortableColumnSet.has(column) ? (
                           <button
                             className="inline-flex items-center gap-1 text-left hover:text-slate-700 dark:hover:text-slate-200"
@@ -661,21 +957,37 @@ export function EntityManager({
                         )}
                       </th>
                     ))}
-                    {hasActionColumn ? <th className="px-4 py-3">Actions</th> : null}
+                    {hasActionColumn ? <th className="px-3 py-2.5" scope="col">Actions</th> : null}
                   </tr>
                 </thead>
                 <tbody>
-                  {paginatedItems.pageRows.map((item, rowIndex) => (
+                  {paginatedItems.pageRows.map((item) => {
+                    const itemId = String(item.id ?? '');
+                    const selected = selectedIds.has(itemId);
+                    return (
                     <tr
-                      className={`border-b border-slate-100 text-sm text-slate-800 transition hover:bg-slate-50 dark:border-slate-800 dark:text-slate-200 dark:hover:bg-slate-800/50 ${onRowClick ? 'cursor-pointer focus:outline-none focus:ring-2 focus:ring-brandPrimary/40' : ''} ${rowIndex % 2 === 0 ? 'bg-white dark:bg-slate-900' : 'bg-slate-50/50 dark:bg-slate-900/70'}`}
-                      key={String(item.id)}
+                      aria-selected={selection ? selected : undefined}
+                      className={`border-b border-adminBorder text-sm text-adminText transition-colors hover:bg-adminMuted ${selected ? 'bg-adminAccentSoft' : 'bg-adminSurface'} ${onRowClick ? 'cursor-pointer focus:outline-none focus:ring-2 focus:ring-brandPrimary/40' : ''}`}
+                      key={itemId}
                       onClick={onRowClick ? () => onRowClick(item) : undefined}
                       onKeyDown={(event) => handleRowKeyDown(event, item)}
                       role={onRowClick ? 'button' : undefined}
                       tabIndex={onRowClick ? 0 : undefined}
                     >
+                      {selection ? (
+                        <td className="w-11 px-3 py-2.5 align-middle">
+                          <input
+                            aria-label={`Select ${compactPreview(item.name ?? item.code ?? item.id)}`}
+                            checked={selected}
+                            className="h-4 w-4 rounded border-adminBorder text-brandPrimary accent-[var(--admin-accent)]"
+                            onChange={() => setSelectedIds((current) => toggleRowSelection(current, itemId))}
+                            onClick={(event) => event.stopPropagation()}
+                            type="checkbox"
+                          />
+                        </td>
+                      ) : null}
                       {columns.map((column) => (
-                        <td className="max-w-[240px] px-4 py-3 align-top" key={`${String(item.id)}-${column}`}>
+                        <td className="max-w-[240px] px-3 py-2.5 align-middle" key={`${itemId}-${column}`}>
                           <span className="block truncate">{renderTableValue(column, item)}</span>
                         </td>
                       ))}
@@ -735,23 +1047,40 @@ export function EntityManager({
                         </td>
                       ) : null}
                     </tr>
-                  ))}
+                    );
+                  })}
                 </tbody>
               </table>
             </div>
 
             <div className="space-y-3 p-3 md:hidden">
-              {paginatedItems.pageRows.map((item) => (
+              {paginatedItems.pageRows.map((item) => {
+                const itemId = String(item.id ?? '');
+                const selected = selectedIds.has(itemId);
+                return (
                 <article
-                  className={`rounded-xl border border-slate-200 bg-white p-3 shadow-sm dark:border-slate-700 dark:bg-slate-800/70 ${onRowClick ? 'cursor-pointer focus:outline-none focus:ring-2 focus:ring-brandPrimary/40' : ''}`}
-                  key={String(item.id)}
+                  aria-selected={selection ? selected : undefined}
+                  className={`rounded-xl border border-adminBorder p-3 ${selected ? 'bg-adminAccentSoft' : 'bg-adminSurface'} ${onRowClick ? 'cursor-pointer focus:outline-none focus:ring-2 focus:ring-brandPrimary/40' : ''}`}
+                  key={itemId}
                   onClick={onRowClick ? () => onRowClick(item) : undefined}
                   onKeyDown={(event) => handleRowKeyDown(event, item)}
                   role={onRowClick ? 'button' : undefined}
                   tabIndex={onRowClick ? 0 : undefined}
                 >
                   <div className="mb-2 flex items-center justify-between">
-                    <p className="text-sm font-semibold text-slate-900 dark:text-slate-100">{compactPreview(item.name ?? item.code ?? item.id)}</p>
+                    <div className="flex min-w-0 items-center gap-2">
+                      {selection ? (
+                        <input
+                          aria-label={`Select ${compactPreview(item.name ?? item.code ?? item.id)}`}
+                          checked={selected}
+                          className="h-4 w-4 shrink-0 accent-[var(--admin-accent)]"
+                          onChange={() => setSelectedIds((current) => toggleRowSelection(current, itemId))}
+                          onClick={(event) => event.stopPropagation()}
+                          type="checkbox"
+                        />
+                      ) : null}
+                      <p className="truncate text-sm font-semibold text-adminText">{compactPreview(item.name ?? item.code ?? item.id)}</p>
+                    </div>
                     {!readOnly || rowActions.some((action) => action.showWhenReadOnly === true) ? (
                       <div className="flex items-center gap-1">
                         {rowActions.map((action) =>
@@ -815,7 +1144,8 @@ export function EntityManager({
                     ))}
                   </div>
                 </article>
-              ))}
+                );
+              })}
             </div>
 
             <TablePaginationControls
@@ -833,14 +1163,37 @@ export function EntityManager({
         )}
       </div>
 
+      {selection && selectedRows.length > 0 ? (
+        <div aria-live="polite" className="fixed bottom-4 left-1/2 z-30 flex max-w-[calc(100vw-2rem)] -translate-x-1/2 items-center gap-2 rounded-xl border border-adminBorder bg-adminSurface px-3 py-2 shadow-xl">
+          <span className="whitespace-nowrap text-sm font-semibold text-adminText">{selectedRows.length} selected</span>
+          <span aria-hidden="true" className="h-5 w-px bg-adminBorder" />
+          <button className="rounded-lg border border-adminBorder px-3 py-1.5 text-xs font-semibold text-adminText hover:bg-adminMuted" onClick={downloadSelection} type="button">
+            Export CSV
+          </button>
+          <button className="rounded-lg px-2.5 py-1.5 text-xs font-semibold text-adminTextMuted hover:bg-adminMuted hover:text-adminText" onClick={() => setSelectedIds(new Set())} type="button">
+            Clear
+          </button>
+        </div>
+      ) : null}
+
       {dialogMode ? (
-        <div className="fixed inset-0 z-40 flex items-center justify-center bg-slate-950/45 p-4">
-          <section className="w-full max-w-3xl rounded-2xl border border-slate-200 bg-white shadow-xl dark:border-slate-700 dark:bg-slate-900">
+        <AdminModalMotion className="fixed inset-0 z-40 flex items-center justify-center bg-slate-950/45 p-4 backdrop-blur-[3px]">
+          <section
+            ref={(node) => {
+              activeDialogRef.current = node;
+            }}
+            aria-labelledby="entity-editor-title"
+            aria-modal="true"
+            className="max-h-[calc(100vh-2rem)] w-full max-w-3xl overflow-y-auto rounded-xl border border-adminBorder bg-adminSurface shadow-xl"
+            role="dialog"
+            tabIndex={-1}
+          >
             <header className="flex items-center justify-between border-b border-slate-200 px-4 py-3 dark:border-slate-700">
-              <h2 className="text-lg font-semibold text-slate-900 dark:text-slate-100">
+              <h2 className="text-lg font-semibold text-slate-900 dark:text-slate-100" id="entity-editor-title">
                 {dialogMode === 'create' ? `Add ${title} Record` : `Edit ${title} Record`}
               </h2>
               <button
+                aria-label="Close record editor"
                 className="rounded-md border border-slate-300 px-2 py-1 text-xs text-slate-600 dark:border-slate-600 dark:text-slate-300"
                 onClick={closeDialog}
                 type="button"
@@ -947,13 +1300,22 @@ export function EntityManager({
               </div>
             </form>
           </section>
-        </div>
+        </AdminModalMotion>
       ) : null}
 
       {confirmOpen ? (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/55 p-4">
-          <section className="w-full max-w-md rounded-2xl border border-slate-200 bg-white p-4 shadow-2xl dark:border-slate-700 dark:bg-slate-900">
-            <h3 className="text-lg font-semibold text-slate-900 dark:text-slate-100">Confirm {editingId ? 'Update' : 'Create'}</h3>
+        <AdminModalMotion className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/55 p-4 backdrop-blur-[3px]">
+          <section
+            ref={(node) => {
+              activeDialogRef.current = node;
+            }}
+            aria-labelledby="entity-confirm-title"
+            aria-modal="true"
+            className="w-full max-w-md rounded-xl border border-adminBorder bg-adminSurface p-4 shadow-2xl"
+            role="alertdialog"
+            tabIndex={-1}
+          >
+            <h3 className="text-lg font-semibold text-slate-900 dark:text-slate-100" id="entity-confirm-title">Confirm {editingId ? 'Update' : 'Create'}</h3>
             <p className="mt-2 text-sm text-slate-600 dark:text-slate-300">
               This will {editingId ? 'update' : 'create'} a record in <span className="font-semibold">{title}</span>. Continue?
             </p>
@@ -976,13 +1338,22 @@ export function EntityManager({
               </button>
             </div>
           </section>
-        </div>
+        </AdminModalMotion>
       ) : null}
 
       {deleteConfirmOpen && deleteTarget ? (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/55 p-4">
-          <section className="w-full max-w-md rounded-2xl border border-slate-200 bg-white p-4 shadow-2xl dark:border-slate-700 dark:bg-slate-900">
-            <h3 className="text-lg font-semibold text-slate-900 dark:text-slate-100">
+        <AdminModalMotion className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/55 p-4 backdrop-blur-[3px]">
+          <section
+            ref={(node) => {
+              activeDialogRef.current = node;
+            }}
+            aria-labelledby="entity-delete-title"
+            aria-modal="true"
+            className="w-full max-w-md rounded-xl border border-adminBorder bg-adminSurface p-4 shadow-2xl"
+            role="alertdialog"
+            tabIndex={-1}
+          >
+            <h3 className="text-lg font-semibold text-slate-900 dark:text-slate-100" id="entity-delete-title">
               {deleteMode === 'reactivate' ? 'Confirm Reactivate' : 'Confirm Deactivate'}
             </h3>
             <p className="mt-2 text-sm text-slate-600 dark:text-slate-300">
@@ -1025,12 +1396,21 @@ export function EntityManager({
               </button>
             </div>
           </section>
-        </div>
+        </AdminModalMotion>
       ) : null}
 
       {saving ? (
-        <div className="fixed inset-0 z-[70] flex items-center justify-center bg-slate-950/45 p-4 backdrop-blur-[1px]">
-          <div className="w-full max-w-sm rounded-2xl border border-slate-200 bg-white px-5 py-4 shadow-xl dark:border-slate-700 dark:bg-slate-900">
+        <AdminModalMotion className="fixed inset-0 z-[70] flex items-center justify-center bg-slate-950/45 p-4 backdrop-blur-[3px]">
+          <div
+            ref={(node) => {
+              activeDialogRef.current = node;
+            }}
+            aria-live="polite"
+            aria-modal="true"
+            className="w-full max-w-sm rounded-xl border border-adminBorder bg-adminSurface px-5 py-4 shadow-xl"
+            role="status"
+            tabIndex={-1}
+          >
             <div className="flex items-center gap-3">
               <span className="h-5 w-5 animate-spin rounded-full border-2 border-slate-300 border-t-brandPrimary dark:border-slate-600 dark:border-t-brandSecondary" />
               <p className="text-sm font-semibold text-slate-900 dark:text-slate-100">{savingMessage}</p>
@@ -1039,7 +1419,7 @@ export function EntityManager({
               Please wait. Actions are temporarily disabled.
             </p>
           </div>
-        </div>
+        </AdminModalMotion>
       ) : null}
     </div>
   );

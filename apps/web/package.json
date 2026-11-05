@@ -7,22 +7,24 @@
     "build": "next build",
     "start": "next start",
     "test": "jest --config jest.config.cjs",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "next typegen && tsc --noEmit"
   },
   "dependencies": {
     "exceljs": "^4.4.0",
+    "framer-motion": "^14.9.1",
     "gsap": "^3.12.5",
-    "next": "14.2.23",
-    "react": "18.3.1",
-    "react-dom": "18.3.1",
-    "sharp": "^0.34.5",
+    "next": "15.5.29",
+    "react": "19.3.1",
+    "react-dom": "19.3.1",
+    "recharts": "^3.10.1",
+    "sharp": "0.35.5",
     "sileo": "^0.1.5",
     "xlsx": "^0.18.5"
   },
   "devDependencies": {
     "@types/jest": "^29.5.14",
-    "@types/react": "^18.3.19",
-    "@types/react-dom": "^18.3.5",
+    "@types/react": "19.3.0",
+    "@types/react-dom": "19.3.0",
     "autoprefixer": "^10.4.20",
     "jest": "^29.7.0",
     "postcss": "^8.5.3",

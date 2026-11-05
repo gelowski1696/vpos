@@ -24,25 +24,26 @@ export function TablePaginationControls({
   onPageChange,
   onPageSizeChange,
   className
-}: TablePaginationControlsProps): JSX.Element {
+}: TablePaginationControlsProps): React.JSX.Element {
   if (totalItems <= 0) {
     return <></>;
   }
 
   return (
     <div
-      className={`flex flex-wrap items-center justify-between gap-3 border-t border-slate-200 px-4 py-3 text-xs dark:border-slate-800 ${className ?? ''}`}
+      className={`flex flex-wrap items-center justify-between gap-3 border-t border-adminBorder bg-adminSurface px-4 py-3 text-xs ${className ?? ''}`}
     >
-      <p className="text-slate-600 dark:text-slate-300">
+      <p aria-live="polite" className="text-adminTextMuted">
         Showing <strong>{startRow}</strong>-<strong>{endRow}</strong> of{' '}
         <strong>{totalItems}</strong>
       </p>
 
       <div className="flex items-center gap-2">
-        <label className="flex items-center gap-2 text-slate-600 dark:text-slate-300">
+        <label className="flex items-center gap-2 text-adminTextMuted">
           <span>Rows</span>
           <select
-            className="rounded-md border border-slate-300 bg-white px-2 py-1 text-xs text-slate-700 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-200"
+            aria-label="Rows per page"
+            className="h-8 rounded-md border border-adminBorder bg-adminSurface px-2 text-xs text-adminText"
             onChange={(event) => onPageSizeChange(Number.parseInt(event.target.value, 10))}
             value={String(pageSize)}
           >
@@ -55,18 +56,20 @@ export function TablePaginationControls({
         </label>
 
         <button
-          className="rounded-md border border-slate-300 px-2 py-1 text-xs font-semibold text-slate-700 hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-50 dark:border-slate-600 dark:text-slate-200 dark:hover:bg-slate-800"
+          aria-label="Previous page"
+          className="h-8 rounded-md border border-adminBorder px-2.5 text-xs font-semibold text-adminText hover:bg-adminMuted disabled:cursor-not-allowed disabled:opacity-50"
           disabled={page <= 1}
           onClick={() => onPageChange(page - 1)}
           type="button"
         >
           Prev
         </button>
-        <span className="text-slate-600 dark:text-slate-300">
+        <span className="text-adminTextMuted">
           Page <strong>{page}</strong> / <strong>{totalPages}</strong>
         </span>
         <button
-          className="rounded-md border border-slate-300 px-2 py-1 text-xs font-semibold text-slate-700 hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-50 dark:border-slate-600 dark:text-slate-200 dark:hover:bg-slate-800"
+          aria-label="Next page"
+          className="h-8 rounded-md border border-adminBorder px-2.5 text-xs font-semibold text-adminText hover:bg-adminMuted disabled:cursor-not-allowed disabled:opacity-50"
           disabled={page >= totalPages}
           onClick={() => onPageChange(page + 1)}
           type="button"

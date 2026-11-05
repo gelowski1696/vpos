@@ -20,7 +20,7 @@ describe('tester feedback regressions', () => {
     const source = readFileSync(join(__dirname, '../src/app/(admin)/dashboard/page.tsx'), 'utf8');
 
     expect(source).toContain("sales.filter((row) => row.status === 'ACTIVE')");
-    expect(source).toContain('for (const row of activeSales)');
+    expect(source).toContain('buildDailyTotals(activeSales');
     expect(source).toContain('return activeSales');
   });
 });

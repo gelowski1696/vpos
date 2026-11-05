@@ -52,7 +52,7 @@ function fmtDate(value: string): string {
   return parsed.toLocaleString();
 }
 
-export default function CustomerPaymentsPage(): JSX.Element {
+export default function CustomerPaymentsPage(): React.JSX.Element {
   const [branches, setBranches] = useState<BranchRecord[]>([]);
   const [customers, setCustomers] = useState<CustomerRecord[]>([]);
   const [rows, setRows] = useState<CustomerPaymentRow[]>([]);

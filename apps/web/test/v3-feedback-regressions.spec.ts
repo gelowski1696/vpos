@@ -28,4 +28,26 @@ describe('V3 feedback regressions', () => {
     expect(reports).toContain('Description / Remarks');
     expect(reports).toContain('pettyNoteParts(row.notes)');
   });
+
+  it('applies the selected branch to inventory report rows', () => {
+    const reports = source('src/app/(admin)/reports/page.tsx');
+    expect(reports).toContain('selectedBranchLocationIds');
+    expect(reports).toContain('selectedBranchLocationIds.has(row.locationId)');
+    expect(reports).toContain('selectedBranchLocationIds.has(row.location_id)');
+  });
+
+  it('presents customer contract values as discounts from the current price', () => {
+    const customers = source('src/app/(admin)/customers/page.tsx');
+    expect(customers).toContain('Discount Given (PHP)');
+    expect(customers).toContain('subtracted from the current applicable price');
+    expect(customers).not.toContain('Optional fixed price if this customer has a direct contract.');
+  });
+
+  it('makes the bulk apply action visually explicit and explains disabled state', () => {
+    const priceLists = source('src/app/(admin)/price-lists/page.tsx');
+    expect(priceLists).toContain('bulkAdjustDisabledReason');
+    expect(priceLists).toContain('Apply to ${bulkAdjustPreviewRuleCount} rows');
+    expect(priceLists).toContain('Ready to update');
+    expect(priceLists).toContain('bg-brandPrimary');
+  });
 });

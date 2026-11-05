@@ -45,7 +45,7 @@ function generateShortCode(prefix: string): string {
   return `${normalizedPrefix}${suffix}`.slice(0, 8);
 }
 
-export default function BranchesPage(): JSX.Element {
+export default function BranchesPage(): React.JSX.Element {
   const sessionRoles = useMemo(() => getSessionRoles(), []);
   const sessionCompanyId = useMemo(() => getSessionCompanyId(), []);
   const isPlatformOwner = sessionRoles.includes("platform_owner");

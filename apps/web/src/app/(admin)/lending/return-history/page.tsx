@@ -83,7 +83,7 @@ function saleStatusLabel(status: 'ACTIVE' | 'CANCELLED' | 'VOIDED'): string {
   return 'Active Sale';
 }
 
-export default function LendingReturnHistoryPage(): JSX.Element {
+export default function LendingReturnHistoryPage(): React.JSX.Element {
   const router = useRouter();
   const [branches, setBranches] = useState<BranchRecord[]>([]);
   const [branchFilter, setBranchFilter] = useState('ALL');

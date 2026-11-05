@@ -258,7 +258,7 @@ function SafeIllustration({
   height,
   className,
   priority
-}: SafeIllustrationProps): JSX.Element {
+}: SafeIllustrationProps): React.JSX.Element {
   const [currentSrc, setCurrentSrc] = useState(src);
 
   useEffect(() => {
@@ -283,7 +283,7 @@ function SafeIllustration({
   );
 }
 
-export function HomeLandingShowcase(): JSX.Element {
+export function HomeLandingShowcase(): React.JSX.Element {
   const [activeModuleId, setActiveModuleId] = useState<string>(modules[0].id);
   const [carouselIndex, setCarouselIndex] = useState(0);
   const [isCarouselPaused, setIsCarouselPaused] = useState(false);

@@ -20,7 +20,7 @@ function framePath(index: number): string {
   return `${FRAME_DIR}/frame-${String(index).padStart(3, '0')}.jpg`;
 }
 
-export function ScrollMorphSection(): JSX.Element {
+export function ScrollMorphSection(): React.JSX.Element {
   const wrapperRef = useRef<HTMLDivElement>(null);
   const sectionRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);

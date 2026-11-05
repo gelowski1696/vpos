@@ -23,7 +23,7 @@ const DEFAULT_ADDONS: PosSettingsAddonFlags = {
   delivery_dispatch_suite: false
 };
 
-export default function PosSettingsPage(): JSX.Element {
+export default function PosSettingsPage(): React.JSX.Element {
   const [roles, setRoles] = useState<string[]>([]);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);

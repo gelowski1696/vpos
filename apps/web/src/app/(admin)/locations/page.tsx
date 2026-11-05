@@ -37,7 +37,7 @@ function yesNo(value: unknown): string {
   return 'No';
 }
 
-export default function LocationsPage(): JSX.Element {
+export default function LocationsPage(): React.JSX.Element {
   const sessionRoles = useMemo(() => getSessionRoles(), []);
   const sessionCompanyId = useMemo(() => getSessionCompanyId(), []);
   const isPlatformOwner = sessionRoles.includes('platform_owner');

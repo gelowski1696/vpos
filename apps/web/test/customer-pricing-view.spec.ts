@@ -150,11 +150,11 @@ describe('customer pricing view resolver', () => {
     expect(view.productRows[0].final?.unitPrice).toBe(100);
   });
 
-  it('falls back to the customer contract price when there is no contract price list', () => {
+  it('subtracts the customer discount from the current scoped price when there is no contract price list', () => {
     const view = resolveCustomerPricingView({
       customer: {
         ...customer,
-        contractPrice: 875
+        contractPrice: 50
       },
       branchId: branch.id,
       requestedAt: '2026-06-20T00:00:00.000Z',
@@ -187,6 +187,6 @@ describe('customer pricing view resolver', () => {
     });
 
     expect(view.productRows[0].final?.source).toBe('customer_contract_price');
-    expect(view.productRows[0].final?.unitPrice).toBe(875);
+    expect(view.productRows[0].final?.unitPrice).toBe(450);
   });
 });

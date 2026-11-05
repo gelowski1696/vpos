@@ -233,7 +233,7 @@ function personnelFromTableRow(row: Record<string, unknown>): PersonnelRow {
   };
 }
 
-export default function PersonnelsPage(): JSX.Element {
+export default function PersonnelsPage(): React.JSX.Element {
   const [reloadSignal, setReloadSignal] = useState(0);
   const [branches, setBranches] = useState<BranchRow[]>([]);
   const [roles, setRoles] = useState<PersonnelRoleRow[]>([]);

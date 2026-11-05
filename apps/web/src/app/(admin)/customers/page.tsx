@@ -110,7 +110,7 @@ function fmtDateTime(value: string | null | undefined): string {
   return parsed.toLocaleString();
 }
 
-export default function CustomersPage(): JSX.Element {
+export default function CustomersPage(): React.JSX.Element {
   const router = useRouter();
   const pathname = usePathname();
   const searchParams = useSearchParams();
@@ -233,7 +233,7 @@ export default function CustomersPage(): JSX.Element {
         example: 'REGULAR',
         templateDropdownValues: customerTierTemplateValues
       },
-      { key: 'contractPrice', label: 'Contract Price', example: 0, aliases: ['contract_price'] },
+      { key: 'contractPrice', label: 'Discount Given', example: 0, aliases: ['contract_price'] },
       {
         key: 'isActive',
         label: 'Active',
@@ -453,9 +453,9 @@ export default function CustomersPage(): JSX.Element {
         },
         {
           key: 'contractPrice',
-          label: 'Contract Price (PHP)',
+          label: 'Discount Given (PHP)',
           type: 'number',
-          helperText: 'Optional fixed price if this customer has a direct contract.'
+          helperText: 'Optional fixed peso discount subtracted from the current applicable price.'
         },
         {
           key: 'outstandingBalance',
@@ -494,7 +494,7 @@ export default function CustomersPage(): JSX.Element {
           render: (value) => (value ? String(value) : '-')
         },
         contractPrice: {
-          label: 'Contract Price',
+          label: 'Discount Given',
           render: (value) => money(value)
         },
         outstandingBalance: {

@@ -1,8 +1,15 @@
 'use client';
 
+import { motion } from 'framer-motion';
 import type { Route } from 'next';
 import Link from 'next/link';
 import { useEffect, useMemo, useState } from 'react';
+import {
+  DistributionDonutChart,
+  PerformanceBarChart,
+  TrendAreaChart
+} from '../../../components/admin-charts';
+import { buildDailyTotals } from '../../../lib/admin-chart-series';
 import { apiRequest } from '../../../lib/api-client';
 import { getHiddenSystemLocationIds } from '../../../lib/reports-hidden-location';
 import { toastInfo, toastSuccess } from '../../../lib/web-toast';
@@ -18,6 +25,8 @@ type LocationRecord = {
   id: string;
   code: string;
   name: string;
+  branchId?: string | null;
+  branch_id?: string | null;
   isActive: boolean;
 };
 
@@ -487,9 +496,16 @@ type ReportCardProps = {
   children: React.ReactNode;
 };
 
-function ReportCard({ title, subtitle, status = 'LIVE', children }: ReportCardProps): JSX.Element {
+function ReportCard({ title, subtitle, status = 'LIVE', children }: ReportCardProps): React.JSX.Element {
   return (
-    <article className="group rounded-2xl border border-slate-200 bg-white/95 p-4 shadow-sm transition duration-200 hover:-translate-y-0.5 hover:shadow-md dark:border-slate-700 dark:bg-slate-800/80">
+    <motion.article
+      className="group rounded-xl border border-adminBorder bg-adminSurface p-4"
+      initial={{ opacity: 0, y: 8 }}
+      transition={{ duration: 0.18 }}
+      viewport={{ amount: 0.08, once: true }}
+      whileHover={{ y: -2 }}
+      whileInView={{ opacity: 1, y: 0 }}
+    >
       <div className="mb-3 flex items-start justify-between gap-3">
         <div>
           <h3 className="text-sm font-semibold text-slate-900 dark:text-slate-100">{title}</h3>
@@ -500,7 +516,7 @@ function ReportCard({ title, subtitle, status = 'LIVE', children }: ReportCardPr
         </span>
       </div>
       {children}
-    </article>
+    </motion.article>
   );
 }
 
@@ -510,7 +526,7 @@ type SectionHeaderProps = {
   subtitle: string;
 };
 
-function SectionHeader({ id, title, subtitle }: SectionHeaderProps): JSX.Element {
+function SectionHeader({ id, title, subtitle }: SectionHeaderProps): React.JSX.Element {
   return (
     <div className="rounded-xl border border-slate-200 bg-white px-4 py-3 dark:border-slate-700 dark:bg-slate-800/70">
       <h2 id={id} className="text-sm font-bold uppercase tracking-[0.16em] text-slate-700 dark:text-slate-200">
@@ -523,7 +539,7 @@ function SectionHeader({ id, title, subtitle }: SectionHeaderProps): JSX.Element
 
 type ReportSectionKey = 'sales' | 'inventory' | 'lpg' | 'operations' | 'customer' | 'system';
 
-export default function ReportsPage(): JSX.Element {
+export default function ReportsPage(): React.JSX.Element {
   const initialFilters = useMemo(() => readInitialFilters(), []);
   const [loading, setLoading] = useState(true);
   const [errors, setErrors] = useState<string[]>([]);
@@ -701,24 +717,52 @@ export default function ReportsPage(): JSX.Element {
 
   const hiddenSystemLocationIds = useMemo(() => getHiddenSystemLocationIds(locations), [locations]);
 
+  const selectedBranchLocationIds = useMemo(
+    () =>
+      branchFilter === 'ALL'
+        ? null
+        : new Set(
+            locations
+              .filter((row) => (row.branchId ?? row.branch_id) === branchFilter)
+              .map((row) => row.id)
+          ),
+    [branchFilter, locations]
+  );
+
   const filteredOpeningSnapshot = useMemo(
-    () => data.openingSnapshot.filter((row) => !hiddenSystemLocationIds.has(row.locationId)),
-    [data.openingSnapshot, hiddenSystemLocationIds]
+    () => data.openingSnapshot.filter(
+      (row) =>
+        !hiddenSystemLocationIds.has(row.locationId) &&
+        (selectedBranchLocationIds === null || selectedBranchLocationIds.has(row.locationId))
+    ),
+    [data.openingSnapshot, hiddenSystemLocationIds, selectedBranchLocationIds]
   );
 
   const filteredInventoryMovements = useMemo(
-    () => data.inventoryMovements.filter((row) => !hiddenSystemLocationIds.has(row.location_id)),
-    [data.inventoryMovements, hiddenSystemLocationIds]
+    () => data.inventoryMovements.filter(
+      (row) =>
+        !hiddenSystemLocationIds.has(row.location_id) &&
+        (selectedBranchLocationIds === null || selectedBranchLocationIds.has(row.location_id))
+    ),
+    [data.inventoryMovements, hiddenSystemLocationIds, selectedBranchLocationIds]
   );
 
   const filteredFullEmpty = useMemo(
-    () => data.fullEmpty.filter((row) => !hiddenSystemLocationIds.has(row.location_id)),
-    [data.fullEmpty, hiddenSystemLocationIds]
+    () => data.fullEmpty.filter(
+      (row) =>
+        !hiddenSystemLocationIds.has(row.location_id) &&
+        (selectedBranchLocationIds === null || selectedBranchLocationIds.has(row.location_id))
+    ),
+    [data.fullEmpty, hiddenSystemLocationIds, selectedBranchLocationIds]
   );
 
   const filteredCylinders = useMemo(
-    () => data.cylinders.filter((row) => !hiddenSystemLocationIds.has(row.locationId)),
-    [data.cylinders, hiddenSystemLocationIds]
+    () => data.cylinders.filter(
+      (row) =>
+        !hiddenSystemLocationIds.has(row.locationId) &&
+        (selectedBranchLocationIds === null || selectedBranchLocationIds.has(row.locationId))
+    ),
+    [data.cylinders, hiddenSystemLocationIds, selectedBranchLocationIds]
   );
 
   const lowStockRows = useMemo(
@@ -801,6 +845,14 @@ export default function ReportsPage(): JSX.Element {
   const openSyncReviews = useMemo(
     () => data.syncReviews.filter((row) => row.status === 'OPEN').length,
     [data.syncReviews]
+  );
+  const salesTrend = useMemo(
+    () => buildDailyTotals(data.salesList, {
+      date: (row) => row.posted_at ?? row.created_at,
+      value: (row) => row.total_amount,
+      limit: 14
+    }),
+    [data.salesList]
   );
   const reportSectionCards = useMemo(
     () => ({
@@ -1111,6 +1163,62 @@ export default function ReportsPage(): JSX.Element {
           </div>
         </div>
       </section>
+
+      <motion.section
+        aria-labelledby="reports-analytics-title"
+        className="rounded-xl border border-adminBorder bg-adminSurface p-4"
+        initial={{ opacity: 0, y: 8 }}
+        transition={{ duration: 0.2 }}
+        viewport={{ once: true }}
+        whileInView={{ opacity: 1, y: 0 }}
+      >
+        <div className="mb-4 flex flex-wrap items-end justify-between gap-3">
+          <div>
+            <p className="text-[11px] font-semibold uppercase tracking-[0.12em] text-brandPrimary">Analytics overview</p>
+            <h2 className="mt-1 text-lg font-semibold text-adminText" id="reports-analytics-title">Performance at a glance</h2>
+            <p className="mt-1 text-xs text-adminTextMuted">Charts use the same branch and date filters as the detailed reports below.</p>
+          </div>
+          <span className="rounded-full border border-adminBorder bg-adminMuted px-2.5 py-1 text-[11px] font-semibold text-adminTextMuted">
+            {since} to {until}
+          </span>
+        </div>
+        <div className="grid gap-4 xl:grid-cols-3">
+          <article className="rounded-xl border border-adminBorder bg-adminMuted/45 p-3 xl:col-span-2">
+            <div className="mb-2">
+              <h3 className="text-sm font-semibold text-adminText">Daily sales trend</h3>
+              <p className="text-xs text-adminTextMuted">Posted sales value across the selected period.</p>
+            </div>
+            <TrendAreaChart data={salesTrend} label="Sales" valueFormatter={money} />
+          </article>
+          <article className="rounded-xl border border-adminBorder bg-adminMuted/45 p-3">
+            <div className="mb-2">
+              <h3 className="text-sm font-semibold text-adminText">Payment mix</h3>
+              <p className="text-xs text-adminTextMuted">Collected value by payment method.</p>
+            </div>
+            <DistributionDonutChart
+              data={(data.salesSummary?.payments ?? []).map((row, index) => ({
+                name: row.method,
+                value: row.amount,
+                color: ['#7047eb', '#10b981', '#0ea5e9', '#f59e0b'][index % 4]
+              }))}
+            />
+          </article>
+          <article className="rounded-xl border border-adminBorder bg-adminMuted/45 p-3 xl:col-span-3">
+            <div className="mb-2">
+              <h3 className="text-sm font-semibold text-adminText">Branch sales and gross profit</h3>
+              <p className="text-xs text-adminTextMuted">Comparable performance across authorized branches.</p>
+            </div>
+            <PerformanceBarChart
+              data={data.salesByBranch.map((row) => ({
+                name: row.branch_name,
+                primary: row.total_sales,
+                secondary: row.gross_profit
+              }))}
+              valueFormatter={money}
+            />
+          </article>
+        </div>
+      </motion.section>
 
       <section className="sticky top-20 z-10 rounded-xl border border-slate-200 bg-white/95 px-3 py-3 backdrop-blur dark:border-slate-700 dark:bg-slate-900/95" data-tour="reports-tabs">
         <div className="flex flex-wrap items-center gap-2">
