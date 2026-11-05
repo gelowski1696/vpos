@@ -25,6 +25,7 @@
         "ops:datastore-key-rotate:dry-run": "node ./scripts/rotate-datastore-registry-keys.mjs",
         "ops:datastore-key-rotate:apply": "node ./scripts/rotate-datastore-registry-keys.mjs --apply",
         "ops:maintenance": "powershell -ExecutionPolicy Bypass -File ./scripts/run-ops-maintenance.ps1",
+        "ops:owner:ensure": "node ./scripts/ensure-platform-owner.mjs",
         "tenants:cleanup:seeded": "node ./scripts/cleanup-seeded-tenants.mjs",
         "prisma:generate": "prisma generate",
         "prisma:migrate": "prisma migrate dev",
