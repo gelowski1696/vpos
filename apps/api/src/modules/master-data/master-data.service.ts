@@ -8522,7 +8522,7 @@ export class MasterDataService {
         name: 'Contract Client',
         type: 'BUSINESS',
         tier: 'REGULAR',
-        contractPrice: new Prisma.Decimal(900)
+        contractPrice: new Prisma.Decimal(50)
       },
       create: {
         companyId,
@@ -8530,7 +8530,7 @@ export class MasterDataService {
         name: 'Contract Client',
         type: 'BUSINESS',
         tier: 'REGULAR',
-        contractPrice: new Prisma.Decimal(900)
+        contractPrice: new Prisma.Decimal(50)
       }
     });
 
@@ -9775,7 +9775,7 @@ export class MasterDataService {
     this.customers.push(
       { id: 'cust-walkin', code: 'CUST-RETAIL-001', name: 'Walk-in Customer', type: 'RETAIL', tier: 'REGULAR', contractPrice: null, isActive: true, ...stamp },
       { id: 'cust-premium', code: 'CUST-BIZ-001', name: 'Premium Dealer', type: 'BUSINESS', tier: 'PREMIUM', contractPrice: null, isActive: true, ...stamp },
-      { id: 'cust-contract', code: 'CUST-CONTRACT-001', name: 'Contract Client', type: 'BUSINESS', tier: 'REGULAR', contractPrice: 900, isActive: true, ...stamp }
+      { id: 'cust-contract', code: 'CUST-CONTRACT-001', name: 'Contract Client', type: 'BUSINESS', tier: 'REGULAR', contractPrice: 50, isActive: true, ...stamp }
     );
 
     this.suppliers.push({

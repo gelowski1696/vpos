@@ -18,7 +18,7 @@ export class PricingService {
     const customer = await this.masterDataService.getCustomerById(input.customer_id);
     const activeLists = await this.masterDataService.getActivePriceLists(requestedAt);
 
-    const contractPrice = await this.resolveContract(input, activeLists, requestedFlow, defaultUnitCost);
+    const contractPrice = this.resolveContract(input, activeLists, requestedFlow, defaultUnitCost);
     if (contractPrice) {
       return contractPrice;
     }
@@ -30,34 +30,29 @@ export class PricingService {
       requestedFlow,
       defaultUnitCost
     );
-    if (customerGroupPrice) {
-      return customerGroupPrice;
-    }
+    let basePrice = customerGroupPrice;
 
-    const tierPrice = this.resolveTier(input, customer?.tier ?? null, activeLists, requestedFlow, defaultUnitCost);
-    if (tierPrice) {
-      return tierPrice;
-    }
+    const tierPrice = basePrice ? null : this.resolveTier(input, customer?.tier ?? null, activeLists, requestedFlow, defaultUnitCost);
+    basePrice ??= tierPrice;
 
-    const branchPrice = this.resolveBranch(input, activeLists, requestedFlow, defaultUnitCost);
-    if (branchPrice) {
-      return branchPrice;
-    }
+    const branchPrice = basePrice ? null : this.resolveBranch(input, activeLists, requestedFlow, defaultUnitCost);
+    basePrice ??= branchPrice;
 
-    const globalPrice = this.resolveGlobal(input, activeLists, requestedFlow, defaultUnitCost);
-    if (globalPrice) {
-      return globalPrice;
+    const globalPrice = basePrice ? null : this.resolveGlobal(input, activeLists, requestedFlow, defaultUnitCost);
+    basePrice ??= globalPrice;
+    if (basePrice) {
+      return this.applyCustomerDiscount(basePrice, customer?.contractPrice ?? null);
     }
 
     throw new NotFoundException('No active price rule for product');
   }
 
-  private async resolveContract(
+  private resolveContract(
     input: PriceResolutionInput,
     lists: Awaited<ReturnType<MasterDataService['getActivePriceLists']>>,
     requestedFlow: 'REFILL_EXCHANGE' | 'NON_REFILL' | null,
     defaultUnitCost: number | null
-  ): Promise<PriceResolutionOutput | null> {
+  ): PriceResolutionOutput | null {
     const contractLists = lists.filter(
       (list) => list.scope === 'CONTRACT' && input.customer_id && list.customerId === input.customer_id
     );
@@ -73,21 +68,21 @@ export class PricingService {
       };
     }
 
-    if (!input.customer_id) {
-      return null;
-    }
-
-    const customer = await this.masterDataService.getCustomerById(input.customer_id);
-    if (customer?.contractPrice) {
-      return {
-        source: 'contract',
-        unit_price: customer.contractPrice,
-        discount_cap_percent: 0,
-        resolved_unit_cost: defaultUnitCost
-      };
-    }
-
     return null;
+  }
+
+  private applyCustomerDiscount(
+    base: PriceResolutionOutput,
+    discountGiven: number | null
+  ): PriceResolutionOutput {
+    const discount = Math.max(0, Number(discountGiven ?? 0));
+    if (discount <= 0) {
+      return base;
+    }
+    return {
+      ...base,
+      unit_price: Number(Math.max(0, base.unit_price - discount).toFixed(2))
+    };
   }
 
   private resolveCustomerGroup(
