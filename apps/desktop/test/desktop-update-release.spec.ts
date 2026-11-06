@@ -58,4 +58,10 @@ describe('desktop update release tooling', () => {
     expect(source).toContain('release-desktop-update.ps1');
     expect(source).toContain("'-File'");
   });
+
+  it('preserves an existing version tag that identifies an ancestor release commit', () => {
+    const source = readFileSync(join(desktopRoot, '..', '..', 'scripts', 'publish-desktop-update.ps1'), 'utf8');
+    expect(source).toContain('merge-base --is-ancestor');
+    expect(source).not.toContain('if ($tagCommit -ne $headCommit)');
+  });
 });

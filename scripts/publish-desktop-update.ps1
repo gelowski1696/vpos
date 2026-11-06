@@ -205,15 +205,26 @@ try {
     $existingTag = if ($existingTagOutput) { ($existingTagOutput | Select-Object -First 1).Trim() } else { '' }
     if ($tagLookupExitCode -eq 0 -and $existingTag) {
         $tagCommit = (& git -C $ReleaseWorktree rev-list -n 1 $tagName).Trim()
-        if ($tagCommit -ne $headCommit) {
-            throw "Tag $tagName already points to $tagCommit instead of $headCommit."
+        & git -C $ReleaseWorktree merge-base --is-ancestor $tagCommit $headCommit
+        if ($LASTEXITCODE -ne 0) {
+            throw "Tag $tagName points to $tagCommit, which is not an ancestor of release commit $headCommit."
+        }
+
+        $taggedPackageJson = (& git -C $ReleaseWorktree show "${tagCommit}:apps/desktop/package.json" | Out-String)
+        if ($LASTEXITCODE -ne 0) {
+            throw "Unable to inspect the desktop version at tag $tagName."
+        }
+        $taggedVersion = ($taggedPackageJson | ConvertFrom-Json).version
+        if ($taggedVersion -ne $Version) {
+            throw "Tag $tagName contains desktop version $taggedVersion instead of $Version."
         }
     } else {
         Invoke-Checked -FilePath 'git' -Arguments @('-C', $ReleaseWorktree, 'tag', '-a', $tagName, '-m', "VPOS Desktop $Version")
+        $tagCommit = $headCommit
     }
     Invoke-Checked -FilePath 'git' -Arguments @('-C', $ReleaseWorktree, 'push', 'origin', $tagName)
 
-    Write-Host "VPOS Desktop $Version was generated, published, verified, and tagged at $headCommit." -ForegroundColor Green
+    Write-Host "VPOS Desktop $Version was generated and published from $headCommit; tag $tagName identifies release source $tagCommit." -ForegroundColor Green
 } finally {
     if ($askPassExe -and (Test-Path -LiteralPath $askPassExe)) {
         Remove-Item -LiteralPath $askPassExe -Force -ErrorAction SilentlyContinue
