@@ -8,13 +8,25 @@ param(
 
     [string]$ReleaseWorktree = 'D:\vpos-release-0.1.5-clean-2',
 
+    [ValidatePattern('^\d+\.\d+\.\d+$')]
+    [string]$MinimumSupportedVersion = '0.1.3',
+
     [switch]$SkipVpsStackUpdate,
+
+    [switch]$PolicyOnly,
 
     [switch]$ValidateOnly
 )
 
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
+
+if ($Notes -match '[\r\n]') {
+    throw 'Release notes must be a single line.'
+}
+if ($PolicyOnly -and $SkipVpsStackUpdate) {
+    throw 'PolicyOnly cannot be combined with SkipVpsStackUpdate.'
+}
 
 $repoRoot = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
 $updaterKeyPath = 'C:\Secure\TauriUpdater\vpos-desktop-updater.key'
@@ -170,20 +182,56 @@ try {
         exit 0
     }
 
-    Set-UpdaterSigningEnvironment
-    $releaseScriptPath = Join-Path $ReleaseWorktree 'apps\desktop\scripts\release-desktop-update.ps1'
-    Invoke-Checked -FilePath 'powershell.exe' -Arguments @(
-        '-NoProfile',
-        '-ExecutionPolicy', 'Bypass',
-        '-File', $releaseScriptPath,
-        '-Version', $Version,
-        '-Notes', $Notes,
-        '-SshTarget', $SshTarget,
-        '-Publish'
-    ) -WorkingDirectory $ReleaseWorktree
+    if (-not $PolicyOnly) {
+        Set-UpdaterSigningEnvironment
+        $releaseScriptPath = Join-Path $ReleaseWorktree 'apps\desktop\scripts\release-desktop-update.ps1'
+        Invoke-Checked -FilePath 'powershell.exe' -Arguments @(
+            '-NoProfile',
+            '-ExecutionPolicy', 'Bypass',
+            '-File', $releaseScriptPath,
+            '-Version', $Version,
+            '-Notes', $Notes,
+            '-SshTarget', $SshTarget,
+            '-Publish'
+        ) -WorkingDirectory $ReleaseWorktree
+    }
 
     if (-not $SkipVpsStackUpdate) {
-        $remoteCommand = "set -e; cd /opt/vpos; git pull --ff-only origin main; docker compose -f $composeFile up -d --build; docker compose -f $composeFile ps"
+        $publishedAt = [DateTime]::UtcNow.ToString('yyyy-MM-ddTHH:mm:ss.fffZ')
+        $policyLines = @(
+            'DESKTOP_WINDOWS_UPDATES_ENABLED=true'
+            "DESKTOP_WINDOWS_LATEST_VERSION=$Version"
+            "DESKTOP_WINDOWS_MIN_SUPPORTED_VERSION=$MinimumSupportedVersion"
+            'DESKTOP_WINDOWS_REQUIRED=false'
+            'DESKTOP_WINDOWS_ROLLOUT_PERCENTAGE=100'
+            "DESKTOP_WINDOWS_RELEASE_NOTES=$Notes"
+            "DESKTOP_WINDOWS_PUBLISHED_AT=$publishedAt"
+            'DESKTOP_WINDOWS_SUPPORT_URL=https://vmjamtech.com/support'
+        ) -join "`n"
+        $policyBase64 = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes("$policyLines`n"))
+        $policyBackup = "apps/api/.env.backup-desktop-$Version"
+        $remoteTemplate = @'
+set -e
+cd /opt/vpos
+git pull --ff-only origin main
+env_file='apps/api/.env'
+test -f "$env_file"
+cp -p "$env_file" '__POLICY_BACKUP__'
+policy_file=$(mktemp)
+trap 'rm -f "$policy_file" "$env_file.tmp"' EXIT
+printf '%s' '__POLICY_BASE64__' | base64 -d > "$policy_file"
+while IFS='=' read -r key value; do
+  [ -n "$key" ] || continue
+  awk -v key="$key" -v value="$value" 'BEGIN { found=0 } index($0, key "=") == 1 { print key "=" value; found=1; next } { print } END { if (!found) print key "=" value }' "$env_file" > "$env_file.tmp"
+  mv "$env_file.tmp" "$env_file"
+done < "$policy_file"
+docker compose -f __COMPOSE_FILE__ up -d --build
+docker compose -f __COMPOSE_FILE__ ps
+'@
+        $remoteCommand = $remoteTemplate.
+            Replace('__POLICY_BACKUP__', $policyBackup).
+            Replace('__POLICY_BASE64__', $policyBase64).
+            Replace('__COMPOSE_FILE__', $composeFile)
         Invoke-Checked -FilePath 'ssh' -Arguments @(
             '-o', 'StrictHostKeyChecking=yes',
             '-o', 'NumberOfPasswordPrompts=1',
@@ -203,31 +251,35 @@ try {
         throw "Published artifact verification failed: $artifactUrl"
     }
 
-    $existingTagOutput = & git -C $ReleaseWorktree rev-parse -q --verify "refs/tags/$tagName" 2>$null
-    $tagLookupExitCode = $LASTEXITCODE
-    $existingTag = if ($existingTagOutput) { ($existingTagOutput | Select-Object -First 1).Trim() } else { '' }
-    if ($tagLookupExitCode -eq 0 -and $existingTag) {
-        $tagCommit = (& git -C $ReleaseWorktree rev-list -n 1 $tagName).Trim()
-        & git -C $ReleaseWorktree merge-base --is-ancestor $tagCommit $headCommit
-        if ($LASTEXITCODE -ne 0) {
-            throw "Tag $tagName points to $tagCommit, which is not an ancestor of release commit $headCommit."
-        }
-
-        $taggedPackageJson = (& git -C $ReleaseWorktree show "${tagCommit}:apps/desktop/package.json" | Out-String)
-        if ($LASTEXITCODE -ne 0) {
-            throw "Unable to inspect the desktop version at tag $tagName."
-        }
-        $taggedVersion = ($taggedPackageJson | ConvertFrom-Json).version
-        if ($taggedVersion -ne $Version) {
-            throw "Tag $tagName contains desktop version $taggedVersion instead of $Version."
-        }
+    if ($PolicyOnly) {
+        Write-Host "VPOS Desktop $Version policy and VPS stack were updated from $headCommit." -ForegroundColor Green
     } else {
-        Invoke-Checked -FilePath 'git' -Arguments @('-C', $ReleaseWorktree, 'tag', '-a', $tagName, '-m', "VPOS Desktop $Version")
-        $tagCommit = $headCommit
-    }
-    Invoke-Checked -FilePath 'git' -Arguments @('-C', $ReleaseWorktree, 'push', 'origin', $tagName)
+        $existingTagOutput = & git -C $ReleaseWorktree rev-parse -q --verify "refs/tags/$tagName" 2>$null
+        $tagLookupExitCode = $LASTEXITCODE
+        $existingTag = if ($existingTagOutput) { ($existingTagOutput | Select-Object -First 1).Trim() } else { '' }
+        if ($tagLookupExitCode -eq 0 -and $existingTag) {
+            $tagCommit = (& git -C $ReleaseWorktree rev-list -n 1 $tagName).Trim()
+            & git -C $ReleaseWorktree merge-base --is-ancestor $tagCommit $headCommit
+            if ($LASTEXITCODE -ne 0) {
+                throw "Tag $tagName points to $tagCommit, which is not an ancestor of release commit $headCommit."
+            }
 
-    Write-Host "VPOS Desktop $Version was generated and published from $headCommit; tag $tagName identifies release source $tagCommit." -ForegroundColor Green
+            $taggedPackageJson = (& git -C $ReleaseWorktree show "${tagCommit}:apps/desktop/package.json" | Out-String)
+            if ($LASTEXITCODE -ne 0) {
+                throw "Unable to inspect the desktop version at tag $tagName."
+            }
+            $taggedVersion = ($taggedPackageJson | ConvertFrom-Json).version
+            if ($taggedVersion -ne $Version) {
+                throw "Tag $tagName contains desktop version $taggedVersion instead of $Version."
+            }
+        } else {
+            Invoke-Checked -FilePath 'git' -Arguments @('-C', $ReleaseWorktree, 'tag', '-a', $tagName, '-m', "VPOS Desktop $Version")
+            $tagCommit = $headCommit
+        }
+        Invoke-Checked -FilePath 'git' -Arguments @('-C', $ReleaseWorktree, 'push', 'origin', $tagName)
+
+        Write-Host "VPOS Desktop $Version was generated and published from $headCommit; tag $tagName identifies release source $tagCommit." -ForegroundColor Green
+    }
 } finally {
     if ($askPassExe -and (Test-Path -LiteralPath $askPassExe)) {
         Remove-Item -LiteralPath $askPassExe -Force -ErrorAction SilentlyContinue

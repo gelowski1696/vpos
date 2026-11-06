@@ -70,4 +70,16 @@ describe('desktop update release tooling', () => {
     expect(source).toContain("Get-EnvironmentSecret -Name 'tauri_updater_password'");
     expect(source).toContain('$env:TAURI_KEY_PASSWORD = $keyPassword');
   });
+
+  it('updates the production desktop policy as part of the VPS release', () => {
+    const source = readFileSync(join(desktopRoot, '..', '..', 'scripts', 'publish-desktop-update.ps1'), 'utf8');
+    expect(source).toContain('[switch]$PolicyOnly');
+    expect(source).toContain('if (-not $PolicyOnly)');
+    expect(source).toContain('if ($PolicyOnly -and $SkipVpsStackUpdate)');
+    expect(source).toContain('DESKTOP_WINDOWS_LATEST_VERSION=$Version');
+    expect(source).toContain('DESKTOP_WINDOWS_MIN_SUPPORTED_VERSION=$MinimumSupportedVersion');
+    expect(source).toContain('apps/api/.env.backup-desktop-$Version');
+    expect(source).toContain("[Convert]::ToBase64String");
+    expect(source).toContain("base64 -d");
+  });
 });
