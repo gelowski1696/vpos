@@ -4,7 +4,8 @@ import type {
   DesktopMasterDataRow,
   DesktopSalePayload,
   DesktopSalePersonnelCommission,
-  DesktopSaleRecord
+  DesktopSaleRecord,
+  DesktopShiftRecord
 } from './schema';
 import { buildSaleOutboxPayload } from './sale-sync-payload';
 import type { DesktopSubscriptionPolicyDecision } from './subscription-policy-service';
@@ -281,6 +282,118 @@ class HttpSyncTransport {
 
 export class DesktopSyncService {
   constructor(private readonly ports: DesktopSyncPorts) {}
+
+  private async ensureMissingTransferShiftOutboxRows(): Promise<void> {
+    const outboxRows = await this.ports.repository.listOutboxItems();
+    const missingShiftIds = new Set(
+      outboxRows
+        .filter((row) => {
+          if (row.entity !== 'transfer' || row.status !== 'failed') {
+            return false;
+          }
+          const reason = row.last_error ?? '';
+          return (
+            /^Shift .+ (?:not found|is not OPEN)$/.test(reason) ||
+            reason === 'Transfer requires an OPEN shift'
+          );
+        })
+        .map((row) => asString(row.payload?.shift_id ?? row.payload?.shiftId))
+        .filter((shiftId): shiftId is string => Boolean(shiftId))
+    );
+    if (missingShiftIds.size === 0) {
+      return;
+    }
+
+    const shiftRows = await this.ports.repository.listMasterData('desktop_shift');
+    for (const row of shiftRows) {
+      let shift: DesktopShiftRecord;
+      try {
+        shift = JSON.parse(row.payload) as DesktopShiftRecord;
+      } catch {
+        continue;
+      }
+      if (!missingShiftIds.has(shift.id)) {
+        continue;
+      }
+
+      const outboxId = `outbox-${shift.id}`;
+      await this.ports.repository.enqueueOutboxItem({
+        id: outboxId,
+        entity: 'shift',
+        action: 'open',
+        payload: {
+          id: shift.id,
+          branch_id: shift.branchId,
+          location_id: shift.locationId,
+          user_id: shift.userId,
+          opening_cash: shift.openingCash,
+          opening_cash_denominations: shift.openingCashDenominations ?? null,
+          opening_inventory_snapshot: shift.openingInventorySnapshot,
+          status: 'open',
+          opened_at: shift.openedAt
+        },
+        idempotency_key: `desktop-shift-open:${shift.id}:repair`,
+        created_at: shift.openedAt
+      });
+      await this.ports.repository.markOutboxStatus(outboxId, 'pending' as OutboxItem['status']);
+    }
+  }
+
+  private async ensureFailedPettyCashShiftEntryOutboxRows(): Promise<void> {
+    const outboxRows = await this.ports.repository.listOutboxItems();
+    const shiftIds = new Set(
+      outboxRows
+        .filter((row) => {
+          if (row.entity !== 'petty_cash' || row.status !== 'failed') {
+            return false;
+          }
+          return row.last_error === 'Insufficient shift cash balance for petty cash OUT';
+        })
+        .map((row) => asString(row.payload?.shift_id ?? row.payload?.shiftId))
+        .filter((shiftId): shiftId is string => Boolean(shiftId))
+    );
+    if (shiftIds.size === 0) {
+      return;
+    }
+
+    const shiftCashRows = await this.ports.repository.listMasterData('desktop_shift_cash');
+    for (const row of shiftCashRows) {
+      let entry: {
+        id: string;
+        shiftId: string;
+        direction: 'IN' | 'OUT';
+        amount: number;
+        notes?: string | null;
+        createdAt: string;
+      };
+      try {
+        entry = JSON.parse(row.payload) as typeof entry;
+      } catch {
+        continue;
+      }
+      if (!shiftIds.has(entry.shiftId) || !entry.id || !Number.isFinite(Number(entry.amount))) {
+        continue;
+      }
+
+      const outboxId = `outbox-${entry.id}`;
+      await this.ports.repository.enqueueOutboxItem({
+        id: outboxId,
+        entity: 'shift_cash_entry',
+        action: 'create',
+        payload: {
+          id: entry.id,
+          shift_id: entry.shiftId,
+          direction: entry.direction,
+          amount: Number(entry.amount),
+          notes: entry.notes ?? null,
+          created_at: entry.createdAt
+        },
+        idempotency_key: `desktop-shift-cash:${entry.id}:repair`,
+        created_at: entry.createdAt
+      });
+      await this.ports.repository.markOutboxStatus(outboxId, 'pending' as OutboxItem['status']);
+    }
+  }
 
   private async ensureOfflineCustomerOutboxRows(): Promise<void> {
     const customerRows = await this.ports.repository.listMasterData('customer');
@@ -831,6 +944,8 @@ export class DesktopSyncService {
         const policyCheck = await this.refreshSubscriptionPolicy(state);
         const transport = new HttpSyncTransport(policyCheck.state, this.ports.auth);
         await this.ensureOfflineCustomerOutboxRows();
+        await this.ensureMissingTransferShiftOutboxRows();
+        await this.ensureFailedPettyCashShiftEntryOutboxRows();
         const rows = await this.ports.repository.listOutboxItems();
         const pending = rows
           .filter((row) => row.status === 'pending' || row.status === 'failed')

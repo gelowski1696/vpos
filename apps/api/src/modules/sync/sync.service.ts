@@ -54,6 +54,7 @@ export class SyncService {
     Map<string, { status: DeliveryStatus; orderType: 'PICKUP' | 'DELIVERY' }>
   >();
   private readonly shiftsByCompany = new Map<string, Map<string, ShiftState>>();
+  private readonly appliedShiftCashEntryIdsByCompany = new Map<string, Set<string>>();
   private readonly pettyCashByCompany = new Map<string, PettyCashEntryRecord[]>();
   private readonly cylindersByCompany = new Map<
     string,
@@ -422,7 +423,7 @@ export class SyncService {
       accepted.push(item.id);
       await this.persistIdempotencyDecision(companyId, persistenceIdempotencyKey, requestHash, {
         status: 'accepted'
-      });
+      }, syncedItem.payload);
       const saleCancelInventoryChanges = saleCancelPosting.ok
         ? saleCancelPosting.inventoryChanges ?? []
         : [];
@@ -727,6 +728,8 @@ export class SyncService {
         return this.validateDeliveryOrder(companyId, action, payload);
       case 'petty_cash':
         return this.validatePettyCash(companyId, action, payload);
+      case 'shift_cash_entry':
+        return this.validateShiftCashEntry(companyId, action, payload);
       case 'shift':
         return this.validateShift(companyId, action, payload, context);
       case 'cylinder_event':
@@ -737,6 +740,12 @@ export class SyncService {
   }
 
   private outboxPriority(item: SyncPushRequest['outbox_items'][number]): number {
+    if (item.entity === 'shift' && item.action === 'open') {
+      return 5;
+    }
+    if (item.entity === 'shift_cash_entry' && item.action === 'create') {
+      return 15;
+    }
     if (item.entity === 'customer' && item.action === 'create') {
       return 10;
     }
@@ -745,6 +754,9 @@ export class SyncService {
     }
     if (item.entity === 'customer_payment' && item.action === 'create') {
       return 30;
+    }
+    if (item.entity === 'petty_cash' && item.action === 'create') {
+      return 35;
     }
     if (item.entity === 'delivery_order' && item.action === 'create') {
       return 40;
@@ -2747,13 +2759,20 @@ export class SyncService {
       if (!id) {
         return { ok: false, reason: 'Shift id is required for open action' };
       }
-      if (shifts.get(id)?.status === 'OPEN') {
-        return { ok: false, reason: 'Shift is already open' };
-      }
-
       const openingCash = this.asNumber(payload.opening_cash ?? payload.openingCash);
       if (openingCash < 0) {
         return { ok: false, reason: 'Opening cash cannot be negative' };
+      }
+
+      const persisted = await this.persistShiftOpenToDatastore(
+        companyId,
+        id,
+        payload,
+        Number(openingCash.toFixed(2)),
+        context
+      );
+      if (!persisted) {
+        return { ok: false, reason: 'Shift open could not be saved. Retry sync.' };
       }
 
       shifts.set(id, {
@@ -2766,16 +2785,12 @@ export class SyncService {
         closed_at: undefined,
         branch_id: this.asString(payload.branch_id ?? payload.branchId) ?? undefined,
         location_id: this.asString(payload.location_id ?? payload.locationId) ?? undefined,
-        user_id: this.asString(payload.user_id ?? payload.userId) ?? undefined,
+        user_id:
+          context?.actorUserId?.trim() ||
+          this.asString(payload.user_id ?? payload.userId) ||
+          undefined,
         device_id: context?.deviceId?.trim() || undefined
       });
-      await this.persistShiftOpenToDatastore(
-        companyId,
-        id,
-        payload,
-        Number(openingCash.toFixed(2)),
-        context
-      );
       return { ok: true };
     }
 
@@ -3253,6 +3268,64 @@ export class SyncService {
     }
   }
 
+  private async validateShiftCashEntry(
+    companyId: string,
+    action: string,
+    payload: Record<string, unknown>
+  ): Promise<{ ok: true } | { ok: false; reason: string }> {
+    if (action !== 'create') {
+      return { ok: true };
+    }
+
+    const shiftId = this.asString(payload.shift_id ?? payload.shiftId);
+    const direction = this.asString(payload.direction)?.toUpperCase();
+    const amount = this.asNumber(payload.amount);
+    const entryId = this.asString(payload.id);
+    if (!shiftId || !entryId || !direction) {
+      return { ok: false, reason: 'Shift cash payload missing id/shift/direction' };
+    }
+    if (amount <= 0) {
+      return { ok: false, reason: 'Shift cash amount must be greater than zero' };
+    }
+    if (direction !== 'IN' && direction !== 'OUT') {
+      return { ok: false, reason: 'Shift cash direction must be IN or OUT' };
+    }
+
+    const shifts = this.getCompanyShifts(companyId);
+    const hydratedShift = await this.hydrateShiftFromDatastore(companyId, shiftId);
+    const shift = shifts.get(shiftId) ?? hydratedShift;
+    if (!shift || shift.status !== 'OPEN') {
+      return { ok: false, reason: 'Shift cash requires an OPEN shift' };
+    }
+    if (direction === 'OUT' && shift.balance < amount) {
+      return { ok: false, reason: 'Insufficient shift cash balance for shift cash OUT' };
+    }
+
+    const persisted = await this.persistShiftCashEntryToDatastore(companyId, {
+      id: entryId,
+      shift_id: shiftId,
+      direction: direction as 'IN' | 'OUT',
+      amount: Number(amount.toFixed(2)),
+      notes: this.asString(payload.notes) ?? null,
+      created_at: this.asString(payload.created_at ?? payload.createdAt) ?? new Date().toISOString()
+    });
+    if (!persisted) {
+      return { ok: false, reason: 'Shift cash entry could not be saved. Retry sync.' };
+    }
+
+    const appliedEntries = this.getAppliedShiftCashEntryIds(companyId);
+    if (appliedEntries.has(entryId)) {
+      return { ok: true };
+    }
+
+    const updatedBalance = Number(
+      (shift.balance + (direction === 'IN' ? amount : -amount)).toFixed(2)
+    );
+    shifts.set(shiftId, { ...shift, balance: updatedBalance });
+    appliedEntries.add(entryId);
+    return { ok: true };
+  }
+
   private async validatePettyCash(
     companyId: string,
     action: string,
@@ -3637,15 +3710,15 @@ export class SyncService {
     payload: Record<string, unknown>,
     openingCash: number,
     context?: { deviceId?: string; actorUserId?: string }
-  ): Promise<void> {
+  ): Promise<boolean> {
     if (!this.tenantRouter) {
-      return;
+      return true;
     }
     const branchId = this.asString(payload.branch_id ?? payload.branchId);
     const locationId = this.asString(payload.location_id ?? payload.locationId);
-    const userId = this.asString(payload.user_id ?? payload.userId);
+    const userId = context?.actorUserId?.trim() || this.asString(payload.user_id ?? payload.userId);
     if (!branchId || !userId) {
-      return;
+      return false;
     }
 
     try {
@@ -3693,7 +3766,7 @@ export class SyncService {
         };
       };
       if (!client.shift || typeof client.shift.upsert !== 'function') {
-        return;
+        return false;
       }
 
       const openedAtRaw = this.asString(payload.opened_at ?? payload.openedAt);
@@ -3726,26 +3799,31 @@ export class SyncService {
         }
       });
       if (client.auditLog && typeof client.auditLog.create === 'function') {
-        await client.auditLog.create({
-          data: {
-            companyId,
-            userId: context?.actorUserId?.trim() || userId,
-            action: 'SHIFT_OPEN',
-            level: 'INFO',
-            entity: 'Shift',
-            entityId: shiftId,
-            metadata: {
-              branch_id: branchId,
-              location_id: locationId ?? null,
-              user_id: userId,
-              device_id: context?.deviceId?.trim() || null,
-              source: 'sync_push'
+        try {
+          await client.auditLog.create({
+            data: {
+              companyId,
+              userId,
+              action: 'SHIFT_OPEN',
+              level: 'INFO',
+              entity: 'Shift',
+              entityId: shiftId,
+              metadata: {
+                branch_id: branchId,
+                location_id: locationId ?? null,
+                user_id: userId,
+                device_id: context?.deviceId?.trim() || null,
+                source: 'sync_push'
+              }
             }
-          }
-        });
+          });
+        } catch {
+          // The shift is durable; audit recovery is independent of transfer correctness.
+        }
       }
+      return true;
     } catch {
-      // Keep sync push resilient when persistence is unavailable.
+      return false;
     }
   }
 
@@ -3865,6 +3943,95 @@ export class SyncService {
       }
     } catch {
       // Keep sync push resilient when persistence is unavailable.
+    }
+  }
+
+  private async persistShiftCashEntryToDatastore(
+    companyId: string,
+    entry: {
+      id: string;
+      shift_id: string;
+      direction: 'IN' | 'OUT';
+      amount: number;
+      notes: string | null;
+      created_at: string;
+    }
+  ): Promise<boolean> {
+    if (!this.tenantRouter) {
+      return true;
+    }
+    try {
+      const binding = await this.tenantRouter.forCompany(companyId);
+      const client = binding.client as unknown as {
+        shift?: {
+          findFirst: (args: {
+            where: { id: string; companyId: string };
+            select: { id: true };
+          }) => Promise<{ id: string } | null>;
+        };
+        shiftCashEntry?: {
+          findUnique: (args: { where: { id: string } }) => Promise<{ id: string } | null>;
+          upsert: (args: {
+            where: { id: string };
+            create: {
+              id: string;
+              shiftId: string;
+              direction: string;
+              amount: number;
+              notes: string | null;
+              createdAt: Date;
+            };
+            update: {
+              direction: string;
+              amount: number;
+              notes: string | null;
+              createdAt: Date;
+            };
+          }) => Promise<unknown>;
+        };
+      };
+      if (
+        !client.shift ||
+        !client.shiftCashEntry ||
+        typeof client.shift.findFirst !== 'function' ||
+        typeof client.shiftCashEntry.findUnique !== 'function' ||
+        typeof client.shiftCashEntry.upsert !== 'function'
+      ) {
+        return false;
+      }
+      const shift = await client.shift.findFirst({
+        where: { id: entry.shift_id, companyId },
+        select: { id: true }
+      });
+      if (!shift) {
+        return false;
+      }
+      const existing = await client.shiftCashEntry.findUnique({ where: { id: entry.id } });
+      if (existing) {
+        this.getAppliedShiftCashEntryIds(companyId).add(entry.id);
+        return true;
+      }
+      const createdAt = new Date(entry.created_at);
+      await client.shiftCashEntry.upsert({
+        where: { id: entry.id },
+        create: {
+          id: entry.id,
+          shiftId: entry.shift_id,
+          direction: entry.direction,
+          amount: Number(entry.amount.toFixed(2)),
+          notes: entry.notes,
+          createdAt: Number.isNaN(createdAt.getTime()) ? new Date() : createdAt
+        },
+        update: {
+          direction: entry.direction,
+          amount: Number(entry.amount.toFixed(2)),
+          notes: entry.notes,
+          createdAt: Number.isNaN(createdAt.getTime()) ? new Date() : createdAt
+        }
+      });
+      return true;
+    } catch {
+      return false;
     }
   }
 
@@ -4493,6 +4660,16 @@ export class SyncService {
     return created;
   }
 
+  private getAppliedShiftCashEntryIds(companyId: string): Set<string> {
+    const existing = this.appliedShiftCashEntryIdsByCompany.get(companyId);
+    if (existing) {
+      return existing;
+    }
+    const created = new Set<string>();
+    this.appliedShiftCashEntryIdsByCompany.set(companyId, created);
+    return created;
+  }
+
   private getCompanyCylinders(
     companyId: string
   ): Map<string, { status: 'FULL' | 'EMPTY' | 'DAMAGED' | 'JUNKED' | 'DISPOSED' | 'LOST'; locationId: string }> {
@@ -4761,6 +4938,10 @@ export class SyncService {
     const reason = String(record.reason ?? '');
     return (
       reason === 'Lending record not found' ||
+      reason === 'Insufficient shift cash balance for petty cash OUT' ||
+      reason === 'Transfer requires an OPEN shift' ||
+      reason === 'Shift must be OPEN before close action' ||
+      /^Shift .+ (?:not found|is not OPEN)$/.test(reason) ||
       /^Sale line .+ does not belong to this sale$/.test(reason) ||
       reason.startsWith('Delivery assignment user was not found for rider/personnel reference:')
     );

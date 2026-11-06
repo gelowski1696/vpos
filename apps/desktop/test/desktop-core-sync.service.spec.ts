@@ -290,4 +290,252 @@ describe('DesktopSyncService shared ports', () => {
     expect(outbox.find((row) => row.id === 'outbox-payment-1')?.status).toBe('synced');
     expect(outbox.filter((row) => row.entity === 'customer')).toHaveLength(1);
   });
+
+  it('requeues a missing synced shift before retrying its failed transfer', async () => {
+    const openedAt = '2026-11-06T08:00:00.000Z';
+    const shiftId = 'desk-shift-1';
+    const shiftPayload = {
+      id: shiftId,
+      branchId: 'branch-1',
+      branchLabel: 'Main Branch',
+      locationId: 'location-1',
+      locationLabel: 'Store 1',
+      userId: 'cashier-1',
+      cashierName: 'Cashier One',
+      openingCash: 1_000,
+      openingInventorySnapshot: null,
+      closingCash: null,
+      cashVariance: null,
+      closingInventorySnapshot: null,
+      status: 'OPEN',
+      syncStatus: 'synced',
+      lastError: null,
+      openedAt,
+      closedAt: null,
+      createdAt: openedAt,
+      updatedAt: openedAt
+    };
+    const masterData: DesktopMasterDataRow[] = [{
+      entity: 'desktop_shift',
+      recordId: shiftId,
+      payload: JSON.stringify(shiftPayload),
+      updatedAt: openedAt
+    }];
+    let outbox: OutboxItem[] = [
+      {
+        id: `outbox-${shiftId}`,
+        entity: 'shift',
+        action: 'open',
+        payload: { id: shiftId },
+        idempotency_key: `desktop-shift-open:${shiftId}`,
+        created_at: openedAt,
+        updated_at: openedAt,
+        status: 'synced',
+        retry_count: 0,
+        last_error: null
+      },
+      {
+        id: 'outbox-desk-transfer-1',
+        entity: 'transfer',
+        action: 'create',
+        payload: {
+          id: 'desk-transfer-1',
+          source_location_id: 'location-1',
+          destination_location_id: 'location-2',
+          shift_id: shiftId,
+          lines: [{ product_id: 'product-1', qty_full: 1, qty_empty: 0 }]
+        },
+        idempotency_key: 'desktop-transfer:desk-transfer-1',
+        created_at: '2026-11-06T08:01:00.000Z',
+        updated_at: '2026-11-06T08:02:00.000Z',
+        status: 'failed',
+        retry_count: 1,
+        last_error: `Shift ${shiftId} not found`
+      }
+    ];
+    let pushedItems: Array<Record<string, unknown>> = [];
+    const authorizedFetch = jest.fn(async (state: DesktopAppState, input: string, init?: RequestInit) => {
+      if (input.includes('/platform/entitlements/current')) {
+        return { response: jsonResponse({ status: 'ACTIVE' }), state };
+      }
+      if (input.endsWith('/sync/push')) {
+        const body = JSON.parse(String(init?.body ?? '{}')) as { outbox_items?: Array<Record<string, unknown>> };
+        pushedItems = body.outbox_items ?? [];
+        return {
+          response: jsonResponse({ accepted: pushedItems.map((row) => String(row.id)), rejected: [] }),
+          state
+        };
+      }
+      return {
+        response: jsonResponse({ changes: [], conflicts: [], next_token: 'pull-token-1' }),
+        state
+      };
+    });
+    const noOpStatus = async (): Promise<void> => undefined;
+    const ports: DesktopSyncPorts = {
+      repository: {
+        listMasterData: async (entity) => masterData.filter((row) => !entity || row.entity === entity),
+        replaceMasterDataEntity: async () => undefined,
+        upsertMasterDataRows: async () => undefined,
+        listOutboxItems: async () => outbox.map((row) => ({ ...row, payload: { ...row.payload } })),
+        enqueueOutboxItem: async (input) => {
+          const next: OutboxItem = {
+            ...input,
+            updated_at: input.created_at,
+            status: 'pending',
+            retry_count: 0,
+            last_error: null
+          };
+          outbox = [next, ...outbox.filter((row) => row.id !== input.id)];
+        },
+        markOutboxStatus: async (id, status, lastError = null) => {
+          outbox = outbox.map((row) => row.id === id ? { ...row, status, last_error: lastError } : row);
+        },
+        incrementOutboxRetry: async () => undefined,
+        updateOutboxPayload: async () => undefined,
+        listSales: async () => [],
+        saveSale: async () => undefined
+      },
+      auth: { authorizedFetch },
+      settings: { saveState: async (state) => state },
+      subscriptionPolicy: {
+        applyRemotePayload: async () => undefined,
+        isSubscriptionEndedError: () => false,
+        evaluate: async () => ({
+          status: 'ACTIVE', mode: 'FULL_ACCESS', withinGrace: false,
+          canCreateTransactions: true, canSyncPush: true, canSyncPull: true,
+          reason: 'Subscription active'
+        })
+      },
+      transfer: { updateTransferSyncStatus: noOpStatus },
+      shift: { updateShiftSyncStatus: noOpStatus, updateShiftCashSyncStatus: noOpStatus },
+      delivery: { updateDeliverySyncStatus: noOpStatus, updateDispatchSyncStatus: noOpStatus },
+      purchaseOrder: { updatePurchaseOrderSyncStatus: noOpStatus },
+      expense: { updateExpenseSyncStatus: noOpStatus }
+    };
+    const state: DesktopAppState = {
+      ...DEFAULT_DESKTOP_APP_STATE,
+      setup: {
+        ...DEFAULT_DESKTOP_APP_STATE.setup,
+        apiBaseUrl: 'https://example.com/api',
+        deviceId: 'desktop-1'
+      }
+    };
+
+    const result = await new DesktopSyncService(ports).runSync(state, 'desktop-1');
+
+    expect(result.ok).toBe(true);
+    expect(pushedItems.map((row) => row.id)).toEqual([
+      `outbox-${shiftId}`,
+      'outbox-desk-transfer-1'
+    ]);
+    expect(pushedItems[0]).toMatchObject({
+      entity: 'shift',
+      action: 'open',
+      idempotency_key: `desktop-shift-open:${shiftId}:repair`,
+      payload: {
+        id: shiftId,
+        branch_id: 'branch-1',
+        location_id: 'location-1',
+        user_id: 'cashier-1',
+        opening_cash: 1_000,
+        opened_at: openedAt
+      }
+    });
+  });
+
+  it('requeues local shift cash before retrying a failed petty cash OUT', async () => {
+    const createdAt = '2026-11-06T08:01:00.000Z';
+    const outbox: OutboxItem[] = [{
+      id: 'outbox-petty-cash-1',
+      entity: 'petty_cash',
+      action: 'create',
+      payload: { id: 'petty-cash-1', shift_id: 'shift-1', direction: 'OUT', amount: 300 },
+      idempotency_key: 'idem-petty-cash-1',
+      created_at: '2026-11-06T08:02:00.000Z',
+      updated_at: '2026-11-06T08:03:00.000Z',
+      status: 'failed',
+      retry_count: 1,
+      last_error: 'Insufficient shift cash balance for petty cash OUT'
+    }];
+    const masterData: DesktopMasterDataRow[] = [{
+      entity: 'desktop_shift_cash',
+      recordId: 'shift-cash-1',
+      payload: JSON.stringify({
+        id: 'shift-cash-1',
+        shiftId: 'shift-1',
+        direction: 'IN',
+        amount: 500,
+        notes: 'Additional float',
+        createdAt
+      }),
+      updatedAt: createdAt
+    }];
+    let pushedItems: Array<Record<string, unknown>> = [];
+    const authorizedFetch = jest.fn(async (state: DesktopAppState, input: string, init?: RequestInit) => {
+      if (input.includes('/platform/entitlements/current')) {
+        return { response: jsonResponse({ status: 'ACTIVE' }), state };
+      }
+      if (input.endsWith('/sync/push')) {
+        const body = JSON.parse(String(init?.body ?? '{}')) as { outbox_items?: Array<Record<string, unknown>> };
+        pushedItems = body.outbox_items ?? [];
+        return { response: jsonResponse({ accepted: pushedItems.map((row) => String(row.id)), rejected: [] }), state };
+      }
+      return { response: jsonResponse({ changes: [], conflicts: [], next_token: 'pull-token-1' }), state };
+    });
+    const noOpStatus = async (): Promise<void> => undefined;
+    const ports: DesktopSyncPorts = {
+      repository: {
+        listMasterData: async (entity) => masterData.filter((row) => !entity || row.entity === entity),
+        replaceMasterDataEntity: async () => undefined,
+        upsertMasterDataRows: async () => undefined,
+        listOutboxItems: async () => outbox.map((row) => ({ ...row, payload: { ...row.payload } })),
+        enqueueOutboxItem: async (input) => {
+          const next: OutboxItem = {
+            ...input,
+            updated_at: input.created_at,
+            status: 'pending',
+            retry_count: 0,
+            last_error: null
+          };
+          outbox.splice(0, outbox.length, next, ...outbox.filter((row) => row.id !== input.id));
+        },
+        markOutboxStatus: async () => undefined,
+        incrementOutboxRetry: async () => undefined,
+        updateOutboxPayload: async () => undefined,
+        listSales: async () => [],
+        saveSale: async () => undefined
+      },
+      auth: { authorizedFetch },
+      settings: { saveState: async (state) => state },
+      subscriptionPolicy: {
+        applyRemotePayload: async () => undefined,
+        isSubscriptionEndedError: () => false,
+        evaluate: async () => ({
+          status: 'ACTIVE', mode: 'FULL_ACCESS', withinGrace: false,
+          canCreateTransactions: true, canSyncPush: true, canSyncPull: true,
+          reason: 'Subscription active'
+        })
+      },
+      transfer: { updateTransferSyncStatus: noOpStatus },
+      shift: { updateShiftSyncStatus: noOpStatus, updateShiftCashSyncStatus: noOpStatus },
+      delivery: { updateDeliverySyncStatus: noOpStatus, updateDispatchSyncStatus: noOpStatus },
+      purchaseOrder: { updatePurchaseOrderSyncStatus: noOpStatus },
+      expense: { updateExpenseSyncStatus: noOpStatus }
+    };
+    const state: DesktopAppState = {
+      ...DEFAULT_DESKTOP_APP_STATE,
+      setup: { ...DEFAULT_DESKTOP_APP_STATE.setup, apiBaseUrl: 'https://example.com/api' }
+    };
+
+    await new DesktopSyncService(ports).runSync(state, 'desktop-1');
+
+    expect(pushedItems.map((row) => row.id)).toEqual(['outbox-shift-cash-1', 'outbox-petty-cash-1']);
+    expect(pushedItems[0]).toMatchObject({
+      entity: 'shift_cash_entry',
+      action: 'create',
+      idempotency_key: 'desktop-shift-cash:shift-cash-1:repair',
+      payload: { shift_id: 'shift-1', direction: 'IN', amount: 500 }
+    });
+  });
 });
