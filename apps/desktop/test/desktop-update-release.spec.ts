@@ -51,4 +51,11 @@ describe('desktop update release tooling', () => {
     expect(source).toContain("createHash('sha256')");
     expect(source).toContain('release-metadata.json');
   });
+
+  it('invokes the PowerShell release script without forwarding a pnpm separator', () => {
+    const source = readFileSync(join(desktopRoot, '..', '..', 'scripts', 'publish-desktop-update.ps1'), 'utf8');
+    expect(source).not.toContain("'desktop:release', '--'");
+    expect(source).toContain('release-desktop-update.ps1');
+    expect(source).toContain("'-File'");
+  });
 });

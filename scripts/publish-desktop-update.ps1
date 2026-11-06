@@ -168,8 +168,11 @@ try {
     }
 
     Set-UpdaterSigningEnvironment
-    Invoke-Checked -FilePath 'pnpm' -Arguments @(
-        'desktop:release', '--',
+    $releaseScriptPath = Join-Path $ReleaseWorktree 'apps\desktop\scripts\release-desktop-update.ps1'
+    Invoke-Checked -FilePath 'powershell.exe' -Arguments @(
+        '-NoProfile',
+        '-ExecutionPolicy', 'Bypass',
+        '-File', $releaseScriptPath,
         '-Version', $Version,
         '-Notes', $Notes,
         '-SshTarget', $SshTarget,
