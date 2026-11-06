@@ -61,7 +61,10 @@ function Set-UpdaterSigningEnvironment {
     }
     $env:TAURI_PRIVATE_KEY = $privateKey.Trim()
 
-    $keyPassword = Get-EnvironmentSecret -Name 'TAURI_KEY_PASSWORD'
+    $keyPassword = Get-EnvironmentSecret -Name 'tauri_updater_password'
+    if ([string]::IsNullOrEmpty($keyPassword)) {
+        $keyPassword = Get-EnvironmentSecret -Name 'TAURI_KEY_PASSWORD'
+    }
     if ([string]::IsNullOrEmpty($keyPassword)) {
         $securePassword = Read-Host 'Enter the Tauri updater key password' -AsSecureString
         $passwordPointer = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($securePassword)

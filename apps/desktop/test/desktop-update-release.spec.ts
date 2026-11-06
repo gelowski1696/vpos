@@ -64,4 +64,10 @@ describe('desktop update release tooling', () => {
     expect(source).toContain('merge-base --is-ancestor');
     expect(source).not.toContain('if ($tagCommit -ne $headCommit)');
   });
+
+  it('loads the updater signing password from the configured Windows user variable', () => {
+    const source = readFileSync(join(desktopRoot, '..', '..', 'scripts', 'publish-desktop-update.ps1'), 'utf8');
+    expect(source).toContain("Get-EnvironmentSecret -Name 'tauri_updater_password'");
+    expect(source).toContain('$env:TAURI_KEY_PASSWORD = $keyPassword');
+  });
 });
