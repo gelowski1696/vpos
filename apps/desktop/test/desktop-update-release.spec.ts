@@ -81,5 +81,7 @@ describe('desktop update release tooling', () => {
     expect(source).toContain('apps/api/.env.backup-desktop-$Version');
     expect(source).toContain("[Convert]::ToBase64String");
     expect(source).toContain("base64 -d");
+    expect(source).toContain('$remoteScriptBase64');
+    expect(source).toContain("| base64 -d | sh");
   });
 });

@@ -228,10 +228,12 @@ done < "$policy_file"
 docker compose -f __COMPOSE_FILE__ up -d --build
 docker compose -f __COMPOSE_FILE__ ps
 '@
-        $remoteCommand = $remoteTemplate.
+        $remoteScript = $remoteTemplate.
             Replace('__POLICY_BACKUP__', $policyBackup).
             Replace('__POLICY_BASE64__', $policyBase64).
             Replace('__COMPOSE_FILE__', $composeFile)
+        $remoteScriptBase64 = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($remoteScript))
+        $remoteCommand = "printf '%s' '$remoteScriptBase64' | base64 -d | sh"
         Invoke-Checked -FilePath 'ssh' -Arguments @(
             '-o', 'StrictHostKeyChecking=yes',
             '-o', 'NumberOfPasswordPrompts=1',
