@@ -28,12 +28,6 @@ type NotificationItem = {
   onAction?: () => void;
 };
 
-const CONNECTIVITY_ERROR_PATTERN = /\b(fetch|network|offline|internet|connection|unreachable|timed?\s*out|dns|econn|enotfound)\b/i;
-
-function hasConnectivityError(state: DesktopAppState): boolean {
-  return state.sync.lastSyncStatus === 'error' && CONNECTIVITY_ERROR_PATTERN.test(state.sync.lastSyncMessage ?? '');
-}
-
 function SvgIcon({ children, className }: { children: ReactNode; className?: string }): JSX.Element {
   return (
     <svg
@@ -175,7 +169,11 @@ export function TopBar({
     typeof navigator === 'undefined' ? true : navigator.onLine
   );
   const tutorialScope = getTutorialScopeForRoute(activeRoute);
-  const operatorName = state.setup.operatorName || 'Cashier';
+  const operatorName =
+    state.auth.userFullName?.trim() ||
+    state.auth.userEmail?.trim() ||
+    state.setup.operatorName.trim() ||
+    'Cashier';
 
   useEffect(() => {
     setNotificationOpen(false);
@@ -257,7 +255,7 @@ export function TopBar({
     return next;
   }, [onOpenRoute, onRunSync, pendingOutboxCount, state, syncBusy]);
 
-  const statusHealthy = isNetworkOnline && !hasConnectivityError(state);
+  const statusHealthy = isNetworkOnline;
   const notificationCount = notifications.filter((item) => item.tone !== 'success').length;
   const onlinePillTone = statusHealthy ? 'success' : 'danger';
   const syncPillTone = pendingOutboxCount > 0 ? 'warning' : state.sync.lastSyncStatus === 'error' ? 'danger' : 'muted';

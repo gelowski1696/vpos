@@ -112,7 +112,7 @@ export type DesktopSyncPorts = {
   readTimeoutMs?: () => number;
 };
 
-const DEFAULT_SYNC_TIMEOUT_MS = 120_000;
+const DEFAULT_SYNC_TIMEOUT_MS = 300_000;
 
 function asString(value: unknown): string | null {
   if (typeof value !== 'string') {

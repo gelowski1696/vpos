@@ -7,6 +7,11 @@ import { desktopMasterDataService } from '../services/desktop-master-data.servic
 import { desktopStockProjectionService } from '../services/desktop-stock-projection.service';
 import { desktopShiftService } from '../services/desktop-shift.service';
 import { desktopTransferService } from '../services/desktop-transfer.service';
+import {
+  hasConsumableTransferStock,
+  transferBucketConsumesStock,
+  type TransferModeSelection
+} from './transfer-stock-policy';
 
 type Props = {
   appState: DesktopAppState;
@@ -26,8 +31,6 @@ type TransferDraftLine = {
   qtyFull: string;
   qtyEmpty: string;
 };
-
-type TransferModeSelection = DesktopTransferMode | '';
 
 type InventorySnapshot = {
   qtyOnHand: number;
@@ -394,8 +397,7 @@ export function TransferScreen({ appState, onOutboxChanged }: Props): JSX.Elemen
       ]);
       const nextLocations = locationRows
         .map((row) => parseLocationOption(row.payload))
-        .filter((row): row is LocationOption => Boolean(row))
-        .filter((row) => !row.branchId || row.branchId === appState.setup.branchId);
+        .filter((row): row is LocationOption => Boolean(row));
       setLocations(nextLocations);
       const projectedCatalog = catalogRows.map((product) => {
         const projected = projectedInventory.get(product.id);
@@ -495,12 +497,17 @@ export function TransferScreen({ appState, onOutboxChanged }: Props): JSX.Elemen
     [locations, mode, sourceId]
   );
 
+  const localSourceLocations = useMemo(
+    () => locations.filter((location) => !location.branchId || location.branchId === appState.setup.branchId),
+    [appState.setup.branchId, locations]
+  );
+
   const sourceOptions = useMemo(() => {
     if (!mode) {
       return [];
     }
-    const stores = locations.filter((location) => (location.type ?? '').toUpperCase().includes('STORE'));
-    const warehouses = locations.filter((location) => (location.type ?? '').toUpperCase().includes('WAREHOUSE'));
+    const stores = localSourceLocations.filter((location) => (location.type ?? '').toUpperCase().includes('STORE'));
+    const warehouses = localSourceLocations.filter((location) => (location.type ?? '').toUpperCase().includes('WAREHOUSE'));
 
     switch (mode) {
       case 'SUPPLIER_RESTOCK_IN':
@@ -518,9 +525,9 @@ export function TransferScreen({ appState, onOutboxChanged }: Props): JSX.Elemen
       case 'WAREHOUSE_TO_STORE':
         return warehouses;
       default:
-        return locations;
+        return localSourceLocations;
     }
-  }, [locations, mode]);
+  }, [localSourceLocations, mode]);
 
   useEffect(() => {
     if (!sourceOptions.length) {
@@ -574,7 +581,7 @@ export function TransferScreen({ appState, onOutboxChanged }: Props): JSX.Elemen
   }, [mode]);
 
   const requiresSourceStockCheck = useMemo(
-    () => Boolean(mode) && mode !== 'SUPPLIER_RESTOCK_IN' && !isSingleBucketAdjustmentMode(mode),
+    () => Boolean(mode) && mode !== 'SUPPLIER_RESTOCK_IN',
     [mode]
   );
   const activeSourceLocationId = useMemo(() => {
@@ -695,17 +702,17 @@ export function TransferScreen({ appState, onOutboxChanged }: Props): JSX.Elemen
       const availableEmpty = resolveRemainingQtyForLine(line.key, line.productId, 'empty');
       warnings.set(line.key, {
         full:
-          fullQty > availableFull + 0.0001
+          transferBucketConsumesStock(mode, 'full') && fullQty > availableFull + 0.0001
             ? `${product?.name ?? 'Item'} only has ${availableFull.toFixed(2)} ${product?.isLpg === false ? 'quantity' : 'FULL'} available at source.`
             : null,
         empty:
-          emptyQty > availableEmpty + 0.0001
+          transferBucketConsumesStock(mode, 'empty') && emptyQty > availableEmpty + 0.0001
             ? `${product?.name ?? 'Item'} only has ${availableEmpty.toFixed(2)} EMPTY available at source.`
             : null
       });
     }
     return warnings;
-  }, [lines, productById, requiresSourceStockCheck, activeSourceLocationId, sourceInventoryByProduct]);
+  }, [lines, mode, productById, requiresSourceStockCheck, activeSourceLocationId, sourceInventoryByProduct]);
 
   const hasBlockingStockWarning = useMemo(
     () =>
@@ -751,6 +758,17 @@ export function TransferScreen({ appState, onOutboxChanged }: Props): JSX.Elemen
             ? firstBlockingStockWarning.full ?? firstBlockingStockWarning.empty ?? 'Transfer quantities exceed source stock.'
             : 'Transfer is ready to save locally and sync later.';
   const canSaveTransfer = !saving && Boolean(activeShiftId) && hasSelectedMode && hasValidTransferLine && !hasBlockingStockWarning;
+  const canAttemptSaveTransfer = !saving && hasSelectedMode && hasValidTransferLine && !hasBlockingStockWarning;
+
+  const openSaveConfirmation = (): void => {
+    if (!activeShiftId) {
+      announce('Start Duty in Shift before saving a transfer.', 'warning');
+      return;
+    }
+    if (canSaveTransfer) {
+      setSaveConfirmOpen(true);
+    }
+  };
 
   const addLine = (): void => {
     if (!hasSelectedMode) {
@@ -769,11 +787,9 @@ export function TransferScreen({ appState, onOutboxChanged }: Props): JSX.Elemen
       announce('Choose a source location first so desktop can check available stock.', 'warning');
       return;
     }
-    const sourceStock = sourceInventoryByProduct.get(product.id);
     const availableFull = resolveAvailableQtyForBucket(product.id, 'full');
     const availableEmpty = resolveAvailableQtyForBucket(product.id, 'empty');
-    const availableQoh = sourceStock?.qtyOnHand ?? product.qtyOnHand;
-    if (requiresSourceStockCheck && availableFull <= 0.0001 && availableEmpty <= 0.0001 && availableQoh <= 0.0001) {
+    if (requiresSourceStockCheck && !hasConsumableTransferStock(mode, availableFull, availableEmpty)) {
       announce(`${product.name} has no available stock at the selected source.`, 'warning');
       return;
     }
@@ -819,8 +835,9 @@ export function TransferScreen({ appState, onOutboxChanged }: Props): JSX.Elemen
         if (line.key !== key) {
           return line;
         }
-        if (delta > 0 && line.productId && requiresSourceStockCheck) {
-          const allowed = resolveRemainingQtyForLine(line.key, line.productId, bucket === 'qtyFull' ? 'full' : 'empty');
+        const stockBucket = bucket === 'qtyFull' ? 'full' : 'empty';
+        if (delta > 0 && line.productId && requiresSourceStockCheck && transferBucketConsumesStock(mode, stockBucket)) {
+          const allowed = resolveRemainingQtyForLine(line.key, line.productId, stockBucket);
           const nextValue = parseDraftQty(line[bucket]) + delta;
           if (nextValue > allowed + 0.0001) {
             return line;
@@ -843,11 +860,12 @@ export function TransferScreen({ appState, onOutboxChanged }: Props): JSX.Elemen
         }
         const normalized = normalizeDraftQtyInput(rawValue);
         const nextValue = parseDraftQty(normalized);
-        if (line.productId && requiresSourceStockCheck) {
+        const stockBucket = bucket === 'qtyFull' ? 'full' : 'empty';
+        if (line.productId && requiresSourceStockCheck && transferBucketConsumesStock(mode, stockBucket)) {
           const allowed = resolveRemainingQtyForLine(
             line.key,
             line.productId,
-            bucket === 'qtyFull' ? 'full' : 'empty'
+            stockBucket
           );
           if (nextValue > allowed + 0.0001) {
             return {
@@ -1243,7 +1261,7 @@ export function TransferScreen({ appState, onOutboxChanged }: Props): JSX.Elemen
             <div className="transfer-static-item-table">
               <div className="transfer-static-item-head">
                 <span>Item Name</span>
-              <span>Full / Qty</span>
+                <span>Full / Regular Qty</span>
                 <span>Empty</span>
                 <span>QOH</span>
                 <span aria-hidden="true" />
@@ -1263,9 +1281,7 @@ export function TransferScreen({ appState, onOutboxChanged }: Props): JSX.Elemen
                     const availableQoh = sourceStock?.qtyOnHand ?? product.qtyOnHand;
                     const canSelect =
                       !requiresSourceStockCheck ||
-                      availableFull > 0.0001 ||
-                      availableEmpty > 0.0001 ||
-                      availableQoh > 0.0001;
+                      hasConsumableTransferStock(mode, availableFull, availableEmpty);
 
                     return (
                       <button
@@ -1353,7 +1369,7 @@ export function TransferScreen({ appState, onOutboxChanged }: Props): JSX.Elemen
                           <div className={`transfer-static-line-qty-card ${warning?.full ? 'has-warning' : ''}`}>
                             <div className="transfer-static-qty-head">
                               <span>{product?.isLpg === false ? `Quantity (${getBucketIndicator(mode, 'full') || '+'})` : getBucketLabel(mode, 'full')}</span>
-                              {line.productId && requiresSourceStockCheck ? (
+                              {line.productId && requiresSourceStockCheck && transferBucketConsumesStock(mode, 'full') ? (
                                 <small>{resolveRemainingQtyForLine(line.key, line.productId, 'full').toFixed(2)} available</small>
                               ) : null}
                             </div>
@@ -1380,7 +1396,7 @@ export function TransferScreen({ appState, onOutboxChanged }: Props): JSX.Elemen
                           {product?.isLpg === false ? null : <div className={`transfer-static-line-qty-card ${warning?.empty ? 'has-warning' : ''}`}>
                             <div className="transfer-static-qty-head">
                               <span>{getBucketLabel(mode, 'empty')}</span>
-                              {line.productId && requiresSourceStockCheck ? (
+                              {line.productId && requiresSourceStockCheck && transferBucketConsumesStock(mode, 'empty') ? (
                                 <small>{resolveRemainingQtyForLine(line.key, line.productId, 'empty').toFixed(2)} available</small>
                               ) : null}
                             </div>
@@ -1456,8 +1472,8 @@ export function TransferScreen({ appState, onOutboxChanged }: Props): JSX.Elemen
               <button
                 className="primary-btn transfer-static-save-btn"
                 type="button"
-                onClick={() => setSaveConfirmOpen(true)}
-                disabled={!canSaveTransfer}
+                onClick={openSaveConfirmation}
+                disabled={!canAttemptSaveTransfer}
               >
                 <span>{saving ? 'Saving...' : 'Save Transfer'}</span>
                 <TransferSymbol kind="save" className="h-[18px] w-[18px]" />
@@ -1662,9 +1678,7 @@ export function TransferScreen({ appState, onOutboxChanged }: Props): JSX.Elemen
                   const availableQoh = sourceInventoryByProduct.get(product.id)?.qtyOnHand ?? product.qtyOnHand;
                   const canSelect =
                     !requiresSourceStockCheck ||
-                    availableFull > 0.0001 ||
-                    availableEmpty > 0.0001 ||
-                    availableQoh > 0.0001;
+                    hasConsumableTransferStock(mode, availableFull, availableEmpty);
 
                   return (
                     <button

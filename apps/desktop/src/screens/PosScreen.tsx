@@ -832,7 +832,9 @@ function hasCylinderStock(product: DesktopCatalogProduct): boolean {
 }
 
 function formatStockQuantity(value: number): string {
-  return Number.isFinite(value) ? value.toFixed(2) : "0.00";
+  return Number.isFinite(value)
+    ? value.toLocaleString(undefined, { maximumFractionDigits: 0 })
+    : "0";
 }
 
 function formatCylinderStockQuantity(value: number): string {
@@ -1059,6 +1061,7 @@ function parsePriceLists(rows: Array<{ payload: string }>): LocalPriceList[] {
 
 function resolveLocalPrice(input: {
   productId: string;
+  baseUnitPrice: number;
   branchId: string;
   customer: DesktopOption | null;
   priceLists: LocalPriceList[];
@@ -1139,6 +1142,7 @@ function resolveLocalPrice(input: {
     return contract;
   }
 
+  let basePrice: number | null = null;
   if (input.allowCustomPricing && input.customer?.customerCategoryId) {
     const customerGroup = pick(
       activeLists.filter(
@@ -1149,47 +1153,44 @@ function resolveLocalPrice(input: {
       ),
     );
     if (customerGroup !== null) {
-      return customerGroup;
+      basePrice = customerGroup;
     }
   }
 
-  if (
-    input.customer?.contractPrice !== null &&
-    input.customer?.contractPrice !== undefined
-  ) {
-    if (input.customer.contractPrice > 0) {
-      return round2(input.customer.contractPrice);
-    }
+  const tier = basePrice === null
+    ? pick(
+        activeLists.filter(
+          (list) =>
+            list.scope === "TIER" &&
+            input.customer?.tier &&
+            list.customerTier &&
+            list.customerTier.toUpperCase() === input.customer.tier.toUpperCase(),
+        ),
+      )
+    : null;
+  if (basePrice === null && tier !== null) {
+    basePrice = tier;
   }
 
-  const tier = pick(
-    activeLists.filter(
-      (list) =>
-        list.scope === "TIER" &&
-        input.customer?.tier &&
-        list.customerTier &&
-        list.customerTier.toUpperCase() === input.customer.tier.toUpperCase(),
-    ),
-  );
-  if (tier !== null) {
-    return tier;
+  const branch = basePrice === null
+    ? pick(
+        activeLists.filter(
+          (list) => list.scope === "BRANCH" && list.branchId === input.branchId,
+        ),
+      )
+    : null;
+  if (basePrice === null && branch !== null) {
+    basePrice = branch;
   }
 
-  const branch = pick(
-    activeLists.filter(
-      (list) => list.scope === "BRANCH" && list.branchId === input.branchId,
-    ),
-  );
-  if (branch !== null) {
-    return branch;
-  }
+  const global = basePrice === null ? pick(activeLists.filter((list) => list.scope === "GLOBAL")) : null;
+  basePrice ??= global ?? input.baseUnitPrice;
 
-  const global = pick(activeLists.filter((list) => list.scope === "GLOBAL"));
-  if (global !== null) {
-    return global;
+  const customerDiscount = Math.max(0, input.customer?.contractPrice ?? 0);
+  if (customerDiscount > 0) {
+    return round2(Math.max(0, basePrice - customerDiscount));
   }
-
-  return null;
+  return round2(basePrice);
 }
 
 function isSupportedRewardType(
@@ -2444,6 +2445,7 @@ export function PosScreen({
     }
     const resolved = resolveLocalPrice({
       productId: product.id,
+      baseUnitPrice: product.unitPrice,
       branchId,
       customer,
       priceLists,
@@ -2751,6 +2753,7 @@ export function PosScreen({
         }
         const resolved = resolveLocalPrice({
           productId: product.id,
+          baseUnitPrice: product.unitPrice,
           branchId,
           customer: selectedCustomer,
           priceLists: nextPriceLists,
@@ -2783,12 +2786,14 @@ export function PosScreen({
       setCart((prev) =>
         prev.map((line) => {
           const match = nextCatalog.find((entry) => entry.id === line.id);
+          const baseMatch = nextBaseCatalog.find((entry) => entry.id === line.id);
           return match
             ? {
                 ...line,
                 unitPrice:
                   resolveLocalPrice({
                     productId: line.id,
+                    baseUnitPrice: baseMatch?.unitPrice ?? line.unitPrice,
                     branchId,
                     customer: selectedCustomer,
                     priceLists: nextPriceLists,

@@ -35,7 +35,11 @@ describe('DesktopMasterDataService personnel options', () => {
     expect(result[0]).toEqual({
       id: 'personnel-1',
       label: 'PER-001 - Juan Dela Cruz',
-      subtitle: 'Driver'
+      subtitle: 'Driver',
+      roleName: 'Driver',
+      salaryType: 'MONTHLY',
+      salaryRate: 0,
+      commissionEligible: true
     });
   });
 });

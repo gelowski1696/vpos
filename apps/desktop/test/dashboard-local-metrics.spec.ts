@@ -47,6 +47,7 @@ function makeSale(overrides: Partial<DesktopSaleRecord>): DesktopSaleRecord {
 
 describe('loadLocalRangeMetrics', () => {
   afterEach(() => {
+    jest.useRealTimers();
     jest.restoreAllMocks();
   });
 
@@ -461,8 +462,9 @@ describe('loadLocalRangeMetrics', () => {
   });
 
   it('builds a sales trail feed sorted by newest sale first', async () => {
-    const earlierIso = '2026-06-03T01:00:00.000Z';
-    const laterIso = '2026-06-03T03:30:00.000Z';
+    jest.useFakeTimers().setSystemTime(new Date(2026, 5, 3, 12));
+    const earlierIso = new Date(2026, 5, 3, 9).toISOString();
+    const laterIso = new Date(2026, 5, 3, 11, 30).toISOString();
     const partialSale = makeSale({
       id: 'sale-trail-1',
       receiptNumber: '20260603-0000011',

@@ -26,6 +26,43 @@ describe('shared POS pricing and rewards', () => {
     expect(resolveDesktopUnitPrice({ ...base, customer: null })).toBe(95);
   });
 
+  it('subtracts the customer discount from the current scoped price without overriding contract lists', () => {
+    const updatedAt = '2026-10-09T00:00:00.000Z';
+    const priceLists = parseDesktopPosPriceLists([
+      {
+        entity: 'price_list',
+        recordId: 'branch',
+        updatedAt,
+        payload: JSON.stringify({
+          id: 'branch', scope: 'BRANCH', branchId: 'b1', startsAt: '2026-01-01T00:00:00.000Z',
+          rules: [{ productId: 'p1', flowMode: 'ANY', unitPrice: 95, priority: 1 }]
+        })
+      },
+      {
+        entity: 'price_list',
+        recordId: 'contract',
+        updatedAt,
+        payload: JSON.stringify({
+          id: 'contract', scope: 'CONTRACT', customerId: 'exact', startsAt: '2026-01-01T00:00:00.000Z',
+          rules: [{ productId: 'p1', flowMode: 'ANY', unitPrice: 80, priority: 1 }]
+        })
+      }
+    ]);
+    const common = {
+      productId: 'p1', branchId: 'b1', priceLists, allowCustomPricing: false,
+      atIso: '2026-10-09T00:00:00.000Z'
+    };
+
+    expect(resolveDesktopUnitPrice({
+      ...common,
+      customer: { id: 'discount', label: 'Discount customer', contractPrice: 50 }
+    })).toBe(45);
+    expect(resolveDesktopUnitPrice({
+      ...common,
+      customer: { id: 'exact', label: 'Exact contract', contractPrice: 50 }
+    })).toBe(80);
+  });
+
   it('parses cached rewards and calculates eligible discounts', () => {
     const reward = parseDesktopPosReward({
       id: 'reward-1', code: 'FREE-REFILL', name: 'Free refill', reward_type: 'FREE_REFILL',

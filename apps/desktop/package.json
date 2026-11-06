@@ -1,6 +1,6 @@
 {
   "name": "@vpos/desktop",
-  "version": "0.1.4",
+  "version": "0.1.5",
   "private": true,
   "description": "VPOS Desktop cashier workstation application",
   "author": "VPOS Team",
@@ -22,7 +22,7 @@
     "ota:manifest": "node scripts/create-update-manifest.mjs",
     "version:set": "node scripts/set-desktop-version.mjs",
     "version:check": "node scripts/set-desktop-version.mjs --check",
-    "release:check": "pnpm version:check && pnpm typecheck && pnpm test -- --runInBand && pnpm build",
+    "release:check": "pnpm --filter \"@vpos/desktop^...\" build && pnpm version:check && pnpm typecheck && pnpm test --runInBand && pnpm build",
     "docs:update-screens": "node scripts/capture-update-guide.mjs",
     "docs:update-pdf": "node scripts/build-update-guide-pdf.mjs"
   },

@@ -72,7 +72,12 @@ function makeShift(
 }
 
 describe('daily inventory report service', () => {
+  afterEach(() => {
+    jest.useRealTimers();
+  });
+
   it('groups closed shifts by day and computes the day summary from the stored snapshots', () => {
+    jest.useFakeTimers().setSystemTime(new Date(2026, 5, 19, 12));
     const report = buildDailyInventoryReport(
       [
         makeShift(

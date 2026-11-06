@@ -303,11 +303,11 @@ describe('PurchaseOrdersScreen layout', () => {
     expect(markup).toContain('Order Progress');
     expect(markup).toContain('Details');
     expect(markup).toContain('Activity Timeline');
-    expect(markup).toContain('Activity Summary');
+    expect(markup).toContain('Activity Log');
     expect(markup).toContain('Submit Purchase Order');
     expect(markup).toContain('Edit Draft');
     expect(markup).toContain('Delete Draft');
-    expect(markup).not.toContain('Receive Stock');
+    expect(markup).not.toContain('Post Delivery');
     expect(markup).not.toContain('Record Pullout');
     expect(markup).not.toContain('Complete Purchase Order');
     expect(markup).toContain('Cancel Purchase Order');
@@ -352,7 +352,7 @@ describe('PurchaseOrdersScreen layout', () => {
     const markup = renderPurchaseOrdersMarkup([record], { detailId: record.id });
 
     expect(markup).toContain('PO-2026-0900');
-    expect(markup).toContain('Receive Stock');
+    expect(markup).toContain('Post Delivery');
     expect(markup).toContain('Add Attachment');
   });
 });

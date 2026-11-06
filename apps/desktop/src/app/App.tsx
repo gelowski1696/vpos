@@ -45,6 +45,7 @@ import { DesktopTutorialOverlayHost } from '../tutorial/tutorial-overlay-host';
 import { DesktopTutorialProvider, useDesktopTutorialActions, useDesktopTutorialState } from '../tutorial/tutorial-provider';
 import { getRouteForTutorialScreen } from '../tutorial/tutorial-routing';
 import { filterDesktopRoutes, isDesktopRouteAllowed } from './pos-access-policy';
+import { isDesktopTauriRuntime } from '../services/tauri-runtime';
 
 const PRIMARY_ROUTES: DesktopRouteId[] = ['dashboard', 'pos', 'sales', 'transfer', 'transfer-list'];
 const SIDE_MENU_ROUTES: DesktopRouteId[] = ['items', 'customers', 'lending', 'lpg-service', 'expense', 'shift', 'reports', 'settings'];
@@ -367,6 +368,41 @@ function DesktopAppShell(): JSX.Element {
   useEffect(() => {
     void playDesktopStartupCueOnce();
   }, []);
+
+  useEffect(() => {
+    if (!isDesktopTauriRuntime()) {
+      return;
+    }
+
+    let disposed = false;
+    let unlisten: (() => void) | undefined;
+    void import('@tauri-apps/api/window')
+      .then(({ appWindow }) =>
+        appWindow.onCloseRequested((event) => {
+          if (startupStage !== 'READY') {
+            return;
+          }
+          event.preventDefault();
+          desktopUi.showToast({
+            tone: 'warning',
+            message: 'Use Full Sign Out before closing VPOS.'
+          });
+        })
+      )
+      .then((stopListening) => {
+        if (disposed) {
+          stopListening();
+          return;
+        }
+        unlisten = stopListening;
+      })
+      .catch(() => undefined);
+
+    return () => {
+      disposed = true;
+      unlisten?.();
+    };
+  }, [desktopUi, startupStage]);
 
   useEffect(() => {
     let active = true;

@@ -111,6 +111,7 @@ export function parseDesktopPosPriceLists(rows: DesktopMasterDataRow[]): Desktop
 
 export function resolveDesktopUnitPrice(input: {
   productId: string;
+  baseUnitPrice?: number;
   branchId: string;
   customer: DesktopOption | null;
   priceLists: DesktopPosPriceList[];
@@ -137,16 +138,24 @@ export function resolveDesktopUnitPrice(input: {
   };
   const contract = pick(active.filter((list) => list.scope === 'CONTRACT' && list.customerId === input.customer?.id));
   if (contract !== null) return contract;
+  let basePrice: number | null = null;
   if (input.allowCustomPricing && input.customer?.customerCategoryId) {
     const group = pick(active.filter((list) => list.scope === 'CUSTOMER_GROUP' && list.customerCategoryId === input.customer?.customerCategoryId));
-    if (group !== null) return group;
+    if (group !== null) basePrice = group;
   }
-  if (input.customer?.contractPrice && input.customer.contractPrice > 0) return round2(input.customer.contractPrice);
-  const tier = pick(active.filter((list) => list.scope === 'TIER' && list.customerTier === input.customer?.tier?.toUpperCase()));
-  if (tier !== null) return tier;
-  const branch = pick(active.filter((list) => list.scope === 'BRANCH' && list.branchId === input.branchId));
-  if (branch !== null) return branch;
-  return pick(active.filter((list) => list.scope === 'GLOBAL'));
+  const tier = basePrice === null
+    ? pick(active.filter((list) => list.scope === 'TIER' && list.customerTier === input.customer?.tier?.toUpperCase()))
+    : null;
+  basePrice ??= tier;
+  const branch = basePrice === null
+    ? pick(active.filter((list) => list.scope === 'BRANCH' && list.branchId === input.branchId))
+    : null;
+  basePrice ??= branch;
+  const global = basePrice === null ? pick(active.filter((list) => list.scope === 'GLOBAL')) : null;
+  basePrice ??= global ?? input.baseUnitPrice ?? null;
+  if (basePrice === null) return null;
+  const customerDiscount = Math.max(0, input.customer?.contractPrice ?? 0);
+  return round2(Math.max(0, basePrice - customerDiscount));
 }
 
 function isRewardType(value: string | null): value is DesktopPosRewardType {
