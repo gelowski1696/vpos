@@ -52,6 +52,21 @@ describe('V3 desktop feedback regressions', () => {
     expect(auth).toContain('const DEFAULT_FETCH_TIMEOUT_MS = 30_000;');
   });
 
+  it('explains that rejected sync work is isolated from new queued work', () => {
+    const topBar = source('src/components/layout/TopBar.tsx');
+    const settings = source('src/screens/SettingsScreen.tsx');
+    expect(topBar).toContain('Rejected changes wait for correction and do not block new work.');
+    expect(topBar).toContain('`${pendingOutboxCount} Unsynced`');
+    expect(settings).toContain('`Sync ${pendingOutboxCount} Unsynced`');
+  });
+
+  it('opens the grouped sync summary modal after a sync run finishes', () => {
+    const app = source('src/app/App.tsx');
+    expect(app).toContain("import { SyncSummaryModal } from '../components/feedback/SyncSummaryModal';");
+    expect(app).toContain('setSyncSummary({ summary: result.summary, message: result.message });');
+    expect(app).toContain('<SyncSummaryModal');
+  });
+
   it('requires a full sign-out before the desktop window can close', () => {
     const app = source('src/app/App.tsx');
     expect(app).toContain('appWindow.onCloseRequested');
@@ -66,5 +81,11 @@ describe('V3 desktop feedback regressions', () => {
     expect(dashboard).toContain('pettyCashNet');
     expect(reports).toContain('Petty Cash Net');
     expect(shift).toContain('+ drawerCashIn - drawerCashOut');
+  });
+
+  it('shows the scoped item price and applies the customer discount at checkout', () => {
+    const pos = source('src/screens/PosScreen.tsx');
+    expect(pos).toContain('resolveCustomerCheckoutDiscount');
+    expect(pos).not.toContain('basePrice - customerDiscount');
   });
 });

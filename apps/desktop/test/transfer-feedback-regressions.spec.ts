@@ -1,6 +1,10 @@
 import { readFileSync } from 'fs';
 import { join } from 'path';
-import { hasConsumableTransferStock, transferBucketConsumesStock } from '../src/screens/transfer-stock-policy';
+import {
+  canSelectTransferProduct,
+  hasConsumableTransferStock,
+  transferBucketConsumesStock
+} from '../src/screens/transfer-stock-policy';
 
 describe('transfer tester feedback regressions', () => {
   const source = readFileSync(join(__dirname, '../src/screens/TransferScreen.tsx'), 'utf8');
@@ -39,11 +43,17 @@ describe('transfer tester feedback regressions', () => {
     expect(transferBucketConsumesStock('GENERAL', 'empty')).toBe(true);
   });
 
-  it('only offers adjustment items with stock in the bucket that will decrease', () => {
+  it('allows adjustment items to be selected before validating the entered quantity', () => {
     expect(hasConsumableTransferStock('CREATE', 10, 0)).toBe(false);
     expect(hasConsumableTransferStock('CREATE', 0, 10)).toBe(true);
     expect(hasConsumableTransferStock('USED', 10, 0)).toBe(true);
     expect(hasConsumableTransferStock('USED', 0, 10)).toBe(false);
+    expect(canSelectTransferProduct('CREATE', true, 10, 0)).toBe(true);
+    expect(canSelectTransferProduct('USED', true, 0, 10)).toBe(true);
+    expect(canSelectTransferProduct('CONVERT', true, 10, 0)).toBe(true);
+    expect(canSelectTransferProduct('GENERAL', true, 0, 0)).toBe(false);
+    expect(canSelectTransferProduct('GENERAL', true, 1, 0)).toBe(true);
+    expect(canSelectTransferProduct('GENERAL', false, 0, 0)).toBe(true);
   });
 
   it('prompts the cashier to start duty when Save Transfer is clicked', () => {
@@ -53,6 +63,8 @@ describe('transfer tester feedback regressions', () => {
   });
 
   it('labels regular inventory quantity clearly', () => {
-    expect(source).toContain('<span>Full / Regular Qty</span>');
+    expect(source).toContain('<span>Full / Qty</span>');
+    expect(source).not.toContain('Full / Regular');
+    expect(historySource).not.toContain('Full / Regular');
   });
 });

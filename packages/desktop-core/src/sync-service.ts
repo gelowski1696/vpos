@@ -9,6 +9,14 @@ import type {
 } from './schema';
 import { buildSaleOutboxPayload } from './sale-sync-payload';
 import type { DesktopSubscriptionPolicyDecision } from './subscription-policy-service';
+import {
+  isInsufficientPettyCashBalanceFailure,
+  planPettyCashBalanceRepairs
+} from './petty-cash-sync-policy';
+import {
+  summarizeDesktopSyncRows,
+  type DesktopSyncRunResult
+} from './sync-summary';
 
 type DesktopOutboxInput = Pick<
   OutboxItem,
@@ -339,41 +347,25 @@ export class DesktopSyncService {
     }
   }
 
-  private async ensureFailedPettyCashShiftEntryOutboxRows(): Promise<void> {
+  private async ensureFailedPettyCashShiftEntryOutboxRows(): Promise<Set<string>> {
     const outboxRows = await this.ports.repository.listOutboxItems();
-    const shiftIds = new Set(
-      outboxRows
-        .filter((row) => {
-          if (row.entity !== 'petty_cash' || row.status !== 'failed') {
-            return false;
-          }
-          return row.last_error === 'Insufficient shift cash balance for petty cash OUT';
-        })
-        .map((row) => asString(row.payload?.shift_id ?? row.payload?.shiftId))
-        .filter((shiftId): shiftId is string => Boolean(shiftId))
-    );
-    if (shiftIds.size === 0) {
-      return;
+    const failedPettyCashRows = outboxRows.filter(isInsufficientPettyCashBalanceFailure);
+    if (failedPettyCashRows.length === 0) {
+      return new Set();
     }
 
-    const shiftCashRows = await this.ports.repository.listMasterData('desktop_shift_cash');
-    for (const row of shiftCashRows) {
-      let entry: {
-        id: string;
-        shiftId: string;
-        direction: 'IN' | 'OUT';
-        amount: number;
-        notes?: string | null;
-        createdAt: string;
-      };
-      try {
-        entry = JSON.parse(row.payload) as typeof entry;
-      } catch {
-        continue;
-      }
-      if (!shiftIds.has(entry.shiftId) || !entry.id || !Number.isFinite(Number(entry.amount))) {
-        continue;
-      }
+    const [shiftCashRows, shiftRows, expenseRows] = await Promise.all([
+      this.ports.repository.listMasterData('desktop_shift_cash'),
+      this.ports.repository.listMasterData('desktop_shift'),
+      this.ports.repository.listMasterData('desktop_expense')
+    ]);
+    const repairPlan = planPettyCashBalanceRepairs({
+      failedRows: failedPettyCashRows,
+      shiftCashRows,
+      shiftRows,
+      expenseRows
+    });
+    for (const entry of repairPlan.shiftCashEntriesToRequeue) {
 
       const outboxId = `outbox-${entry.id}`;
       await this.ports.repository.enqueueOutboxItem({
@@ -393,6 +385,8 @@ export class DesktopSyncService {
       });
       await this.ports.repository.markOutboxStatus(outboxId, 'pending' as OutboxItem['status']);
     }
+
+    return repairPlan.repairableOutboxIds;
   }
 
   private async ensureOfflineCustomerOutboxRows(): Promise<void> {
@@ -937,7 +931,8 @@ export class DesktopSyncService {
   async runSync(
     state: DesktopAppState,
     deviceId: string
-  ): Promise<{ ok: boolean; message: string; timestamp: string }> {
+  ): Promise<DesktopSyncRunResult> {
+    const syncedRows: OutboxItem[] = [];
     try {
       const timeoutMs = this.ports.readTimeoutMs?.() ?? readSyncTimeoutMs();
       return await withTimeout(async () => {
@@ -945,11 +940,25 @@ export class DesktopSyncService {
         const transport = new HttpSyncTransport(policyCheck.state, this.ports.auth);
         await this.ensureOfflineCustomerOutboxRows();
         await this.ensureMissingTransferShiftOutboxRows();
-        await this.ensureFailedPettyCashShiftEntryOutboxRows();
+        const repairedPettyCashIds = await this.ensureFailedPettyCashShiftEntryOutboxRows();
         const rows = await this.ports.repository.listOutboxItems();
         const pending = rows
-          .filter((row) => row.status === 'pending' || row.status === 'failed')
+          .filter((row) => {
+            if (row.status === 'pending') {
+              return true;
+            }
+            if (row.status !== 'failed') {
+              return false;
+            }
+            const isUnrepairedPettyCashBalanceFailure =
+              isInsufficientPettyCashBalanceFailure(row) && !repairedPettyCashIds.has(row.id);
+            return !isUnrepairedPettyCashBalanceFailure;
+          })
           .sort((a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime());
+        const quarantinedCount = rows.filter((row) =>
+          isInsufficientPettyCashBalanceFailure(row) &&
+          !repairedPettyCashIds.has(row.id)
+        ).length;
         const lastPullToken = policyCheck.state.sync.lastPullToken ?? null;
         if (pending.length > 0 && !policyCheck.decision.canSyncPush) {
           if (policyCheck.decision.canSyncPull) {
@@ -966,7 +975,11 @@ export class DesktopSyncService {
           return {
             ok: false,
             message: `Sync push paused. ${policyCheck.decision.reason}`,
-            timestamp: new Date().toISOString()
+            timestamp: new Date().toISOString(),
+            summary: summarizeDesktopSyncRows({
+              syncedRows,
+              unsyncedRows: rows.filter((row) => row.status === 'pending' || row.status === 'failed')
+            })
           };
         }
 
@@ -974,17 +987,26 @@ export class DesktopSyncService {
           return {
             ok: false,
             message: `Sync paused. ${policyCheck.decision.reason}`,
-            timestamp: new Date().toISOString()
+            timestamp: new Date().toISOString(),
+            summary: summarizeDesktopSyncRows({
+              syncedRows,
+              unsyncedRows: rows.filter((row) => row.status === 'pending' || row.status === 'failed')
+            })
           };
         }
 
+        let acceptedCount = 0;
+        let rejectedCount = 0;
         if (pending.length > 0) {
           const pushRequest = buildDesktopSyncPushRequest(deviceId, pending, lastPullToken);
           const pushResult = await transport.push(pushRequest);
+          acceptedCount = pushResult.accepted.length;
+          rejectedCount = pushResult.rejected.length;
           for (const acceptedId of pushResult.accepted) {
             await this.ports.repository.markOutboxStatus(acceptedId, 'synced' as OutboxItem['status']);
             const acceptedRow = pending.find((row) => row.id === acceptedId);
             if (acceptedRow) {
+              syncedRows.push(acceptedRow);
               await this.updateLinkedDesktopRecordStatus(acceptedRow, 'synced');
             }
             if (
@@ -1025,29 +1047,42 @@ export class DesktopSyncService {
             lastPullToken: pullResult.response.next_token
           }
         });
+        const needsReviewCount = quarantinedCount + rejectedCount;
+        const remainingRows = await this.ports.repository.listOutboxItems();
         return {
-          ok: true,
-          message:
-            pending.length > 0
-              ? `Sync finished. ${pending.length} queued desktop item(s) were processed.`
+          ok: quarantinedCount === 0,
+          message: needsReviewCount > 0
+            ? `Sync completed without blocking other work. ${acceptedCount} ${acceptedCount === 1 ? 'item was' : 'items were'} synced; ${needsReviewCount} ${needsReviewCount === 1 ? 'item needs' : 'items need'} review. Add shift cash before retrying a rejected petty cash OUT.`
+            : pending.length > 0
+              ? `Sync finished. ${acceptedCount} queued desktop ${acceptedCount === 1 ? 'item was' : 'items were'} synced.`
               : 'Initial sync check finished successfully.',
-          timestamp: new Date().toISOString()
+          timestamp: new Date().toISOString(),
+          summary: summarizeDesktopSyncRows({
+            syncedRows,
+            unsyncedRows: remainingRows.filter((row) => row.status === 'pending' || row.status === 'failed')
+          })
         };
       }, timeoutMs, `Desktop sync timed out after ${timeoutMs}ms.`);
     } catch (error) {
+      const remainingRows = await this.ports.repository.listOutboxItems().catch(() => []);
       return {
         ok: false,
         message: error instanceof Error ? error.message : 'Unable to complete desktop sync.',
-        timestamp: new Date().toISOString()
+        timestamp: new Date().toISOString(),
+        summary: summarizeDesktopSyncRows({
+          syncedRows,
+          unsyncedRows: remainingRows.filter((row) => row.status === 'pending' || row.status === 'failed')
+        })
       };
     }
   }
 
-  async previewOffline(): Promise<{ ok: boolean; message: string; timestamp: string }> {
+  async previewOffline(): Promise<DesktopSyncRunResult> {
     return {
       ok: true,
       message: 'Desktop offline queue is ready. Full local outbox persistence is now available.',
-      timestamp: new Date().toISOString()
+      timestamp: new Date().toISOString(),
+      summary: summarizeDesktopSyncRows({ syncedRows: [], unsyncedRows: [] })
     };
   }
 

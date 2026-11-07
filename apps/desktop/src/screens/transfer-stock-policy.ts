@@ -29,3 +29,18 @@ export function hasConsumableTransferStock(
     (transferBucketConsumesStock(mode, 'empty') && availableEmpty > 0.0001)
   );
 }
+
+export function canSelectTransferProduct(
+  mode: TransferModeSelection,
+  requiresSourceStockCheck: boolean,
+  availableFull: number,
+  availableEmpty: number
+): boolean {
+  if (!requiresSourceStockCheck) {
+    return true;
+  }
+  if (mode === 'CREATE' || mode === 'USED' || mode === 'CONVERT') {
+    return true;
+  }
+  return hasConsumableTransferStock(mode, availableFull, availableEmpty);
+}

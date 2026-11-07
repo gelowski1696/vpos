@@ -1,12 +1,12 @@
 param(
     [ValidatePattern('^\d+\.\d+\.\d+$')]
-    [string]$Version = '0.1.5',
+    [string]$Version = '0.1.7',
 
-    [string]$Notes = 'Transfer, pricing, sync, cashier identity, and stability improvements.',
+    [string]$Notes = 'Expense validation, resilient sync, transfer stock checks, and sync summaries.',
 
     [string]$SshTarget = 'root@vmjamtech.com',
 
-    [string]$ReleaseWorktree = 'D:\vpos-release-0.1.5-clean-2',
+    [string]$ReleaseWorktree = 'D:\vpos-release-0.1.7-clean',
 
     [ValidatePattern('^\d+\.\d+\.\d+$')]
     [string]$MinimumSupportedVersion = '0.1.3',

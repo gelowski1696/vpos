@@ -215,8 +215,8 @@ export function TopBar({
     if (pendingOutboxCount > 0) {
       next.push({
         id: 'outbox',
-        title: pendingOutboxCount === 1 ? '1 item waiting to sync' : `${pendingOutboxCount} items waiting to sync`,
-        detail: 'Sales and other queued changes will upload on the next successful sync.',
+        title: pendingOutboxCount === 1 ? '1 unsynced item' : `${pendingOutboxCount} unsynced items`,
+        detail: 'Pending changes upload automatically. Rejected changes wait for correction and do not block new work.',
         tone: 'warning',
         actionLabel: syncBusy ? 'Syncing...' : 'Sync Now',
         onAction: syncBusy ? undefined : onRunSync
@@ -261,7 +261,7 @@ export function TopBar({
   const syncPillTone = pendingOutboxCount > 0 ? 'warning' : state.sync.lastSyncStatus === 'error' ? 'danger' : 'muted';
   const syncPillLabel =
     pendingOutboxCount > 0
-      ? `${pendingOutboxCount} Pending Sync`
+      ? `${pendingOutboxCount} Unsynced`
       : state.sync.lastSyncStatus === 'error'
         ? 'Sync Needs Attention'
         : 'All Synced';

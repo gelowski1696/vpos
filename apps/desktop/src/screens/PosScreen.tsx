@@ -1,5 +1,6 @@
 ﻿import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { SearchField } from "../components/inputs/SearchField";
+import { resolveCustomerCheckoutDiscount } from "@vpos/desktop-core";
 import { useDesktopUi } from "../components/feedback/DesktopUiFeedback";
 import { desktopDb } from "../db/sqlite";
 import type {
@@ -1186,10 +1187,6 @@ function resolveLocalPrice(input: {
   const global = basePrice === null ? pick(activeLists.filter((list) => list.scope === "GLOBAL")) : null;
   basePrice ??= global ?? input.baseUnitPrice;
 
-  const customerDiscount = Math.max(0, input.customer?.contractPrice ?? 0);
-  if (customerDiscount > 0) {
-    return round2(Math.max(0, basePrice - customerDiscount));
-  }
   return round2(basePrice);
 }
 
@@ -4049,6 +4046,14 @@ export function PosScreen({
         onGoToShift?.();
       }
       return;
+    }
+    const checkoutDiscount = resolveCustomerCheckoutDiscount({
+      customerDiscount: selectedCustomer?.contractPrice,
+      currentDiscount: discount,
+      subtotal,
+    });
+    if (checkoutDiscount !== discount) {
+      setDiscountAmount(checkoutDiscount === 0 ? "0" : checkoutDiscount.toFixed(2));
     }
     setPaidAmount("0");
     setPaymentModalOpen(true);

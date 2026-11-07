@@ -168,7 +168,7 @@ export function DesktopStartupScreen({
     if (!canSubmitLogin) {
       return;
     }
-    void onLogin({ ...form, password, pin });
+    void onLogin({ ...form, password, pin: '' });
   };
 
   const handleLoginKeyDown = (event: KeyboardEvent<HTMLInputElement>): void => {
@@ -216,17 +216,8 @@ export function DesktopStartupScreen({
                   autoComplete="off"
                   disabled={busy}
                 />
-                <input
-                  type="password"
-                  value={pin}
-                  onChange={(event) => setPin(event.target.value)}
-                  onKeyDown={handleLoginKeyDown}
-                  placeholder="PIN (optional)"
-                  inputMode="numeric"
-                  disabled={busy}
-                />
-                <div className="startup-helper-copy">PIN is optional.</div>
                 <div className="startup-helper-copy">Your tenant is detected automatically from your cashier account.</div>
+                <div className="startup-helper-copy">PIN is only used to unlock a saved session after sign-in.</div>
               </div>
 
               <div className="desktop-settings-actions startup-auth-actions">

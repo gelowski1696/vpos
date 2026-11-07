@@ -24,7 +24,9 @@ import { CashierReportsScreen } from '../screens/CashierReportsScreen';
 import { PurchaseOrdersScreen } from '../screens/PurchaseOrdersScreen';
 import { DeliveryDispatchScreen } from '../screens/DeliveryDispatchScreen';
 import { DesktopUiProvider, useDesktopUi } from '../components/feedback/DesktopUiFeedback';
+import { SyncSummaryModal } from '../components/feedback/SyncSummaryModal';
 import { playDesktopStartupCueOnce } from '../components/feedback/desktop-startup-cue';
+import type { DesktopSyncSummary } from '@vpos/desktop-core';
 import { DEFAULT_DESKTOP_APP_STATE, type DesktopAppState, type DesktopSaleRecord } from '../db/schema';
 import { desktopDb } from '../db/sqlite';
 import { desktopAuthService } from '../services/desktop-auth.service';
@@ -46,6 +48,7 @@ import { DesktopTutorialProvider, useDesktopTutorialActions, useDesktopTutorialS
 import { getRouteForTutorialScreen } from '../tutorial/tutorial-routing';
 import { filterDesktopRoutes, isDesktopRouteAllowed } from './pos-access-policy';
 import { isDesktopTauriRuntime } from '../services/tauri-runtime';
+import { shouldPreventDesktopClose } from './desktop-close-policy';
 
 const PRIMARY_ROUTES: DesktopRouteId[] = ['dashboard', 'pos', 'sales', 'transfer', 'transfer-list'];
 const SIDE_MENU_ROUTES: DesktopRouteId[] = ['items', 'customers', 'lending', 'lpg-service', 'expense', 'shift', 'reports', 'settings'];
@@ -269,6 +272,8 @@ function DesktopAppShell(): JSX.Element {
   const isWide = useBreakpointUp('md');
   const [booting, setBooting] = useState(true);
   const [startupStage, setStartupStage] = useState<DesktopStartupStage>('LOGIN');
+  const desktopCloseGuardRef = useRef(false);
+  desktopCloseGuardRef.current = shouldPreventDesktopClose(startupStage, state.auth.accessToken);
   const [startupBusy, setStartupBusy] = useState(false);
   const [startupMessage, setStartupMessage] = useState(
     'Sign in with password or use QR quick setup, then download branch data before opening the app.'
@@ -276,6 +281,10 @@ function DesktopAppShell(): JSX.Element {
   const [startupMessageTone, setStartupMessageTone] = useState<'info' | 'success'>('info');
   const [startupError, setStartupError] = useState<string | null>(null);
   const [syncBusy, setSyncBusy] = useState(false);
+  const [syncSummary, setSyncSummary] = useState<{
+    summary: DesktopSyncSummary;
+    message: string;
+  } | null>(null);
   const [branchDataBusy, setBranchDataBusy] = useState(false);
   const [pendingOutboxCount, setPendingOutboxCount] = useState(0);
   const [shellScrolled, setShellScrolled] = useState(false);
@@ -379,7 +388,7 @@ function DesktopAppShell(): JSX.Element {
     void import('@tauri-apps/api/window')
       .then(({ appWindow }) =>
         appWindow.onCloseRequested((event) => {
-          if (startupStage !== 'READY') {
+          if (!desktopCloseGuardRef.current) {
             return;
           }
           event.preventDefault();
@@ -402,7 +411,7 @@ function DesktopAppShell(): JSX.Element {
       disposed = true;
       unlisten?.();
     };
-  }, [desktopUi, startupStage]);
+  }, [desktopUi]);
 
   useEffect(() => {
     let active = true;
@@ -606,6 +615,7 @@ function DesktopAppShell(): JSX.Element {
             state.setup.deviceId || `${state.setup.branchLabel || 'branch'}-${state.setup.locationLabel || 'location'}`
           )
         : await desktopSyncService.previewOffline();
+      setSyncSummary({ summary: result.summary, message: result.message });
 
       const nextSync = {
         lastSyncedAt: result.timestamp,
@@ -1361,6 +1371,13 @@ function DesktopAppShell(): JSX.Element {
         onCompleteScope={() => void handleCompleteWalkthrough()}
         onSkipScope={() => void handleSkipWalkthrough()}
       />
+      {syncSummary ? (
+        <SyncSummaryModal
+          summary={syncSummary.summary}
+          message={syncSummary.message}
+          onClose={() => setSyncSummary(null)}
+        />
+      ) : null}
     </div>
   );
 }

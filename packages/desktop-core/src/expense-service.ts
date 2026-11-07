@@ -1,8 +1,15 @@
-import type { DesktopAppState, DesktopExpenseRecord, DesktopShiftRecord } from './schema';
+import type {
+  DesktopAppState,
+  DesktopExpenseRecord,
+  DesktopShiftCashEntry,
+  DesktopShiftRecord
+} from './schema';
 import type { DesktopOperationalRepository, DesktopTransactionPolicyPort } from './operational-ports';
+import { INSUFFICIENT_PETTY_CASH_BALANCE_ERROR } from './petty-cash-sync-policy';
 
 export interface DesktopExpenseShiftPort {
   listShifts(): Promise<DesktopShiftRecord[]>;
+  listShiftCashEntries(): Promise<DesktopShiftCashEntry[]>;
 }
 
 export type DesktopExpensePorts = {
@@ -124,6 +131,28 @@ export class DesktopExpenseService {
     const shift = shifts.find((row) => row.id === shiftId);
     if (!shift || shift.status !== 'OPEN') {
       throw new Error('Petty cash requires an open shift.');
+    }
+
+    if (input.direction === 'OUT') {
+      const [cashEntries, expenseRows] = await Promise.all([
+        this.ports.shift.listShiftCashEntries(),
+        this.listExpenses()
+      ]);
+      const shiftCash = cashEntries
+        .filter((entry) => entry.shiftId === shiftId)
+        .reduce(
+          (balance, entry) => balance + (entry.direction === 'IN' ? entry.amount : -entry.amount),
+          0
+        );
+      const pettyCash = summarizeDesktopPettyCash(expenseRows, { shiftId });
+      const availableCash = Number(
+        (Number(shift.openingCash || 0) + shiftCash + pettyCash.net).toFixed(2)
+      );
+      if (amount > availableCash + 0.009) {
+        throw new Error(
+          `${INSUFFICIENT_PETTY_CASH_BALANCE_ERROR}. Available: ${availableCash.toFixed(2)}; requested: ${amount.toFixed(2)}. Add cash to the shift or reduce the amount.`
+        );
+      }
     }
 
     const id = `desktop-expense-${Date.now()}-${Math.floor(Math.random() * 1_000_000)}`;

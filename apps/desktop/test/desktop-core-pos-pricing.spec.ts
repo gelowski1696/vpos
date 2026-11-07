@@ -2,6 +2,7 @@ import {
   isDesktopRewardEligible,
   parseDesktopPosPriceLists,
   parseDesktopPosReward,
+  resolveCustomerCheckoutDiscount,
   resolveDesktopRewardValue,
   resolveDesktopUnitPrice,
   type DesktopMasterDataRow
@@ -26,7 +27,7 @@ describe('shared POS pricing and rewards', () => {
     expect(resolveDesktopUnitPrice({ ...base, customer: null })).toBe(95);
   });
 
-  it('subtracts the customer discount from the current scoped price without overriding contract lists', () => {
+  it('keeps scoped unit prices visible and applies the customer discount at checkout', () => {
     const updatedAt = '2026-10-09T00:00:00.000Z';
     const priceLists = parseDesktopPosPriceLists([
       {
@@ -56,11 +57,26 @@ describe('shared POS pricing and rewards', () => {
     expect(resolveDesktopUnitPrice({
       ...common,
       customer: { id: 'discount', label: 'Discount customer', contractPrice: 50 }
-    })).toBe(45);
+    })).toBe(95);
     expect(resolveDesktopUnitPrice({
       ...common,
       customer: { id: 'exact', label: 'Exact contract', contractPrice: 50 }
     })).toBe(80);
+    expect(resolveCustomerCheckoutDiscount({
+      customerDiscount: 50,
+      currentDiscount: 0,
+      subtotal: 95
+    })).toBe(50);
+    expect(resolveCustomerCheckoutDiscount({
+      customerDiscount: 100,
+      currentDiscount: 0,
+      subtotal: 95
+    })).toBe(95);
+    expect(resolveCustomerCheckoutDiscount({
+      customerDiscount: 50,
+      currentDiscount: 20,
+      subtotal: 95
+    })).toBe(20);
   });
 
   it('parses cached rewards and calculates eligible discounts', () => {

@@ -1531,7 +1531,7 @@ export function SettingsScreen({
               </button>
               {pendingOutboxCount > 0 && onRunSync ? (
                 <button className="secondary-btn" type="button" onClick={() => void onRunSync()} disabled={syncBusy}>
-                  {syncBusy ? 'Syncing...' : `Sync ${pendingOutboxCount} Pending`}
+                  {syncBusy ? 'Syncing...' : `Sync ${pendingOutboxCount} Unsynced`}
                 </button>
               ) : null}
               <button

@@ -154,8 +154,18 @@ export function resolveDesktopUnitPrice(input: {
   const global = basePrice === null ? pick(active.filter((list) => list.scope === 'GLOBAL')) : null;
   basePrice ??= global ?? input.baseUnitPrice ?? null;
   if (basePrice === null) return null;
-  const customerDiscount = Math.max(0, input.customer?.contractPrice ?? 0);
-  return round2(Math.max(0, basePrice - customerDiscount));
+  return round2(Math.max(0, basePrice));
+}
+
+export function resolveCustomerCheckoutDiscount(input: {
+  customerDiscount?: number | null;
+  currentDiscount: number;
+  subtotal: number;
+}): number {
+  const subtotal = Math.max(0, input.subtotal);
+  const currentDiscount = Math.max(0, input.currentDiscount);
+  const customerDiscount = Math.max(0, input.customerDiscount ?? 0);
+  return round2(Math.min(subtotal, currentDiscount > 0 ? currentDiscount : customerDiscount));
 }
 
 function isRewardType(value: string | null): value is DesktopPosRewardType {

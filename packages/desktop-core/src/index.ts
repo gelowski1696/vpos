@@ -11,6 +11,8 @@ export * from './sync-service';
 export * from './sales-service';
 export * from './shift-service';
 export * from './shift-projection';
+export * from './petty-cash-sync-policy';
+export * from './sync-summary';
 export * from './operational-ports';
 export * from './expense-service';
 export * from './transfer-service';

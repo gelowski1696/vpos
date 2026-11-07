@@ -1,0 +1,286 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>VPOS Cashier System Update Guide</title>
+  <style>
+    @page { size: A4; margin: 13mm 14mm 16mm; }
+    :root {
+      font-family: "Segoe UI", Arial, sans-serif;
+      color: #142d43;
+      background: #ffffff;
+    }
+    * { box-sizing: border-box; }
+    body { margin: 0; font-size: 10.5pt; line-height: 1.46; }
+    .page { break-after: page; min-height: 255mm; position: relative; }
+    .page:last-child { break-after: auto; }
+    .hero {
+      padding: 12mm;
+      color: #ffffff;
+      background: linear-gradient(135deg, #0b4f7b, #1272b4);
+      border-radius: 7mm;
+    }
+    .brand { display: flex; align-items: center; gap: 5mm; }
+    .brand img {
+      width: 18mm;
+      height: 18mm;
+      padding: 2mm;
+      object-fit: contain;
+      background: #ffffff;
+      border-radius: 5mm;
+    }
+    h1 { margin: 0; font-size: 25pt; line-height: 1.08; }
+    .hero p { margin: 3mm 0 0; color: #e5f4ff; font-size: 12pt; }
+    h2 {
+      margin: 7mm 0 3mm;
+      padding-bottom: 2mm;
+      color: #0c507c;
+      font-size: 17pt;
+      border-bottom: 1px solid #c9dce9;
+    }
+    h3 { margin: 0 0 2mm; color: #123f61; font-size: 13pt; }
+    p { margin: 0 0 3mm; }
+    ol, ul { margin: 0; padding-left: 6mm; }
+    li { margin-bottom: 2.2mm; }
+    strong { color: #102b42; }
+    .notice {
+      margin-top: 5mm;
+      padding: 4mm 5mm;
+      border-left: 1.6mm solid #e27a13;
+      background: #fff5e8;
+      border-radius: 2mm 4mm 4mm 2mm;
+    }
+    .notice.good { border-color: #1e9a55; background: #eaf8f0; }
+    .quick-grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 4mm;
+      margin-top: 5mm;
+    }
+    .card {
+      padding: 4mm;
+      border: 1px solid #cfdeea;
+      background: #f8fbfe;
+      border-radius: 4mm;
+      break-inside: avoid;
+    }
+    .step-number {
+      display: inline-grid;
+      width: 8mm;
+      height: 8mm;
+      margin-bottom: 2mm;
+      place-items: center;
+      color: #ffffff;
+      background: #146fa9;
+      border-radius: 50%;
+      font-weight: 800;
+    }
+    .screenshot-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 7mm;
+      align-items: start;
+      margin-top: 4mm;
+    }
+    figure {
+      margin: 0;
+      padding: 3mm;
+      text-align: center;
+      border: 1px solid #c8d9e6;
+      background: #f8fbfe;
+      border-radius: 5mm;
+      break-inside: avoid;
+    }
+    figure img {
+      display: block;
+      width: auto;
+      max-width: 100%;
+      height: 137mm;
+      margin: 0 auto;
+      object-fit: contain;
+      border-radius: 3mm;
+    }
+    figcaption { margin-top: 2mm; color: #526e84; font-size: 8.5pt; }
+    .status {
+      display: inline-block;
+      padding: 1mm 3mm;
+      border-radius: 10mm;
+      font-weight: 800;
+    }
+    .status.ready { color: #16743d; background: #dff4e7; }
+    .status.blocked { color: #b53357; background: #fde5eb; }
+    .checklist {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 4mm;
+      margin-top: 4mm;
+    }
+    .checklist .card { min-height: 39mm; }
+    .help-table {
+      width: 100%;
+      margin-top: 3mm;
+      border-collapse: separate;
+      border-spacing: 0;
+      border: 1px solid #cbdce8;
+      border-radius: 4mm;
+      overflow: hidden;
+    }
+    .help-table th, .help-table td {
+      padding: 3mm 4mm;
+      text-align: left;
+      vertical-align: top;
+      border-bottom: 1px solid #d8e4ec;
+    }
+    .help-table th { color: #ffffff; background: #155d8d; }
+    .help-table tr:last-child td { border-bottom: 0; }
+    .footer-note {
+      margin-top: 6mm;
+      padding: 4mm;
+      color: #405d73;
+      background: #eef5fa;
+      border-radius: 4mm;
+      font-size: 9.5pt;
+    }
+  </style>
+</head>
+<body>
+  <section class="page">
+    <div class="hero">
+      <div class="brand">
+        <img src="../apps/desktop/src/assets/vpos-logo.png" alt="VPOS logo">
+        <div>
+          <h1>VPOS Cashier System Update Guide</h1>
+          <p>How to check for, prepare, and install a VPOS Desktop update safely.</p>
+        </div>
+      </div>
+    </div>
+
+    <div class="notice">
+      <strong>Before you update:</strong> Finish the current sale, make sure the workstation has internet access, and close the cashier shift when operationally possible. Never turn off the computer while an update is installing.
+    </div>
+
+    <h2>Quick update steps</h2>
+    <div class="quick-grid">
+      <div class="card">
+        <span class="step-number">1</span>
+        <h3>Open Settings</h3>
+        <p>In VPOS Desktop, select <strong>Settings</strong>. Find the <strong>Software Update</strong> card named <strong>Desktop OTA</strong>.</p>
+      </div>
+      <div class="card">
+        <span class="step-number">2</span>
+        <h3>Check for an update</h3>
+        <p>Select <strong>Check for Updates</strong>. Wait for the latest-version result and release notes.</p>
+      </div>
+      <div class="card">
+        <span class="step-number">3</span>
+        <h3>Make the workstation ready</h3>
+        <p>Confirm <strong>Install Safety</strong> says <strong>Ready</strong>. If it says <strong>Action Needed</strong>, synchronize the pending records first.</p>
+      </div>
+      <div class="card">
+        <span class="step-number">4</span>
+        <h3>Install and restart</h3>
+        <p>Select <strong>Install [version]</strong>. Allow the download, verification, installation, and restart to finish.</p>
+      </div>
+    </div>
+
+    <h2>What the update keeps</h2>
+    <ul>
+      <li>Branch, location, cashier, printer, and device settings stay on the workstation.</li>
+      <li>Local sales and pending synchronization records are not intentionally deleted by the update.</li>
+      <li>VPOS verifies the update signature before installation.</li>
+    </ul>
+
+    <div class="notice good">
+      <strong>Best time to update:</strong> after pending records are synchronized and the cashier shift is closed.
+    </div>
+  </section>
+
+  <section class="page">
+    <h2>Understand the update screen</h2>
+    <div class="screenshot-grid">
+      <div>
+        <figure>
+          <img src="assets/desktop-update-guide/update-ready.png" alt="VPOS update panel showing Ready">
+          <figcaption>Example: update available and safe to install.</figcaption>
+        </figure>
+        <h3><span class="status ready">Ready</span></h3>
+        <ol>
+          <li>Review the <strong>Installed Version</strong>, available version, and release notes.</li>
+          <li>Select <strong>Check for Updates</strong> again if the result is old.</li>
+          <li>Select <strong>Install [version]</strong>.</li>
+          <li>Wait for VPOS to restart. Do not force-close the program.</li>
+        </ol>
+      </div>
+      <div>
+        <figure>
+          <img src="assets/desktop-update-guide/update-sync-required.png" alt="VPOS update panel showing Action Needed">
+          <figcaption>Example: installation blocked by pending records.</figcaption>
+        </figure>
+        <h3><span class="status blocked">Action Needed</span></h3>
+        <ol>
+          <li>Select <strong>Sync [number] Pending</strong>.</li>
+          <li>Wait until synchronization finishes and the top status shows that records are synced.</li>
+          <li>Select <strong>Check for Updates</strong> again.</li>
+          <li>Install only when <strong>Install Safety</strong> changes to <strong>Ready</strong>.</li>
+        </ol>
+      </div>
+    </div>
+  </section>
+
+  <section class="page">
+    <h2>After VPOS restarts</h2>
+    <div class="checklist">
+      <div class="card">
+        <h3>Confirm the version</h3>
+        <p>Open <strong>Settings &gt; Desktop OTA</strong> and confirm <strong>Installed Version</strong> shows the new version.</p>
+      </div>
+      <div class="card">
+        <h3>Confirm workstation setup</h3>
+        <p>Check the branch, location, cashier identity, printer, and receipt settings.</p>
+      </div>
+      <div class="card">
+        <h3>Synchronize</h3>
+        <p>Select <strong>Sync Now</strong> and wait for the workstation to show that it is fully synchronized.</p>
+      </div>
+      <div class="card">
+        <h3>Do a quick check</h3>
+        <p>Perform a test print. On a pilot workstation, complete a small test transaction according to store procedure.</p>
+      </div>
+    </div>
+
+    <h2>If something goes wrong</h2>
+    <table class="help-table">
+      <thead>
+        <tr><th>What you see</th><th>What to do</th></tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><strong>Check failed</strong></td>
+          <td>Check the internet connection, then select <strong>Check for Updates</strong> again. If it still fails, contact the supervisor or system administrator.</td>
+        </tr>
+        <tr>
+          <td><strong>Action Needed</strong></td>
+          <td>Select <strong>Sync [number] Pending</strong>. Finish any active transaction and wait for synchronization to complete.</td>
+        </tr>
+        <tr>
+          <td><strong>Shift Open</strong></td>
+          <td>Close the cashier shift before updating when possible. If VPOS asks for confirmation, follow the supervisor's instruction.</td>
+        </tr>
+        <tr>
+          <td><strong>Installation failed</strong></td>
+          <td>Do not repeatedly force-close VPOS or delete local files. Record the message, keep the workstation powered on, and contact support.</td>
+        </tr>
+        <tr>
+          <td><strong>VPOS does not reopen</strong></td>
+          <td>Wait one minute, then open VPOS Desktop once. If it still does not start, contact support and report the old and new version numbers.</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <div class="footer-note">
+      <strong>Important:</strong> Do not download an installer from an unofficial link, bypass signature warnings, uninstall VPOS, or delete the VPOS data folder unless an authorized administrator instructs you to do so.
+    </div>
+  </section>
+</body>
+</html>

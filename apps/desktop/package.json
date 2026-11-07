@@ -1,6 +1,6 @@
 {
   "name": "@vpos/desktop",
-  "version": "0.1.6",
+  "version": "0.1.7",
   "private": true,
   "description": "VPOS Desktop cashier workstation application",
   "author": "VPOS Team",
@@ -24,7 +24,8 @@
     "version:check": "node scripts/set-desktop-version.mjs --check",
     "release:check": "pnpm --filter \"@vpos/desktop^...\" build && pnpm version:check && pnpm typecheck && pnpm test --runInBand && pnpm build",
     "docs:update-screens": "node scripts/capture-update-guide.mjs",
-    "docs:update-pdf": "node scripts/build-update-guide-pdf.mjs"
+    "docs:update-pdf": "node scripts/build-update-guide-pdf.mjs",
+    "docs:cashier-update-pdf": "node scripts/build-cashier-update-guide-pdf.mjs"
   },
   "dependencies": {
     "@tauri-apps/api": "1.6.0",

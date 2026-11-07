@@ -8,7 +8,7 @@ import { desktopStockProjectionService } from '../services/desktop-stock-project
 import { desktopShiftService } from '../services/desktop-shift.service';
 import { desktopTransferService } from '../services/desktop-transfer.service';
 import {
-  hasConsumableTransferStock,
+  canSelectTransferProduct,
   transferBucketConsumesStock,
   type TransferModeSelection
 } from './transfer-stock-policy';
@@ -789,7 +789,7 @@ export function TransferScreen({ appState, onOutboxChanged }: Props): JSX.Elemen
     }
     const availableFull = resolveAvailableQtyForBucket(product.id, 'full');
     const availableEmpty = resolveAvailableQtyForBucket(product.id, 'empty');
-    if (requiresSourceStockCheck && !hasConsumableTransferStock(mode, availableFull, availableEmpty)) {
+    if (!canSelectTransferProduct(mode, requiresSourceStockCheck, availableFull, availableEmpty)) {
       announce(`${product.name} has no available stock at the selected source.`, 'warning');
       return;
     }
@@ -1094,7 +1094,7 @@ export function TransferScreen({ appState, onOutboxChanged }: Props): JSX.Elemen
               <TransferSymbol kind="full" />
             </span>
             <span className="transfer-static-metric-copy">
-              <span>Full / Regular Qty</span>
+              <span>Full / Qty</span>
               <strong>{fmtQty(totalFull)}</strong>
             </span>
           </div>
@@ -1261,7 +1261,7 @@ export function TransferScreen({ appState, onOutboxChanged }: Props): JSX.Elemen
             <div className="transfer-static-item-table">
               <div className="transfer-static-item-head">
                 <span>Item Name</span>
-                <span>Full / Regular Qty</span>
+                <span>Full / Qty</span>
                 <span>Empty</span>
                 <span>QOH</span>
                 <span aria-hidden="true" />
@@ -1279,9 +1279,12 @@ export function TransferScreen({ appState, onOutboxChanged }: Props): JSX.Elemen
                     const availableFull = resolveAvailableQtyForBucket(product.id, 'full');
                     const availableEmpty = resolveAvailableQtyForBucket(product.id, 'empty');
                     const availableQoh = sourceStock?.qtyOnHand ?? product.qtyOnHand;
-                    const canSelect =
-                      !requiresSourceStockCheck ||
-                      hasConsumableTransferStock(mode, availableFull, availableEmpty);
+                    const canSelect = canSelectTransferProduct(
+                      mode,
+                      requiresSourceStockCheck,
+                      availableFull,
+                      availableEmpty
+                    );
 
                     return (
                       <button
@@ -1459,7 +1462,7 @@ export function TransferScreen({ appState, onOutboxChanged }: Props): JSX.Elemen
                 <strong>{destinationSummaryLabel}</strong>
               </div>
               <div className="transfer-static-total-row">
-                <span>Total Full / Regular</span>
+                <span>Total Full / Qty</span>
                 <strong>{fmtQty(totalFull)}</strong>
               </div>
               <div className="transfer-static-total-row">
@@ -1530,7 +1533,7 @@ export function TransferScreen({ appState, onOutboxChanged }: Props): JSX.Elemen
                 <strong className={summaryValueClass}>{lines.length}</strong>
               </div>
               <div className={summaryTileClass}>
-                <span className={summaryLabelClass}>Full / Regular / Empty</span>
+                <span className={summaryLabelClass}>Full / Qty / Empty</span>
                 <strong className={summaryValueClass}>{fmtQty(totalFull)} / {fmtQty(totalEmpty)}</strong>
               </div>
             </div>
@@ -1598,7 +1601,7 @@ export function TransferScreen({ appState, onOutboxChanged }: Props): JSX.Elemen
                   <strong>{transferSuccessModal.lineCount}</strong>
                 </div>
                 <div className="pos-sale-success-detail">
-                  <span>Full / Regular / Empty</span>
+                  <span>Full / Qty / Empty</span>
                   <strong>{fmtQty(transferSuccessModal.totalFull)} / {fmtQty(transferSuccessModal.totalEmpty)}</strong>
                 </div>
               </div>
@@ -1676,9 +1679,12 @@ export function TransferScreen({ appState, onOutboxChanged }: Props): JSX.Elemen
                   const availableFull = resolveAvailableQtyForBucket(product.id, 'full');
                   const availableEmpty = resolveAvailableQtyForBucket(product.id, 'empty');
                   const availableQoh = sourceInventoryByProduct.get(product.id)?.qtyOnHand ?? product.qtyOnHand;
-                  const canSelect =
-                    !requiresSourceStockCheck ||
-                    hasConsumableTransferStock(mode, availableFull, availableEmpty);
+                  const canSelect = canSelectTransferProduct(
+                    mode,
+                    requiresSourceStockCheck,
+                    availableFull,
+                    availableEmpty
+                  );
 
                   return (
                     <button

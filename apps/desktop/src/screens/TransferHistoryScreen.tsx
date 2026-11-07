@@ -922,7 +922,7 @@ export function TransferHistoryScreen({ appState }: Props): JSX.Element {
                   <strong>{confirmedSuccess.lineCount}</strong>
                 </div>
                 <div className="pos-sale-success-detail">
-                  <span>Full / Regular / Empty</span>
+                  <span>Full / Qty / Empty</span>
                   <strong>{fmtQty(confirmedSuccess.totalFull)} / {fmtQty(confirmedSuccess.totalEmpty)}</strong>
                 </div>
               </div>

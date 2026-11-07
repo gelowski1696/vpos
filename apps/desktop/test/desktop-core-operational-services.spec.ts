@@ -66,7 +66,10 @@ describe('shared operational services', () => {
     };
     const expense = new DesktopExpenseService({
       repository,
-      shift: { listShifts: async () => [{ id: 'shift-1', status: 'OPEN' } as never] },
+      shift: {
+        listShifts: async () => [{ id: 'shift-1', status: 'OPEN', openingCash: 500 } as never],
+        listShiftCashEntries: async () => []
+      },
       subscriptionPolicy: policy
     });
     const transfer = new DesktopTransferService({ repository, subscriptionPolicy: policy });
@@ -105,7 +108,10 @@ describe('shared operational services', () => {
     const repository = new MemoryOperationalRepository();
     const expense = new DesktopExpenseService({
       repository,
-      shift: { listShifts: async () => [{ id: 'shift-1', status: 'OPEN' } as never] },
+      shift: {
+        listShifts: async () => [{ id: 'shift-1', status: 'OPEN', openingCash: 100 } as never],
+        listShiftCashEntries: async () => []
+      },
       subscriptionPolicy: policy
     });
 
@@ -123,6 +129,31 @@ describe('shared operational services', () => {
     const summary = summarizeDesktopPettyCash(await expense.listExpenses(), { shiftId: 'shift-1' });
     expect(summary).toMatchObject({ totalIn: 100, totalOut: 50, net: 50 });
     expect(summary.entries).toHaveLength(2);
+  });
+
+  it('rejects petty-cash OUT locally before it is added to the sync outbox', async () => {
+    const repository = new MemoryOperationalRepository();
+    const expense = new DesktopExpenseService({
+      repository,
+      shift: {
+        listShifts: async () => [{ id: 'shift-1', status: 'OPEN', openingCash: 40 } as never],
+        listShiftCashEntries: async () => [{
+          id: 'cash-in-1', shiftId: 'shift-1', direction: 'IN', amount: 10
+        } as never]
+      },
+      subscriptionPolicy: policy
+    });
+
+    await expect(expense.createExpense(DEFAULT_DESKTOP_APP_STATE, {
+      shiftId: 'shift-1',
+      categoryCode: 'SUPPLIES',
+      direction: 'OUT',
+      amount: 75,
+      notes: 'Cleaning supplies'
+    })).rejects.toThrow('Insufficient shift cash balance for petty cash OUT');
+
+    expect(await expense.listExpenses()).toEqual([]);
+    expect(repository.outbox).toEqual([]);
   });
 
   it('creates a purchase-order draft using cached operational records', async () => {
