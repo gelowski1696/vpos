@@ -510,7 +510,11 @@ export function MasterDataImportWizard({
       </button>
 
       {open ? (
-        <AdminModalMotion className="fixed inset-0 z-[80] flex items-center justify-center bg-slate-950/55 p-4 backdrop-blur-[3px]">
+        <AdminModalMotion
+          className="fixed inset-0 z-[80] flex items-center justify-center bg-slate-950/55 p-4 backdrop-blur-[3px]"
+          closeOnEscape={!validating && !committing}
+          onClose={close}
+        >
           <section aria-labelledby={`import-wizard-title-${entity}`} aria-modal="true" className="flex max-h-[92vh] w-full max-w-5xl flex-col overflow-hidden rounded-xl border border-adminBorder bg-adminSurface shadow-2xl" role="dialog">
             <header className="flex items-center justify-between border-b border-slate-200 px-4 py-3 dark:border-slate-700">
               <div>

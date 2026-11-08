@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useMemo, useRef, useState } from 'react';
+import { AdminModalMotion } from '../../../components/admin-motion';
 import { EntityManager, type SelectOption } from '../../../components/entity-manager';
 import {
   MasterDataImportWizard,
@@ -948,7 +949,7 @@ export default function PersonnelsPage(): React.JSX.Element {
       }}
     />
     {selectedPersonnel ? (
-      <div
+      <AdminModalMotion
         className="fixed inset-0 z-[85] flex items-center justify-center bg-slate-950/55 px-4 py-6"
         onClick={(event) => {
           if (event.currentTarget === event.target) {
@@ -1117,10 +1118,10 @@ export default function PersonnelsPage(): React.JSX.Element {
             )}
           </div>
         </section>
-      </div>
+      </AdminModalMotion>
     ) : null}
     {riderUsersOpen ? (
-      <div
+      <AdminModalMotion
         className="fixed inset-0 z-[90] flex items-center justify-center bg-slate-950/55 px-4 py-6"
         onClick={(event) => {
           if (event.currentTarget === event.target) {
@@ -1364,7 +1365,7 @@ export default function PersonnelsPage(): React.JSX.Element {
             </aside>
           </div>
         </section>
-      </div>
+      </AdminModalMotion>
     ) : null}
     </>
   );

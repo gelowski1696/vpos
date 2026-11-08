@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useMemo, useState } from 'react';
+import { AdminModalMotion } from '../../../components/admin-motion';
 import { TablePaginationControls } from '../../../components/table-pagination-controls';
 import { apiRequest } from '../../../lib/api-client';
 import { useTablePagination } from '../../../lib/table-pagination';
@@ -476,7 +477,7 @@ export default function LendingPage(): React.JSX.Element {
       </section>
 
       {selectedId ? (
-        <div className="fixed inset-0 z-50 flex items-end justify-center bg-slate-950/60 px-4 py-6 lg:items-center">
+        <AdminModalMotion className="fixed inset-0 z-50 flex items-end justify-center bg-slate-950/60 px-4 py-6 lg:items-center">
           <div className="absolute inset-0" onClick={() => { setSelectedId(null); setSelectedDetail(null); }} />
           <div className="relative z-10 flex max-h-[92vh] w-full max-w-4xl flex-col overflow-hidden rounded-[28px] border border-slate-200 bg-white shadow-2xl dark:border-slate-800 dark:bg-slate-900">
             {detailLoading || !selectedDetail ? (
@@ -624,11 +625,11 @@ export default function LendingPage(): React.JSX.Element {
               </>
             )}
           </div>
-        </div>
+        </AdminModalMotion>
       ) : null}
 
       {returnModalOpen && selectedDetail ? (
-        <div className="fixed inset-0 z-[60] flex items-end justify-center bg-slate-950/60 px-4 py-6 lg:items-center">
+        <AdminModalMotion className="fixed inset-0 z-[60] flex items-end justify-center bg-slate-950/60 px-4 py-6 lg:items-center">
           <div className="absolute inset-0" onClick={() => setReturnModalOpen(false)} />
           <div className="relative z-10 flex max-h-[90vh] w-full max-w-3xl flex-col overflow-hidden rounded-[28px] border border-slate-200 bg-white shadow-2xl dark:border-slate-800 dark:bg-slate-900">
             <div className="flex items-start justify-between gap-4 border-b border-slate-200 p-6 dark:border-slate-800">
@@ -724,7 +725,7 @@ export default function LendingPage(): React.JSX.Element {
               </button>
             </div>
           </div>
-        </div>
+        </AdminModalMotion>
       ) : null}
     </div>
   );

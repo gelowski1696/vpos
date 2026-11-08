@@ -1,6 +1,5 @@
 'use client';
 
-import Image from 'next/image';
 import { FormEvent, useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import type { Route } from 'next';
@@ -10,6 +9,13 @@ import {
   getAccessToken,
   getSessionRequiresPasswordChange
 } from '../../../lib/api-client';
+import {
+  AuthWorkspace,
+  authFieldClassName,
+  authLabelClassName,
+  authRevealButtonClassName,
+  authSubmitClassName
+} from '../../../components/auth-workspace';
 
 export default function ChangePasswordPage(): React.JSX.Element {
   const router = useRouter();
@@ -82,45 +88,26 @@ export default function ChangePasswordPage(): React.JSX.Element {
   }
 
   return (
-    <main className="flex min-h-screen items-center justify-center bg-[radial-gradient(circle_at_12%_10%,rgba(240,200,111,0.18),transparent_35%),radial-gradient(circle_at_88%_6%,rgba(182,138,61,0.18),transparent_30%),linear-gradient(130deg,#060606,#15110b,#050505)] px-4 py-8 sm:px-6">
-      <section className="w-full max-w-md rounded-3xl border border-amber-300/35 bg-black/65 p-5 shadow-2xl shadow-black/50 backdrop-blur-md sm:p-6">
-        <div className="mb-4 flex items-center gap-3">
-          <Image
-            src="/logo.png"
-            alt="VPOS logo"
-            width={44}
-            height={44}
-            className="h-11 w-11 rounded-lg border border-amber-300/60 bg-black/30 p-1"
-            priority
-          />
-          <div>
-            <p className="text-xs uppercase tracking-[0.22em] text-amber-300/90">VMJAMTECH</p>
-            <p className="text-sm font-semibold text-amber-100">VPOS Platform</p>
-          </div>
-        </div>
-
-        <div className="mb-2 flex items-center justify-between">
-          <h2 className="text-2xl font-bold text-amber-200">Change Password</h2>
-          <span className="rounded-full border border-amber-300/40 bg-amber-300/10 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wider text-amber-100">
-            Required
-          </span>
-        </div>
-        <p className="text-sm text-slate-300">For first login security, update your tenant password before continuing.</p>
-
-        <form autoComplete="off" className="mt-5 space-y-3" onSubmit={onSubmit}>
+    <AuthWorkspace
+      badge="Security update required"
+      description="For first-login security, choose a new tenant password before opening the operations workspace."
+      title="Set a new password"
+    >
+        <form autoComplete="off" className="space-y-4" onSubmit={onSubmit}>
           <label className="block text-sm">
-            <span className="mb-1 block font-medium text-amber-100">Current Password</span>
+            <span className={authLabelClassName}>Current password</span>
             <div className="relative">
               <input
                 autoComplete="current-password"
-                className="w-full rounded-xl border border-amber-300/35 bg-slate-900/85 px-3 py-2.5 pr-11 text-amber-50 placeholder:text-slate-400 outline-none transition focus:border-amber-200/75 focus:ring-2 focus:ring-amber-300/20"
+                className={`${authFieldClassName} pr-16`}
                 onChange={(event) => setCurrentPassword(event.target.value)}
                 required
                 type={showCurrent ? 'text' : 'password'}
                 value={currentPassword}
               />
               <button
-                className="absolute right-2 top-1/2 -translate-y-1/2 rounded-md border border-amber-300/40 px-2 py-1 text-xs text-amber-100 hover:bg-amber-300/10"
+                aria-label={showCurrent ? 'Hide current password' : 'Show current password'}
+                className={authRevealButtonClassName}
                 onClick={() => setShowCurrent((prev) => !prev)}
                 type="button"
               >
@@ -130,18 +117,19 @@ export default function ChangePasswordPage(): React.JSX.Element {
           </label>
 
           <label className="block text-sm">
-            <span className="mb-1 block font-medium text-amber-100">New Password</span>
+            <span className={authLabelClassName}>New password</span>
             <div className="relative">
               <input
                 autoComplete="new-password"
-                className="w-full rounded-xl border border-amber-300/35 bg-slate-900/85 px-3 py-2.5 pr-11 text-amber-50 placeholder:text-slate-400 outline-none transition focus:border-amber-200/75 focus:ring-2 focus:ring-amber-300/20"
+                className={`${authFieldClassName} pr-16`}
                 onChange={(event) => setNewPassword(event.target.value)}
                 required
                 type={showNew ? 'text' : 'password'}
                 value={newPassword}
               />
               <button
-                className="absolute right-2 top-1/2 -translate-y-1/2 rounded-md border border-amber-300/40 px-2 py-1 text-xs text-amber-100 hover:bg-amber-300/10"
+                aria-label={showNew ? 'Hide new password' : 'Show new password'}
+                className={authRevealButtonClassName}
                 onClick={() => setShowNew((prev) => !prev)}
                 type="button"
               >
@@ -151,18 +139,19 @@ export default function ChangePasswordPage(): React.JSX.Element {
           </label>
 
           <label className="block text-sm">
-            <span className="mb-1 block font-medium text-amber-100">Confirm New Password</span>
+            <span className={authLabelClassName}>Confirm new password</span>
             <div className="relative">
               <input
                 autoComplete="new-password"
-                className="w-full rounded-xl border border-amber-300/35 bg-slate-900/85 px-3 py-2.5 pr-11 text-amber-50 placeholder:text-slate-400 outline-none transition focus:border-amber-200/75 focus:ring-2 focus:ring-amber-300/20"
+                className={`${authFieldClassName} pr-16`}
                 onChange={(event) => setConfirmPassword(event.target.value)}
                 required
                 type={showConfirm ? 'text' : 'password'}
                 value={confirmPassword}
               />
               <button
-                className="absolute right-2 top-1/2 -translate-y-1/2 rounded-md border border-amber-300/40 px-2 py-1 text-xs text-amber-100 hover:bg-amber-300/10"
+                aria-label={showConfirm ? 'Hide password confirmation' : 'Show password confirmation'}
+                className={authRevealButtonClassName}
                 onClick={() => setShowConfirm((prev) => !prev)}
                 type="button"
               >
@@ -172,7 +161,7 @@ export default function ChangePasswordPage(): React.JSX.Element {
           </label>
 
           <button
-            className="mt-1 w-full rounded-xl bg-amber-300 px-4 py-2.5 font-semibold text-slate-900 transition hover:bg-amber-200 disabled:cursor-not-allowed disabled:opacity-70"
+            className={authSubmitClassName}
             disabled={loading}
             type="submit"
           >
@@ -180,9 +169,8 @@ export default function ChangePasswordPage(): React.JSX.Element {
           </button>
         </form>
 
-        {error && <p className="mt-3 text-sm text-rose-300">{error}</p>}
-        {success && <p className="mt-3 text-sm text-emerald-300">{success}</p>}
-      </section>
-    </main>
+        {error && <p aria-live="polite" className="mt-4 rounded-lg border border-rose-200 bg-rose-50 px-3 py-2.5 text-sm text-rose-700">{error}</p>}
+        {success && <p aria-live="polite" className="mt-4 rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2.5 text-sm text-emerald-700">{success}</p>}
+    </AuthWorkspace>
   );
 }

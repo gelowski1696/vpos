@@ -3,6 +3,7 @@
 import type { Route } from 'next';
 import { useEffect, useMemo, useState } from 'react';
 import { usePathname, useRouter, useSearchParams } from 'next/navigation';
+import { AdminModalMotion } from '../../../components/admin-motion';
 import { EntityManager } from '../../../components/entity-manager';
 import {
   MasterDataImportWizard,
@@ -1058,7 +1059,7 @@ export default function ProductsPage(): React.JSX.Element {
       />
 
       {viewProductId ? (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/60 p-4">
+        <AdminModalMotion className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/60 p-4">
           <section className="flex max-h-[92vh] w-full max-w-5xl flex-col overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-2xl dark:border-slate-700 dark:bg-slate-900">
             <header className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-200 px-4 py-3 dark:border-slate-700">
               <div>
@@ -1548,7 +1549,7 @@ export default function ProductsPage(): React.JSX.Element {
               )}
             </div>
           </section>
-        </div>
+        </AdminModalMotion>
       ) : null}
     </div>
   );

@@ -4,6 +4,7 @@ import type { Route } from 'next';
 import Link from 'next/link';
 import { useEffect, useRef, useState } from 'react';
 import { usePathname, useRouter, useSearchParams } from 'next/navigation';
+import { AdminModalMotion } from '../../../components/admin-motion';
 import { TablePaginationControls } from '../../../components/table-pagination-controls';
 import { apiRequest } from '../../../lib/api-client';
 import { useTablePagination } from '../../../lib/table-pagination';
@@ -599,7 +600,7 @@ export default function SalesListPage(): React.JSX.Element {
       </div>
 
       {selectedSaleId ? (
-        <div className="fixed inset-0 z-40 flex items-center justify-center bg-slate-950/45 p-4">
+        <AdminModalMotion className="fixed inset-0 z-40 flex items-center justify-center bg-slate-950/45 p-4">
           <section className="flex max-h-[90vh] w-full max-w-6xl flex-col overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-xl dark:border-slate-700 dark:bg-slate-900">
             <header className="flex items-center justify-between border-b border-slate-200 px-4 py-3 dark:border-slate-700">
               <div>
@@ -1048,11 +1049,11 @@ export default function SalesListPage(): React.JSX.Element {
               )}
             </div>
           </section>
-        </div>
+        </AdminModalMotion>
       ) : null}
 
       {selectedSaleId && paymentBreakdownOpen && selectedDetails ? (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/55 p-4">
+        <AdminModalMotion className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/55 p-4">
           <section className="w-full max-w-3xl rounded-2xl border border-slate-200 bg-white shadow-xl dark:border-slate-700 dark:bg-slate-900">
             <header className="flex items-center justify-between border-b border-slate-200 px-4 py-3 dark:border-slate-700">
               <div>
@@ -1143,11 +1144,11 @@ export default function SalesListPage(): React.JSX.Element {
               </article>
             </div>
           </section>
-        </div>
+        </AdminModalMotion>
       ) : null}
 
       {voidReturnOpen && selectedReturnToVoid ? (
-        <div className="fixed inset-0 z-[60] flex items-center justify-center bg-slate-950/55 p-4">
+        <AdminModalMotion className="fixed inset-0 z-[60] flex items-center justify-center bg-slate-950/55 p-4">
           <section className="w-full max-w-lg rounded-2xl border border-slate-200 bg-white shadow-xl dark:border-slate-700 dark:bg-slate-900">
             <header className="flex items-center justify-between border-b border-slate-200 px-4 py-3 dark:border-slate-700">
               <div>
@@ -1197,7 +1198,7 @@ export default function SalesListPage(): React.JSX.Element {
               </div>
             </div>
           </section>
-        </div>
+        </AdminModalMotion>
       ) : null}
     </section>
   );

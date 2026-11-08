@@ -5,7 +5,7 @@ import Image from 'next/image';
 import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { AdminMotionProvider, AdminPageTransition } from './admin-motion';
+import { AdminModalMotion, AdminMotionProvider, AdminPageTransition } from './admin-motion';
 import { AdminWalkthrough, type AdminTourStep } from './admin-walkthrough';
 import { ChatWidget } from './chat/ChatWidget';
 import {
@@ -2212,14 +2212,14 @@ export function AdminShell({ children }: { children: React.ReactNode }): React.J
         </main>
       </div>
       {inventoryNotificationModalOpen ? (
-        <div
+        <AdminModalMotion
           className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-slate-950/55 p-3 py-6 md:items-center"
+          onClose={closeInventoryNotificationModal}
           onMouseDown={(event) => {
             if (event.target === event.currentTarget) {
               closeInventoryNotificationModal();
             }
           }}
-          role="presentation"
         >
           <section
             aria-labelledby="inventory-sync-notification-title"
@@ -2399,7 +2399,7 @@ export function AdminShell({ children }: { children: React.ReactNode }): React.J
               </>
             )}
           </section>
-        </div>
+        </AdminModalMotion>
       ) : null}
       {!isPlatformOwner ? (
         <AdminWalkthrough

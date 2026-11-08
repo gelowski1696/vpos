@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useMemo, useState } from 'react';
+import { AdminModalMotion } from '../../../components/admin-motion';
 import { TablePaginationControls } from '../../../components/table-pagination-controls';
 import { TenantOperationalResetDialog } from '../../../components/tenant-operational-reset-dialog';
 import { apiRequest } from '../../../lib/api-client';
@@ -1022,7 +1023,7 @@ export default function TenantsPage(): React.JSX.Element {
       </div>
 
       {dialogMode === 'bindings' && selected ? (
-        <div className="fixed inset-0 z-40 flex items-center justify-center bg-slate-950/45 p-4">
+        <AdminModalMotion className="fixed inset-0 z-40 flex items-center justify-center bg-slate-950/45 p-4">
           <section className="w-full max-w-5xl rounded-2xl border border-slate-200 bg-white shadow-xl dark:border-slate-700 dark:bg-slate-900">
             <header className="flex items-center justify-between border-b border-slate-200 px-4 py-3 dark:border-slate-700">
               <div>
@@ -1113,11 +1114,11 @@ export default function TenantsPage(): React.JSX.Element {
               </section>
             </div>
           </section>
-        </div>
+        </AdminModalMotion>
       ) : null}
 
       {dialogMode === 'override' && selected && overrideForm ? (
-        <div className="fixed inset-0 z-40 flex items-center justify-center bg-slate-950/45 p-4">
+        <AdminModalMotion className="fixed inset-0 z-40 flex items-center justify-center bg-slate-950/45 p-4">
           <section className="w-full max-w-3xl rounded-2xl border border-slate-200 bg-white shadow-xl dark:border-slate-700 dark:bg-slate-900">
             <header className="flex items-center justify-between border-b border-slate-200 px-4 py-3 dark:border-slate-700">
               <h2 className="text-lg font-semibold text-slate-900 dark:text-slate-100">Override Entitlement: {selected.company_name}</h2>
@@ -1188,11 +1189,11 @@ export default function TenantsPage(): React.JSX.Element {
               </button>
             </footer>
           </section>
-        </div>
+        </AdminModalMotion>
       ) : null}
 
       {dialogMode === 'addons' && selected && addonsForm ? (
-        <div className="fixed inset-0 z-40 flex items-center justify-center bg-slate-950/45 p-4">
+        <AdminModalMotion className="fixed inset-0 z-40 flex items-center justify-center bg-slate-950/45 p-4">
           <section className="w-full max-w-2xl rounded-2xl border border-slate-200 bg-white shadow-xl dark:border-slate-700 dark:bg-slate-900">
             <header className="flex items-center justify-between border-b border-slate-200 px-4 py-3 dark:border-slate-700">
               <h2 className="text-lg font-semibold text-slate-900 dark:text-slate-100">
@@ -1254,11 +1255,11 @@ export default function TenantsPage(): React.JSX.Element {
               </button>
             </footer>
           </section>
-        </div>
+        </AdminModalMotion>
       ) : null}
 
       {dialogMode === 'provision' ? (
-        <div className="fixed inset-0 z-40 flex items-center justify-center bg-slate-950/45 p-4">
+        <AdminModalMotion className="fixed inset-0 z-40 flex items-center justify-center bg-slate-950/45 p-4">
           <section className="w-full max-w-2xl rounded-2xl border border-slate-200 bg-white shadow-xl dark:border-slate-700 dark:bg-slate-900">
             <header className="flex items-center justify-between border-b border-slate-200 px-4 py-3 dark:border-slate-700">
               <h2 className="text-lg font-semibold text-slate-900 dark:text-slate-100">Provision Tenant from Subscription</h2>
@@ -1424,11 +1425,11 @@ export default function TenantsPage(): React.JSX.Element {
               </button>
             </footer>
           </section>
-        </div>
+        </AdminModalMotion>
       ) : null}
 
       {dialogMode === 'suspend' && selected ? (
-        <div className="fixed inset-0 z-40 flex items-center justify-center bg-slate-950/45 p-4">
+        <AdminModalMotion className="fixed inset-0 z-40 flex items-center justify-center bg-slate-950/45 p-4">
           <section className="w-full max-w-lg rounded-2xl border border-slate-200 bg-white p-4 shadow-xl dark:border-slate-700 dark:bg-slate-900">
             <h3 className="text-lg font-semibold text-slate-900 dark:text-slate-100">Suspend {selected.company_name}?</h3>
             <p className="mt-2 text-sm text-slate-600 dark:text-slate-300">
@@ -1449,11 +1450,11 @@ export default function TenantsPage(): React.JSX.Element {
               </button>
             </div>
           </section>
-        </div>
+        </AdminModalMotion>
       ) : null}
 
       {dialogMode === 'reactivate' && selected ? (
-        <div className="fixed inset-0 z-40 flex items-center justify-center bg-slate-950/45 p-4">
+        <AdminModalMotion className="fixed inset-0 z-40 flex items-center justify-center bg-slate-950/45 p-4">
           <section className="w-full max-w-lg rounded-2xl border border-slate-200 bg-white p-4 shadow-xl dark:border-slate-700 dark:bg-slate-900">
             <h3 className="text-lg font-semibold text-slate-900 dark:text-slate-100">Reactivate {selected.company_name}?</h3>
             <p className="mt-2 text-sm text-slate-600 dark:text-slate-300">
@@ -1470,7 +1471,7 @@ export default function TenantsPage(): React.JSX.Element {
               </button>
             </div>
           </section>
-        </div>
+        </AdminModalMotion>
       ) : null}
 
       {dialogMode === 'reset' && selected ? (
@@ -1490,7 +1491,7 @@ export default function TenantsPage(): React.JSX.Element {
       ) : null}
 
       {dialogMode === 'delete' && selected ? (
-        <div className="fixed inset-0 z-40 flex items-center justify-center bg-slate-950/45 p-4">
+        <AdminModalMotion className="fixed inset-0 z-40 flex items-center justify-center bg-slate-950/45 p-4">
           <section className="w-full max-w-xl rounded-2xl border border-slate-200 bg-white p-4 shadow-xl dark:border-slate-700 dark:bg-slate-900">
             <h3 className="text-lg font-semibold text-slate-900 dark:text-slate-100">Delete Tenant: {selected.company_name}</h3>
             <p className="mt-2 text-sm text-slate-600 dark:text-slate-300">
@@ -1528,11 +1529,11 @@ export default function TenantsPage(): React.JSX.Element {
               </button>
             </div>
           </section>
-        </div>
+        </AdminModalMotion>
       ) : null}
 
       {saving ? (
-        <div className="fixed inset-0 z-[70] flex items-center justify-center bg-slate-950/45 p-4 backdrop-blur-[1px]">
+        <AdminModalMotion className="fixed inset-0 z-[70] flex items-center justify-center bg-slate-950/45 p-4 backdrop-blur-[1px]">
           <div className="w-full max-w-sm rounded-2xl border border-slate-200 bg-white px-5 py-4 shadow-xl dark:border-slate-700 dark:bg-slate-900">
             <div className="flex items-center gap-3">
               <span className="h-5 w-5 animate-spin rounded-full border-2 border-slate-300 border-t-brandPrimary dark:border-slate-600 dark:border-t-brandSecondary" />
@@ -1542,7 +1543,7 @@ export default function TenantsPage(): React.JSX.Element {
               Please wait. Actions are temporarily disabled.
             </p>
           </div>
-        </div>
+        </AdminModalMotion>
       ) : null}
     </main>
   );

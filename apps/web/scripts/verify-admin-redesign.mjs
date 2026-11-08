@@ -80,7 +80,7 @@ function mockPayload(pathname) {
     return products;
   }
   if (pathname.endsWith('/platform/entitlements/current')) {
-    return { addons: {} };
+    return { addons: { customer_category: true } };
   }
   if (pathname.endsWith('/master-data/branches')) {
     return [
@@ -223,6 +223,7 @@ await page.screenshot({ path: `${outputDir}/products-desktop.png` });
 await page.getByRole('button', { name: 'Import Excel', exact: true }).click();
 const importDialog = page.getByRole('dialog', { name: 'Products Import Wizard' });
 await importDialog.waitFor();
+await page.waitForTimeout(240);
 assert(
   (await importDialog.evaluate((node) => window.getComputedStyle(node).borderRadius)) !== '0px',
   'Import dialog did not receive the modern surface treatment.'
@@ -269,17 +270,50 @@ await page.getByRole('heading', { name: 'Sales List', exact: true }).waitFor();
 await page.goto(`${baseUrl}/audit-logs`, { waitUntil: 'domcontentloaded' });
 await page.getByRole('heading', { name: 'Audit Logs', exact: true }).waitFor();
 
+await page.goto(`${baseUrl}/customer-categories`, { waitUntil: 'domcontentloaded' });
+await page.getByRole('heading', { name: 'Customer Categories', exact: true }).waitFor();
+const addCategory = page.getByRole('button', { name: 'Add Category', exact: true });
+await addCategory.click();
+const categoryDialog = page.getByRole('dialog', { name: 'Add Customer Category' });
+await categoryDialog.waitFor();
+assert(await categoryDialog.evaluate((node) => node.contains(document.activeElement)), 'Custom dialog focus was not contained.');
+await page.keyboard.press('Escape');
+await categoryDialog.waitFor({ state: 'detached' });
+assert(await addCategory.evaluate((node) => node === document.activeElement), 'Custom dialog did not restore focus.');
+
 await page.evaluate(() => window.localStorage.clear());
 await page.goto(`${baseUrl}/login`, { waitUntil: 'domcontentloaded' });
 assert((await page.locator('[data-admin-workspace]').count()) === 0, 'Admin styles leaked onto login.');
+await page.getByRole('heading', { name: 'Welcome back', exact: true }).waitFor();
+const authCanvas = await page.locator('main').evaluate((node) => window.getComputedStyle(node).backgroundColor);
+assert(authCanvas === 'rgb(245, 244, 247)', `Authentication canvas is incorrect: ${authCanvas}.`);
+await page.waitForTimeout(240);
 await page.screenshot({ path: `${outputDir}/login-public.png` });
+
+await page.goto(`${baseUrl}/missing-ui-consistency-check`, { waitUntil: 'domcontentloaded' });
+await page.getByRole('heading', { name: 'Page not found', exact: true }).waitFor();
+assert((await page.locator('[data-public-error]').count()) === 1, 'Not-found page missed the reconstructed public surface.');
+
+const mustChangePayload = Buffer.from(
+  JSON.stringify({ roles: ['admin'], company_id: 'demo-company', must_change_password: true })
+).toString('base64url');
+const mustChangeToken = `eyJhbGciOiJub25lIn0.${mustChangePayload}.signature`;
+await page.addInitScript((accessToken) => {
+  window.localStorage.setItem('vpos_admin_access_token', accessToken);
+  window.localStorage.setItem('vpos_admin_refresh_token', 'mock-refresh');
+}, mustChangeToken);
+await page.goto(`${baseUrl}/change-password`, { waitUntil: 'domcontentloaded' });
+await page.getByRole('heading', { name: 'Set a new password', exact: true }).waitFor();
+await page.waitForTimeout(240);
+await page.screenshot({ path: `${outputDir}/change-password-public.png` });
 
 assert(browserErrors.length === 0, `Browser errors: ${browserErrors.join(' | ')}`);
 await browser.close();
 process.stdout.write(
   JSON.stringify({
-    checks: ['shell', 'summaries', 'selection', 'filters', 'dialog-focus', 'modern-modal', 'dark-mode', 'mobile-drawer', 'dashboard-charts', 'reports-charts', 'custom-pages', 'public-css-scope'],
-    screenshots: 8,
+    checks: ['shell', 'summaries', 'selection', 'filters', 'dialog-focus', 'modern-modal', 'dark-mode', 'mobile-drawer', 'dashboard-charts', 'reports-charts', 'custom-pages', 'public-css-scope', 'auth-pages'],
+    screenshots: 9,
+    authCanvas,
     darkRowBackground,
     darkSurface
   })

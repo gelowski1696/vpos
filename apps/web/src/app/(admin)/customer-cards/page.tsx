@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useMemo, useState } from 'react';
+import { AdminModalMotion } from '../../../components/admin-motion';
 import { apiRequest, getSessionRoles } from '../../../lib/api-client';
 import { toastError, toastInfo, toastSuccess } from '../../../lib/web-toast';
 
@@ -1255,7 +1256,7 @@ export default function CustomerCardsPage(): React.JSX.Element {
       ) : null}
 
       {assignConfirm ? (
-        <div
+        <AdminModalMotion
           className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/55 p-4"
           onClick={() => {
             setAssignConfirm(null);
@@ -1381,11 +1382,11 @@ export default function CustomerCardsPage(): React.JSX.Element {
               ) : null}
             </div>
           </div>
-        </div>
+        </AdminModalMotion>
       ) : null}
 
       {rewardModalOpen && canManageRewards ? (
-        <div
+        <AdminModalMotion
           className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/55 p-4"
           onClick={() => {
             if (!rewardsBusy) {
@@ -1521,7 +1522,7 @@ export default function CustomerCardsPage(): React.JSX.Element {
               </button>
             </div>
           </div>
-        </div>
+        </AdminModalMotion>
       ) : null}
     </section>
   );

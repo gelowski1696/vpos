@@ -1,5 +1,7 @@
 'use client';
 
+import { AdminModalMotion } from './admin-motion';
+
 type TenantOperationalResetDialogProps = {
   open: boolean;
   companyCode: string;
@@ -34,14 +36,18 @@ export function TenantOperationalResetDialog({
   const canSubmit = confirmationValue.trim().toUpperCase() === companyCode.trim().toUpperCase();
 
   return (
-    <div className="fixed inset-0 z-40 flex items-center justify-center bg-slate-950/55 p-4">
-      <section className="w-full max-w-3xl rounded-3xl border border-rose-200 bg-white shadow-2xl dark:border-rose-900/60 dark:bg-slate-900">
+    <AdminModalMotion
+      className="fixed inset-0 z-40 flex items-center justify-center bg-slate-950/55 p-4"
+      closeOnEscape={!saving}
+      onClose={onClose}
+    >
+      <section aria-labelledby="tenant-reset-title" aria-modal="true" className="w-full max-w-3xl rounded-xl border border-rose-200 bg-white shadow-2xl dark:border-rose-900/60 dark:bg-slate-900" role="alertdialog">
         <header className="flex items-start justify-between gap-4 border-b border-slate-200 px-5 py-4 dark:border-slate-700">
           <div className="space-y-1">
             <p className="text-sm font-semibold uppercase tracking-[0.18em] text-rose-600 dark:text-rose-300">
               Destructive Action
             </p>
-            <h2 className="text-2xl font-bold text-slate-900 dark:text-slate-100">Reset Tenant Data</h2>
+            <h2 className="text-xl font-semibold text-slate-900 dark:text-slate-100" id="tenant-reset-title">Reset Tenant Data</h2>
             <p className="text-sm text-slate-500 dark:text-slate-400">
               {companyName} ({companyCode})
             </p>
@@ -110,6 +116,6 @@ export function TenantOperationalResetDialog({
           </button>
         </footer>
       </section>
-    </div>
+    </AdminModalMotion>
   );
 }

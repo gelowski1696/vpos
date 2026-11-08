@@ -1,6 +1,7 @@
 'use client';
 
 import { type FormEvent, useEffect, useMemo, useState } from 'react';
+import { AdminModalMotion } from '../../../components/admin-motion';
 import { TablePaginationControls } from '../../../components/table-pagination-controls';
 import { apiRequest } from '../../../lib/api-client';
 import { useTablePagination } from '../../../lib/table-pagination';
@@ -436,11 +437,11 @@ export default function CustomerCategoriesPage(): React.JSX.Element {
       ) : null}
 
       {dialogMode ? (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/55 p-4">
-          <section className="max-h-[90vh] w-full max-w-4xl overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-2xl dark:border-slate-700 dark:bg-slate-900">
+        <AdminModalMotion className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/55 p-4" onClose={closeDialog}>
+          <section aria-labelledby="customer-category-dialog-title" aria-modal="true" className="max-h-[90vh] w-full max-w-4xl overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-2xl dark:border-slate-700 dark:bg-slate-900" role="dialog">
             <header className="flex items-center justify-between border-b border-slate-200 px-4 py-3 dark:border-slate-700">
               <div>
-                <h2 className="text-lg font-semibold text-slate-900 dark:text-slate-100">
+                <h2 className="text-lg font-semibold text-slate-900 dark:text-slate-100" id="customer-category-dialog-title">
                   {dialogMode === 'create' ? 'Add Customer Category' : 'Edit Customer Category'}
                 </h2>
                 <p className="text-xs text-slate-500 dark:text-slate-400">
@@ -561,7 +562,7 @@ export default function CustomerCategoriesPage(): React.JSX.Element {
               </footer>
             </form>
           </section>
-        </div>
+        </AdminModalMotion>
       ) : null}
     </main>
   );

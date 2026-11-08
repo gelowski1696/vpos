@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useMemo, useState } from 'react';
+import { AdminModalMotion } from '../../../components/admin-motion';
 import { TablePaginationControls } from '../../../components/table-pagination-controls';
 import { apiRequest } from '../../../lib/api-client';
 import { useTablePagination } from '../../../lib/table-pagination';
@@ -562,7 +563,7 @@ export default function SyncReviewsPage(): React.JSX.Element {
       </section>
 
       {selected ? (
-        <div className="fixed inset-0 z-50 flex items-end justify-center bg-slate-950/40 p-3 md:items-center">
+        <AdminModalMotion className="fixed inset-0 z-50 flex items-end justify-center bg-slate-950/40 p-3 md:items-center">
           <div className="w-full max-w-3xl rounded-xl border border-slate-200 bg-white p-4 shadow-xl dark:border-slate-700 dark:bg-slate-900">
             <div className="flex items-start justify-between gap-3">
               <div>
@@ -609,7 +610,7 @@ export default function SyncReviewsPage(): React.JSX.Element {
               {previewPayload}
             </pre>
           </div>
-        </div>
+        </AdminModalMotion>
       ) : null}
     </main>
   );

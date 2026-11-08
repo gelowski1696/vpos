@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useMemo, useState } from 'react';
+import { AdminModalMotion } from '../../../components/admin-motion';
 import { apiRequest, getSessionRoles } from '../../../lib/api-client';
 import { toastError, toastInfo, toastSuccess } from '../../../lib/web-toast';
 
@@ -524,7 +525,7 @@ export default function InventoryOpeningPage(): React.JSX.Element {
       </section>
 
       {applyModalOpen ? (
-        <div className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-slate-900/50 p-4 sm:items-center" role="presentation">
+        <AdminModalMotion className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-slate-900/50 p-4 sm:items-center">
           <div
             className="flex max-h-[92vh] w-full max-w-6xl flex-col overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-xl dark:border-slate-700 dark:bg-slate-900"
             onClick={(event) => event.stopPropagation()}
@@ -757,11 +758,11 @@ export default function InventoryOpeningPage(): React.JSX.Element {
               Location: {selectedLocation ? `${selectedLocation.name} (${selectedLocation.code})` : '-'} | Rows: {lines.length}
             </p>
           </div>
-        </div>
+        </AdminModalMotion>
       ) : null}
 
       {applyModalOpen && productPickerOpen ? (
-        <div className="fixed inset-0 z-[60] flex items-center justify-center bg-slate-950/55 p-4">
+        <AdminModalMotion className="fixed inset-0 z-[60] flex items-center justify-center bg-slate-950/55 p-4">
           <section className="max-h-[88vh] w-full max-w-4xl overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-2xl dark:border-slate-700 dark:bg-slate-900">
             <header className="flex items-center justify-between border-b border-slate-200 px-4 py-3 dark:border-slate-700">
               <div>
@@ -863,7 +864,7 @@ export default function InventoryOpeningPage(): React.JSX.Element {
               </div>
             </footer>
           </section>
-        </div>
+        </AdminModalMotion>
       ) : null}
 
       <section className="rounded-2xl border border-slate-200 bg-white p-4 dark:border-slate-700 dark:bg-slate-900">

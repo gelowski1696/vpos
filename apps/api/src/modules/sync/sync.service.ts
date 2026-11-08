@@ -189,6 +189,9 @@ export class SyncService {
         }, item.payload);
         continue;
       }
+      if (syncedItem.entity === 'sale' && syncedItem.action === 'create') {
+        this.applyCashSaleToShiftState(companyId, syncedItem.payload);
+      }
       const saleCancelPosting = await this.tryPostSaleCancelOutbox(companyId, item, actorUserId);
       if (!saleCancelPosting.ok) {
         const reviewId = this.createReview(companyId, item.id, item.entity, saleCancelPosting.reason, item.payload);
@@ -737,6 +740,46 @@ export class SyncService {
       default:
         return { ok: true };
     }
+  }
+
+  private applyCashSaleToShiftState(
+    companyId: string,
+    payload: Record<string, unknown>
+  ): void {
+    const shiftId = this.asString(payload.shift_id ?? payload.shiftId);
+    const cashAmount = this.resolveCashSaleAmount(payload);
+    if (!shiftId || cashAmount <= 0) {
+      return;
+    }
+    const shifts = this.getCompanyShifts(companyId);
+    const shift = shifts.get(shiftId);
+    if (!shift || shift.status !== 'OPEN') {
+      return;
+    }
+    shifts.set(shiftId, {
+      ...shift,
+      balance: Number((shift.balance + cashAmount).toFixed(2))
+    });
+  }
+
+  private resolveCashSaleAmount(payload: Record<string, unknown>): number {
+    const payments = Array.isArray(payload.payments) ? payload.payments : [];
+    if (payments.length > 0) {
+      return Number(payments.reduce((sum, payment) => {
+        const row = (payment as Record<string, unknown>) ?? {};
+        const method = this.asString(row.method)?.toUpperCase();
+        return sum + (method === 'CASH' ? this.asNumber(row.amount) : 0);
+      }, 0).toFixed(2));
+    }
+
+    const method = this.asString(payload.payment_method ?? payload.paymentMethod)?.toUpperCase();
+    if (method !== 'CASH') {
+      return 0;
+    }
+    const paid = this.asNumber(payload.paid_amount ?? payload.paidAmount);
+    const total = this.asNumber(payload.total_amount ?? payload.totalAmount);
+    const change = this.asNumber(payload.change_amount ?? payload.changeAmount);
+    return Number(Math.max(0, (paid > 0 ? paid : total) - change).toFixed(2));
   }
 
   private outboxPriority(item: SyncPushRequest['outbox_items'][number]): number {
@@ -3293,7 +3336,7 @@ export class SyncService {
 
     const shifts = this.getCompanyShifts(companyId);
     const hydratedShift = await this.hydrateShiftFromDatastore(companyId, shiftId);
-    const shift = shifts.get(shiftId) ?? hydratedShift;
+    const shift = hydratedShift ?? shifts.get(shiftId);
     if (!shift || shift.status !== 'OPEN') {
       return { ok: false, reason: 'Shift cash requires an OPEN shift' };
     }
@@ -3355,7 +3398,7 @@ export class SyncService {
 
     const shifts = this.getCompanyShifts(companyId);
     const hydratedShift = await this.hydrateShiftFromDatastore(companyId, shiftId);
-    const shift = shifts.get(shiftId) ?? hydratedShift;
+    const shift = hydratedShift ?? shifts.get(shiftId);
     if (!shift || shift.status !== 'OPEN') {
       return { ok: false, reason: 'Petty cash requires an OPEN shift' };
     }
@@ -3627,6 +3670,20 @@ export class SyncService {
             select: { direction: true; amount: true };
           }) => Promise<Array<{ direction: string; amount: unknown }>>;
         };
+        sale?: {
+          findMany: (args: {
+            where: { companyId: string; shiftId: string };
+            select: {
+              status: true;
+              payments: { select: { method: true; amount: true } };
+              returns: { select: { status: true; totalAmount: true } };
+            };
+          }) => Promise<Array<{
+            status: string;
+            payments: Array<{ method: string; amount: unknown }>;
+            returns: Array<{ status: string; totalAmount: unknown }>;
+          }>>;
+        };
       };
       if (!client.shift || typeof client.shift.findFirst !== 'function') {
         return null;
@@ -3675,6 +3732,31 @@ export class SyncService {
             balance -= amount;
           } else {
             balance += amount;
+          }
+        }
+      }
+      if (client.sale && typeof client.sale.findMany === 'function') {
+        const sales = await client.sale.findMany({
+          where: { companyId, shiftId: row.id },
+          select: {
+            status: true,
+            payments: { select: { method: true, amount: true } },
+            returns: { select: { status: true, totalAmount: true } }
+          }
+        });
+        for (const sale of sales) {
+          if (String(sale.status).toUpperCase() !== 'ACTIVE') {
+            continue;
+          }
+          for (const payment of sale.payments ?? []) {
+            if (String(payment.method).toUpperCase() === 'CASH') {
+              balance += this.toNumeric(payment.amount);
+            }
+          }
+          for (const saleReturn of sale.returns ?? []) {
+            if (String(saleReturn.status).toUpperCase() === 'POSTED') {
+              balance -= this.toNumeric(saleReturn.totalAmount);
+            }
           }
         }
       }

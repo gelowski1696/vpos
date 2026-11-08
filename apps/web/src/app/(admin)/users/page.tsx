@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useMemo, useRef, useState } from 'react';
+import { AdminModalMotion } from '../../../components/admin-motion';
 import { EntityManager, type EntityField, type SelectOption } from '../../../components/entity-manager';
 import { apiRequest, getSessionCompanyId, getSessionRoles } from '../../../lib/api-client';
 import { buildQrSvgDataUrl } from '../../../lib/qr-svg';
@@ -609,7 +610,7 @@ export default function UsersPage(): React.JSX.Element {
       />
 
       {setupModalOpen ? (
-        <div
+        <AdminModalMotion
           className="fixed inset-0 z-[100] flex items-center justify-center bg-slate-900/60 px-4 py-6"
           onClick={(event) => {
             if (event.currentTarget === event.target) {
@@ -718,7 +719,7 @@ export default function UsersPage(): React.JSX.Element {
               </div>
             ) : null}
           </div>
-        </div>
+        </AdminModalMotion>
       ) : null}
     </div>
   );

@@ -312,4 +312,136 @@ describe('SyncService shift dependencies', () => {
       rejected: []
     });
   });
+
+  it('uses a queued CASH sale to fund a later petty cash OUT', async () => {
+    const service = new SyncService();
+    const result = await service.push(
+      'company-1',
+      {
+        device_id: 'desktop-1',
+        outbox_items: [
+          {
+            id: 'outbox-shift-open-cash-sale-1',
+            entity: 'shift',
+            action: 'open',
+            payload: {
+              id: 'shift-cash-sale-1',
+              branch_id: 'location-1',
+              location_id: 'location-1',
+              user_id: 'cashier-1',
+              opening_cash: 0,
+              opened_at: '2026-11-08T08:00:00.000Z'
+            },
+            idempotency_key: 'desktop-shift-open:shift-cash-sale-1',
+            created_at: '2026-11-08T08:00:00.000Z'
+          },
+          {
+            id: 'outbox-cash-sale-1',
+            entity: 'sale',
+            action: 'create',
+            payload: {
+              id: 'cash-sale-1',
+              shift_id: 'shift-cash-sale-1',
+              payment_method: 'CASH',
+              paid_amount: 300,
+              change_amount: 0,
+              total_amount: 300
+            },
+            idempotency_key: 'desktop-sale:cash-sale-1',
+            created_at: '2026-11-08T09:00:00.000Z'
+          },
+          {
+            id: 'outbox-petty-cash-after-sale-1',
+            entity: 'petty_cash',
+            action: 'create',
+            payload: {
+              id: 'petty-cash-after-sale-1',
+              shift_id: 'shift-cash-sale-1',
+              category_code: 'SUPPLIES',
+              direction: 'OUT',
+              amount: 100,
+              notes: 'Cleaning supplies'
+            },
+            idempotency_key: 'idem-petty-cash-after-sale-1',
+            created_at: '2026-11-08T09:01:00.000Z'
+          }
+        ]
+      },
+      'cashier-1'
+    );
+
+    expect(result).toEqual({
+      accepted: [
+        'outbox-shift-open-cash-sale-1',
+        'outbox-cash-sale-1',
+        'outbox-petty-cash-after-sale-1'
+      ],
+      rejected: []
+    });
+  });
+
+  it('hydrates persisted CASH sales when rebuilding a shift balance after restart', async () => {
+    const tenantRouter = {
+      forCompany: jest.fn(async () => ({
+        client: {
+          shift: {
+            findFirst: jest.fn(async () => ({
+              id: 'shift-persisted-cash-sale-1',
+              status: 'OPEN',
+              branchId: 'branch-1',
+              userId: 'cashier-1',
+              openingCash: 0,
+              closingCash: null,
+              openedAt: new Date('2026-11-08T08:00:00.000Z'),
+              closedAt: null
+            }))
+          },
+          sale: {
+            findMany: jest.fn(async () => [{
+              status: 'ACTIVE',
+              payments: [{ method: 'CASH', amount: 300 }],
+              returns: []
+            }])
+          }
+        }
+      }))
+    };
+    const service = new SyncService(
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      tenantRouter as never
+    );
+
+    const result = await service.push(
+      'company-1',
+      {
+        device_id: 'desktop-1',
+        outbox_items: [{
+          id: 'outbox-petty-cash-persisted-sale-1',
+          entity: 'petty_cash',
+          action: 'create',
+          payload: {
+            id: 'petty-cash-persisted-sale-1',
+            shift_id: 'shift-persisted-cash-sale-1',
+            category_code: 'SUPPLIES',
+            direction: 'OUT',
+            amount: 100,
+            notes: 'Cleaning supplies'
+          },
+          idempotency_key: 'idem-petty-cash-persisted-sale-1',
+          created_at: '2026-11-08T09:01:00.000Z'
+        }]
+      },
+      'cashier-1'
+    );
+
+    expect(result.accepted).toEqual(['outbox-petty-cash-persisted-sale-1']);
+    expect(result.rejected).toEqual([]);
+  });
 });

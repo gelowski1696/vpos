@@ -1,6 +1,7 @@
 'use client';
 
 import { type FormEvent, useEffect, useMemo, useState } from 'react';
+import { AdminModalMotion } from '../../../components/admin-motion';
 import { apiRequest } from '../../../lib/api-client';
 import {
   getScopeLookupOrder,
@@ -1568,7 +1569,7 @@ export default function PriceListsPage(): React.JSX.Element {
       </div>
 
       {selectedPriceList ? (
-        <div className="fixed inset-0 z-40 flex items-center justify-center bg-slate-950/55 p-4" onClick={closeVersionsPanel}>
+        <AdminModalMotion className="fixed inset-0 z-40 flex items-center justify-center bg-slate-950/55 p-4" onClick={closeVersionsPanel}>
           <section
             className="max-h-[92vh] w-full max-w-7xl overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-2xl dark:border-slate-700 dark:bg-slate-900"
             onClick={(event) => event.stopPropagation()}
@@ -2080,11 +2081,11 @@ export default function PriceListsPage(): React.JSX.Element {
             </div>
             </div>
           </section>
-        </div>
+        </AdminModalMotion>
       ) : null}
 
       {dialogMode ? (
-        <div className="fixed inset-0 z-40 flex items-center justify-center bg-slate-950/45 p-4">
+        <AdminModalMotion className="fixed inset-0 z-40 flex items-center justify-center bg-slate-950/45 p-4">
           <section className="max-h-[92vh] w-full max-w-5xl overflow-y-auto rounded-2xl border border-slate-200 bg-white shadow-xl dark:border-slate-700 dark:bg-slate-900">
             <header className="flex items-center justify-between border-b border-slate-200 px-4 py-3 dark:border-slate-700">
               <h2 className="text-lg font-semibold text-slate-900 dark:text-slate-100">
@@ -2546,11 +2547,11 @@ export default function PriceListsPage(): React.JSX.Element {
               </div>
             </form>
           </section>
-        </div>
+        </AdminModalMotion>
       ) : null}
 
       {confirmOpen ? (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/55 p-4">
+        <AdminModalMotion className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/55 p-4">
           <section className="w-full max-w-md rounded-2xl border border-slate-200 bg-white p-4 shadow-2xl dark:border-slate-700 dark:bg-slate-900">
             <h3 className="text-lg font-semibold text-slate-900 dark:text-slate-100">Confirm Save</h3>
             <p className="mt-2 text-sm text-slate-600 dark:text-slate-300">
@@ -2576,11 +2577,11 @@ export default function PriceListsPage(): React.JSX.Element {
               </button>
             </div>
           </section>
-        </div>
+        </AdminModalMotion>
       ) : null}
 
       {dialogMode && productPickerOpen ? (
-        <div className="fixed inset-0 z-[55] flex items-center justify-center bg-slate-950/55 p-4">
+        <AdminModalMotion className="fixed inset-0 z-[55] flex items-center justify-center bg-slate-950/55 p-4">
           <section className="max-h-[88vh] w-full max-w-4xl overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-2xl dark:border-slate-700 dark:bg-slate-900">
             <header className="flex items-center justify-between border-b border-slate-200 px-4 py-3 dark:border-slate-700">
               <div>
@@ -2682,7 +2683,7 @@ export default function PriceListsPage(): React.JSX.Element {
               </div>
             </footer>
           </section>
-        </div>
+        </AdminModalMotion>
       ) : null}
     </main>
   );

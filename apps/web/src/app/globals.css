@@ -185,6 +185,60 @@ html.dark [data-admin-workspace] {
   color: var(--admin-text);
 }
 
+.admin-route-page {
+  min-width: 0;
+}
+
+.admin-route-page > :first-child {
+  min-width: 0;
+}
+
+.admin-route-page :is(header, form, nav)[class*='border-slate'] {
+  border-color: var(--admin-border);
+}
+
+.admin-route-page :is(button, a)[class*='bg-brandPrimary'] {
+  background-color: var(--admin-accent);
+}
+
+.admin-route-page :is(button, a)[class*='bg-brandPrimary']:hover {
+  background-color: var(--admin-accent-strong);
+  filter: none;
+}
+
+.admin-dialog-backdrop {
+  background-color: rgb(15 23 42 / 0.52);
+  backdrop-filter: blur(3px);
+}
+
+.admin-dialog-backdrop > :is(section, div:not(.absolute))[role='dialog'],
+.admin-dialog-backdrop > :is(section, div:not(.absolute))[role='alertdialog'] {
+  border-color: var(--admin-border);
+  border-radius: 0.875rem;
+  background-color: var(--admin-surface);
+  color: var(--admin-text);
+  box-shadow: 0 24px 64px rgb(15 23 42 / 0.22);
+}
+
+.admin-dialog-backdrop > :is(section, div:not(.absolute))[role='dialog'] > :is(header, footer),
+.admin-dialog-backdrop > :is(section, div:not(.absolute))[role='alertdialog'] > :is(header, footer) {
+  border-color: var(--admin-border);
+}
+
+@media (max-width: 639px) {
+  .admin-dialog-backdrop {
+    align-items: flex-end;
+    padding: 0.5rem;
+  }
+
+  .admin-dialog-backdrop > :is(section, div:not(.absolute))[role='dialog'],
+  .admin-dialog-backdrop > :is(section, div:not(.absolute))[role='alertdialog'] {
+    max-height: calc(100dvh - 1rem);
+    width: 100%;
+    border-radius: 0.875rem;
+  }
+}
+
 .admin-page-content div.fixed.inset-0[class*='bg-slate-9'] {
   backdrop-filter: blur(3px);
 }

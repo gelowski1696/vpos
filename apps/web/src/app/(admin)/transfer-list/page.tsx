@@ -2,9 +2,11 @@
 
 import { useEffect, useMemo, useState } from 'react';
 import { useSearchParams } from 'next/navigation';
+import { AdminModalMotion } from '../../../components/admin-motion';
 import { TablePaginationControls } from '../../../components/table-pagination-controls';
 import { apiRequest } from '../../../lib/api-client';
 import { useTablePagination } from '../../../lib/table-pagination';
+import { transferQuantityHeaders } from '../../../lib/transfer-quantity-labels';
 
 type BranchRecord = {
   id: string;
@@ -151,6 +153,14 @@ export default function TransferListPage(): React.JSX.Element {
   const deepLinkUntil = searchParams.get('until')?.trim() ?? '';
 
   const locationById = useMemo(() => new Map(locations.map((row) => [row.id, row])), [locations]);
+  const selectedTransferMode = selectedTransfer
+    ? selectedTransfer.transfer_mode ??
+      deriveModeFromLocations(
+        locationById.get(selectedTransfer.source_location_id),
+        locationById.get(selectedTransfer.destination_location_id)
+      )
+    : null;
+  const selectedTransferQuantityHeaders = transferQuantityHeaders(selectedTransferMode);
   const productByRef = useMemo(() => {
     const map = new Map<string, ProductRecord>();
     for (const product of products) {
@@ -545,7 +555,7 @@ export default function TransferListPage(): React.JSX.Element {
       </div>
 
       {selectedTransfer ? (
-        <div className="fixed inset-0 z-40 flex items-center justify-center bg-slate-950/45 p-4">
+        <AdminModalMotion className="fixed inset-0 z-40 flex items-center justify-center bg-slate-950/45 p-4">
           <section className="flex max-h-[90vh] w-full max-w-5xl flex-col overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-xl dark:border-slate-700 dark:bg-slate-900">
             <header className="flex items-center justify-between border-b border-slate-200 px-4 py-3 dark:border-slate-700">
               <div>
@@ -565,7 +575,7 @@ export default function TransferListPage(): React.JSX.Element {
                 <article className="rounded-xl border border-slate-200 bg-slate-50 p-3 dark:border-slate-700 dark:bg-slate-800/50">
                   <p className="text-xs uppercase tracking-wide text-slate-500 dark:text-slate-400">Transfer Mode</p>
                   <p className="mt-1 text-sm font-semibold text-slate-900 dark:text-slate-100">
-                    {modeLabel(selectedTransfer.transfer_mode)}
+                    {modeLabel(selectedTransferMode ?? undefined)}
                   </p>
                 </article>
                 <article className="rounded-xl border border-slate-200 bg-slate-50 p-3 dark:border-slate-700 dark:bg-slate-800/50">
@@ -614,8 +624,8 @@ export default function TransferListPage(): React.JSX.Element {
                       <tr>
                         <th className="px-3 py-2">Item Code</th>
                         <th className="px-3 py-2">Item Name</th>
-                        <th className="px-3 py-2 text-right">FULL</th>
-                        <th className="px-3 py-2 text-right">EMPTY</th>
+                        <th className="px-3 py-2 text-right">{selectedTransferQuantityHeaders.full}</th>
+                        <th className="px-3 py-2 text-right">{selectedTransferQuantityHeaders.empty}</th>
                       </tr>
                     </thead>
                     <tbody>
@@ -636,7 +646,7 @@ export default function TransferListPage(): React.JSX.Element {
               </div>
             </div>
           </section>
-        </div>
+        </AdminModalMotion>
       ) : null}
     </section>
   );
