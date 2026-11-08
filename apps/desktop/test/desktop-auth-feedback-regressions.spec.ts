@@ -21,4 +21,11 @@ describe('desktop authentication feedback regressions', () => {
     expect(shouldPreventDesktopClose('UNLOCK', 'access-token')).toBe(false);
     expect(appSource).toContain('desktopCloseGuardRef.current');
   });
+
+  it('exposes an exit action on the startup screen and clears the close guard during sign-out', () => {
+    expect(startupSource).toContain('onExit');
+    expect(startupSource).toContain('Exit Application');
+    expect(appSource).toContain('exitDesktopApplication');
+    expect(appSource).toContain('desktopCloseGuardRef.current = false');
+  });
 });

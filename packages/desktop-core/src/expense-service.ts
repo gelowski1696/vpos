@@ -2,19 +2,26 @@ import type {
   DesktopAppState,
   DesktopExpenseRecord,
   DesktopShiftCashEntry,
-  DesktopShiftRecord
+  DesktopShiftRecord,
+  DesktopSaleRecord
 } from './schema';
 import type { DesktopOperationalRepository, DesktopTransactionPolicyPort } from './operational-ports';
 import { INSUFFICIENT_PETTY_CASH_BALANCE_ERROR } from './petty-cash-sync-policy';
+import { summarizeDesktopShiftRegister } from './shift-projection';
 
 export interface DesktopExpenseShiftPort {
   listShifts(): Promise<DesktopShiftRecord[]>;
   listShiftCashEntries(): Promise<DesktopShiftCashEntry[]>;
 }
 
+export interface DesktopExpenseSalesPort {
+  listSales(): Promise<DesktopSaleRecord[]>;
+}
+
 export type DesktopExpensePorts = {
   repository: DesktopOperationalRepository;
   shift: DesktopExpenseShiftPort;
+  sales: DesktopExpenseSalesPort;
   subscriptionPolicy: DesktopTransactionPolicyPort;
 };
 
@@ -134,19 +141,22 @@ export class DesktopExpenseService {
     }
 
     if (input.direction === 'OUT') {
-      const [cashEntries, expenseRows] = await Promise.all([
+      const [cashEntries, expenseRows, sales] = await Promise.all([
         this.ports.shift.listShiftCashEntries(),
-        this.listExpenses()
+        this.listExpenses(),
+        this.ports.sales.listSales()
       ]);
-      const shiftCash = cashEntries
-        .filter((entry) => entry.shiftId === shiftId)
-        .reduce(
-          (balance, entry) => balance + (entry.direction === 'IN' ? entry.amount : -entry.amount),
-          0
-        );
+      const register = summarizeDesktopShiftRegister({ shift, cashEntries, sales });
       const pettyCash = summarizeDesktopPettyCash(expenseRows, { shiftId });
       const availableCash = Number(
-        (Number(shift.openingCash || 0) + shiftCash + pettyCash.net).toFixed(2)
+        (
+          Number(shift.openingCash || 0) +
+          register.cashSales -
+          register.cashReturns +
+          register.cashIn -
+          register.cashOut +
+          pettyCash.net
+        ).toFixed(2)
       );
       if (amount > availableCash + 0.009) {
         throw new Error(

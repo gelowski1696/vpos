@@ -9,6 +9,7 @@ export class DesktopExpenseService extends CoreDesktopExpenseService {
   constructor(ports: DesktopExpensePorts = {
     repository: desktopDb,
     shift: desktopShiftService,
+    sales: desktopDb,
     subscriptionPolicy: desktopSubscriptionPolicyService
   }) {
     super(ports);

@@ -70,6 +70,7 @@ describe('shared operational services', () => {
         listShifts: async () => [{ id: 'shift-1', status: 'OPEN', openingCash: 500 } as never],
         listShiftCashEntries: async () => []
       },
+      sales: { listSales: async () => [] },
       subscriptionPolicy: policy
     });
     const transfer = new DesktopTransferService({ repository, subscriptionPolicy: policy });
@@ -112,6 +113,7 @@ describe('shared operational services', () => {
         listShifts: async () => [{ id: 'shift-1', status: 'OPEN', openingCash: 100 } as never],
         listShiftCashEntries: async () => []
       },
+      sales: { listSales: async () => [] },
       subscriptionPolicy: policy
     });
 
@@ -141,6 +143,7 @@ describe('shared operational services', () => {
           id: 'cash-in-1', shiftId: 'shift-1', direction: 'IN', amount: 10
         } as never]
       },
+      sales: { listSales: async () => [] },
       subscriptionPolicy: policy
     });
 
@@ -154,6 +157,55 @@ describe('shared operational services', () => {
 
     expect(await expense.listExpenses()).toEqual([]);
     expect(repository.outbox).toEqual([]);
+  });
+
+  it('allows petty-cash OUT when local cash sales fund the open shift', async () => {
+    const repository = new MemoryOperationalRepository();
+    const expense = new DesktopExpenseService({
+      repository,
+      shift: {
+        listShifts: async () => [{
+          id: 'shift-1',
+          status: 'OPEN',
+          openingCash: 0,
+          openedAt: '2026-11-08T08:00:00.000Z',
+          closedAt: null
+        } as never],
+        listShiftCashEntries: async () => []
+      },
+      sales: {
+        listSales: async () => [{
+          id: 'sale-1',
+          payload: {
+            id: 'sale-1',
+            shiftId: 'shift-1',
+            paymentMethod: 'CASH',
+            paidAmount: 300,
+            changeAmount: 0,
+            totalAmount: 300
+          },
+          saleStatus: 'ACTIVE',
+          syncStatus: 'pending',
+          receiptNumber: 'R-1',
+          createdAt: '2026-11-08T09:00:00.000Z',
+          updatedAt: '2026-11-08T09:00:00.000Z'
+        } as never]
+      },
+      subscriptionPolicy: policy
+    });
+
+    const record = await expense.createExpense(DEFAULT_DESKTOP_APP_STATE, {
+      shiftId: 'shift-1',
+      categoryCode: 'SUPPLIES',
+      direction: 'OUT',
+      amount: 100,
+      notes: 'Cleaning supplies'
+    });
+
+    expect(record.amount).toBe(100);
+    expect(repository.outbox).toEqual(expect.arrayContaining([
+      expect.objectContaining({ entity: 'petty_cash', action: 'create' })
+    ]));
   });
 
   it('creates a purchase-order draft using cached operational records', async () => {

@@ -19,6 +19,7 @@ type Props = {
   onUnlock: (pin: string) => Promise<void>;
   onDownloadSetup: (setup: DesktopSetupState) => Promise<void>;
   onQuickSetup: (input: { token: string; pin: string; apiBaseUrl: string; deviceId: string; operatorName: string }) => Promise<void>;
+  onExit: () => Promise<void>;
   onSwitchToLogin: () => void;
   onSwitchToPin: () => void;
 };
@@ -35,6 +36,7 @@ export function DesktopStartupScreen({
   onUnlock,
   onDownloadSetup,
   onQuickSetup,
+  onExit,
   onSwitchToLogin,
   onSwitchToPin
 }: Props): JSX.Element {
@@ -328,6 +330,11 @@ export function DesktopStartupScreen({
 
           <div className={`message-banner ${error ? 'startup-error-banner' : messageTone === 'success' ? 'startup-success-banner' : ''}`}>
             {error || optionMessage || message}
+          </div>
+          <div className="desktop-settings-actions startup-auth-actions">
+            <button className="secondary-btn" type="button" onClick={() => void onExit()}>
+              Exit Application
+            </button>
           </div>
         </section>
       </div>

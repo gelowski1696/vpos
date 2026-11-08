@@ -49,6 +49,7 @@ import { getRouteForTutorialScreen } from '../tutorial/tutorial-routing';
 import { filterDesktopRoutes, isDesktopRouteAllowed } from './pos-access-policy';
 import { isDesktopTauriRuntime } from '../services/tauri-runtime';
 import { shouldPreventDesktopClose } from './desktop-close-policy';
+import { exitDesktopApplication } from '../services/desktop-exit.service';
 
 const PRIMARY_ROUTES: DesktopRouteId[] = ['dashboard', 'pos', 'sales', 'transfer', 'transfer-list'];
 const SIDE_MENU_ROUTES: DesktopRouteId[] = ['items', 'customers', 'lending', 'lpg-service', 'expense', 'shift', 'reports', 'settings'];
@@ -736,6 +737,7 @@ function DesktopAppShell(): JSX.Element {
 
   const handleSwitchCashier = async (): Promise<void> => {
     const nextState = await desktopSessionService.fullSignOut(state, 'switch_cashier');
+    desktopCloseGuardRef.current = false;
     setState(nextState);
     setDrawerOpen(false);
     setActiveRoute('dashboard');
@@ -767,6 +769,7 @@ function DesktopAppShell(): JSX.Element {
 
   const handleFullSignOut = async (): Promise<void> => {
     const nextState = await desktopSessionService.fullSignOut(state, 'full_sign_out');
+    desktopCloseGuardRef.current = false;
     setState(nextState);
     setDrawerOpen(false);
     setActiveRoute('dashboard');
@@ -780,6 +783,7 @@ function DesktopAppShell(): JSX.Element {
 
   const handleResetLocalData = useCallback(async () => {
     await desktopSettingsService.resetLocalData();
+    desktopCloseGuardRef.current = false;
     tutorialActions.close();
     autoWalkthroughOpenedRef.current = false;
     setState(DEFAULT_DESKTOP_APP_STATE);
@@ -1249,6 +1253,16 @@ function DesktopAppShell(): JSX.Element {
         onUnlock={handleStartupUnlock}
         onDownloadSetup={handleStartupDownloadSetup}
         onQuickSetup={handleQuickSetup}
+        onExit={async () => {
+          try {
+            await exitDesktopApplication();
+          } catch (error) {
+            desktopUi.showToast({
+              tone: 'error',
+              message: error instanceof Error ? error.message : 'Unable to close VPOS Desktop.'
+            });
+          }
+        }}
         onSwitchToLogin={() => {
           setStartupStage('LOGIN');
           setStartupError(null);
