@@ -21,6 +21,7 @@ import {
 } from '../lib/api-client';
 import {
   buildAfterShiftInventorySyncNotification,
+  canShowAfterShiftInventoryNotifications,
   resolveInventoryCountDiscrepancyStatus,
   type AfterShiftInventorySyncNotification,
   type InventoryCountDiscrepancyStatus,
@@ -963,9 +964,13 @@ export function AdminShell({ children }: { children: React.ReactNode }): React.J
     () => roles.includes('admin') || roles.includes('owner') || roles.includes('platform_owner'),
     [roles]
   );
+  const canShowInventoryNotifications = canShowAfterShiftInventoryNotifications({
+    canViewAuditLogs,
+    inventoryCountAddonEnabled: tenantAddons.cashier_end_of_day_inventory_count
+  });
 
   useEffect(() => {
-    if (!ready || !hasToken || !canViewAuditLogs) {
+    if (!ready || !hasToken || !canShowInventoryNotifications) {
       setInventorySyncNotifications([]);
       setInventoryNotificationDiscrepancyById({});
       setSelectedInventorySyncNotificationId(null);
@@ -1012,10 +1017,10 @@ export function AdminShell({ children }: { children: React.ReactNode }): React.J
       active = false;
       window.clearInterval(intervalId);
     };
-  }, [canViewAuditLogs, hasToken, ready]);
+  }, [canShowInventoryNotifications, hasToken, ready]);
 
   useEffect(() => {
-    if (!ready || !hasToken || !canViewAuditLogs) {
+    if (!ready || !hasToken || !canShowInventoryNotifications) {
       return;
     }
     if (inventorySyncNotifications.length === 0) {
@@ -1070,7 +1075,7 @@ export function AdminShell({ children }: { children: React.ReactNode }): React.J
     return () => {
       cancelled = true;
     };
-  }, [canViewAuditLogs, hasToken, inventorySyncNotifications, ready]);
+  }, [canShowInventoryNotifications, hasToken, inventorySyncNotifications, ready]);
 
   const inventorySyncNotification = useMemo(
     () =>
@@ -2008,6 +2013,7 @@ export function AdminShell({ children }: { children: React.ReactNode }): React.J
             </div>
 
             <div className="flex items-center gap-2">
+              {canShowInventoryNotifications ? (
               <div className="relative" ref={notificationContainerRef}>
                 <button
                   aria-expanded={inventoryNotificationDropdownOpen}
@@ -2132,6 +2138,7 @@ export function AdminShell({ children }: { children: React.ReactNode }): React.J
                   </div>
                 ) : null}
               </div>
+              ) : null}
               <button
                 data-tour="theme-toggle"
                 aria-label={theme === 'light' ? 'Switch to dark mode' : 'Switch to light mode'}
@@ -2211,7 +2218,7 @@ export function AdminShell({ children }: { children: React.ReactNode }): React.J
           </section>
         </main>
       </div>
-      {inventoryNotificationModalOpen ? (
+      {canShowInventoryNotifications && inventoryNotificationModalOpen ? (
         <AdminModalMotion
           className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-slate-950/55 p-3 py-6 md:items-center"
           onClose={closeInventoryNotificationModal}

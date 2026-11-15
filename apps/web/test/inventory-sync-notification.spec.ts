@@ -1,9 +1,31 @@
 import {
   buildAfterShiftInventorySyncNotification,
+  canShowAfterShiftInventoryNotifications,
   resolveInventoryCountDiscrepancyStatus
 } from '../src/lib/inventory-sync-notification';
 
 describe('after-shift inventory sync notification', () => {
+  it('only enables the bell for authorized users whose tenant has the inventory-count add-on', () => {
+    expect(
+      canShowAfterShiftInventoryNotifications({
+        canViewAuditLogs: true,
+        inventoryCountAddonEnabled: true
+      })
+    ).toBe(true);
+    expect(
+      canShowAfterShiftInventoryNotifications({
+        canViewAuditLogs: true,
+        inventoryCountAddonEnabled: false
+      })
+    ).toBe(false);
+    expect(
+      canShowAfterShiftInventoryNotifications({
+        canViewAuditLogs: false,
+        inventoryCountAddonEnabled: true
+      })
+    ).toBe(false);
+  });
+
   it('builds a direct inventory report link for committed shift count syncs', () => {
     const notification = buildAfterShiftInventorySyncNotification({
       id: 'audit-1',

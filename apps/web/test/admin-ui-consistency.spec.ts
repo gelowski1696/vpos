@@ -47,9 +47,20 @@ describe('admin UI consistency', () => {
     expect(read('src/components/master-data-import-wizard.tsx')).toContain('onClose={close}');
   });
 
-  it('keeps authentication pages on the same reconstructed visual system', () => {
-    expect(read('src/app/(auth)/login/page.tsx')).toContain('<AuthWorkspace');
+  it('keeps the restored classic login while retaining the shared password-change workspace', () => {
+    const loginSource = read('src/app/(auth)/login/page.tsx');
+    expect(loginSource).not.toContain('<AuthWorkspace');
+    expect(loginSource).toContain('VMJAMTECH');
+    expect(loginSource).toContain('Admin Login');
+    expect(loginSource).toContain('linear-gradient(130deg,#060606,#15110b,#050505)');
     expect(read('src/app/(auth)/change-password/page.tsx')).toContain('<AuthWorkspace');
     expect(read('src/app/not-found.tsx')).toContain('data-public-error');
+  });
+
+  it('gates after-shift inventory notifications behind the tenant add-on', () => {
+    const shellSource = read('src/components/admin-shell.tsx');
+    expect(shellSource).toContain('inventoryCountAddonEnabled: tenantAddons.cashier_end_of_day_inventory_count');
+    expect(shellSource).toContain('if (!ready || !hasToken || !canShowInventoryNotifications)');
+    expect(shellSource).toContain('{canShowInventoryNotifications ? (');
   });
 });

@@ -32,6 +32,16 @@ export type InventoryCountDiscrepancyShift = {
 
 const INVENTORY_COUNT_EPSILON = 0.0001;
 
+export function canShowAfterShiftInventoryNotifications({
+  canViewAuditLogs,
+  inventoryCountAddonEnabled
+}: {
+  canViewAuditLogs: boolean;
+  inventoryCountAddonEnabled: boolean;
+}): boolean {
+  return canViewAuditLogs && inventoryCountAddonEnabled;
+}
+
 function metadataRecord(value: unknown): Record<string, unknown> {
   return value && typeof value === 'object' && !Array.isArray(value) ? (value as Record<string, unknown>) : {};
 }
